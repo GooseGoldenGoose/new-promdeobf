@@ -181,6 +181,7 @@ Current implementation:
 - Missing ConstantArray is now a safe pass-through so later stages still run when that Prometheus step is disabled.
 - `sample\1.txt`: 7 constants recovered and 10 references inlined with 0 unresolved wrapper/array uses.
 - `sample\2.txt`: 11 constants recovered and 14 references inlined with 0 unresolved wrapper/array uses.
+- `sample\3.txt` is a controlled scope/upvalue fixture: outer mutable `x`, shadowed block-local `x`, block-local `y`, and two closures (`inc`, `get`) sharing the captured outer `x`.
 - Keep the current Luau parser while sufficient; Rust Moonlight is acceptable if parser limitations become a correctness blocker.
 
 ## Environment Binding Step
@@ -194,7 +195,8 @@ Current implementation:
 - `sample\2.txt`: environment parameter `S -> _env`, 4 bound references renamed; current deobfuscated output is `output\2.lua`.
 - Regression checks cover direct `getgenv()`, `getfenv ... or _ENV`, direct `_ENV`, nested-name shadowing, collision rejection, and operation when ConstantArray is absent.
 - `main.js` reparses after ConstantArray and again after environment renaming; default output is now `output\1.lua`.
-- Full sample-folder validation on 2026-08-22 covers every current fixture (`sample\1.txt`, `sample\2.txt`): both pass steps 1-2, both outputs reparse successfully, and `_env` is only applied to the environment binding while nested same-named parameters remain unchanged.
+- Full sample-folder validation now covers `sample\1.txt`, `sample\2.txt`, and `sample\3.txt`; all pass steps 1-2 and reparse successfully.
+- `sample\3.txt` produces `output\3.lua`; runtime comparison with the unobfuscated source matches exactly: `block 10 2`, `before 1`, `after 3 3`, confirming shared mutable upvalue behavior is preserved by current steps.
 
 ## Control-Flow Understanding
 
@@ -406,7 +408,7 @@ without producing unrelated locals.
 
 # Immediate Next Steps
 
-1. Treat `output\1.lua` / `output\2.lua` as outputs after steps 1-2.
+1. Treat `output\1.lua`, `output\2.lua`, and `output\3.lua` as outputs after steps 1-2.
 2. Do not add step 3 until the user chooses the next recovery target.
 3. Keep each pass structural/generalized, scope-aware where bindings matter, and reparse its output before advancing.
 4. If the current parser becomes a correctness blocker, evaluate Rust Moonlight instead of adding parser-specific hacks.
