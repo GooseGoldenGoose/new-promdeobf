@@ -27,16 +27,19 @@ function lineIndentAt(source, offset) {
 
 function dedent(text) {
     const lines = text.replace(/\r\n/g, "\n").split("\n");
+    if (lines.length <= 1) return lines.join("\n");
+
+    // AST ranges begin at the first token, so continuation lines still carry
+    // original source indentation while line 1 starts at column 0.
     let min = Infinity;
-    for (const line of lines) {
-        if (!line.trim()) continue;
-        const match = line.match(/^[\t ]*/);
+    for (let i = 1; i < lines.length; i++) {
+        if (!lines[i].trim()) continue;
+        const match = lines[i].match(/^[\t ]*/);
         min = Math.min(min, match ? match[0].length : 0);
     }
     if (!Number.isFinite(min) || min === 0) return lines.join("\n");
-    return lines.map(line => line.trim() ? line.slice(min) : "").join("\n");
+    return [lines[0], ...lines.slice(1).map(line => line.trim() ? line.slice(min) : "")].join("\n");
 }
-
 function indentText(text, indent) {
     return dedent(text)
         .split("\n")
@@ -341,11 +344,235 @@ function resolveFirstEntryStateBeta(source, ast) {
         whileRange: stateWhile.range,
     };
 }
+function isClosureFactoryName(name) {
+    return typeof name === "string" && /^createClosure(?:\d+)?$/.test(name);
+}
+
+function findClosureEntries(ast) {
+    const entries = [];
+    function walk(node) {
+        if (!isNode(node)) return;
+        if (node.type === "CallExpression" && isIdentifier(node.base) &&
+            isClosureFactoryName(node.base.name)) {
+            const args = node.arguments || [];
+            const entryId = numericValue(args[0]);
+            if (entryId !== null) entries.push({ entryId, factory: node.base.name, call: node });
+        }
+        for (const [key, value] of Object.entries(node)) {
+            if (key === "loc" || key === "range") continue;
+            if (Array.isArray(value)) for (const child of value) walk(child);
+            else if (isNode(value)) walk(value);
+        }
+    }
+    walk(ast);
+    return entries;
+}
+
+function bodyKey(body) {
+    if (!body?.length) return "empty";
+    return `${body[0].range?.[0] ?? -1}:${body[body.length - 1].range?.[1] ?? -1}`;
+}
+
+function collectDispatcherLeaves(body, source, out = []) {
+    if (body?.length === 1 && body[0]?.type === "IfStatement") {
+        for (const clause of body[0].clauses || []) {
+            collectDispatcherLeaves(clause.body || [], source, out);
+        }
+        return out;
+    }
+    out.push({ body: body || [], key: bodyKey(body || []) });
+    return out;
+}
+
+function findStateAssignment(statement, stateName) {
+    if (statement?.type !== "AssignmentStatement") return null;
+    const vars = statement.variables || [];
+    const init = statement.init || [];
+    for (let i = 0; i < Math.min(vars.length, init.length); i++) {
+        if (isIdentifier(vars[i], stateName)) return init[i];
+    }
+    return null;
+}
+
+function analyzeBranchTarget(node, source) {
+    if (node?.type !== "LogicalExpression" || node.operator !== "or") return null;
+    if (node.left?.type !== "LogicalExpression" || node.left.operator !== "and") return null;
+    const onTrue = numericValue(node.left.right);
+    const onFalse = numericValue(node.right);
+    if (onTrue === null || onFalse === null) return null;
+    return {
+        kind: "branch",
+        condition: sourceOf(source, node.left.left),
+        onTrue,
+        onFalse,
+        expression: sourceOf(source, node),
+    };
+}
+
+function analyzeBlockTerminator(body, stateName, source) {
+    // Prometheus can reuse POS_REGISTER as a temporary register. Only the
+    // final write to the state/POS variable is a block terminator.
+    for (let i = (body?.length ?? 0) - 1; i >= 0; i--) {
+        const rhs = findStateAssignment(body[i], stateName);
+        if (!rhs) continue;
+        const direct = numericValue(rhs);
+        if (direct !== null) {
+            return { kind: "jump", target: direct, statementIndex: i, expression: sourceOf(source, rhs) };
+        }
+        const branch = analyzeBranchTarget(rhs, source);
+        if (branch) return { ...branch, statementIndex: i };
+        return { kind: "stop", statementIndex: i, expression: sourceOf(source, rhs) };
+    }
+    return { kind: "unknown", statementIndex: -1, expression: null };
+}
+
+function resolveStateBlock(dispatcherBody, stateName, stateId, source) {
+    const path = [];
+    const body = resolveDispatcherBody(dispatcherBody, stateName, stateId, source, path);
+    if (!body) return null;
+    return {
+        id: stateId,
+        body,
+        key: bodyKey(body),
+        path,
+        terminator: analyzeBlockTerminator(body, stateName, source),
+    };
+}
+
+function successorsOf(term) {
+    if (term?.kind === "jump") return [term.target];
+    if (term?.kind === "branch") return [term.onTrue, term.onFalse];
+    return [];
+}
+
+function walkStateGraph(dispatcherBody, stateName, rootId, source) {
+    const queue = [rootId];
+    const blocks = new Map();
+    const order = [];
+    while (queue.length) {
+        const id = queue.shift();
+        if (blocks.has(id)) continue;
+        const block = resolveStateBlock(dispatcherBody, stateName, id, source);
+        if (!block) {
+            blocks.set(id, { id, unresolved: true, terminator: { kind: "unresolved" } });
+            order.push(id);
+            continue;
+        }
+        blocks.set(id, block);
+        order.push(id);
+        for (const next of successorsOf(block.terminator)) {
+            if (!blocks.has(next)) queue.push(next);
+        }
+    }
+    return { rootId, blocks, order };
+}
+
+function renderExplicitDispatcher(source, stateWhile, stateName, blocks, orderedIds, complete) {
+    const indent = lineIndentAt(source, stateWhile.range[0]);
+    const bodyIndent = indent + "    ";
+    const caseIndent = bodyIndent + "    ";
+    const lines = [`while ${stateName} do`];
+
+    orderedIds.forEach((id, index) => {
+        const block = blocks.get(id);
+        lines.push(`${bodyIndent}${index === 0 ? "if" : "elseif"} ${stateName} == ${id} then`);
+        if (block?.body?.length) lines.push(renderStatements(source, block.body, caseIndent));
+        else lines.push(`${caseIndent}${stateName} = nil`);
+    });
+
+    lines.push(`${bodyIndent}else`);
+    if (complete) {
+        lines.push(`${caseIndent}-- beta: invalid/unreachable VM state`);
+        lines.push(`${caseIndent}${stateName} = nil`);
+    } else {
+        lines.push(`${caseIndent}-- beta: unresolved state, keep original dispatcher behavior`);
+        lines.push(renderStatements(source, stateWhile.body || [], caseIndent));
+    }
+    lines.push(`${bodyIndent}end`);
+    lines.push(`${indent}end`);
+    return lines.join("\n");
+}
+
+function resolveEntryStateGraphBeta(source, ast) {
+    const vm = findVmFunction(ast);
+    if (!vm) return { source, found: false, reason: "No semantically named vm function was found" };
+
+    const stateParam = (vm.functionNode.parameters || [])[0];
+    if (!isIdentifier(stateParam)) return { source, found: false, reason: "VM state parameter is not an identifier" };
+    const stateName = stateParam.name;
+
+    const stateWhile = findStateWhile(vm.functionNode, stateName);
+    if (!stateWhile) return { source, found: false, reason: "No while <state> dispatcher was found" };
+
+    const rootEntry = findRootEntry(ast);
+    if (!rootEntry) return { source, found: false, reason: "No root entry was found" };
+
+    const rootGraph = walkStateGraph(stateWhile.body || [], stateName, rootEntry.entryId, source);
+    const closureEntries = findClosureEntries(ast);
+
+    const allBlocks = new Map();
+    const graphRoots = [];
+    const seenRoots = new Set();
+
+    function addRoot(kind, factory, entryId) {
+        if (seenRoots.has(entryId)) return;
+        seenRoots.add(entryId);
+        const graph = walkStateGraph(stateWhile.body || [], stateName, entryId, source);
+        graphRoots.push({ kind, factory, entryId, graph });
+        for (const id of graph.order) if (!allBlocks.has(id)) allBlocks.set(id, graph.blocks.get(id));
+    }
+
+    addRoot("root", rootEntry.factory || "createClosure", rootEntry.entryId);
+    for (const entry of closureEntries) addRoot("closure", entry.factory, entry.entryId);
+
+    const leaves = collectDispatcherLeaves(stateWhile.body || [], source);
+    const leafKeys = new Set(leaves.map(leaf => leaf.key));
+    const resolvedKeys = new Set([...allBlocks.values()].filter(b => b?.key).map(b => b.key));
+
+    const owners = new Map();
+    let collision = false;
+    for (const [id, block] of allBlocks) {
+        if (!block?.key) continue;
+        if (owners.has(block.key) && owners.get(block.key) !== id) collision = true;
+        else owners.set(block.key, id);
+    }
+
+    const complete = !collision &&
+        leafKeys.size > 0 &&
+        leafKeys.size === resolvedKeys.size &&
+        [...leafKeys].every(key => resolvedKeys.has(key));
+
+    const orderedIds = [];
+    for (const root of graphRoots) {
+        for (const id of root.graph.order) if (!orderedIds.includes(id)) orderedIds.push(id);
+    }
+
+    const replacement = renderExplicitDispatcher(source, stateWhile, stateName, allBlocks, orderedIds, complete);
+    const output = source.slice(0, stateWhile.range[0]) + replacement + source.slice(stateWhile.range[1]);
+
+    return {
+        source: output,
+        found: true,
+        rootEntryId: rootEntry.entryId,
+        rootGraph,
+        graphRoots,
+        blocks: allBlocks,
+        orderedIds,
+        dispatcherLeafCount: leafKeys.size,
+        resolvedLeafCount: resolvedKeys.size,
+        complete,
+        collision,
+    };
+}
 
 module.exports = {
     numericValue,
     findVmFunction,
     findRootEntry,
+    findClosureEntries,
     evaluateStateCondition,
-    resolveFirstEntryStateBeta,
+    analyzeBlockTerminator,
+    resolveStateBlock,
+    walkStateGraph,
+    resolveEntryStateGraphBeta,
 };
