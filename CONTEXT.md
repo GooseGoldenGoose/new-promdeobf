@@ -210,7 +210,7 @@ Current implementation:
 - The beta rewrite emits an explicit `if state == <root entry> then` containing the resolved dispatcher region and retains the original dispatcher body in `else` as a behavior-preserving fallback for states not yet resolved.
 - `tools/resolve-entry-beta.js` defaults to `output\1.lua -> output\1.beta.lua`; the entry number is discovered structurally and is not hardcoded.
 - Current `sample\1` beta resolves root entry `1383946` directly to 7 VM statements. `output\1.beta.lua` reparses and runs identically to `output\1.lua` (`AD`, exit 0).
-- Temporary validation on sample 3 resolved root entry `2815217` through `state < 5701683 => true`, `state < 1663260 => false`, then `else`; the beta output still produced `block 10 2`, `before 1`, `after 3 3`.
+- `output\3.beta.lua` is now an explicit beta validation artifact for sample 3. It resolves root entry `2815217` through `state < 5701683 => true`, `state < 1663260 => false`, then `else`, extracts 35 statements into `if state == 2815217 then`, reparses, and runs identically to stable `output\3.lua`: `block 10 2`, `before 1`, `after 3 3`, exit 0.
 ## Control-Flow Understanding
 
 Prometheus-style control-flow flattening should be modeled as a dispatcher/state machine.
@@ -422,7 +422,7 @@ without producing unrelated locals.
 # Immediate Next Steps
 
 1. Keep `output\1.lua`, `output\2.lua`, and `output\3.lua` as the stable step-2 outputs; beta entry-state experiments stay separate.
-2. Use `output\1.beta.lua` as the first entry-state recovery experiment and extend recovery from the root entry toward numeric successor states / a per-function CFG without hardcoded state IDs.
+2. Use `output\1.beta.lua` and `output\3.beta.lua` as validated entry-state experiments; extend recovery from each root entry toward numeric successor states / a per-function CFG without hardcoded state IDs.
 3. Keep unresolved dispatcher states on a behavior-preserving fallback until their equivalence is proven.
 4. Keep each pass structural/generalized, scope-aware where bindings matter, and reparse/runtime-check transformed output before advancing.
 5. If the current parser becomes a correctness blocker, evaluate Rust Moonlight instead of adding parser-specific hacks.
