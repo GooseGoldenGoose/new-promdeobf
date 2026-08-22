@@ -695,6 +695,19 @@ function recoverVmBindings(source, ast, vmState) {
     }
 
     const captureSlotResolver = buildCaptureSlotResolver(captures);
+    let unresolvedCaptureCount = 0;
+    for (const capture of captures) {
+        if (capture.kind === "local-cell") {
+            capture.resolution = { kind: "resolved-cell", cellId: capture.cellId, cellIds: [capture.cellId] };
+        } else if (capture.kind === "parent-capture-slot") {
+            capture.resolution = captureSlotResolver.resolve(capture.parentFunctionId, capture.parentSlot);
+        } else {
+            capture.resolution = { kind: "unresolved", cellIds: [] };
+        }
+        capture.resolvedCellId = capture.resolution.kind === "resolved-cell" ? capture.resolution.cellId : null;
+        if (capture.resolvedCellId === null) unresolvedCaptureCount++;
+    }
+
     const cellAccesses = functions.flatMap(fn => fn.cellAccesses);
     for (const access of cellAccesses) {
         if (access.kind === "local-cell") {
@@ -716,12 +729,15 @@ function recoverVmBindings(source, ast, vmState) {
     const undefinedUseCount = uses.filter(use => use.reachingDefIds.length === 0).length;
     const localCells = definitions.filter(def => def.kind === "alloc-upvalue");
 
+    const resolvedCellAccessCount = cellAccesses.filter(access => access.resolvedCellId !== null).length;
+    const unresolvedCellAccessCount = cellAccesses.length - resolvedCellAccessCount;
+
     const sharedLocalCells = [];
     const localCellConsumers = new Map();
     for (const capture of captures) {
-        if (capture.kind !== "local-cell") continue;
-        if (!localCellConsumers.has(capture.cellId)) localCellConsumers.set(capture.cellId, new Set());
-        localCellConsumers.get(capture.cellId).add(capture.childFunctionId);
+        if (capture.resolvedCellId === null) continue;
+        if (!localCellConsumers.has(capture.resolvedCellId)) localCellConsumers.set(capture.resolvedCellId, new Set());
+        localCellConsumers.get(capture.resolvedCellId).add(capture.childFunctionId);
     }
     for (const [cellId, children] of localCellConsumers) {
         if (children.size < 2) continue;
@@ -731,11 +747,40 @@ function recoverVmBindings(source, ast, vmState) {
         });
     }
 
+    const lifetimeByDefinitionId = new Map(definitionLifetimes.map(item => [item.definitionId, item]));
+    const capturesByCell = new Map(localCells.map(cell => [cell.id, []]));
+    const accessesByCell = new Map(localCells.map(cell => [cell.id, []]));
+    for (const capture of captures) capturesByCell.get(capture.resolvedCellId)?.push(capture);
+    for (const access of cellAccesses) accessesByCell.get(access.resolvedCellId)?.push(access);
+
+    const cellGraphComplete = unresolvedCaptureCount === 0 && unresolvedCellAccessCount === 0;
+    const capturedBindingCandidates = localCells.map(cell => {
+        const cellCaptures = capturesByCell.get(cell.id) || [];
+        const cellAccessesForCell = accessesByCell.get(cell.id) || [];
+        const childFunctionIds = [...new Set(cellCaptures.map(capture => capture.childFunctionId))].sort((a, b) => a - b);
+        const accessFunctionIds = [...new Set(cellAccessesForCell.map(access => access.functionId))].sort((a, b) => a - b);
+        const lifetime = lifetimeByDefinitionId.get(cell.id) || null;
+        return {
+            id: `captured:${cell.id}`,
+            kind: "captured-cell",
+            ownerFunctionId: cell.functionId,
+            allocationDefinitionId: cell.id,
+            allocationRegisterName: cell.name,
+            childFunctionIds,
+            accessFunctionIds,
+            captureCount: cellCaptures.length,
+            readCount: cellAccessesForCell.filter(access => access.mode === "read").length,
+            writeCount: cellAccessesForCell.filter(access => access.mode === "write").length,
+            sharedAcrossFunctions: childFunctionIds.length > 1,
+            allocationCrossBlock: lifetime?.crossBlock || false,
+            allocationLoopCarried: lifetime?.loopCarried || false,
+            provenanceComplete: cellGraphComplete,
+        };
+    });
+
     const allConverged = functions.every(fn => fn.reaching.converged && fn.liveness.converged);
     const crossBlockLifetimeCount = definitionLifetimes.filter(item => item.crossBlock).length;
     const loopCarriedLifetimeCount = definitionLifetimes.filter(item => item.loopCarried).length;
-    const resolvedCellAccessCount = cellAccesses.filter(access => access.resolvedCellId !== null).length;
-    const unresolvedCellAccessCount = cellAccesses.length - resolvedCellAccessCount;
 
     return {
         found: true,
@@ -749,12 +794,15 @@ function recoverVmBindings(source, ast, vmState) {
         loopCarriedLifetimeCount,
         uses,
         captures,
+        unresolvedCaptureCount,
         captureSlotOrigins: captureSlotResolver.origins,
         cellAccesses,
         resolvedCellAccessCount,
         unresolvedCellAccessCount,
         localCells,
         sharedLocalCells,
+        capturedBindingCandidates,
+        cellGraphComplete,
         uniqueUseCount,
         ambiguousUseCount,
         undefinedUseCount,

@@ -165,6 +165,7 @@ function main() {
         console.log(`VM definition lifetimes: ${vmBindings.definitionLifetimes.length}, joins: ${vmBindings.definitionJoinGroups.length}, cross-block: ${vmBindings.crossBlockLifetimeCount}, loop-carried: ${vmBindings.loopCarriedLifetimeCount}`);
         console.log(`VM capture slots: ${vmBindings.captures.length}, local cells: ${vmBindings.localCells.length}, shared cells: ${vmBindings.sharedLocalCells.length}`);
         console.log(`VM upvalue cell accesses: ${vmBindings.resolvedCellAccessCount}/${vmBindings.cellAccesses.length} resolved`);
+        console.log(`VM captured binding candidates: ${vmBindings.capturedBindingCandidates.length}, cell graph complete: ${vmBindings.cellGraphComplete}`);
     }
     console.log(`Output: ${result.outputPath}`);
     return result;
