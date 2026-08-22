@@ -1,0 +1,232 @@
+return (function(...)
+    local k = {
+        "b3lRw3Y+",
+        "6LtG07yhx/==",
+        "xSm=",
+        "6Ltqc31=",
+        "fkQG0H8=",
+        "xS/=",
+        "PS2IyHaRZLbqc3l4",
+        "6LtHwR==",
+        "xo/=",
+        "xom="
+    }
+    local function h(h)
+        return k[h + (36387)]
+    end
+    for h, A in ipairs({
+        {
+            1,
+            10
+        },
+        {
+            1,
+            9
+        },
+        {
+            10,
+            10
+        }
+    }) do
+        while A[1] < A[2] do
+            k[A[1]], k[A[2]], A[1], A[2] = k[A[2]], k[A[1]], A[1] + (1), A[2] - (1)
+        end
+    end
+    do
+        local h = table.insert
+        local A = string.sub
+        local g = {
+            p = 47,
+            W = 55,
+            F = 46,
+            w = 24,
+            L = 53,
+            x = 30,
+            o = 19,
+            ["1"] = 56,
+            g = 50,
+            S = 3,
+            D = 31,
+            s = 20,
+            ["6"] = 23,
+            I = 15,
+            t = 61,
+            b = 29,
+            f = 28,
+            d = 10,
+            M = 6,
+            i = 62,
+            y = 17,
+            J = 51,
+            O = 21,
+            N = 32,
+            h = 37,
+            T = 52,
+            U = 36,
+            u = 1,
+            ["7"] = 38,
+            ["3"] = 22,
+            z = 34,
+            E = 33,
+            A = 42,
+            H = 39,
+            Q = 9,
+            k = 7,
+            n = 49,
+            ["9"] = 59,
+            K = 14,
+            G = 41,
+            r = 18,
+            m = 4,
+            ["2"] = 5,
+            v = 8,
+            q = 44,
+            ["0"] = 27,
+            e = 63,
+            j = 35,
+            V = 45,
+            B = 54,
+            ["5"] = 11,
+            c = 25,
+            R = 48,
+            l = 57,
+            Y = 13,
+            a = 40,
+            ["4"] = 58,
+            X = 2,
+            C = 60,
+            ["+"] = 43,
+            ["/"] = 0,
+            Z = 26,
+            ["8"] = 16,
+            P = 12
+        }
+        local j = table.concat
+        local f = string.len
+        local u = string.char
+        local M = type
+        local U = k
+        local w = math.floor
+        for k = 1, #U, 1 do
+            local B = U[k]
+            if M(B) == "string" then
+                local M = f(B)
+                local Q = {}
+                local L = 1
+                local F = 0
+                local b = 0
+                while L <= M do
+                    local k = A(B, L, L)
+                    local j = g[k]
+                    if j then
+                        F = F + j * (64) ^ ((3) - b)
+                        b = b + (1)
+                        if b == 4 then
+                            b = 0
+                            local k = w(F / (65536))
+                            local A = w((F % (65536)) / (256))
+                            local g = F % (256)
+                            h(Q, u(k, A, g))
+                            F = 0
+                        end
+                    elseif k == "=" then
+                        h(Q, u(w(F / (65536))))
+                        if L >= M or A(B, L + (1), L + (1)) ~= "=" then
+                            h(Q, u(w((F % (65536)) / (256))))
+                        end
+                        break
+                    end
+                    L = L + (1)
+                end
+                U[k] = j(Q)
+            end
+        end
+    end
+    return (function(k, g, j, f, u, M, U, B, F, V, Q, b, L, w, l, A)
+        w, l, A, B, V, b, L, F, Q = {}, function(k, h)
+            local g = F(h)
+            local j = function(...)
+                return A(k, {
+                    ...
+                }, h, g)
+            end
+            return j
+        end, function(A, j, f, u)
+            local b, Q, L, B, w, U, F
+            while A do
+                U = h(-36383)
+                L = h(-36385)
+                A = nil
+                Q = h(-36382)
+                B = A
+                w = j
+                A = k[U]
+                U = A(Q, B)
+                Q = h(-36383)
+                A = 5
+                b = h(-36378)
+                U = k[Q]
+                B = A
+                F = h(-36379)
+                Q = U(L, B)
+                L = h(-36383)
+                B = nil
+                U = nil
+                Q = U
+                U = k[L]
+                L = U(F, Q)
+                F = h(-36383)
+                A = k[h(-36381)]
+                L = k[F]
+                U = 6
+                Q = U
+                F = L(b, Q)
+                U = {}
+                Q = nil
+            end
+            A = #u
+            return g(U)
+        end, {}, function(k)
+            B[k] = B[k] - (1)
+            if B[k] == 0 then
+                B[k], w[k] = nil, nil
+            end
+        end, function(k)
+            local h, A = 1, k[1]
+            while A do
+                B[A], h = B[A] - (1), (1) + h
+                if 0 == B[A] then
+                    B[A], w[A] = nil, nil
+                end
+                A = k[h]
+            end
+        end, 0, function(k)
+            for h = 1, #k, 1 do
+                B[k[h]] = (1) + B[k[h]]
+            end
+            if j then
+                local A = j(true)
+                local g = u(A)
+                g[h(-36386)], g[h(-36380)], g[h(-36384)] = k, b, function()
+                    return -3238794
+                end
+                return A
+            else
+                return f({}, {
+                    [h(-36380)] = b,
+                    [h(-36386)] = k,
+                    [h(-36384)] = function()
+                        return -3238794
+                    end
+                })
+            end
+        end, function()
+            L = L + (1)
+            B[L] = 1
+            return L
+        end
+        return (l(8099129, {}))(g(U))
+    end)(getfenv and getfenv() or _ENV, unpack or table[h(-36377)], newproxy, setmetatable, getmetatable, select, {
+        ...
+    })
+end)(...)
