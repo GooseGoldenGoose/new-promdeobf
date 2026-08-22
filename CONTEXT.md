@@ -175,16 +175,25 @@ Current implementation:
 
 ## Prometheus ConstantArray Step
 
-- The arithmetic constant-folding pass was removed; that was not the intended first deobfuscation step.
-- `passes/constant-array.js` structurally recovers Prometheus `ConstantArray`: literal table, rotation, accessor offset, and custom-base64 decoder.
-- It is scope-aware when replacing accessor calls, so shadowed identifiers are not mistaken for the ConstantArray wrapper.
-- `main.js` reads `sample\1.txt`, runs this pass, reparses the output, and writes `output\01-constant-table.lua`.
-- Current fixture result: 7 constants recovered, rotation applied, strings decoded, 10 references inlined, 0 unresolved wrapper/array uses, and the dead ConstantArray prelude removed.
-- Current recovered constants are `__index`, `print`, `__len`, `AD`, `uDe20wqvE6Bx`, `unpack`, and `__gc`.
-- `sample\2.txt` is a second normalized Medium-preset fixture generated from `warn("gg")` plus `if math.random(1, 2) == 1 then print("ranf") end`.
-- The deobfuscated output for sample 2 is named `output\2.lua`.
-- The ConstantArray pass also succeeds on `sample\2.txt`: 11 constants recovered, 14 references inlined, rotation and string decoding applied, 0 unresolved wrapper/array uses, and the dead prelude removed.
-- Keep the current Luau parser while it remains sufficient; switching the parser layer to Rust Moonlight is acceptable if parser limitations begin blocking correct structural recovery.
+- The arithmetic constant-folding pass was removed; step 1 is Prometheus ConstantArray recovery.
+- `passes/constant-array.js` structurally recovers the literal array, optional rotation, accessor offset, and custom-base64 decoder.
+- Accessor replacement is scope-aware; fixture names, offsets, and constant values are not hardcoded.
+- Missing ConstantArray is now a safe pass-through so later stages still run when that Prometheus step is disabled.
+- `sample\1.txt`: 7 constants recovered and 10 references inlined with 0 unresolved wrapper/array uses.
+- `sample\2.txt`: 11 constants recovered and 14 references inlined with 0 unresolved wrapper/array uses.
+- Keep the current Luau parser while sufficient; Rust Moonlight is acceptable if parser limitations become a correctness blocker.
+
+## Environment Binding Step
+
+- Step 2 is implemented in `passes/environment.js`.
+- It finds an environment-producing IIFE argument and maps that argument position to the receiving function parameter, rather than renaming by identifier text.
+- Supported environment provenance includes direct global `getgenv()`, Prometheus-style `getfenv and getfenv() or _ENV`, and direct global `_ENV`.
+- The receiving binding is renamed to `_env` with lexical shadow tracking; unrelated nested parameters/locals with the same original name are left unchanged.
+- If an existing `_env` binding would capture a renamed use, the pass reports a collision instead of changing semantics.
+- `sample\1.txt`: environment parameter `U -> _env`, 2 bound references renamed.
+- `sample\2.txt`: environment parameter `S -> _env`, 4 bound references renamed; current deobfuscated output is `output\2.lua`.
+- Regression checks cover direct `getgenv()`, `getfenv ... or _ENV`, direct `_ENV`, nested-name shadowing, collision rejection, and operation when ConstantArray is absent.
+- `main.js` reparses after ConstantArray and again after environment renaming; default output is now `output\1.lua`.
 
 ## Control-Flow Understanding
 
@@ -396,8 +405,8 @@ without producing unrelated locals.
 
 # Immediate Next Steps
 
-1. Treat `output\01-constant-table.lua` as the current stage output.
-2. Do not add another recovery pass until the user chooses the next deobfuscation step.
+1. Treat `output\1.lua` / `output\2.lua` as outputs after steps 1-2.
+2. Do not add step 3 until the user chooses the next recovery target.
 3. Keep each pass structural/generalized, scope-aware where bindings matter, and reparse its output before advancing.
 4. If the current parser becomes a correctness blocker, evaluate Rust Moonlight instead of adding parser-specific hacks.
 5. Update `CONTEXT.md`, commit, and push every project change as a checkpoint.
