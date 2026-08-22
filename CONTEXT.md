@@ -14,6 +14,24 @@ The Git repository is connected to:
 https://github.com/GooseGoldenGoose/new-promdeobf.git
 ```
 
+# Fresh-Chat Startup / Mandatory Workflow
+
+When continuing this project in a new chat:
+
+- Read this entire `CONTEXT.md` first and treat it as the authoritative live handoff. Do not ask the user to repeat decisions already recorded here.
+- Active workspace: `C:\Users\reala\Desktop\!workspaces\promdeobf ova\new promdeobf` on branch `main`; remote is `https://github.com/GooseGoldenGoose/new-promdeobf.git`.
+- Use the connected Windows shell for project work. Prefer direct file edits / Node UTF-8 writes over PowerShell text round-trips when changing `CONTEXT.md`.
+- Every project code/content change, even tiny, must be checkpointed with `git add` for only intended files, a focused commit, and `git push origin main`. Keep conceptually separate changes in separate commits when practical.
+- Keep `CONTEXT.md` continuously updated after meaningful implementation/analysis decisions. Compact or replace stale/superseded notes rather than accumulating contradictions.
+- Never stage or modify unrelated untracked workspace items. Current intentional untracked items include `formater/` and `sample/5.txt` unless the user explicitly changes that policy.
+- Everything must be structural/generalized: never hardcode sample IDs, state numbers, register names, closure arities, strings, filenames, or random constants. Fix root causes, not output text afterward.
+- After transformations, reparse generated Lua and run runtime regressions whenever executable fixtures permit it. Compare original/readable source, obfuscated input, and deobfuscated output where useful.
+- Prometheus-specific behavior should be verified against canonical `wcrddn/Prometheus` source when exact compiler semantics matter.
+- Preserve stable pipeline behavior when experimenting. A recovery pass must fail closed: if proof is incomplete, preserve the previous safe output rather than guess.
+- End every project-related turn with exactly: `Done for this turn — you can prompt now.`
+
+Current startup state at this handoff: latest commit before this section is `3a0b601 Record shadowed sample 7 scope proof`; normal Step 3 state recovery/normalization is promoted in `main.js`; samples 4, 6, and 7 are focused CFG/closure/scope regressions; untracked sample 5 is the large 930-state stress regression.
+
 # Core Knowledge & Rules
 
 ## General Deobfuscation Philosophy
@@ -40,7 +58,7 @@ https://github.com/GooseGoldenGoose/new-promdeobf.git
 - Test each coherent change before continuing.
 - Treat `CONTEXT.md` as a live handoff: update it after meaningful decisions or implementation work, compact superseded detail, and remove stale topics that have not mattered for a while.
 - After every project change, even a small one, create a Git checkpoint commit and push it to origin/main.
-- At the end of every assistant turn, clearly state that the current work is done and the user can send the next prompt.
+- End every project-related assistant turn with exactly: `Done for this turn — you can prompt now.`
 ## Prometheus Reference
 
 Whenever the user says **Prometheus**, use this repository as the reference implementation:
