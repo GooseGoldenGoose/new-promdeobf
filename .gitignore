@@ -1,2 +1,9 @@
+﻿# Generated deobfuscator artifacts
+output/*.json
+output/*.lua
+
+# Local formatter artifacts
+formater/out.txt
+
 node_modules/
 .env
