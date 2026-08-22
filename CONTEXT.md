@@ -436,10 +436,14 @@ end
 
 without producing unrelated locals.
 
+- Tracked `sample/7.source.lua` / `sample/7.txt` is the dedicated lexical-scope regression. Source semantics: `local a = 1`; an inner `do ... end` declares `local b = 2`; after the block `print(b)` is a global lookup and prints `nil`; nested function `w()` reads captured `a` and returns `1`. Readable source, Prometheus Medium fixture, and current deobfuscated output all print `1`, `2`, `nil`, `1` and exit 0.
+- Sample 7 resolves 2/2 VM states: root state `1` and `w` as `createClosure3` state `2`. In the root block, `a` is promoted through `D = allocUpvalue(); upvalueValues[D] = 1`; `print(a)` reads that cell. The inner block-local `b = 2` is represented only as an ordinary temporary value used by its print. The later source `print(b)` is separately represented by loading string `"b"` and reading `_env[...]`, proving it is not the same binding as the inner local. `w` is created with captures `{D}` and reads `upvalueValues[upvalues[1]]`, proving it captures `a` only.
+- Scope-recovery rule reinforced by sample 7: never merge identifiers by spelling or reused VM register name. Recover source binding identity from lexical/function ownership, reaching definitions/liveness, environment-vs-local provenance, and explicit closure capture/upvalue-cell identity.
+
 # Immediate Next Steps
 
 1. Treat `output\\N.lua` as the normal final output through promoted Step 3; keep earlier step boundaries only as internal pipeline stages.
-2. Use sample 4 as the small source-control-flow CFG regression, sample 6 as the nested-closure/function-ownership regression, and untracked sample 5 as the large stress regression for split branches, closed reachable graphs, and unreachable-block pruning; keep closure graphs distinct and preserve proven jump/back-edge semantics.
+2. Use sample 4 as the small source-control-flow CFG regression, sample 6 as the nested-closure/function-ownership regression, sample 7 as the lexical-scope/binding-identity regression, and untracked sample 5 as the large stress regression for split branches, closed reachable graphs, and unreachable-block pruning; keep closure graphs distinct and preserve proven jump/back-edge semantics.
 3. Keep POS-register temporary reuse distinct from true block terminators; extend terminator recognition only from proven Prometheus compiler patterns.
 4. Keep each pass structural/generalized and reparse/runtime-check transformed outputs before advancing.
 5. If the current parser becomes a correctness blocker, evaluate Rust Moonlight instead of parser-specific hacks.
