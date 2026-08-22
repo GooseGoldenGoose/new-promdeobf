@@ -2,10 +2,11 @@ const fs = require("fs");
 const path = require("path");
 const luaparse = require("./parser/luaparse");
 const { inlinePrometheusConstantArray } = require("./passes/constant-array");
+const { renameEnvironmentBinding } = require("./passes/environment");
 
 const ROOT = __dirname;
 const DEFAULT_INPUT = path.join(ROOT, "sample", "1.txt");
-const DEFAULT_OUTPUT = path.join(ROOT, "output", "01-constant-table.lua");
+const DEFAULT_OUTPUT = path.join(ROOT, "output", "1.lua");
 const DEFAULT_AST_OUTPUT = path.join(ROOT, "output", "ast.json");
 
 function parseLua(source, filename = "<input>") {
@@ -46,18 +47,24 @@ function writeSource(source, outputPath = DEFAULT_OUTPUT) {
 
 function runDeobfuscator(inputPath = DEFAULT_INPUT, outputPath = DEFAULT_OUTPUT) {
     const loaded = loadAst(inputPath);
-    const constants = inlinePrometheusConstantArray(loaded.source, loaded.ast);
-    if (!constants.found) throw new Error(constants.reason);
 
-    const outputAst = parseLua(constants.source, outputPath);
-    const resolvedOutput = writeSource(constants.source, outputPath);
+    const constantArray = inlinePrometheusConstantArray(loaded.source, loaded.ast);
+    const stage1Source = constantArray.found ? constantArray.source : loaded.source;
+    const stage1Ast = parseLua(stage1Source, `${inputPath} <after ConstantArray>`);
+
+    const environment = renameEnvironmentBinding(stage1Source, stage1Ast, "_env");
+    if (environment.collision) throw new Error(environment.reason);
+
+    const outputAst = parseLua(environment.source, outputPath);
+    const resolvedOutput = writeSource(environment.source, outputPath);
 
     return {
         ...loaded,
         outputAst,
         outputPath: resolvedOutput,
-        outputSource: constants.source,
-        constantArray: constants,
+        outputSource: environment.source,
+        constantArray,
+        environment,
     };
 }
 
@@ -65,17 +72,27 @@ function main() {
     const inputPath = process.argv[2] || DEFAULT_INPUT;
     const outputPath = process.argv[3] || DEFAULT_OUTPUT;
     const result = runDeobfuscator(inputPath, outputPath);
-    const info = result.constantArray;
+    const constants = result.constantArray;
+    const env = result.environment;
 
     console.log(`Input: ${result.inputPath}`);
     console.log(`AST root: ${result.ast.type}`);
-    console.log(`Constant entries: ${info.constants.length}`);
-    console.log(`Constant references inlined: ${info.replacements.length}`);
-    console.log(`Array rotated: ${info.rotated}`);
-    console.log(`Strings decoded: ${info.decoded}`);
-    console.log(`Prelude removed: ${info.removedPrelude}`);
-    console.log(`Unresolved wrapper uses: ${info.unresolvedWrapperUses}`);
-    console.log(`Unresolved array uses: ${info.unresolvedArrayUses}`);
+    console.log(`ConstantArray found: ${constants.found}`);
+    if (constants.found) {
+        console.log(`Constant entries: ${constants.constants.length}`);
+        console.log(`Constant references inlined: ${constants.replacements.length}`);
+        console.log(`Array rotated: ${constants.rotated}`);
+        console.log(`Strings decoded: ${constants.decoded}`);
+        console.log(`Prelude removed: ${constants.removedPrelude}`);
+        console.log(`Unresolved wrapper uses: ${constants.unresolvedWrapperUses}`);
+        console.log(`Unresolved array uses: ${constants.unresolvedArrayUses}`);
+    }
+    console.log(`Environment binding found: ${env.found}`);
+    if (env.found) {
+        console.log(`Environment source: ${env.sourceKind}`);
+        console.log(`Environment rename: ${env.oldName} -> ${env.newName}`);
+        console.log(`Environment references renamed: ${env.referencesRenamed}`);
+    }
     console.log(`Output: ${result.outputPath}`);
     return result;
 }
