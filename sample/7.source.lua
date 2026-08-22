@@ -1,3 +1,4 @@
+local b = 3
 local a = 1
 print(a)
 
@@ -12,5 +13,4 @@ local function w()
     print(a)
     return 1
 end
-
 w()
