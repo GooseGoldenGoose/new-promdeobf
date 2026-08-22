@@ -171,6 +171,8 @@ Current implementation:
 - Controlled obfuscator fixture source exists at `C:\Users\reala\Desktop\!workspaces\promdeobf ova\wearedev obf`; `run.bat` invokes `luajit cli.lua --preset Medium input.txt`, producing `input.txt.obfuscated.lua`.
 - Both the formatted sample and the direct `wearedev obf\input.txt.obfuscated.lua` parse successfully as a `Chunk` with one top-level statement.
 - Existing untracked `sample/` content should not be modified unless explicitly needed.
+- sample\1.txt is the current normalized fixture copied byte-for-byte from ormater\out.txt; use it as the next-stage deobfuscation sample.
+
 ## Control-Flow Understanding
 
 Prometheus-style control-flow flattening should be modeled as a dispatcher/state machine.
