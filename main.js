@@ -9,6 +9,7 @@ const { splitSafeParallelAssignmentsFully } = require("./passes/split-safe-assig
 const { recoverVmStateGraph } = require("./passes/vm-state");
 const { recoverVmBindings } = require("./passes/vm-bindings");
 const { scheduleVmRegisterUses } = require("./passes/vm-register-scheduler");
+const { renameVmRegisterBindings } = require("./passes/vm-register-names");
 
 const ROOT = __dirname;
 const DEFAULT_INPUT = path.join(ROOT, "sample", "1.txt");
@@ -79,7 +80,12 @@ function runDeobfuscator(inputPath = DEFAULT_INPUT, outputPath = DEFAULT_OUTPUT)
     const registerSchedule = vmStateApplied
         ? scheduleVmRegisterUses(normalizedSource, normalizedAst)
         : { source: normalizedSource, found: false, applied: false, blocksChanged: 0, swaps: 0 };
-    const finalSource = registerSchedule.applied ? registerSchedule.source : normalizedSource;
+    const scheduledSource = registerSchedule.applied ? registerSchedule.source : normalizedSource;
+    const scheduledAst = parseLua(scheduledSource, `${inputPath} <before VM register naming>`);
+    const registerNames = vmStateApplied
+        ? renameVmRegisterBindings(scheduledSource, scheduledAst)
+        : { source: scheduledSource, found: false, applied: false, mapping: [] };
+    const finalSource = registerNames.applied ? registerNames.source : scheduledSource;
 
     const outputAst = parseLua(finalSource, outputPath);
     const resolvedOutput = writeSource(finalSource, outputPath);
@@ -97,6 +103,7 @@ function runDeobfuscator(inputPath = DEFAULT_INPUT, outputPath = DEFAULT_OUTPUT)
         vmState,
         vmBindings,
         registerSchedule,
+        registerNames,
         vmStateApplied,
     };
 }
@@ -113,6 +120,7 @@ function main() {
     const vmState = result.vmState;
     const vmBindings = result.vmBindings;
     const registerSchedule = result.registerSchedule;
+    const registerNames = result.registerNames;
     const vmStateApplied = result.vmStateApplied;
 
     console.log(`Input: ${result.inputPath}`);
@@ -178,6 +186,13 @@ function main() {
         if (registerSchedule.safetyRejectedSegments > 0) {
             console.log(`VM register scheduling safety rejections: ${registerSchedule.safetyRejectedSegments}`);
         }
+    }
+    console.log(`VM register naming applied: ${registerNames.applied}`);
+    if (registerNames.applied) {
+        console.log(`VM return register: ${registerNames.returnRegisterOldName} -> ${registerNames.returnRegisterName}`);
+        console.log(`VM temporary registers renamed: ${registerNames.temporaryRegisterCount}`);
+    } else if (registerNames.found && registerNames.reason) {
+        console.log(`VM register naming skipped: ${registerNames.reason}`);
     }
     console.log(`VM binding analysis found: ${vmBindings.found}`);
     if (vmBindings.found) {
