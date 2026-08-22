@@ -1,242 +1,270 @@
 return (function(...)
-    local S = {
-        "bUXLc7d=",
-        "Hp+SHuOvoTBm+4+E",
-        "JuQlAu+R",
-        "TNy7Al==",
-        "TNy2ouh=",
-        "TNyLctVMxj==",
-        "oMi3D3+qJIQIVqBSb3h="
+    local F = {
+        "7EuFVo==",
+        "jqBnMEC=",
+        "jqBkZw==",
+        "6/lvzd8yXN8AMXanVo==",
+        "6WugMLBh",
+        "PEawZEfQ",
+        "7EbJ80fQ+tr/VNrv",
+        "zXz9PXfn8TznlLTQp8X=",
+        "jqBm7WzT5o==",
+        "6AOm7k+="
     }
-    for F, b in ipairs({
+    for V, m in ipairs({
         {
             1,
-            7
+            10
         },
         {
             1,
-            5
+            8
         },
         {
-            6,
-            7
+            9,
+            10
         }
     }) do
-        while b[1] < b[2] do
-            S[b[1]], S[b[2]], b[1], b[2] = S[b[2]], S[b[1]], b[1] + (1), b[2] - (1)
+        while m[1] < m[2] do
+            F[m[1]], F[m[2]], m[1], m[2] = F[m[2]], F[m[1]], m[1] + (1), m[2] - (1)
         end
     end
-    local function F(F)
-        return S[F - (21579)]
+    local function V(V)
+        return F[V + (32312)]
     end
     do
-        local F = type
-        local b = S
-        local D = string.char
-        local z = table.concat
+        local V = table.concat
         local m = {
-            k = 21,
-            O = 20,
-            A = 24,
-            i = 1,
-            ["3"] = 36,
-            m = 55,
-            ["4"] = 19,
-            o = 25,
-            B = 33,
-            C = 10,
-            r = 60,
-            ["6"] = 32,
-            f = 49,
-            d = 16,
-            a = 26,
-            Z = 50,
-            W = 47,
-            z = 42,
-            K = 34,
-            v = 54,
-            I = 52,
-            M = 37,
-            Y = 45,
-            L = 41,
-            R = 43,
-            ["0"] = 15,
-            ["5"] = 2,
-            ["7"] = 39,
-            w = 59,
-            ["/"] = 6,
-            p = 51,
-            D = 12,
-            F = 5,
-            q = 3,
-            E = 4,
-            b = 28,
-            j = 0,
-            x = 30,
-            G = 62,
-            ["8"] = 31,
-            T = 23,
-            U = 7,
-            ["+"] = 13,
-            Q = 57,
-            ["2"] = 44,
-            P = 63,
-            V = 17,
-            S = 14,
-            c = 27,
-            X = 9,
-            ["9"] = 58,
-            h = 56,
-            l = 48,
-            J = 29,
-            t = 38,
-            N = 53,
+            M = 25,
+            j = 23,
+            T = 37,
+            b = 40,
+            ["4"] = 11,
+            l = 12,
+            V = 26,
+            c = 15,
+            ["3"] = 2,
+            C = 56,
+            S = 47,
+            F = 52,
+            J = 54,
+            ["2"] = 31,
+            s = 10,
+            E = 22,
+            p = 18,
+            ["+"] = 16,
+            ["1"] = 59,
+            t = 19,
+            r = 33,
+            Q = 43,
+            h = 45,
+            i = 63,
+            A = 7,
+            z = 17,
+            Z = 24,
+            a = 57,
             g = 46,
-            s = 35,
-            ["1"] = 11,
-            n = 8,
-            e = 40,
-            u = 22,
-            H = 18,
-            y = 61
+            f = 13,
+            L = 6,
+            y = 3,
+            K = 42,
+            o = 0,
+            R = 60,
+            H = 49,
+            X = 20,
+            ["8"] = 21,
+            m = 41,
+            ["/"] = 51,
+            D = 58,
+            N = 36,
+            w = 48,
+            x = 1,
+            d = 55,
+            k = 39,
+            u = 5,
+            v = 50,
+            ["0"] = 4,
+            O = 9,
+            ["7"] = 27,
+            q = 53,
+            ["6"] = 28,
+            e = 35,
+            Y = 34,
+            I = 8,
+            G = 32,
+            ["9"] = 14,
+            W = 38,
+            n = 44,
+            B = 61,
+            U = 62,
+            P = 29,
+            ["5"] = 30
         }
-        local J = string.len
-        local B = string.sub
-        local o = math.floor
-        local d = table.insert
-        for S = 1, #b, 1 do
-            local U = b[S]
-            if F(U) == "string" then
-                local F = J(U)
-                local E = {}
-                local h = 1
-                local f = 0
-                local a = 0
-                while h <= F do
-                    local S = B(U, h, h)
-                    local b = m[S]
-                    if b then
-                        f = f + b * (64) ^ ((3) - a)
-                        a = a + (1)
-                        if a == 4 then
-                            a = 0
-                            local S = o(f / (65536))
-                            local F = o((f % (65536)) / (256))
-                            local b = f % (256)
-                            d(E, D(S, F, b))
-                            f = 0
+        local i = F
+        local Q = type
+        local l = table.insert
+        local u = math.floor
+        local p = string.char
+        local d = string.len
+        local c = string.sub
+        for F = 1, #i, 1 do
+            local y = i[F]
+            if Q(y) == "string" then
+                local Q = d(y)
+                local Y = {}
+                local O = 1
+                local j = 0
+                local R = 0
+                while O <= Q do
+                    local F = c(y, O, O)
+                    local V = m[F]
+                    if V then
+                        j = j + V * (64) ^ ((3) - R)
+                        R = R + (1)
+                        if R == 4 then
+                            R = 0
+                            local F = u(j / (65536))
+                            local V = u((j % (65536)) / (256))
+                            local m = j % (256)
+                            l(Y, p(F, V, m))
+                            j = 0
                         end
-                    elseif S == "=" then
-                        d(E, D(o(f / (65536))))
-                        if h >= F or B(U, h + (1), h + (1)) ~= "=" then
-                            d(E, D(o((f % (65536)) / (256))))
+                    elseif F == "=" then
+                        l(Y, p(u(j / (65536))))
+                        if O >= Q or c(y, O + (1), O + (1)) ~= "=" then
+                            l(Y, p(u((j % (65536)) / (256))))
                         end
                         break
                     end
-                    h = h + (1)
+                    O = O + (1)
                 end
-                b[S] = z(E)
+                i[F] = V(Y)
             end
         end
     end
-    return (function(S, D, z, m, J, B, o, U, b, p, E, A, s, h, d, f, a)
-        f, b, s, E, a, h, d, p, U, A = function(S)
-            for F = 1, #S, 1 do
-                U[S[F]] = U[S[F]] + (1)
+    return (function(F, i, Q, l, u, p, d, v, A, R, j, c, Y, m, y, O, T)
+        c, v, A, O, R, y, Y, j, T, m = {}, function(F, V)
+            local i = j(V)
+            local Q = function()
+                return m(F, {}, V, i)
             end
-            if z then
-                local b = z(true)
-                local D = J(b)
-                D[F(21583)], D[F(21581)], D[F(21582)] = S, a, function()
-                    return 1535915
+            return Q
+        end, function(F)
+            y[F] = y[F] - (1)
+            if 0 == y[F] then
+                y[F], c[F] = nil, nil
+            end
+        end, 0, function(F)
+            local V, m = 1, F[1]
+            while m do
+                y[m], V = y[m] - (1), (1) + V
+                if 0 == y[m] then
+                    y[m], c[m] = nil, nil
                 end
-                return b
+                m = F[V]
+            end
+        end, {}, function()
+            O = (1) + O
+            y[O] = 1
+            return O
+        end, function(F)
+            for V = 1, #F, 1 do
+                y[F[V]] = y[F[V]] + (1)
+            end
+            if Q then
+                local m = Q(true)
+                local i = u(m)
+                i[V(-32305)], i[V(-32311)], i[V(-32302)] = F, R, function()
+                    return 237482
+                end
+                return m
             else
-                return m({}, {
-                    [F(21581)] = a,
-                    [F(21583)] = S,
-                    [F(21582)] = function()
-                        return 1535915
+                return l({}, {
+                    [V(-32311)] = R,
+                    [V(-32305)] = F,
+                    [V(-32302)] = function()
+                        return 237482
                     end
                 })
             end
-        end, function(b, z, m, J)
-            local a, f, U, o, h
-            while b do
-                if b < 1041865 then
-                    o = F(21585)
-                    b = S[o]
-                    U = d[m[1]]
-                    o = b(U)
-                    b = 1
-                    o = {
-                        b
-                    }
-                    b = S[F(21586)]
-                else
-                    U = z
-                    f = E()
-                    b = 3
-                    h = b
-                    b = 1
-                    d[f] = b
-                    o = F(21585)
-                    b = S[o]
-                    a = d[f]
-                    o = b(a)
-                    b = 2
-                    a = b
-                    o = F(21585)
-                    b = S[o]
-                    o = b(a)
-                    b = 123
-                    o = {
-                        b
-                    }
-                    b = S[F(21584)]
-                end
-            end
-            b = #J
-            return D(o)
-        end, function(S, F)
-            local D = f(F)
-            local z = function(...)
-                return b(S, {
+        end, function(F, V)
+            local i = j(V)
+            local Q = function(...)
+                return m(F, {
                     ...
-                }, F, D)
+                }, V, i)
             end
-            return z
-        end, function()
-            h = h + (1)
-            U[h] = 1
-            return h
-        end, function(S)
-            local F, b = 1, S[1]
-            while b do
-                U[b], F = U[b] - (1), F + (1)
-                if U[b] == 0 then
-                    U[b], d[b] = nil, nil
+            return Q
+        end, function(m, Q, l, u)
+            local y, T, R, f, j, O, d
+            while m do
+                if m < 4656983 then
+                    if m < 4180248 then
+                        m = 2
+                        d = V(-32304)
+                        R = m
+                        m = F[d]
+                        d = m(R)
+                        m = 123
+                        d = {
+                            m
+                        }
+                        m = F[V(-32310)]
+                    else
+                        d = V(-32304)
+                        m = F[d]
+                        y = c[l[1]]
+                        d = m(y)
+                        m = 1
+                        d = {
+                            m
+                        }
+                        m = F[V(-32306)]
+                    end
+                else
+                    if m < 13206210 then
+                        T = V(-32303)
+                        m = 3
+                        y = Q
+                        O = m
+                        m = 1
+                        j = Y()
+                        f = 2
+                        c[j] = m
+                        d = V(-32304)
+                        m = F[d]
+                        R = c[j]
+                        d = m(R)
+                        R = F[T]
+                        T = V(-32309)
+                        d = R[T]
+                        T = 1
+                        R = d(T, f)
+                        d = 1
+                        m = R == d
+                        m = m and 906173 or 13982396
+                    else
+                        d = V(-32304)
+                        m = F[d]
+                        d = m(O)
+                        m = v(4300829, {
+                            j
+                        })
+                        R = m
+                        d = {}
+                        m = R()
+                        O = nil
+                        R = nil
+                        m = F[V(-32307)]
+                        j = A(j)
+                    end
                 end
-                b = S[F]
             end
-        end, 0, {}, function(S, F)
-            local D = f(F)
-            local z = function(z, m, J)
-                return b(S, {
-                    z,
-                    m,
-                    J
-                }, F, D)
-            end
-            return z
-        end, {}, function(S)
-            U[S] = U[S] - (1)
-            if 0 == U[S] then
-                U[S], d[S] = nil, nil
-            end
+            m = #u
+            return i(d)
         end
-        return (s(5226258, {}))(D(o))
-    end)(getfenv and getfenv() or _ENV, unpack or table[F(21580)], newproxy, setmetatable, getmetatable, select, {
+        return (T(4779749, {}))(i(d))
+    end)(getfenv and getfenv() or _ENV, unpack or table[V(-32308)], newproxy, setmetatable, getmetatable, select, {
         ...
     })
 end)(...)
