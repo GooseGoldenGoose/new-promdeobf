@@ -1,0 +1,556 @@
+return (function(...)
+    local c = {
+        "7Gu+5PghZa==",
+        "jiLgp2fsVWrnihfGVq==",
+        "50dhfPdz50fecyrSca==",
+        "7Gu2pq==",
+        "7GuzdN/=",
+        "fOo+52v=",
+        "cNnqpNmR"
+    }
+    for E, D in ipairs({
+        {
+            1,
+            7
+        },
+        {
+            1,
+            6
+        },
+        {
+            7,
+            7
+        }
+    }) do
+        while D[1] < D[2] do
+            c[D[1]], c[D[2]], D[1], D[2] = c[D[2]], c[D[1]], D[1] + (1), D[2] - (1)
+        end
+    end
+    local function E(E)
+        return c[E + (14567)]
+    end
+    do
+        local E = table.insert
+        local D = string.sub
+        local G = c
+        local S = {
+            G = 53,
+            k = 5,
+            ["6"] = 3,
+            V = 26,
+            e = 45,
+            ["7"] = 23,
+            M = 15,
+            P = 38,
+            ["/"] = 56,
+            ["9"] = 52,
+            ["2"] = 39,
+            c = 29,
+            ["3"] = 35,
+            b = 59,
+            Z = 30,
+            w = 10,
+            m = 13,
+            u = 61,
+            F = 58,
+            X = 54,
+            p = 24,
+            ["8"] = 42,
+            R = 43,
+            E = 8,
+            x = 34,
+            t = 19,
+            Y = 1,
+            z = 44,
+            l = 33,
+            I = 32,
+            r = 21,
+            ["1"] = 18,
+            v = 16,
+            ["+"] = 41,
+            h = 37,
+            K = 2,
+            O = 7,
+            o = 9,
+            U = 36,
+            g = 17,
+            j = 12,
+            L = 49,
+            J = 46,
+            D = 60,
+            Q = 40,
+            n = 57,
+            ["0"] = 55,
+            S = 51,
+            y = 6,
+            N = 22,
+            s = 50,
+            A = 63,
+            H = 14,
+            f = 28,
+            d = 25,
+            a = 0,
+            i = 20,
+            W = 4,
+            ["5"] = 27,
+            q = 48,
+            C = 62,
+            B = 47,
+            ["4"] = 31,
+            T = 11
+        }
+        local B = string.char
+        local T = math.floor
+        local x = string.len
+        local v = table.concat
+        local w = type
+        for c = 1, #G, 1 do
+            local X = G[c]
+            if w(X) == "string" then
+                local w = x(X)
+                local F = {}
+                local N = 1
+                local C = 0
+                local A = 0
+                while N <= w do
+                    local c = D(X, N, N)
+                    local G = S[c]
+                    if G then
+                        C = C + G * (64) ^ ((3) - A)
+                        A = A + (1)
+                        if A == 4 then
+                            A = 0
+                            local c = T(C / (65536))
+                            local D = T((C % (65536)) / (256))
+                            local G = C % (256)
+                            E(F, B(c, D, G))
+                            C = 0
+                        end
+                    elseif c == "=" then
+                        E(F, B(T(C / (65536))))
+                        if N >= w or D(X, N + (1), N + (1)) ~= "=" then
+                            E(F, B(T((C % (65536)) / (256))))
+                        end
+                        break
+                    end
+                    N = N + (1)
+                end
+                G[c] = v(F)
+            end
+        end
+    end
+    return (function(c, G, S, B, T, x, v, X, g, w, q, F, C, N, D, A)
+        X, D, C, g, w, F, N, q, A = {}, function(D, S, B, T)
+            local Sy = {}
+            local n, b, pY, cy, oY, RY, yY, PY, nY, eY, rY, C, q, QY, F, GY, y, p, e, r, L, f, BY, AY, o, wY, Ey, zY, m, k, FY, Z, j, Gy, l, R, t, SY, CY, K, vY, a, EY, d, OY, YY, Y, ZY, U, w, H, W, Dy, jY, N, HY, M, NY, qY, MY, cY, VY, UY, A, Q, gY, z, DY, P, fY, O, KY, XY, lY, g, TY, V, dY, h, JY, mY, WY, X, hY, kY, tY, s, uY, IY, u, sY, I, iY, i, aY, bY, v, J, xY, LY
+            while D do
+                D = 1
+                w = S
+                X = D
+                D = 2
+                F = D
+                D = 3
+                N = D
+                D = 4
+                C = D
+                D = 5
+                A = D
+                D = 6
+                q = D
+                D = 7
+                g = D
+                D = 8
+                K = D
+                D = 9
+                d = D
+                D = 10
+                R = D
+                D = 11
+                p = D
+                D = 12
+                M = D
+                D = 13
+                L = D
+                D = 14
+                l = D
+                D = 15
+                t = D
+                D = 16
+                Q = D
+                D = 17
+                C = nil
+                L = nil
+                U = D
+                D = 18
+                V = D
+                D = 19
+                P = D
+                D = 20
+                b = D
+                D = 21
+                z = D
+                D = 22
+                n = D
+                D = 23
+                i = D
+                D = 24
+                Sy[13] = 1000
+                j = D
+                Sy[15] = 1000
+                D = 25
+                y = D
+                D = 26
+                O = D
+                D = 27
+                Y = D
+                D = 28
+                r = D
+                D = 29
+                o = D
+                D = 30
+                g = nil
+                k = D
+                D = 31
+                H = D
+                D = 32
+                e = D
+                D = 33
+                u = D
+                D = 34
+                s = D
+                D = 35
+                m = D
+                M = nil
+                D = 36
+                I = D
+                D = 37
+                O = nil
+                J = D
+                H = nil
+                D = 38
+                a = D
+                D = 39
+                W = D
+                D = 40
+                f = D
+                t = nil
+                D = 41
+                Z = D
+                D = 42
+                h = D
+                h = nil
+                e = nil
+                q = nil
+                D = 43
+                cY = D
+                D = 44
+                EY = D
+                D = 45
+                U = nil
+                K = nil
+                DY = D
+                D = 46
+                GY = D
+                D = 47
+                Sy[14] = 1000
+                R = nil
+                SY = D
+                D = 48
+                l = nil
+                BY = D
+                Sy[18] = E(-14562)
+                D = 49
+                TY = D
+                D = 50
+                xY = D
+                i = nil
+                D = 51
+                vY = D
+                D = 52
+                wY = D
+                N = nil
+                D = 53
+                XY = D
+                D = 54
+                FY = D
+                D = 55
+                NY = D
+                D = 56
+                CY = D
+                D = 57
+                AY = D
+                D = 58
+                qY = D
+                D = 59
+                gY = D
+                gY = nil
+                A = nil
+                D = 60
+                v = 1000
+                KY = D
+                D = 61
+                F = nil
+                dY = D
+                D = 62
+                Sy[17] = 1000
+                KY = nil
+                RY = D
+                W = nil
+                D = 63
+                pY = D
+                cY = nil
+                D = 64
+                MY = D
+                xY = nil
+                D = 65
+                Q = nil
+                FY = nil
+                LY = D
+                D = 66
+                V = nil
+                EY = nil
+                j = nil
+                lY = D
+                BY = nil
+                D = 67
+                tY = D
+                D = 68
+                MY = nil
+                QY = D
+                D = 69
+                tY = nil
+                UY = D
+                D = 70
+                VY = D
+                dY = nil
+                D = 71
+                TY = nil
+                pY = nil
+                PY = D
+                a = nil
+                D = 72
+                bY = D
+                D = 73
+                zY = D
+                D = 74
+                nY = D
+                D = 75
+                f = nil
+                iY = D
+                LY = nil
+                D = 76
+                jY = D
+                UY = nil
+                D = 77
+                yY = D
+                wY = nil
+                D = 78
+                OY = D
+                D = 79
+                z = nil
+                o = nil
+                YY = D
+                D = 80
+                rY = D
+                qY = nil
+                D = 81
+                P = nil
+                oY = D
+                Sy[16] = 1000
+                n = nil
+                D = 82
+                kY = D
+                D = 83
+                GY = nil
+                HY = D
+                OY = nil
+                D = 84
+                eY = D
+                D = 85
+                uY = D
+                D = 86
+                sY = D
+                uY = nil
+                Sy[19] = E(-14565)
+                d = nil
+                HY = nil
+                D = 87
+                mY = D
+                D = 88
+                nY = nil
+                QY = nil
+                y = nil
+                SY = nil
+                IY = D
+                D = 89
+                XY = nil
+                JY = D
+                mY = nil
+                b = nil
+                D = 90
+                aY = D
+                IY = nil
+                D = 91
+                oY = nil
+                WY = D
+                D = 92
+                eY = nil
+                DY = nil
+                fY = D
+                s = nil
+                D = 93
+                m = nil
+                ZY = D
+                D = 94
+                hY = D
+                D = 95
+                fY = nil
+                cy = D
+                D = 96
+                Ey = D
+                D = 97
+                RY = nil
+                Dy = D
+                D = 98
+                aY = nil
+                Gy = D
+                Z = nil
+                Y = nil
+                p = nil
+                D = 99
+                vY = nil
+                Sy[1] = D
+                D = 100
+                Sy[2] = D
+                D = 101
+                jY = nil
+                Ey = nil
+                Sy[3] = D
+                D = 102
+                Sy[4] = D
+                r = nil
+                D = 103
+                Sy[5] = D
+                rY = nil
+                bY = nil
+                D = 104
+                Sy[6] = D
+                zY = nil
+                kY = nil
+                CY = nil
+                D = 105
+                hY = nil
+                Sy[5] = nil
+                YY = nil
+                Sy[7] = D
+                D = 106
+                Sy[8] = D
+                VY = nil
+                D = 107
+                Sy[9] = D
+                D = 108
+                Sy[10] = D
+                J = nil
+                D = 109
+                Sy[8] = nil
+                Sy[11] = D
+                cy = nil
+                D = 110
+                Sy[9] = nil
+                Sy[12] = D
+                D = X + v
+                yY = nil
+                Sy[7] = nil
+                Sy[6] = nil
+                X = D
+                v = Gy + Sy[13]
+                Sy[4] = nil
+                JY = nil
+                AY = nil
+                sY = nil
+                WY = nil
+                NY = nil
+                ZY = nil
+                PY = nil
+                Gy = v
+                I = nil
+                Sy[13] = Sy[1] + Sy[14]
+                Sy[14] = Sy[2] + Sy[15]
+                v = {}
+                Sy[15] = Sy[3] + Sy[16]
+                Sy[16] = Sy[12] + Sy[17]
+                iY = nil
+                k = nil
+                Sy[17] = c[Sy[18]]
+                Sy[3] = Sy[15]
+                lY = nil
+                Sy[12] = Sy[16]
+                Sy[1] = Sy[13]
+                u = nil
+                Dy = nil
+                Sy[2] = Sy[14]
+                Sy[18] = Sy[17](Sy[19], X, Gy, Sy[1], Sy[2], Sy[3], Sy[12])
+                Gy = nil
+                Sy[3] = nil
+                Sy[10] = nil
+                Sy[2] = nil
+                Sy[12] = nil
+                D = c[E(-14566)]
+                Sy[1] = nil
+                Sy[11] = nil
+                X = nil
+            end
+            D = #T
+            return G(v)
+        end, function(c)
+            for E = 1, #c, 1 do
+                X[c[E]] = (1) + X[c[E]]
+            end
+            if S then
+                local D = S(true)
+                local G = T(D)
+                G[E(-14560)], G[E(-14564)], G[E(-14563)] = c, A, function()
+                    return 1343931
+                end
+                return D
+            else
+                return B({}, {
+                    [E(-14564)] = A,
+                    [E(-14560)] = c,
+                    [E(-14563)] = function()
+                        return 1343931
+                    end
+                })
+            end
+        end, function(c, E)
+            local G = C(E)
+            local S = function(...)
+                return D(c, {
+                    ...
+                }, E, G)
+            end
+            return S
+        end, {}, function()
+            N = (1) + N
+            X[N] = 1
+            return N
+        end, 0, function(c)
+            X[c] = X[c] - (1)
+            if 0 == X[c] then
+                X[c], w[c] = nil, nil
+            end
+        end, function(c)
+            local E, D = 1, c[1]
+            while D do
+                X[D], E = X[D] - (1), E + (1)
+                if 0 == X[D] then
+                    X[D], w[D] = nil, nil
+                end
+                D = c[E]
+            end
+        end
+        return (g(4222331, {}))(G(v))
+    end)(getfenv and getfenv() or _ENV, unpack or table[E(-14561)], newproxy, setmetatable, getmetatable, select, {
+        ...
+    })
+end)(...)
