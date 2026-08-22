@@ -204,13 +204,17 @@ Current implementation:
 
 ## Beta Entry-State Recovery
 
-- Experimental entry-state recovery is intentionally separate from the normal step-2 pipeline; normal `output\1.lua` / `output\2.lua` / `output\3.lua` remain the baseline outputs.
-- Backup tag `backup-before-entry-beta-20260822` points to commit `1acf424`, the project state immediately before this experiment.
-- `passes/entry-state-beta.js` finds the semantically named `vm`, finds the root `createClosure(<numeric entry>, ...)` invocation outside the VM, locates `while state do`, and evaluates nested numeric comparisons (`<`, `<=`, `>`, `>=`, `==`, `~=` plus simple logical/not forms) for that exact entry value.
-- The beta rewrite emits an explicit `if state == <root entry> then` containing the resolved dispatcher region and retains the original dispatcher body in `else` as a behavior-preserving fallback for states not yet resolved.
-- `tools/resolve-entry-beta.js` defaults to `output\1.lua -> output\1.beta.lua`; the entry number is discovered structurally and is not hardcoded.
-- Current `sample\1` beta resolves root entry `1383946` directly to 7 VM statements. `output\1.beta.lua` reparses and runs identically to `output\1.lua` (`AD`, exit 0).
-- `output\3.beta.lua` is now an explicit beta validation artifact for sample 3. It resolves root entry `2815217` through `state < 5701683 => true`, `state < 1663260 => false`, then `else`, extracts 35 statements into `if state == 2815217 then`, reparses, and runs identically to stable `output\3.lua`: `block 10 2`, `before 1`, `after 3 3`, exit 0.
+- Experimental state/CFG recovery stays separate from normal step 2; `output\1.lua`, `output\2.lua`, and `output\3.lua` remain stable baseline outputs. Backup tag `backup-before-entry-beta-20260822` points to pre-beta commit `1acf424`.
+- `passes/entry-state-beta.js` finds the semantic `vm`, root `createClosure(<entry>, ...)`, all `createClosureN(<entry>, ...)` calls, and `while state do`; state IDs and closure arities are discovered structurally.
+- Dispatcher leaves are resolved by evaluating Prometheus nested numeric comparison trees for a candidate state ID. The beta walker then follows numeric POS-register terminators: `state = N` is a jump and `state = condition and A or B` is a branch.
+- Critical rule: Prometheus can temporarily reuse `POS_REGISTER` as an ordinary register, so not every assignment to renamed `state` is a jump. The walker treats the final write to the POS/state binding in a dispatcher block as its control-flow terminator.
+- Graph walking uses a visited set, so loop back-edges are retained without infinite analysis. Closure-created entry IDs are separate graph roots, not CFG successors unless an actual state transition targets them.
+- When every dispatcher leaf has a discovered state ID, beta output replaces the binary/range comparison dispatcher with explicit `if state == ID / elseif ...` cases and no original-tree fallback. Incomplete mappings retain the original dispatcher only for unresolved states.
+- `output\1.beta.lua`: root `1383946`, 1/1 dispatcher block mapped, runtime `AD`, exit 0.
+- `output\3.beta.lua`: all 3/3 blocks mapped. Root `2815217` ends in the generated stop sentinel and has no numeric successor; `9377191` (`createClosure1`) and `394074` (`createClosure0`) are separate closure roots. Runtime remains `block 10 2`, `before 1`, `after 3 3`, exit 0.
+- Sample 2 structurally validates branch walking: `8945882 -> 15467310 / 9224212`, `15467310 -> 9224212`, `9224212 -> stop`. Its LuaJIT runtime is not a useful equivalence check because the Roblox `warn` global is absent in plain LuaJIT; stable and beta fail at the same environment-dependent call.
+- A temporary controlled `while` + nested `if` Prometheus fixture resolved 6/6 blocks including the back-edge `9514929 -> 10936248`; stable and beta both printed `mid`, `done 3`, exit 0.
+- `tools/resolve-entry-beta.js` prints each graph root, state terminator, dispatcher path, leaf coverage, and writes the beta output.
 ## Control-Flow Understanding
 
 Prometheus-style control-flow flattening should be modeled as a dispatcher/state machine.
@@ -236,11 +240,11 @@ The new deobfuscator should recover:
 
 ```text
 dispatcher state value
-    ↓
+    เนยโ€
 basic block
-    ↓
+    เนยโ€
 successor transitions
-    ↓
+    เนยโ€
 CFG
 ```
 
@@ -264,18 +268,18 @@ Preferred recovery pipeline:
 
 ```text
 Prometheus dispatcher
-        ↓
+        เนยโ€
 basic blocks
-        ↓
+        เนยโ€
 CFG
-        ↓
+        เนยโ€
 dominators
 post-dominators
 backedge detection
 loop discovery
-        ↓
+        เนยโ€
 structured regions
-        ↓
+        เนยโ€
 Lua/Luau AST
 ```
 
@@ -327,9 +331,9 @@ end
 must behave conceptually like:
 
 ```text
-       ┌───────────────┐
-inc ──►│ shared x cell │◄── get
-       └───────────────┘
+       เนโ€ยเนโ€โฌเนโ€โฌเนโ€โฌเนโ€โฌเนโ€โฌเนโ€โฌเนโ€โฌเนโ€โฌเนโ€โฌเนโ€โฌเนโ€โฌเนโ€โฌเนโ€โฌเนโ€โฌเนโ€โฌเนโ€ย
+inc เนโ€โฌเนโ€โฌเนโ€“เธเนโ€ย shared x cell เนโ€ยเนโ€”ยเนโ€โฌเนโ€โฌ get
+       เนโ€โ€เนโ€โฌเนโ€โฌเนโ€โฌเนโ€โฌเนโ€โฌเนโ€โฌเนโ€โฌเนโ€โฌเนโ€โฌเนโ€โฌเนโ€โฌเนโ€โฌเนโ€โฌเนโ€โฌเนโ€โฌเนโ€ย
 ```
 
 It must not be treated as two copied values.
@@ -361,11 +365,11 @@ Nested functions receive references to those cells. Deep nesting can relay an up
 
 ```text
 root binding
-    ↓
+    เนยโ€
 function A upvalue slot
-    ↓
+    เนยโ€
 function B upvalue slot
-    ↓
+    เนยโ€
 function C upvalue slot
 ```
 
@@ -421,9 +425,9 @@ without producing unrelated locals.
 
 # Immediate Next Steps
 
-1. Keep `output\1.lua`, `output\2.lua`, and `output\3.lua` as the stable step-2 outputs; beta entry-state experiments stay separate.
-2. Use `output\1.beta.lua` and `output\3.beta.lua` as validated entry-state experiments; extend recovery from each root entry toward numeric successor states / a per-function CFG without hardcoded state IDs.
-3. Keep unresolved dispatcher states on a behavior-preserving fallback until their equivalence is proven.
-4. Keep each pass structural/generalized, scope-aware where bindings matter, and reparse/runtime-check transformed output before advancing.
-5. If the current parser becomes a correctness blocker, evaluate Rust Moonlight instead of adding parser-specific hacks.
+1. Keep stable step-2 outputs separate from beta CFG/state recovery.
+2. Use the beta state graphs as the basis for per-function CFG recovery and later source-level `if`/loop structuring; do not merge separate closure roots merely because their bodies match.
+3. Keep POS-register temporary reuse distinct from true block terminators; extend terminator recognition only from proven Prometheus compiler patterns.
+4. Keep each pass structural/generalized and reparse/runtime-check transformed outputs before advancing.
+5. If the current parser becomes a correctness blocker, evaluate Rust Moonlight instead of parser-specific hacks.
 6. Update `CONTEXT.md`, commit, and push every project change as a checkpoint.
