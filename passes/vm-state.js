@@ -441,11 +441,14 @@ function successorsOf(term) {
 
 function walkStateGraph(dispatcherBody, stateName, rootId, source) {
     const queue = [rootId];
+    const queued = new Set([rootId]);
     const blocks = new Map();
     const order = [];
-    while (queue.length) {
-        const id = queue.shift();
-        if (blocks.has(id)) continue;
+
+    // Cursor-based BFS keeps queue operations O(1). Each state is enqueued at
+    // most once, so graph traversal itself is O(V + E).
+    for (let cursor = 0; cursor < queue.length; cursor++) {
+        const id = queue[cursor];
         const block = resolveStateBlock(dispatcherBody, stateName, id, source);
         if (!block) {
             blocks.set(id, { id, unresolved: true, terminator: { kind: "unresolved" } });
@@ -455,7 +458,9 @@ function walkStateGraph(dispatcherBody, stateName, rootId, source) {
         blocks.set(id, block);
         order.push(id);
         for (const next of successorsOf(block.terminator)) {
-            if (!blocks.has(next)) queue.push(next);
+            if (queued.has(next)) continue;
+            queued.add(next);
+            queue.push(next);
         }
     }
     return { rootId, blocks, order };
@@ -734,8 +739,6 @@ function recoverVmStateGraph(source, ast) {
 
     const rootEntry = findRootEntry(ast);
     if (!rootEntry) return { source, found: false, reason: "No root entry was found" };
-    const globalClosureEntryInfo = findClosureEntryInfo(ast);
-
     const allBlocks = new Map();
     const graphRoots = [];
     const seenRoots = new Set();
@@ -758,8 +761,8 @@ function recoverVmStateGraph(source, ast) {
     // Discover nested closure roots only from states that are themselves
     // reachable from an already-proven root. A createClosure call living in a
     // dead dispatcher leaf must not keep that dead closure graph alive.
-    while (pendingRoots.length) {
-        const currentRoot = pendingRoots.shift();
+    for (let pendingCursor = 0; pendingCursor < pendingRoots.length; pendingCursor++) {
+        const currentRoot = pendingRoots[pendingCursor];
         const bodies = [];
         for (const id of currentRoot.graph.order) {
             const block = currentRoot.graph.blocks.get(id);
@@ -776,19 +779,23 @@ function recoverVmStateGraph(source, ast) {
 
     const rootGraph = rootRoot?.graph || walkStateGraph(stateWhile.body || [], stateName, rootEntry.entryId, source);
 
-    const closureCallKey = call => Array.isArray(call?.range) ? call.range.join(":") : null;
-    const reachableClosureCallKeys = new Set(reachableClosureEntries.map(entry => closureCallKey(entry.call)).filter(Boolean));
-    const rootClosureCallKey = closureCallKey(rootEntry.factoryCall);
-    if (rootClosureCallKey) reachableClosureCallKeys.add(rootClosureCallKey);
-    const ignoredUnreachableClosureEntryCount = globalClosureEntryInfo.entries
-        .filter(entry => {
-            const key = closureCallKey(entry.call);
-            return key && !reachableClosureCallKeys.has(key);
-        }).length;
-
     const leaves = collectDispatcherLeaves(stateWhile.body || [], source);
-    const leafKeys = new Set(leaves.map(leaf => leaf.key));
-    const resolvedKeys = new Set([...allBlocks.values()].filter(b => b?.key).map(b => b.key));
+    const leafKeys = new Set();
+    for (const leaf of leaves) leafKeys.add(leaf.key);
+
+    const resolvedKeys = new Set();
+    for (const block of allBlocks.values()) {
+        if (block?.key) resolvedKeys.add(block.key);
+    }
+
+    // Count ignored closure entries only inside dispatcher leaves that are
+    // already proven unreachable. Avoid a second full-AST closure scan just
+    // for diagnostics.
+    let ignoredUnreachableClosureEntryCount = 0;
+    for (const leaf of leaves) {
+        if (resolvedKeys.has(leaf.key)) continue;
+        ignoredUnreachableClosureEntryCount += collectClosureEntryInfo(leaf.body).entries.length;
+    }
 
     const owners = new Map();
     let collision = false;
@@ -804,8 +811,13 @@ function recoverVmStateGraph(source, ast) {
         [...leafKeys].every(key => resolvedKeys.has(key));
 
     const orderedIds = [];
+    const orderedIdSet = new Set();
     for (const root of graphRoots) {
-        for (const id of root.graph.order) if (!orderedIds.includes(id)) orderedIds.push(id);
+        for (const id of root.graph.order) {
+            if (orderedIdSet.has(id)) continue;
+            orderedIdSet.add(id);
+            orderedIds.push(id);
+        }
     }
 
     const normalization = buildNormalizedLayout(graphRoots, allBlocks);
