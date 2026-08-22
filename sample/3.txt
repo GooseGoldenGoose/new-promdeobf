@@ -1,0 +1,281 @@
+return (function(...)
+    local A = {
+        "GvsoXMJ=",
+        "YzKgKik=",
+        "Ywd+YQf=",
+        "Yw5wX2st",
+        "Y2OlGxswjQgCyvspTJ==",
+        "ipFoXwbt63==",
+        "ipFMY/==",
+        "AE9uSwywj2KfyzlwjJ==",
+        "ipFfKzC=",
+        "Azl/YzyB",
+        "W0s8Ta5WGxA26SFZA/=="
+    }
+    for Z, U in ipairs({
+        {
+            1,
+            11
+        },
+        {
+            1,
+            3
+        },
+        {
+            4,
+            11
+        }
+    }) do
+        while U[1] < U[2] do
+            A[U[1]], A[U[2]], U[1], U[2] = A[U[2]], A[U[1]], U[1] + (1), U[2] - (1)
+        end
+    end
+    local function Z(Z)
+        return A[Z + (37474)]
+    end
+    do
+        local Z = table.insert
+        local U = table.concat
+        local u = string.sub
+        local T = string.char
+        local E = string.len
+        local t = type
+        local X = {
+            ["2"] = 55,
+            D = 14,
+            M = 39,
+            Q = 54,
+            R = 59,
+            ["+"] = 47,
+            E = 6,
+            ["/"] = 48,
+            X = 27,
+            f = 44,
+            e = 50,
+            ["5"] = 21,
+            W = 18,
+            h = 60,
+            n = 15,
+            G = 28,
+            A = 29,
+            ["3"] = 0,
+            J = 16,
+            B = 43,
+            b = 17,
+            V = 34,
+            ["0"] = 3,
+            Y = 24,
+            p = 53,
+            C = 56,
+            N = 42,
+            g = 52,
+            k = 8,
+            z = 22,
+            y = 13,
+            r = 35,
+            ["4"] = 58,
+            w = 38,
+            K = 25,
+            a = 4,
+            ["9"] = 33,
+            ["8"] = 36,
+            u = 51,
+            T = 26,
+            F = 61,
+            l = 57,
+            s = 9,
+            ["1"] = 31,
+            L = 1,
+            P = 63,
+            o = 41,
+            ["6"] = 30,
+            m = 46,
+            i = 23,
+            c = 10,
+            ["7"] = 62,
+            d = 49,
+            q = 11,
+            t = 37,
+            v = 7,
+            x = 19,
+            O = 5,
+            H = 32,
+            j = 12,
+            U = 45,
+            I = 40,
+            S = 20,
+            Z = 2
+        }
+        local y = math.floor
+        local c = A
+        for A = 1, #c, 1 do
+            local R = c[A]
+            if t(R) == "string" then
+                local t = E(R)
+                local Y = {}
+                local P = 1
+                local G = 0
+                local V = 0
+                while P <= t do
+                    local A = u(R, P, P)
+                    local U = X[A]
+                    if U then
+                        G = G + U * (64) ^ ((3) - V)
+                        V = V + (1)
+                        if V == 4 then
+                            V = 0
+                            local A = y(G / (65536))
+                            local U = y((G % (65536)) / (256))
+                            local u = G % (256)
+                            Z(Y, T(A, U, u))
+                            G = 0
+                        end
+                    elseif A == "=" then
+                        Z(Y, T(y(G / (65536))))
+                        if P >= t or u(R, P + (1), P + (1)) ~= "=" then
+                            Z(Y, T(y((G % (65536)) / (256))))
+                        end
+                        break
+                    end
+                    P = P + (1)
+                end
+                c[A] = U(Y)
+            end
+        end
+    end
+    return (function(A, u, T, E, t, X, y, M, F, r, R, G, P, V, j, U, Y, c)
+        M, G, j, P, U, F, c, V, Y, R, r = function(A)
+            R[A] = R[A] - (1)
+            if R[A] == 0 then
+                R[A], c[A] = nil, nil
+            end
+        end, function(A)
+            for Z = 1, #A, 1 do
+                R[A[Z]] = R[A[Z]] + (1)
+            end
+            if T then
+                local U = T(true)
+                local u = t(U)
+                u[Z(-37465)], u[Z(-37464)], u[Z(-37473)] = A, V, function()
+                    return -3476895
+                end
+                return U
+            else
+                return E({}, {
+                    [Z(-37464)] = V,
+                    [Z(-37465)] = A,
+                    [Z(-37473)] = function()
+                        return -3476895
+                    end
+                })
+            end
+        end, function(A, Z)
+            local u = G(Z)
+            local T = function()
+                return U(A, {}, Z, u)
+            end
+            return T
+        end, 0, function(U, T, E, t)
+            local G, P, x, V, R, r, J, y
+            while U do
+                if U < 5701683 then
+                    if U < 1663260 then
+                        U = c[E[1]]
+                        y = {
+                            U
+                        }
+                        U = A[Z(-37471)]
+                    else
+                        U = 1
+                        R = T
+                        P = Y()
+                        c[P] = U
+                        U = 10
+                        y = Z(-37470)
+                        G = U
+                        U = 2
+                        r = Z(-37468)
+                        V = U
+                        U = A[y]
+                        y = U(r, G, V)
+                        V = nil
+                        y = Z(-37470)
+                        r = Z(-37467)
+                        U = F(9377191, {
+                            P
+                        })
+                        G = nil
+                        G = U
+                        U = j(394074, {
+                            P
+                        })
+                        V = U
+                        U = A[y]
+                        J = {
+                            V()
+                        }
+                        y = U(r, u(J))
+                        y = Z(-37470)
+                        U = A[y]
+                        r = Z(-37469)
+                        x = 2
+                        J = G(x)
+                        x = {
+                            V()
+                        }
+                        P = M(P)
+                        y = U(r, J, u(x))
+                        V = nil
+                        G = nil
+                        y = {}
+                        U = A[Z(-37463)]
+                    end
+                else
+                    y = c[E[1]]
+                    R = T[1]
+                    U = y + R
+                    c[E[1]] = U
+                    y = c[E[1]]
+                    y = {
+                        y
+                    }
+                    U = A[Z(-37466)]
+                end
+            end
+            U = #t
+            return u(y)
+        end, function(A, Z)
+            local u = G(Z)
+            local T = function(T)
+                return U(A, {
+                    T
+                }, Z, u)
+            end
+            return T
+        end, {}, function(A)
+            local Z, U = 1, A[1]
+            while U do
+                R[U], Z = R[U] - (1), (1) + Z
+                if R[U] == 0 then
+                    R[U], c[U] = nil, nil
+                end
+                U = A[Z]
+            end
+        end, function()
+            P = (1) + P
+            R[P] = 1
+            return P
+        end, {}, function(A, Z)
+            local u = G(Z)
+            local T = function(...)
+                return U(A, {
+                    ...
+                }, Z, u)
+            end
+            return T
+        end
+        return (r(2815217, {}))(u(y))
+    end)(getfenv and getfenv() or _ENV, unpack or table[Z(-37472)], newproxy, setmetatable, getmetatable, select, {
+        ...
+    })
+end)(...)
