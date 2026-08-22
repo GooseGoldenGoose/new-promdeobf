@@ -203,24 +203,24 @@ Current implementation:
 - A fresh randomized Medium obfuscation of the same sample-3 source also passed. It changed bindings (for example environment `V`, general factory `O`, VM `W`, proxy `p`) and emitted fixed factories of arity 2 and 5 instead of the tracked fixture's 0 and 1; the pass recovered `createClosure2` / `createClosure5` structurally and the transformed output produced the same runtime result.
 - `main.js` reparses between semantic naming stages and writes stable outputs `output\1.lua` through `output\4.lua` when invoked with the corresponding sample/output paths.
 
-## Beta Entry-State Recovery
+## Step 3: VM State / CFG Recovery
 
-- Experimental state/CFG recovery stays separate from normal step 2; `output\1.lua` through `output\4.lua` remain stable baseline outputs. Backup tag `backup-before-entry-beta-20260822` points to pre-beta commit `1acf424`.
-- `passes/entry-state-beta.js` finds the semantic `vm`, root `createClosure(<entry>, ...)`, all `createClosureN(<entry>, ...)` calls, and `while state do`; state IDs and closure arities are discovered structurally.
-- Dispatcher leaves are resolved by evaluating Prometheus nested numeric comparison trees for a candidate state ID. The beta walker then follows numeric POS-register terminators: `state = N` is a jump and `state = condition and A or B` is a branch.
-- Critical rule: Prometheus can temporarily reuse `POS_REGISTER` as an ordinary register, so not every assignment to renamed `state` is a jump. The walker treats the final write to the POS/state binding in a dispatcher block as its control-flow terminator.
-- Graph walking uses a visited set, so loop back-edges are retained without infinite analysis. Closure-created entry IDs are separate graph roots, not CFG successors unless an actual state transition targets them.
-- When every dispatcher leaf is recovered and normalization safety checks pass, beta assigns new contiguous VM state IDs by graph root. Random Prometheus IDs become analysis metadata only; executable beta closure-entry arguments and proven CFG jump/branch targets use the normalized IDs. Ordinary temporary values written through the reused POS/state register are not rewritten.
-- Normalization is conservative: it requires complete leaf coverage, no cross-root state overlap, every block resolved, terminators limited to proven `jump` / `branch` / `stop` forms, and every numeric successor present in the recovered state map. If any condition fails, beta falls back to the previous original-ID grouped renderer instead of guessing.
-- Each closure graph receives a contiguous range and beta renders balanced binary range trees both between closure ranges and inside each range. This avoids large `or` membership expressions and long linear `elseif` chains while preserving an exact equality check at final leaves for invalid-state safety.
-- All four tracked beta outputs are generated: `output\1.beta.lua` through `output\4.beta.lua`.
-- `output\1.beta.lua`: original root `1383946` normalizes to entry/range `1`; 1/1 block mapped; runtime `AD`, exit 0.
-- `output\2.beta.lua`: original root `8945882` and its 3-state CFG normalize to range `1-3`; stable and beta both print `gg`, `ranf` with the same RNG seed and `warn = print`, exit 0.
-- `output\3.beta.lua`: original root `2815217` normalizes to `1`; closure entries `9377191` and `394074` normalize to `2` and `3`. Runtime remains `block 10 2`, `before 1`, `after 3 3`, exit 0.
-- `output\4.beta.lua`: all 16/16 blocks normalize to four contiguous ranges: root `1`; `choose` `2-5`; `spin` `6-12`; `trim` `13-16`. Closure calls become `createClosure1(2, ...)`, `createClosure2(6, ...)`, `createClosure5(13, ...)`, and the root call becomes `createClosure(1, ...)`. Controlled source, stable output, and beta all print `start 0`, `choose 5`, `spin 10`, `trim 2`, exit 0.
-- The temporary loop regression also normalizes 6/6 blocks to range `1-6`, retains its back-edge, and still prints `mid`, `done 3`, exit 0.
-- A fresh randomized Medium sample-4 obfuscation changed the original IDs to root `6958029` and closure entries `8724652`, `15604649`, `16255422`, with wrappers `createClosure3`, `createClosure2`, `createClosure6`; beta still recovered 16/16 blocks, normalized to ranges `1`, `2-5`, `6-12`, `13-16`, and matched stable runtime exactly.
-- `tools/resolve-entry-beta.js` prints original graph roots/terminators plus whether normalization succeeded and each normalized entry/range.
+- VM state/CFG recovery is now part of the normal deobfuscation pipeline after helper naming and safe parallel-assignment splitting. The implementation lives in `passes/vm-state.js` and is called from `main.js` through `recoverVmStateGraph(...)`.
+- The final normal command is one step: `node main.js sample\4.txt output\4.lua`. A separate beta resolver command is no longer required; `output\1.lua` through `output\4.lua` now contain the normalized VM-state result when recovery is proven safe.
+- Promotion is conservative: `main.js` applies the VM-state rewrite only when the pass both finds the VM and reports `normalized === true`. If recovery is incomplete or normalization safety fails, main preserves the source from the previous pipeline step instead of forcing an experimental rewrite.
+- `passes/vm-state.js` finds the semantic `vm`, root `createClosure(<entry>, ...)`, all `createClosureN(<entry>, ...)` calls, and `while state do`; state IDs and closure arities are discovered structurally.
+- Dispatcher leaves are resolved by evaluating Prometheus nested numeric comparison trees for candidate state IDs. The walker follows proven POS-register terminators: `state = N` is a direct jump and `state = condition and A or B` is a two-way branch.
+- Critical rule: Prometheus can temporarily reuse `POS_REGISTER` as an ordinary register, so not every assignment to the renamed `state` binding is a control-flow transition. Only the final proven POS/state write in a recovered dispatcher block is treated as its terminator.
+- Graph walking uses a visited set, so back-edges are retained without infinite analysis. Closure-created entry IDs remain separate graph roots unless an actual CFG transition targets them.
+- Normalization requires complete dispatcher-leaf coverage, no cross-root state overlap, all blocks resolved, only proven `jump` / `branch` / `stop` terminators, and every numeric successor present in the recovered state map.
+- Safe graphs receive new contiguous IDs by closure root. Only proven closure entry arguments and CFG jump/branch targets are rewritten; ordinary temporary numeric values assigned through the reused state register are left unchanged.
+- Each closure graph gets a contiguous normalized range, and output uses balanced binary range trees between closure ranges and inside each range. Exact equality is retained at final leaves for invalid-state safety, avoiding large `or` expressions and long linear `elseif` chains.
+- Tracked normalization: sample 1 -> root range `1`; sample 2 -> root CFG `1-3`; sample 3 -> root `1`, closures `2` and `3`; sample 4 -> root `1`, `choose` `2-5`, `spin` `6-12`, `trim` `13-16`.
+- Sample 4 closure calls become `createClosure1(2, ...)`, `createClosure2(6, ...)`, `createClosure5(13, ...)`, and the root call becomes `createClosure(1, ...)`. Its loop and repeat back-edges remain intact.
+- End-to-end validation compares each original tracked obfuscated file with the promoted normal output under LuaJIT: sample 1 prints `AD`; sample 2 prints `gg`, `ranf` with `warn = print` and a fixed RNG seed; sample 3 prints `block 10 2`, `before 1`, `after 3 3`; sample 4 prints `start 0`, `choose 5`, `spin 10`, `trim 2`. All original/promoted pairs exit 0.
+- A fresh randomized Medium sample-4 obfuscation previously changed the original root/closure IDs and closure-factory arities completely; recovery still produced logical ranges `1`, `2-5`, `6-12`, `13-16` and matched runtime, supporting name/ID-independent recovery.
+- `tools/inspect-vm-state.js` remains an optional developer inspection utility for printing graph roots, terminators, dispatcher paths, and normalized ranges; it is not required for normal deobfuscation.
+
 ## Control-Flow Understanding
 
 Prometheus-style control-flow flattening should be modeled as a dispatcher/state machine.
@@ -431,8 +431,8 @@ without producing unrelated locals.
 
 # Immediate Next Steps
 
-1. Keep stable step-2 outputs separate from beta CFG/state recovery.
-2. Use sample 4 normalized contiguous graph ranges as the primary CFG regression for later source-level `if`/loop/repeat structuring; keep closure graphs distinct and preserve proven jump/back-edge semantics.
+1. Treat `output\\N.lua` as the normal final output through promoted Step 3; keep earlier step boundaries only as internal pipeline stages.
+2. Treat promoted Step 3 output as the normal baseline and use sample 4 as the primary CFG regression for source-level `if`/loop/repeat structuring; keep closure graphs distinct and preserve proven jump/back-edge semantics.
 3. Keep POS-register temporary reuse distinct from true block terminators; extend terminator recognition only from proven Prometheus compiler patterns.
 4. Keep each pass structural/generalized and reparse/runtime-check transformed outputs before advancing.
 5. If the current parser becomes a correctness blocker, evaluate Rust Moonlight instead of parser-specific hacks.
