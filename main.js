@@ -3,6 +3,7 @@ const path = require("path");
 const luaparse = require("./parser/luaparse");
 const { inlinePrometheusConstantArray } = require("./passes/constant-array");
 const { renameEnvironmentBinding } = require("./passes/environment");
+const { renameCreateClosureBinding } = require("./passes/closure-factory");
 
 const ROOT = __dirname;
 const DEFAULT_INPUT = path.join(ROOT, "sample", "1.txt");
@@ -55,16 +56,21 @@ function runDeobfuscator(inputPath = DEFAULT_INPUT, outputPath = DEFAULT_OUTPUT)
     const environment = renameEnvironmentBinding(stage1Source, stage1Ast, "_env");
     if (environment.collision) throw new Error(environment.reason);
 
-    const outputAst = parseLua(environment.source, outputPath);
-    const resolvedOutput = writeSource(environment.source, outputPath);
+    const environmentAst = parseLua(environment.source, `${inputPath} <after environment rename>`);
+    const createClosure = renameCreateClosureBinding(environment.source, environmentAst, "createClosure");
+    if (createClosure.collision || createClosure.ambiguous) throw new Error(createClosure.reason);
+
+    const outputAst = parseLua(createClosure.source, outputPath);
+    const resolvedOutput = writeSource(createClosure.source, outputPath);
 
     return {
         ...loaded,
         outputAst,
         outputPath: resolvedOutput,
-        outputSource: environment.source,
+        outputSource: createClosure.source,
         constantArray,
         environment,
+        createClosure,
     };
 }
 
@@ -74,6 +80,7 @@ function main() {
     const result = runDeobfuscator(inputPath, outputPath);
     const constants = result.constantArray;
     const env = result.environment;
+    const createClosure = result.createClosure;
 
     console.log(`Input: ${result.inputPath}`);
     console.log(`AST root: ${result.ast.type}`);
@@ -92,6 +99,11 @@ function main() {
         console.log(`Environment source: ${env.sourceKind}`);
         console.log(`Environment rename: ${env.oldName} -> ${env.newName}`);
         console.log(`Environment references renamed: ${env.referencesRenamed}`);
+    }
+    console.log(`CreateClosure binding found: ${createClosure.found}`);
+    if (createClosure.found) {
+        console.log(`CreateClosure rename: ${createClosure.oldName} -> ${createClosure.newName}`);
+        console.log(`CreateClosure references renamed: ${createClosure.referencesRenamed}`);
     }
     console.log(`Output: ${result.outputPath}`);
     return result;
