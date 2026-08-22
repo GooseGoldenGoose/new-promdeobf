@@ -202,6 +202,15 @@ Current implementation:
 - A fresh randomized Medium obfuscation of the same sample-3 source also passed. It changed bindings (for example environment `V`, general factory `O`, VM `W`, proxy `p`) and emitted fixed factories of arity 2 and 5 instead of the tracked fixture's 0 and 1; the pass recovered `createClosure2` / `createClosure5` structurally and the transformed output produced the same runtime result.
 - `main.js` reparses between semantic naming stages and writes `output\1.lua`, `output\2.lua`, or `output\3.lua` when invoked with the corresponding sample/output paths.
 
+## Beta Entry-State Recovery
+
+- Experimental entry-state recovery is intentionally separate from the normal step-2 pipeline; normal `output\1.lua` / `output\2.lua` / `output\3.lua` remain the baseline outputs.
+- Backup tag `backup-before-entry-beta-20260822` points to commit `1acf424`, the project state immediately before this experiment.
+- `passes/entry-state-beta.js` finds the semantically named `vm`, finds the root `createClosure(<numeric entry>, ...)` invocation outside the VM, locates `while state do`, and evaluates nested numeric comparisons (`<`, `<=`, `>`, `>=`, `==`, `~=` plus simple logical/not forms) for that exact entry value.
+- The beta rewrite emits an explicit `if state == <root entry> then` containing the resolved dispatcher region and retains the original dispatcher body in `else` as a behavior-preserving fallback for states not yet resolved.
+- `tools/resolve-entry-beta.js` defaults to `output\1.lua -> output\1.beta.lua`; the entry number is discovered structurally and is not hardcoded.
+- Current `sample\1` beta resolves root entry `1383946` directly to 7 VM statements. `output\1.beta.lua` reparses and runs identically to `output\1.lua` (`AD`, exit 0).
+- Temporary validation on sample 3 resolved root entry `2815217` through `state < 5701683 => true`, `state < 1663260 => false`, then `else`; the beta output still produced `block 10 2`, `before 1`, `after 3 3`.
 ## Control-Flow Understanding
 
 Prometheus-style control-flow flattening should be modeled as a dispatcher/state machine.
@@ -412,8 +421,9 @@ without producing unrelated locals.
 
 # Immediate Next Steps
 
-1. Treat `output\1.lua`, `output\2.lua`, and `output\3.lua` as outputs after steps 1-2.
-2. Do not add step 3 until the user chooses the next recovery target.
-3. Keep each pass structural/generalized, scope-aware where bindings matter, and reparse its output before advancing.
-4. If the current parser becomes a correctness blocker, evaluate Rust Moonlight instead of adding parser-specific hacks.
-5. Update `CONTEXT.md`, commit, and push every project change as a checkpoint.
+1. Keep `output\1.lua`, `output\2.lua`, and `output\3.lua` as the stable step-2 outputs; beta entry-state experiments stay separate.
+2. Use `output\1.beta.lua` as the first entry-state recovery experiment and extend recovery from the root entry toward numeric successor states / a per-function CFG without hardcoded state IDs.
+3. Keep unresolved dispatcher states on a behavior-preserving fallback until their equivalence is proven.
+4. Keep each pass structural/generalized, scope-aware where bindings matter, and reparse/runtime-check transformed output before advancing.
+5. If the current parser becomes a correctness blocker, evaluate Rust Moonlight instead of adding parser-specific hacks.
+6. Update `CONTEXT.md`, commit, and push every project change as a checkpoint.
