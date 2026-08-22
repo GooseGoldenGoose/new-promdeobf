@@ -531,6 +531,16 @@ without producing unrelated locals.
 - Optimization boundary: do not replace the proven reaching-def/liveness fixed points or scheduler semantics merely to chase micro-benchmarks. Their convergence is already small on sample 5 (321 total reaching iterations across 116 functions, max 8; 241 total liveness iterations, max 7). Remaining scheduler `indexOf` operations are local to short state blocks; any more invasive mutable-index/topological rewrite requires a separate correctness proof and benchmark before adoption.
 
 
+## Semantic Naming Layer (2026-08-23)
+
+- `passes/semantic-names.js` runs after VM register naming and renames only structurally proven compiler roles; it never renames from randomized spelling alone. Scope reconstruction remains unchanged and analysis-only.
+- The outer wrapper parameter receiving the unique `{...}` argument is renamed `InitialArgs`. This is distinct from the VM parameter `args`: `InitialArgs` is the original top-level vararg table passed into the root closure, while `args` is the per-closure invocation argument table.
+- Proven `createClosure*` helpers rename their `createUpvalueProxy(captures)` local to `gcProxy`, returned nested-function local to `closure`, and fixed-arity nested parameters to `arg1`, `arg2`, ...; the vararg factory keeps `...`.
+- `releaseUpvalues` renames its structural iteration locals to `captureIndex` and `upvalueId`. `createUpvalueProxy` renames its numeric-for index to `captureIndex`, the `newproxy(true)` local to `proxy`, and `getmetatable(proxy)` to `proxyMetatable`.
+- When a VM overflow-register table is proven structurally as the table-backed register bank before the scalar register declaration, it is renamed `RegisterOverflow`. Sample 5 exercises this path; smaller fixtures do not invent it.
+- All semantic renames are lexical/binding-aware and fail closed on collision, shadowing, ambiguity, or edit conflicts. Current samples 1-9 apply with zero semantic-name skips.
+- Focused regression `tools/test-semantic-names.js` covers `InitialArgs`, fixed closure `argN`, `gcProxy`, `closure`, `captureIndex`, `upvalueId`, `proxy`, `proxyMetatable`, and `RegisterOverflow`. All focused regressions pass. LuaJIT parity matches samples 1/2/3/4/6/8/9 and both deterministic sample-7 branches; sample 2 uses the existing `warn = print` compatibility shim for stock LuaJIT.
+
 # Immediate Next Steps
 
 1. Keep Step 3 state normalization as the structural emitted-source boundary; the post-Step-3 scheduler may only reorder proven-independent statements for readability. Step 4 remains proof metadata, and source locals must not be reconstructed from register spelling or adjacency.
