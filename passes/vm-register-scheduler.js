@@ -109,6 +109,12 @@ function findNextRegisterTouch(statements, index, name) {
     return null;
 }
 
+function isPrimitiveSourceAssignment(statement, stateName) {
+    if (!isDelayableAssignment(statement, stateName)) return false;
+    const init = statement.init || [];
+    return init.length === 1 && isPrimitiveLiteral(init[0]);
+}
+
 function sinkPureAssignmentsTowardNextTouch(statements, stateName) {
     const originalOrder = [...statements];
     let swaps = 0;
@@ -116,16 +122,17 @@ function sinkPureAssignmentsTowardNextTouch(statements, stateName) {
 
     for (const producer of originalOrder) {
         const fromIndex = statements.indexOf(producer);
-        if (fromIndex < 0 || !isDelayableAssignment(producer, stateName)) continue;
+        // Literal/nil loads have no producer of their own, so place them near
+        // the next read or overwrite of the destination register. Identifier
+        // copies are handled in the opposite direction below so they stay near
+        // the value that produced their RHS.
+        if (fromIndex < 0 || !isPrimitiveSourceAssignment(producer, stateName)) continue;
         const name = getSingleWrittenIdentifier(producer);
         if (!name) continue;
 
         const touch = findNextRegisterTouch(statements, fromIndex, name);
         if (!touch || touch.index <= fromIndex + 1) continue;
 
-        // Keep the write, but move it right until immediately before the next
-        // read or overwrite of the same register. It may cross only statements
-        // that are independently RAW/WAR/WAW-safe with this pure assignment.
         if (!canMoveDelayableRightAcrossRange(statements, fromIndex, touch.index - 1, stateName)) continue;
 
         const distance = touch.index - fromIndex - 1;
@@ -133,6 +140,43 @@ function sinkPureAssignmentsTowardNextTouch(statements, stateName) {
         statements.splice(touch.index - 1, 0, producer);
         swaps += distance;
         moved++;
+    }
+
+    return { swaps, moved };
+}
+
+function pullIdentifierCopiesTowardProducer(statements, stateName) {
+    const originalOrder = [...statements];
+    let swaps = 0;
+    let moved = 0;
+
+    for (const consumer of originalOrder) {
+        let currentIndex = statements.indexOf(consumer);
+        if (currentIndex <= 0 || !isDelayableAssignment(consumer, stateName)) continue;
+        const init = consumer.init || [];
+        if (init.length !== 1 || !isIdentifier(init[0])) continue;
+
+        const producerName = init[0].name;
+        let producerIndex = -1;
+        for (let i = currentIndex - 1; i >= 0; i--) {
+            if (statementWrites(statements[i]).has(producerName)) {
+                producerIndex = i;
+                break;
+            }
+        }
+        if (producerIndex < 0 || currentIndex === producerIndex + 1) continue;
+
+        let didMove = false;
+        while (currentIndex > producerIndex + 1) {
+            const previous = statements[currentIndex - 1];
+            if (hasRegisterHazard(previous, consumer)) break;
+            statements[currentIndex - 1] = consumer;
+            statements[currentIndex] = previous;
+            currentIndex--;
+            swaps++;
+            didMove = true;
+        }
+        if (didMove) moved++;
     }
 
     return { swaps, moved };
@@ -229,15 +273,15 @@ function validateScheduledOrder(original, scheduled, stateName) {
         if (originalAnchors[i] !== scheduledAnchors[i]) return false;
     }
 
-    // Any pair whose order changed must be exactly the kind of adjacent swap
-    // we allow: the original left statement is a pure delayable load and the
-    // pair has no RAW, WAR, or WAW dependency.
+    // Any inverted pair must be reproducible by moving at least one pure
+    // delayable assignment across the other statement, with no RAW, WAR, or
+    // WAW dependency. Two non-movable/effectful statements may never invert.
     for (let i = 0; i < original.length; i++) {
         for (let j = i + 1; j < original.length; j++) {
             const left = original[i];
             const right = original[j];
             if (finalIndex.get(left) < finalIndex.get(right)) continue;
-            if (!isDelayableAssignment(left, stateName)) return false;
+            if (!isDelayableAssignment(left, stateName) && !isDelayableAssignment(right, stateName)) return false;
             if (hasRegisterHazard(left, right)) return false;
         }
     }
@@ -256,6 +300,12 @@ function scheduleStatementList(statements, stateName) {
     const sunk = sinkPureAssignmentsTowardNextTouch(scheduled, stateName);
     swaps += sunk.swaps;
 
+    // Identifier-copy assignments are consumers too. Pull them left toward the
+    // nearest producer of their RHS when every crossed statement is register-
+    // independent. This handles chains such as z = D + G; ...; D = z.
+    const pulled = pullIdentifierCopiesTowardProducer(scheduled, stateName);
+    swaps += pulled.swaps;
+
     // Then compact producer -> consumer gaps by pushing only independent pure
     // loads out of the gap. Each move is still equivalent to dependency-safe
     // adjacent swaps.
@@ -271,6 +321,7 @@ function scheduleStatementList(statements, stateName) {
             statements: [...statements],
             swaps: 0,
             producerSinks: 0,
+            producerPulls: 0,
             safetyRejected: true,
         };
     }
@@ -279,6 +330,7 @@ function scheduleStatementList(statements, stateName) {
         statements: scheduled,
         swaps,
         producerSinks: sunk.moved,
+        producerPulls: pulled.moved,
         safetyRejected: false,
     };
 }
@@ -398,6 +450,7 @@ function scheduleVmRegisterUses(source, ast) {
     let swaps = 0;
     let safetyRejectedSegments = 0;
     let producerSinks = 0;
+    let producerPulls = 0;
 
     for (const body of leaves) {
         const segments = [];
@@ -420,6 +473,7 @@ function scheduleVmRegisterUses(source, ast) {
             const scheduled = scheduleStatementList(statements, stateName);
             if (scheduled.safetyRejected) safetyRejectedSegments++;
             producerSinks += scheduled.producerSinks || 0;
+            producerPulls += scheduled.producerPulls || 0;
             if (scheduled.swaps === 0) continue;
 
             edits.push({
@@ -433,7 +487,7 @@ function scheduleVmRegisterUses(source, ast) {
     }
 
     if (edits.length === 0) {
-        return { source, found: true, applied: false, blocksChanged: 0, swaps: 0, producerSinks, safetyRejectedSegments };
+        return { source, found: true, applied: false, blocksChanged: 0, swaps: 0, producerSinks, producerPulls, safetyRejectedSegments };
     }
 
     return {
@@ -443,6 +497,7 @@ function scheduleVmRegisterUses(source, ast) {
         blocksChanged,
         swaps,
         producerSinks,
+        producerPulls,
         safetyRejectedSegments,
     };
 }

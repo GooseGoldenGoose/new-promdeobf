@@ -86,4 +86,18 @@ function schedule(source) {
     assert.ok(out.indexOf('A = 1') < out.indexOf('B = A'), 'producer moved past its read');
 }
 
+{
+    const source = [
+        'D = 20',
+        'G = 2',
+        'z = D + G',
+        'B = "print"',
+        'G = _env[B]',
+        'D = z',
+    ].join("\n");
+    const out = schedule(source);
+    assert.ok(out.indexOf('z = D + G') + 1 === out.indexOf('D = z'), 'identifier copy was not pulled next to its producer');
+    assert.ok(out.indexOf('B = "print"') + 1 === out.indexOf('G = _env[B]'), 'literal producer was not sunk next to its read');
+}
+
 console.log("vm register scheduler regression: ok");
