@@ -186,7 +186,7 @@ function classifyCaptureExpression(node, reaching, definitionsById) {
     if (parentSlot !== null) {
         return {
             kind: "parent-capture-slot",
-            slot: parentSlot,
+            parentSlot,
         };
     }
 
@@ -201,6 +201,130 @@ function classifyCaptureExpression(node, reaching, definitionsById) {
         kind: "unproven",
         expressionType: node?.type || null,
     };
+}
+
+function isUpvalueValuesIndex(node) {
+    return node?.type === "IndexExpression" && isIdentifier(node.base, "upvalueValues");
+}
+
+function classifyCellIndex(node, reaching, definitionsById) {
+    if (isIdentifier(node)) {
+        const defId = uniqueReachingDef(reaching, node.name);
+        if (!defId) {
+            return {
+                kind: "identifier-unproven",
+                registerName: node.name,
+                reachingDefIds: [...(reaching.get(node.name) || [])],
+            };
+        }
+        const def = definitionsById.get(defId);
+        if (def?.kind === "alloc-upvalue") {
+            return {
+                kind: "local-cell",
+                cellId: def.id,
+                definitionId: def.id,
+                registerName: node.name,
+            };
+        }
+        return {
+            kind: "identifier-definition",
+            registerName: node.name,
+            definitionId: defId,
+        };
+    }
+
+    const captureSlot = upvalueSlotFromExpression(node);
+    if (captureSlot !== null) {
+        return {
+            kind: "capture-slot",
+            captureSlot,
+        };
+    }
+
+    return {
+        kind: "unproven",
+        expressionType: node?.type || null,
+    };
+}
+
+function collectUpvalueValueReads(node, out) {
+    if (!isNode(node) || node.type === "FunctionDeclaration") return;
+    if (isUpvalueValuesIndex(node)) {
+        out.push({ mode: "read", node });
+        collectUpvalueValueReads(node.index, out);
+        return;
+    }
+    for (const [key, value] of Object.entries(node)) {
+        if (key === "loc" || key === "range") continue;
+        if (Array.isArray(value)) {
+            for (const child of value) collectUpvalueValueReads(child, out);
+        } else if (isNode(value)) {
+            collectUpvalueValueReads(value, out);
+        }
+    }
+}
+
+function upvalueValueAccessesInStatement(statement) {
+    const accesses = [];
+    if (statement?.type === "AssignmentStatement" || statement?.type === "LocalStatement") {
+        for (const variable of statement.variables || []) {
+            if (isUpvalueValuesIndex(variable)) {
+                accesses.push({ mode: "write", node: variable });
+                collectUpvalueValueReads(variable.index, accesses);
+            } else if (!isIdentifier(variable)) {
+                collectUpvalueValueReads(variable, accesses);
+            }
+        }
+        for (const init of statement.init || []) collectUpvalueValueReads(init, accesses);
+        return accesses;
+    }
+    collectUpvalueValueReads(statement, accesses);
+    return accesses;
+}
+
+function buildCaptureSlotResolver(captures) {
+    const origins = new Map();
+    for (const capture of captures) {
+        const key = `${capture.childFunctionId}:${capture.childSlot}`;
+        if (!origins.has(key)) origins.set(key, []);
+        origins.get(key).push(capture);
+    }
+
+    function resolve(functionId, slot, seen = new Set()) {
+        const key = `${functionId}:${slot}`;
+        if (seen.has(key)) return { kind: "cycle", cellIds: [] };
+        const entries = origins.get(key) || [];
+        if (!entries.length) return { kind: "unresolved", cellIds: [] };
+
+        const nextSeen = new Set(seen);
+        nextSeen.add(key);
+        const cellIds = new Set();
+        let incomplete = false;
+
+        for (const entry of entries) {
+            if (entry.kind === "local-cell") {
+                cellIds.add(entry.cellId);
+                continue;
+            }
+            if (entry.kind === "parent-capture-slot") {
+                const parent = resolve(entry.parentFunctionId, entry.parentSlot, nextSeen);
+                if (parent.kind !== "resolved-cell") incomplete = true;
+                for (const cellId of parent.cellIds || []) cellIds.add(cellId);
+                continue;
+            }
+            incomplete = true;
+        }
+
+        if (!incomplete && cellIds.size === 1) {
+            return { kind: "resolved-cell", cellId: [...cellIds][0], cellIds: [...cellIds] };
+        }
+        return {
+            kind: incomplete ? "unresolved" : "ambiguous",
+            cellIds: [...cellIds],
+        };
+    }
+
+    return { origins, resolve };
 }
 
 function buildFunctionAnalysis(root, functionId) {
@@ -287,6 +411,7 @@ function buildFunctionAnalysis(root, functionId) {
     const converged = !changed;
     const uses = [];
     const closureSites = [];
+    const cellAccesses = [];
 
     for (const blockId of blockIds) {
         const block = root.graph.blocks.get(blockId);
@@ -309,6 +434,17 @@ function buildFunctionAnalysis(root, functionId) {
                 });
             }
 
+            for (const access of upvalueValueAccessesInStatement(statement)) {
+                cellAccesses.push({
+                    functionId,
+                    blockId,
+                    statementIndex,
+                    mode: access.mode,
+                    range: Array.isArray(access.node.range) ? [...access.node.range] : null,
+                    ...classifyCellIndex(access.node.index, reaching, definitionsById),
+                });
+            }
+
             for (const call of closureCallsInStatement(statement)) {
                 const entryId = numericValue((call.arguments || [])[0]);
                 const captureValues = tableValues((call.arguments || [])[1]);
@@ -321,7 +457,7 @@ function buildFunctionAnalysis(root, functionId) {
                     factory: call.base.name,
                     range: Array.isArray(call.range) ? [...call.range] : null,
                     captures: captureValues.map((value, index) => ({
-                        slot: index + 1,
+                        childSlot: index + 1,
                         ...classifyCaptureExpression(value, reaching, definitionsById),
                     })),
                 });
@@ -347,6 +483,7 @@ function buildFunctionAnalysis(root, functionId) {
         definitionsById,
         uses,
         closureSites,
+        cellAccesses,
         reaching: {
             converged,
             iterations,
@@ -406,6 +543,19 @@ function recoverVmBindings(source, ast, vmState) {
         }
     }
 
+    const captureSlotResolver = buildCaptureSlotResolver(captures);
+    const cellAccesses = functions.flatMap(fn => fn.cellAccesses);
+    for (const access of cellAccesses) {
+        if (access.kind === "local-cell") {
+            access.resolution = { kind: "resolved-cell", cellId: access.cellId, cellIds: [access.cellId] };
+        } else if (access.kind === "capture-slot") {
+            access.resolution = captureSlotResolver.resolve(access.functionId, access.captureSlot);
+        } else {
+            access.resolution = { kind: "unresolved", cellIds: [] };
+        }
+        access.resolvedCellId = access.resolution.kind === "resolved-cell" ? access.resolution.cellId : null;
+    }
+
     const definitions = functions.flatMap(fn => fn.definitions);
     const uses = functions.flatMap(fn => fn.uses);
     const uniqueUseCount = uses.filter(use => use.uniqueDefinitionId !== null).length;
@@ -429,6 +579,8 @@ function recoverVmBindings(source, ast, vmState) {
     }
 
     const allConverged = functions.every(fn => fn.reaching.converged);
+    const resolvedCellAccessCount = cellAccesses.filter(access => access.resolvedCellId !== null).length;
+    const unresolvedCellAccessCount = cellAccesses.length - resolvedCellAccessCount;
 
     return {
         found: true,
@@ -438,6 +590,10 @@ function recoverVmBindings(source, ast, vmState) {
         definitions,
         uses,
         captures,
+        captureSlotOrigins: captureSlotResolver.origins,
+        cellAccesses,
+        resolvedCellAccessCount,
+        unresolvedCellAccessCount,
         localCells,
         sharedLocalCells,
         uniqueUseCount,

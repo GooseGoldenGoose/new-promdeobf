@@ -163,6 +163,7 @@ function main() {
         console.log(`VM functions analyzed: ${vmBindings.functionCount}`);
         console.log(`VM reaching definitions: ${vmBindings.definitions.length} defs, ${vmBindings.uniqueUseCount}/${vmBindings.uses.length} unique uses`);
         console.log(`VM capture slots: ${vmBindings.captures.length}, local cells: ${vmBindings.localCells.length}, shared cells: ${vmBindings.sharedLocalCells.length}`);
+        console.log(`VM upvalue cell accesses: ${vmBindings.resolvedCellAccessCount}/${vmBindings.cellAccesses.length} resolved`);
     }
     console.log(`Output: ${result.outputPath}`);
     return result;
