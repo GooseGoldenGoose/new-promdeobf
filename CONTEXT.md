@@ -210,9 +210,10 @@ Current implementation:
 - Critical rule: Prometheus can temporarily reuse `POS_REGISTER` as an ordinary register, so not every assignment to renamed `state` is a jump. The walker treats the final write to the POS/state binding in a dispatcher block as its control-flow terminator.
 - Graph walking uses a visited set, so loop back-edges are retained without infinite analysis. Closure-created entry IDs are separate graph roots, not CFG successors unless an actual state transition targets them.
 - When every dispatcher leaf has a discovered state ID, beta output replaces the binary/range comparison dispatcher with explicit `if state == ID / elseif ...` cases and no original-tree fallback. Incomplete mappings retain the original dispatcher only for unresolved states.
+- All three tracked beta outputs are generated: `output\1.beta.lua`, `output\2.beta.lua`, and `output\3.beta.lua`.
 - `output\1.beta.lua`: root `1383946`, 1/1 dispatcher block mapped, runtime `AD`, exit 0.
+- `output\2.beta.lua`: root `8945882`, 3/3 dispatcher blocks mapped. CFG: `8945882 -> 15467310 / 9224212`, `15467310 -> 9224212`, `9224212 -> stop`. With a minimal Roblox compatibility shim (`warn = print`) and the same fixed RNG seed, stable and beta both print `gg`, `ranf`, exit 0.
 - `output\3.beta.lua`: all 3/3 blocks mapped. Root `2815217` ends in the generated stop sentinel and has no numeric successor; `9377191` (`createClosure1`) and `394074` (`createClosure0`) are separate closure roots. Runtime remains `block 10 2`, `before 1`, `after 3 3`, exit 0.
-- Sample 2 structurally validates branch walking: `8945882 -> 15467310 / 9224212`, `15467310 -> 9224212`, `9224212 -> stop`. Its LuaJIT runtime is not a useful equivalence check because the Roblox `warn` global is absent in plain LuaJIT; stable and beta fail at the same environment-dependent call.
 - A temporary controlled `while` + nested `if` Prometheus fixture resolved 6/6 blocks including the back-edge `9514929 -> 10936248`; stable and beta both printed `mid`, `done 3`, exit 0.
 - `tools/resolve-entry-beta.js` prints each graph root, state terminator, dispatcher path, leaf coverage, and writes the beta output.
 ## Control-Flow Understanding
