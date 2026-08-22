@@ -186,7 +186,7 @@ Current implementation:
 
 ## Environment Binding Step
 
-- Step 2 is implemented in `passes/environment.js`.
+- Step 2 currently performs semantic VM-wrapper naming through `passes/environment.js` and `passes/closure-factory.js`.
 - It finds an environment-producing IIFE argument and maps that argument position to the receiving function parameter, rather than renaming by identifier text.
 - Supported environment provenance includes direct global `getgenv()`, Prometheus-style `getfenv and getfenv() or _ENV`, and direct global `_ENV`.
 - The receiving binding is renamed to `_env` with lexical shadow tracking; unrelated nested parameters/locals with the same original name are left unchanged.
@@ -194,7 +194,10 @@ Current implementation:
 - `sample\1.txt`: environment parameter `U -> _env`, 2 bound references renamed.
 - `sample\2.txt`: environment parameter `S -> _env`, 4 bound references renamed; current deobfuscated output is `output\2.lua`.
 - Regression checks cover direct `getgenv()`, `getfenv ... or _ENV`, direct `_ENV`, nested-name shadowing, collision rejection, and operation when ConstantArray is absent.
-- `main.js` reparses after ConstantArray and again after environment renaming; default output is now `output\1.lua`.
+- `passes/closure-factory.js` structurally detects the general vararg Prometheus closure factory from its `(entryId, captures)` wrapper shape and renames its outer binding to `createClosure`; it does not key off generated names or block IDs.
+- Prometheus also emits fixed-arity closure factories (such as 0-arg and 1-arg variants); these are distinct bindings and are intentionally not all renamed to the same `createClosure` identifier.
+- Across current fixtures the detected general factory varies (`b` in samples 1-2, `r` in sample 3), confirming name-independent detection.
+- `main.js` reparses after ConstantArray, environment renaming, and createClosure renaming; default output is `output\1.lua`.
 - Full sample-folder validation now covers `sample\1.txt`, `sample\2.txt`, and `sample\3.txt`; all pass steps 1-2 and reparse successfully.
 - `sample\3.txt` produces `output\3.lua`; runtime comparison with the unobfuscated source matches exactly: `block 10 2`, `before 1`, `after 3 3`, confirming shared mutable upvalue behavior is preserved by current steps.
 
