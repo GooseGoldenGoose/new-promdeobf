@@ -1,0 +1,207 @@
+return (function(...)
+    local U = {
+        "8bGi1PL=",
+        "tdYhmxV=",
+        "LlL=",
+        "/lzWpc5N8tm3wrGV",
+        "/xMTfxws",
+        "tdYPfT==",
+        "tdYi1vzW2a=="
+    }
+    for F, n in ipairs({
+        {
+            1,
+            7
+        },
+        {
+            1,
+            1
+        },
+        {
+            2,
+            7
+        }
+    }) do
+        while n[1] < n[2] do
+            U[n[1]], U[n[2]], n[1], n[2] = U[n[2]], U[n[1]], n[1] + (1), n[2] - (1)
+        end
+    end
+    local function F(F)
+        return U[F + (35176)]
+    end
+    do
+        local F = table.insert
+        local n = U
+        local z = {
+            R = 42,
+            m = 25,
+            q = 15,
+            K = 3,
+            Q = 59,
+            N = 55,
+            G = 9,
+            l = 20,
+            ["2"] = 30,
+            Y = 61,
+            X = 50,
+            u = 32,
+            x = 22,
+            O = 62,
+            L = 16,
+            T = 48,
+            B = 4,
+            ["8"] = 28,
+            c = 35,
+            H = 33,
+            e = 26,
+            g = 46,
+            ["1"] = 27,
+            s = 43,
+            ["4"] = 58,
+            r = 36,
+            P = 39,
+            n = 60,
+            V = 56,
+            b = 7,
+            j = 18,
+            ["0"] = 14,
+            y = 2,
+            D = 19,
+            v = 38,
+            a = 0,
+            ["/"] = 29,
+            i = 41,
+            C = 11,
+            d = 53,
+            p = 12,
+            t = 23,
+            S = 51,
+            Z = 31,
+            I = 21,
+            f = 24,
+            h = 44,
+            F = 45,
+            A = 54,
+            E = 6,
+            ["6"] = 10,
+            k = 52,
+            ["9"] = 34,
+            z = 17,
+            J = 40,
+            ["3"] = 5,
+            ["7"] = 8,
+            w = 13,
+            ["+"] = 47,
+            U = 49,
+            ["5"] = 1,
+            W = 37,
+            M = 57,
+            o = 63
+        }
+        local N = table.concat
+        local D = string.len
+        local A = type
+        local P = string.char
+        local R = string.sub
+        local V = math.floor
+        for U = 1, #n, 1 do
+            local q = n[U]
+            if A(q) == "string" then
+                local A = D(q)
+                local S = {}
+                local l = 1
+                local O = 0
+                local W = 0
+                while l <= A do
+                    local U = R(q, l, l)
+                    local n = z[U]
+                    if n then
+                        O = O + n * (64) ^ ((3) - W)
+                        W = W + (1)
+                        if W == 4 then
+                            W = 0
+                            local U = V(O / (65536))
+                            local n = V((O % (65536)) / (256))
+                            local z = O % (256)
+                            F(S, P(U, n, z))
+                            O = 0
+                        end
+                    elseif U == "=" then
+                        F(S, P(V(O / (65536))))
+                        if l >= A or R(q, l + (1), l + (1)) ~= "=" then
+                            F(S, P(V((O % (65536)) / (256))))
+                        end
+                        break
+                    end
+                    l = l + (1)
+                end
+                n[U] = N(S)
+            end
+        end
+    end
+    return (function(U, z, N, D, A, P, R, l, n, W, S, q, V, b, O, Q)
+        O, V, q, Q, l, S, b, W, n = function(U)
+            for F = 1, #U, 1 do
+                q[U[F]] = (1) + q[U[F]]
+            end
+            if N then
+                local n = N(true)
+                local z = A(n)
+                z[F(-35175)], z[F(-35169)], z[F(-35173)] = U, W, function()
+                    return 1046131
+                end
+                return n
+            else
+                return D({}, {
+                    [F(-35169)] = W,
+                    [F(-35175)] = U,
+                    [F(-35173)] = function()
+                        return 1046131
+                    end
+                })
+            end
+        end, {}, {}, function(U)
+            q[U] = q[U] - (1)
+            if 0 == q[U] then
+                q[U], V[U] = nil, nil
+            end
+        end, 0, function()
+            l = l + (1)
+            q[l] = 1
+            return l
+        end, function(U, F)
+            local z = O(F)
+            local N = function(...)
+                return n(U, {
+                    ...
+                }, F, z)
+            end
+            return N
+        end, function(U)
+            local F, n = 1, U[1]
+            while n do
+                q[n], F = q[n] - (1), (1) + F
+                if 0 == q[n] then
+                    q[n], V[n] = nil, nil
+                end
+                n = U[F]
+            end
+        end, function(n, N, D, A)
+            local q, R, V
+            while n do
+                R = F(-35174)
+                q = F(-35172)
+                V = N
+                n = U[R]
+                R = n(q)
+                n = U[F(-35171)]
+                R = {}
+            end
+            n = #A
+            return z(R)
+        end
+        return (b(1383946, {}))(z(R))
+    end)(getfenv and getfenv() or _ENV, unpack or table[F(-35170)], newproxy, setmetatable, getmetatable, select, {
+        ...
+    })
+end)(...)
