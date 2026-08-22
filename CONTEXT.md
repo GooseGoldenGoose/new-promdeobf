@@ -495,6 +495,7 @@ without producing unrelated locals.
 - Current tracked scheduling counts: sample 1 -> 1 block / 5 swaps; sample 2 -> 1 block / 2 swaps; sample 3 -> 1 block / 76 swaps; sample 4 -> 1 block / 51 swaps; sample 6 -> 3 blocks / 54 swaps; sample 7 -> 2 blocks / 28 swaps; sample 8 -> 1 block / 110 swaps. All outputs reparse. LuaJIT runtime parity matches obfuscated vs deobfuscated for samples 1/2/3/4/6/8, and readable source + obfuscated + deobfuscated match for both deterministic sample-7 branches.
 - `tools/test-vm-register-scheduler.js` is a focused scheduler regression covering gap compaction plus RAW, WAR, WAW, and effectful-call-order preservation; it currently passes.
 - Large untracked sample 5 still resolves the same closed 930/938 dispatcher graph with 8 dead leaves, 116 functions, 11,858 definitions, 177 join components, 695 cross-block lifetimes, 61 loop-carried lifetimes, and unchanged capture/cell counts. Stronger scheduling compacts 242 blocks through 92,602 individually dependency-safe adjacent swaps with zero safety-validator rejections. The high swap count is a count of equivalent adjacent crossings, not 92,602 independent source rewrites.
+- Full post-scheduler batch validation on 2026-08-23 ran every current `sample/*.txt` fixture (1 through 8, including untracked stress sample 5) through `main.js`; all eight exited 0 and reparsed. Runtime parity matched for samples 1/2/3/4/6/8 and both deterministic sample-7 seeds. Sample 5 remains structural/stress validation only. The focused scheduler regression also passes.
 
 
 # Immediate Next Steps
