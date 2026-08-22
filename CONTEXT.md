@@ -226,6 +226,8 @@ Current implementation:
 - Canonical dispatcher generation (`emitContainerFuncBody`) shuffles and emits every entry in `self.blocks` before building the comparison tree; it does not prune unreachable blocks. Therefore sample 5 safely normalizes its closed 930-state reachable graph to IDs `1..930` and prunes 8 proven unreachable dispatcher leaves. `main.js` reports `VM state recovery applied: true`, `VM unreachable dispatcher leaves pruned: 8`, and `VM state IDs normalized: true`.
 - Sample-5 normalization has 116 closure graph roots and zero unsupported closure-entry calls. Known original split-branch target IDs are absent from normalized output, while their executable temporary loads use compact normalized targets. A dead-leaf-only random sentinel checked during validation is also absent from output.
 - A fresh temporary Medium numeric-`for` regression resolved 7/7 states and preserved runtime (`numfor 9`) while normalizing its compiler-split branch, confirming the rule is structural rather than sample-5-specific.
+- Tracked `sample/6.source.lua` / `sample/6.txt` is the closure-ownership regression. Readable source: top-level captures `seed`; `outer(n)` has an `if` and `while`; inside `outer` a nested `inner(delta)` captures `value` and has its own branch. Runtime for readable source, obfuscated fixture, and deobfuscated output is identical: `theory 8 10 5`, exit 0.
+- Sample 6 resolves 11/11 states into three closure graphs: root `1`; nested `inner` is `createClosure5` states `2-4` (original entry `2234492`); `outer` is `createClosure6` states `5-11` (original entry `7146503`). Root state 1 creates `outer` via `createClosure6(5, ...)`; inside `outer` state 11 creates `inner` via `createClosure5(2, ...)`. This proves multiple states in one range are pieces of one source function, while function nesting is established by a closure-creation call inside another function's reachable CFG, not by nested dispatcher `if` nodes.
 ## Control-Flow Understanding
 
 Prometheus-style control-flow flattening should be modeled as a dispatcher/state machine.
@@ -437,7 +439,7 @@ without producing unrelated locals.
 # Immediate Next Steps
 
 1. Treat `output\\N.lua` as the normal final output through promoted Step 3; keep earlier step boundaries only as internal pipeline stages.
-2. Use sample 4 as the small source-control-flow CFG regression and untracked sample 5 as the large stress regression for split branches, closed reachable graphs, and unreachable-block pruning; keep closure graphs distinct and preserve proven jump/back-edge semantics.
+2. Use sample 4 as the small source-control-flow CFG regression, sample 6 as the nested-closure/function-ownership regression, and untracked sample 5 as the large stress regression for split branches, closed reachable graphs, and unreachable-block pruning; keep closure graphs distinct and preserve proven jump/back-edge semantics.
 3. Keep POS-register temporary reuse distinct from true block terminators; extend terminator recognition only from proven Prometheus compiler patterns.
 4. Keep each pass structural/generalized and reparse/runtime-check transformed outputs before advancing.
 5. If the current parser becomes a correctness blocker, evaluate Rust Moonlight instead of parser-specific hacks.
