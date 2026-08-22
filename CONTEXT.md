@@ -30,7 +30,7 @@ When continuing this project in a new chat:
 - Preserve stable pipeline behavior when experimenting. A recovery pass must fail closed: if proof is incomplete, preserve the previous safe output rather than guess.
 - End every project-related turn with exactly: `Done for this turn — you can prompt now.`
 
-Current startup state at this handoff: latest commit before this section is `3a0b601 Record shadowed sample 7 scope proof`; normal Step 3 state recovery/normalization is promoted in `main.js`; samples 4, 6, and 7 are focused CFG/closure/scope regressions; untracked sample 5 is the large 930-state stress regression.
+Current implementation checkpoint before this handoff update is `cb5e3d3 Add VM binding and capture analysis`; Step 3 state recovery/normalization remains the emitted-source boundary, and Step 4 now builds analysis-only function/definition/capture identity on top of the proven CFG. Samples 4, 6, and 7 remain focused CFG/closure/scope regressions; untracked sample 5 remains the large 930-state stress regression.
 
 # Core Knowledge & Rules
 
@@ -458,11 +458,22 @@ without producing unrelated locals.
 - Sample 7 still resolves 2/2 VM states: root state `1` and `w` as `createClosure5` state `2`. In the root block, the outer source `b = 3` is held as an ordinary VM value, source `a = 1` is promoted through `allocUpvalue()` into a captured cell, the inner shadowing `b = 2` is a separate temporary/reaching definition used only by its block print, and the later print reads the preserved outer `b = 3` rather than the inner value. `w` is created with only the `a` upvalue cell and reads `upvalueValues[upvalues[1]]`, so neither outer nor inner `b` is captured.
 - Scope-recovery rule reinforced by sample 7: never merge identifiers by spelling or reused VM register name. Recover source binding identity from lexical/function ownership, reaching definitions/liveness, environment-vs-local provenance, and explicit closure capture/upvalue-cell identity.
 
+## Step 4: VM Binding / Capture Analysis
+
+- `passes/vm-bindings.js` is now part of the normal analysis pipeline immediately after Step 3 graph recovery. It is analysis-only: it does not rewrite emitted Lua, and it runs only when the VM graph is found, closed, and safely normalized; otherwise it fails closed with no binding claims.
+- Function identity is derived from Step 3 closure graph roots, not dispatcher nesting or VM register names. Closure-factory calls found inside a function's owned CFG infer parent/child function ownership. Sample 6 therefore proves the structural chain root -> outer -> inner even though all states still execute in the shared VM function.
+- Every VM-register write inside an owned CFG receives a distinct definition-site identity. A forward reaching-definitions fixed point is computed across CFG predecessors/backedges. Identifier uses are linked to a source value only when exactly one definition reaches that use; joins with multiple possible definitions remain ambiguous instead of being guessed.
+- Closure capture slots are provenance-classified. An identifier capture becomes a `local-cell` only when its unique reaching definition is a zero-argument `allocUpvalue()` result. Direct `upvalues[n]` capture expressions are recorded as `parent-capture-slot` relays. Other forms remain explicitly unproven. This matches canonical Prometheus compiler behavior, where a nested function can capture either a newly allocated local cell or a higher-function upvalue slot.
+- Shared-cell identity is now explicit: sample 3's two closures resolve to the same local cell; sample 4's three closures resolve to the same `total` cell; sample 6 resolves the root->outer capture and outer->inner capture to two different local cells; sample 7 resolves one captured cell with all 22 tracked VM-register uses uniquely reaching a definition and zero ambiguous/undefined tracked uses.
+- Large untracked sample 5 also converges under the analysis: 116 recovered functions and 112 local upvalue-cell allocations are identified, and real higher-function capture relays through `upvalues[n]` are observed. Ambiguous/unproven large-sample uses remain metadata only and are not rewritten.
+- `main.js` exposes the binding-analysis result and prints compact counts. Final source output remains exactly the Step 3 normalized source for now. Reparse still occurs after the final emitted source, and LuaJIT runtime parity was reconfirmed for samples 3, 4, 6, and 7.
+
 # Immediate Next Steps
 
-1. Treat `output\\N.lua` as the normal final output through promoted Step 3; keep earlier step boundaries only as internal pipeline stages.
-2. Use sample 4 as the small source-control-flow CFG regression, sample 6 as the nested-closure/function-ownership regression, sample 7 as the lexical-scope/binding-identity regression, and untracked sample 5 as the large stress regression for split branches, closed reachable graphs, and unreachable-block pruning; keep closure graphs distinct and preserve proven jump/back-edge semantics.
-3. Keep POS-register temporary reuse distinct from true block terminators; extend terminator recognition only from proven Prometheus compiler patterns.
-4. Keep each pass structural/generalized and reparse/runtime-check transformed outputs before advancing.
-5. If the current parser becomes a correctness blocker, evaluate Rust Moonlight instead of parser-specific hacks.
-6. Update `CONTEXT.md`, commit, and push every project change as a checkpoint.
+1. Keep Step 3 as the emitted-source boundary while Step 4 matures as proof metadata; do not reconstruct source locals yet from register spelling or adjacency.
+2. Extend the binding IR with explicit `upvalueValues[cell]` read/write access identities, then connect those accesses to local-cell and parent-capture-slot provenance. This is the next prerequisite for reconstructing mutable captured source bindings safely.
+3. Add liveness/lifetime grouping over definition identities so ordinary locals and shadowed bindings can be separated without inventing locals. Use sample 7 as the primary regression and require unique def/use proof before source-like local recovery.
+4. Continue CFG structuring separately: sample 4 remains the focused if/while/repeat regression, sample 6 the nested-function ownership regression, and untracked sample 5 the stress case. Preserve backedges and evaluation order.
+5. Keep POS-register temporary reuse distinct from true block terminators; extend Prometheus-specific recognition only from canonical compiler evidence.
+6. Keep every pass structural/generalized, reparse transformed Lua, runtime-check executable fixtures, and update/commit/push `CONTEXT.md` after meaningful work.
+7. If the current parser becomes a correctness blocker, evaluate Rust Moonlight instead of parser-specific hacks.
