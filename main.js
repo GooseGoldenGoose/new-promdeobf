@@ -7,6 +7,7 @@ const { renameCreateClosureBinding } = require("./passes/closure-factory");
 const { renameVmHelperBindings } = require("./passes/vm-helpers");
 const { splitSafeParallelAssignmentsFully } = require("./passes/split-safe-assignments");
 const { recoverVmStateGraph } = require("./passes/vm-state");
+const { recoverVmBindings } = require("./passes/vm-bindings");
 
 const ROOT = __dirname;
 const DEFAULT_INPUT = path.join(ROOT, "sample", "1.txt");
@@ -70,6 +71,7 @@ function runDeobfuscator(inputPath = DEFAULT_INPUT, outputPath = DEFAULT_OUTPUT)
 
     const vmStateAst = parseLua(splitAssignments.source, `${inputPath} <before VM state recovery>`);
     const vmState = recoverVmStateGraph(splitAssignments.source, vmStateAst);
+    const vmBindings = recoverVmBindings(splitAssignments.source, vmStateAst, vmState);
     const vmStateApplied = vmState.found && vmState.normalized;
     const finalSource = vmStateApplied ? vmState.source : splitAssignments.source;
 
@@ -87,6 +89,7 @@ function runDeobfuscator(inputPath = DEFAULT_INPUT, outputPath = DEFAULT_OUTPUT)
         vmHelpers,
         splitAssignments,
         vmState,
+        vmBindings,
         vmStateApplied,
     };
 }
@@ -101,6 +104,7 @@ function main() {
     const vmHelpers = result.vmHelpers;
     const splitAssignments = result.splitAssignments;
     const vmState = result.vmState;
+    const vmBindings = result.vmBindings;
     const vmStateApplied = result.vmStateApplied;
 
     console.log(`Input: ${result.inputPath}`);
@@ -153,6 +157,12 @@ function main() {
                 console.log(`VM state range: ${group.root.factory} ${group.min}-${group.max} (entry ${group.entryNewId})`);
             }
         }
+    }
+    console.log(`VM binding analysis found: ${vmBindings.found}`);
+    if (vmBindings.found) {
+        console.log(`VM functions analyzed: ${vmBindings.functionCount}`);
+        console.log(`VM reaching definitions: ${vmBindings.definitions.length} defs, ${vmBindings.uniqueUseCount}/${vmBindings.uses.length} unique uses`);
+        console.log(`VM capture slots: ${vmBindings.captures.length}, local cells: ${vmBindings.localCells.length}, shared cells: ${vmBindings.sharedLocalCells.length}`);
     }
     console.log(`Output: ${result.outputPath}`);
     return result;

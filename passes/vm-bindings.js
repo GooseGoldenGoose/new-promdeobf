@@ -1,0 +1,453 @@
+const { findVmFunction } = require("./vm-state");
+
+function isNode(value) {
+    return value && typeof value === "object" && typeof value.type === "string";
+}
+
+function isIdentifier(node, name = null) {
+    return node?.type === "Identifier" && (name === null || node.name === name);
+}
+
+function numericValue(node) {
+    if (!node || node.type !== "NumericLiteral") return null;
+    if (typeof node.value === "number") return node.value;
+    const value = Number(node.raw);
+    return Number.isFinite(value) ? value : null;
+}
+
+function successorsOf(term) {
+    if (term?.kind === "jump") return [term.target];
+    if (term?.kind === "branch") return [term.onTrue, term.onFalse];
+    return [];
+}
+
+function setEquals(a, b) {
+    if (a.size !== b.size) return false;
+    for (const value of a) if (!b.has(value)) return false;
+    return true;
+}
+
+function mapOfSetsClone(source) {
+    const out = new Map();
+    for (const [name, defs] of source) out.set(name, new Set(defs));
+    return out;
+}
+
+function mapOfSetsEquals(a, b) {
+    if (a.size !== b.size) return false;
+    for (const [name, defs] of a) {
+        const other = b.get(name);
+        if (!other || !setEquals(defs, other)) return false;
+    }
+    return true;
+}
+
+function mergeReachingMaps(maps) {
+    const out = new Map();
+    for (const map of maps) {
+        for (const [name, defs] of map) {
+            if (!out.has(name)) out.set(name, new Set());
+            const target = out.get(name);
+            for (const def of defs) target.add(def);
+        }
+    }
+    return out;
+}
+
+function tableValues(node) {
+    if (node?.type !== "TableConstructorExpression") return null;
+    const values = [];
+    for (const field of node.fields || []) {
+        if (field?.type !== "TableValue") return null;
+        values.push(field.value);
+    }
+    return values;
+}
+
+function isClosureFactoryCall(node) {
+    return node?.type === "CallExpression" &&
+        isIdentifier(node.base) &&
+        /^createClosure(?:\d+)?$/.test(node.base.name);
+}
+
+function walkExpression(node, visit) {
+    if (!isNode(node)) return;
+    if (node.type === "FunctionDeclaration") return;
+    visit(node);
+    for (const [key, value] of Object.entries(node)) {
+        if (key === "loc" || key === "range") continue;
+        if (Array.isArray(value)) {
+            for (const child of value) walkExpression(child, visit);
+        } else if (isNode(value)) {
+            walkExpression(value, visit);
+        }
+    }
+}
+
+function assignmentDefinitions(statement) {
+    if (statement?.type !== "AssignmentStatement" && statement?.type !== "LocalStatement") return [];
+    const variables = statement.variables || [];
+    const init = statement.init || [];
+    const exactPositional = variables.length === init.length;
+    const out = [];
+    for (let i = 0; i < variables.length; i++) {
+        if (!isIdentifier(variables[i])) continue;
+        out.push({
+            name: variables[i].name,
+            variableIndex: i,
+            rhs: exactPositional ? init[i] || null : null,
+            exactRhs: exactPositional,
+        });
+    }
+    return out;
+}
+
+function statementReadIdentifiers(statement) {
+    const reads = [];
+
+    function collect(node) {
+        walkExpression(node, current => {
+            if (current.type === "Identifier") reads.push(current);
+        });
+    }
+
+    if (statement?.type === "AssignmentStatement" || statement?.type === "LocalStatement") {
+        for (const variable of statement.variables || []) {
+            if (!isIdentifier(variable)) collect(variable);
+        }
+        for (const init of statement.init || []) collect(init);
+        return reads;
+    }
+
+    collect(statement);
+    return reads;
+}
+
+function closureCallsInStatement(statement) {
+    const calls = [];
+
+    function collect(node) {
+        walkExpression(node, current => {
+            if (isClosureFactoryCall(current)) calls.push(current);
+        });
+    }
+
+    if (statement?.type === "AssignmentStatement" || statement?.type === "LocalStatement") {
+        for (const variable of statement.variables || []) {
+            if (!isIdentifier(variable)) collect(variable);
+        }
+        for (const init of statement.init || []) collect(init);
+    } else {
+        collect(statement);
+    }
+
+    return calls;
+}
+
+function uniqueReachingDef(reaching, name) {
+    const defs = reaching.get(name);
+    if (!defs || defs.size !== 1) return null;
+    return [...defs][0];
+}
+
+function upvalueSlotFromExpression(node) {
+    if (node?.type !== "IndexExpression" || !isIdentifier(node.base, "upvalues")) return null;
+    const slot = numericValue(node.index);
+    return Number.isInteger(slot) && slot >= 1 ? slot : null;
+}
+
+function classifyCaptureExpression(node, reaching, definitionsById) {
+    if (isIdentifier(node)) {
+        const defId = uniqueReachingDef(reaching, node.name);
+        if (!defId) {
+            return {
+                kind: "identifier-unproven",
+                registerName: node.name,
+                reachingDefIds: [...(reaching.get(node.name) || [])],
+            };
+        }
+        const def = definitionsById.get(defId);
+        if (def?.kind === "alloc-upvalue") {
+            return {
+                kind: "local-cell",
+                cellId: def.id,
+                definitionId: def.id,
+                registerName: node.name,
+            };
+        }
+        return {
+            kind: "identifier-definition",
+            registerName: node.name,
+            definitionId: defId,
+        };
+    }
+
+    const parentSlot = upvalueSlotFromExpression(node);
+    if (parentSlot !== null) {
+        return {
+            kind: "parent-capture-slot",
+            slot: parentSlot,
+        };
+    }
+
+    if (node?.type === "CallExpression" && isIdentifier(node.base, "allocUpvalue")) {
+        return {
+            kind: "direct-local-cell-allocation",
+            range: Array.isArray(node.range) ? [...node.range] : null,
+        };
+    }
+
+    return {
+        kind: "unproven",
+        expressionType: node?.type || null,
+    };
+}
+
+function buildFunctionAnalysis(root, functionId) {
+    const blockIds = root.graph.order.filter(id => root.graph.blocks.has(id));
+    const blockSet = new Set(blockIds);
+    const predecessors = new Map(blockIds.map(id => [id, new Set()]));
+
+    for (const id of blockIds) {
+        const block = root.graph.blocks.get(id);
+        for (const successor of successorsOf(block?.terminator)) {
+            if (blockSet.has(successor)) predecessors.get(successor).add(id);
+        }
+    }
+
+    const definitions = [];
+    const definitionsByBlock = new Map(blockIds.map(id => [id, []]));
+    const definitionsByName = new Map();
+
+    for (const blockId of blockIds) {
+        const block = root.graph.blocks.get(blockId);
+        for (let statementIndex = 0; statementIndex < (block?.body?.length || 0); statementIndex++) {
+            const statement = block.body[statementIndex];
+            for (const item of assignmentDefinitions(statement)) {
+                const id = `f${functionId}:b${blockId}:s${statementIndex}:v${item.variableIndex}`;
+                const definition = {
+                    id,
+                    functionId,
+                    blockId,
+                    statementIndex,
+                    variableIndex: item.variableIndex,
+                    name: item.name,
+                    rhs: item.rhs,
+                    exactRhs: item.exactRhs,
+                    statement,
+                    kind: item.exactRhs &&
+                        item.rhs?.type === "CallExpression" &&
+                        isIdentifier(item.rhs.base, "allocUpvalue") &&
+                        (item.rhs.arguments || []).length === 0
+                        ? "alloc-upvalue"
+                        : "assignment",
+                };
+                definitions.push(definition);
+                definitionsByBlock.get(blockId).push(definition);
+                if (!definitionsByName.has(definition.name)) definitionsByName.set(definition.name, new Set());
+                definitionsByName.get(definition.name).add(definition.id);
+            }
+        }
+    }
+
+    const definitionsById = new Map(definitions.map(def => [def.id, def]));
+
+    function transfer(input, blockId) {
+        const out = mapOfSetsClone(input);
+        for (const def of definitionsByBlock.get(blockId) || []) {
+            out.set(def.name, new Set([def.id]));
+        }
+        return out;
+    }
+
+    const inByBlock = new Map(blockIds.map(id => [id, new Map()]));
+    const outByBlock = new Map(blockIds.map(id => [id, new Map()]));
+    let changed = true;
+    let iterations = 0;
+    const iterationLimit = Math.max(1, blockIds.length * 16);
+
+    while (changed && iterations < iterationLimit) {
+        changed = false;
+        iterations++;
+        for (const blockId of blockIds) {
+            const predMaps = [...predecessors.get(blockId)].map(id => outByBlock.get(id));
+            const nextIn = predMaps.length ? mergeReachingMaps(predMaps) : new Map();
+            const nextOut = transfer(nextIn, blockId);
+            if (!mapOfSetsEquals(inByBlock.get(blockId), nextIn)) {
+                inByBlock.set(blockId, nextIn);
+                changed = true;
+            }
+            if (!mapOfSetsEquals(outByBlock.get(blockId), nextOut)) {
+                outByBlock.set(blockId, nextOut);
+                changed = true;
+            }
+        }
+    }
+
+    const converged = !changed;
+    const uses = [];
+    const closureSites = [];
+
+    for (const blockId of blockIds) {
+        const block = root.graph.blocks.get(blockId);
+        let reaching = mapOfSetsClone(inByBlock.get(blockId));
+
+        for (let statementIndex = 0; statementIndex < (block?.body?.length || 0); statementIndex++) {
+            const statement = block.body[statementIndex];
+
+            for (const identifier of statementReadIdentifiers(statement)) {
+                if (!definitionsByName.has(identifier.name)) continue;
+                const reachingDefIds = [...(reaching.get(identifier.name) || [])];
+                uses.push({
+                    functionId,
+                    blockId,
+                    statementIndex,
+                    name: identifier.name,
+                    range: Array.isArray(identifier.range) ? [...identifier.range] : null,
+                    reachingDefIds,
+                    uniqueDefinitionId: reachingDefIds.length === 1 ? reachingDefIds[0] : null,
+                });
+            }
+
+            for (const call of closureCallsInStatement(statement)) {
+                const entryId = numericValue((call.arguments || [])[0]);
+                const captureValues = tableValues((call.arguments || [])[1]);
+                if (entryId === null || !captureValues) continue;
+                closureSites.push({
+                    functionId,
+                    blockId,
+                    statementIndex,
+                    entryId,
+                    factory: call.base.name,
+                    range: Array.isArray(call.range) ? [...call.range] : null,
+                    captures: captureValues.map((value, index) => ({
+                        slot: index + 1,
+                        ...classifyCaptureExpression(value, reaching, definitionsById),
+                    })),
+                });
+            }
+
+            for (const def of definitionsByBlock.get(blockId) || []) {
+                if (def.statementIndex !== statementIndex) continue;
+                reaching.set(def.name, new Set([def.id]));
+            }
+        }
+    }
+
+    return {
+        id: functionId,
+        kind: root.kind,
+        factory: root.factory,
+        entryId: root.entryId,
+        parentId: null,
+        parentAmbiguous: false,
+        stateIds: [...blockIds],
+        predecessors,
+        definitions,
+        definitionsById,
+        uses,
+        closureSites,
+        reaching: {
+            converged,
+            iterations,
+            inByBlock,
+            outByBlock,
+        },
+    };
+}
+
+function recoverVmBindings(source, ast, vmState) {
+    if (!vmState?.found || !vmState?.reachableClosed || !vmState?.normalized) {
+        return {
+            found: false,
+            reason: "VM binding analysis requires a closed, normalized VM state graph",
+            functions: [],
+            definitions: [],
+            uses: [],
+            captures: [],
+        };
+    }
+
+    const vm = findVmFunction(ast);
+    if (!vm) {
+        return {
+            found: false,
+            reason: "No semantically named vm function was found",
+            functions: [],
+            definitions: [],
+            uses: [],
+            captures: [],
+        };
+    }
+
+    const functions = vmState.graphRoots.map((root, index) => buildFunctionAnalysis(root, index));
+    const functionByEntry = new Map(functions.map(fn => [fn.entryId, fn]));
+    const captures = [];
+
+    for (const parent of functions) {
+        for (const site of parent.closureSites) {
+            const child = functionByEntry.get(site.entryId);
+            if (!child || child.id === parent.id) continue;
+
+            if (child.parentId === null) child.parentId = parent.id;
+            else if (child.parentId !== parent.id) child.parentAmbiguous = true;
+
+            for (const capture of site.captures) {
+                captures.push({
+                    parentFunctionId: parent.id,
+                    childFunctionId: child.id,
+                    childEntryId: child.entryId,
+                    blockId: site.blockId,
+                    statementIndex: site.statementIndex,
+                    factory: site.factory,
+                    ...capture,
+                });
+            }
+        }
+    }
+
+    const definitions = functions.flatMap(fn => fn.definitions);
+    const uses = functions.flatMap(fn => fn.uses);
+    const uniqueUseCount = uses.filter(use => use.uniqueDefinitionId !== null).length;
+    const ambiguousUseCount = uses.filter(use => use.reachingDefIds.length > 1).length;
+    const undefinedUseCount = uses.filter(use => use.reachingDefIds.length === 0).length;
+    const localCells = definitions.filter(def => def.kind === "alloc-upvalue");
+
+    const sharedLocalCells = [];
+    const localCellConsumers = new Map();
+    for (const capture of captures) {
+        if (capture.kind !== "local-cell") continue;
+        if (!localCellConsumers.has(capture.cellId)) localCellConsumers.set(capture.cellId, new Set());
+        localCellConsumers.get(capture.cellId).add(capture.childFunctionId);
+    }
+    for (const [cellId, children] of localCellConsumers) {
+        if (children.size < 2) continue;
+        sharedLocalCells.push({
+            cellId,
+            childFunctionIds: [...children].sort((a, b) => a - b),
+        });
+    }
+
+    const allConverged = functions.every(fn => fn.reaching.converged);
+
+    return {
+        found: true,
+        source,
+        functionCount: functions.length,
+        functions,
+        definitions,
+        uses,
+        captures,
+        localCells,
+        sharedLocalCells,
+        uniqueUseCount,
+        ambiguousUseCount,
+        undefinedUseCount,
+        allConverged,
+    };
+}
+
+module.exports = {
+    recoverVmBindings,
+    classifyCaptureExpression,
+};
