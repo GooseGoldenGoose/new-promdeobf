@@ -173,12 +173,15 @@ Current implementation:
 - Existing untracked `sample/` content should not be modified unless explicitly needed.
 - sample\1.txt is the current normalized fixture copied byte-for-byte from ormater\out.txt; use it as the next-stage deobfuscation sample.
 
-## Constant Folding Step
+## Prometheus ConstantArray Step
 
-- `passes/constant-fold.js` performs semantics-safe folding of pure numeric/boolean/nil unary and binary expressions.
-- `main.js` now reads `sample\1.txt` by default, runs the fold pass, reparses the rewritten source for validation, and writes `output\01-constant-fold.lua`.
-- Synthetic verification folds examples such as `(2 + 3) * 4 -> 20`, `not false -> true`, and `-5 % 3 -> 1`.
-- The current normalized sample reports `0` folds because `luau-format --luraph` already removed all pure literal arithmetic; therefore step-1 output is intentionally byte-identical to `sample\1.txt`.
+- The arithmetic constant-folding pass was removed; that was not the intended first deobfuscation step.
+- `passes/constant-array.js` structurally recovers Prometheus `ConstantArray`: literal table, rotation, accessor offset, and custom-base64 decoder.
+- It is scope-aware when replacing accessor calls, so shadowed identifiers are not mistaken for the ConstantArray wrapper.
+- `main.js` reads `sample\1.txt`, runs this pass, reparses the output, and writes `output\01-constant-table.lua`.
+- Current fixture result: 7 constants recovered, rotation applied, strings decoded, 10 references inlined, 0 unresolved wrapper/array uses, and the dead ConstantArray prelude removed.
+- Current recovered constants are `__index`, `print`, `__len`, `AD`, `uDe20wqvE6Bx`, `unpack`, and `__gc`.
+- Keep the current Luau parser while it remains sufficient; switching the parser layer to Rust Moonlight is acceptable if parser limitations begin blocking correct structural recovery.
 
 ## Control-Flow Understanding
 
@@ -390,7 +393,8 @@ without producing unrelated locals.
 
 # Immediate Next Steps
 
-1. Treat `output\01-constant-fold.lua` as the current stage output.
+1. Treat `output\01-constant-table.lua` as the current stage output.
 2. Do not add another recovery pass until the user chooses the next deobfuscation step.
-3. Keep each new pass structural/generalized and reparse its output before advancing.
-4. Update `CONTEXT.md`, commit, and push every project change as a checkpoint.
+3. Keep each pass structural/generalized, scope-aware where bindings matter, and reparse its output before advancing.
+4. If the current parser becomes a correctness blocker, evaluate Rust Moonlight instead of adding parser-specific hacks.
+5. Update `CONTEXT.md`, commit, and push every project change as a checkpoint.
