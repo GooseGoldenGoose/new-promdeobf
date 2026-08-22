@@ -90,6 +90,54 @@ function canSwapRightAssignmentWithLeftStatement(delayable, current, stateName) 
     return true;
 }
 
+function getSingleWrittenIdentifier(statement) {
+    if (statement?.type !== "AssignmentStatement") return null;
+    const variables = statement.variables || [];
+    if (variables.length !== 1 || !isIdentifier(variables[0])) return null;
+    return variables[0].name;
+}
+
+function findNextRegisterTouch(statements, index, name) {
+    for (let i = index + 1; i < statements.length; i++) {
+        if (statementReads(statements[i]).has(name)) {
+            return { index: i, kind: "read" };
+        }
+        if (statementWrites(statements[i]).has(name)) {
+            return { index: i, kind: "write" };
+        }
+    }
+    return null;
+}
+
+function sinkPureAssignmentsTowardNextTouch(statements, stateName) {
+    const originalOrder = [...statements];
+    let swaps = 0;
+    let moved = 0;
+
+    for (const producer of originalOrder) {
+        const fromIndex = statements.indexOf(producer);
+        if (fromIndex < 0 || !isDelayableAssignment(producer, stateName)) continue;
+        const name = getSingleWrittenIdentifier(producer);
+        if (!name) continue;
+
+        const touch = findNextRegisterTouch(statements, fromIndex, name);
+        if (!touch || touch.index <= fromIndex + 1) continue;
+
+        // Keep the write, but move it right until immediately before the next
+        // read or overwrite of the same register. It may cross only statements
+        // that are independently RAW/WAR/WAW-safe with this pure assignment.
+        if (!canMoveDelayableRightAcrossRange(statements, fromIndex, touch.index - 1, stateName)) continue;
+
+        const distance = touch.index - fromIndex - 1;
+        statements.splice(fromIndex, 1);
+        statements.splice(touch.index - 1, 0, producer);
+        swaps += distance;
+        moved++;
+    }
+
+    return { swaps, moved };
+}
+
 function findDirectProducerStatements(statements, index) {
     const reads = statementReads(statements[index]);
     const producers = new Set();
@@ -198,14 +246,19 @@ function validateScheduledOrder(original, scheduled, stateName) {
 
 function scheduleStatementList(statements, stateName) {
     const scheduled = [...statements];
-    const originalOrder = [...statements];
+    const schedulingBaseline = [...scheduled];
+    const originalOrder = [...scheduled];
     let swaps = 0;
 
-    // Compact each producer -> consumer chain by pushing only independent,
-    // proven-pure register loads out of the gap. Every move is equivalent to
-    // a sequence of adjacent RAW/WAR/WAW-safe swaps, so effectful statements
-    // never change order relative to one another. Process each original
-    // statement once so two movable loads cannot oscillate around each other.
+    // First move pure register assignments toward the next semantic touch of
+    // the same register. This covers both producer -> read and write -> write
+    // compaction while preserving every assignment.
+    const sunk = sinkPureAssignmentsTowardNextTouch(scheduled, stateName);
+    swaps += sunk.swaps;
+
+    // Then compact producer -> consumer gaps by pushing only independent pure
+    // loads out of the gap. Each move is still equivalent to dependency-safe
+    // adjacent swaps.
     for (const current of originalOrder) {
         const currentIndex = scheduled.indexOf(current);
         if (currentIndex <= 0) continue;
@@ -213,11 +266,21 @@ function scheduleStatementList(statements, stateName) {
         swaps += result.swaps;
     }
 
-    if (!validateScheduledOrder(statements, scheduled, stateName)) {
-        return { statements: [...statements], swaps: 0, safetyRejected: true };
+    if (!validateScheduledOrder(schedulingBaseline, scheduled, stateName)) {
+        return {
+            statements: [...statements],
+            swaps: 0,
+            producerSinks: 0,
+            safetyRejected: true,
+        };
     }
 
-    return { statements: scheduled, swaps, safetyRejected: false };
+    return {
+        statements: scheduled,
+        swaps,
+        producerSinks: sunk.moved,
+        safetyRejected: false,
+    };
 }
 
 function findStateWhile(vmFunction, stateName) {
@@ -334,6 +397,7 @@ function scheduleVmRegisterUses(source, ast) {
     let blocksChanged = 0;
     let swaps = 0;
     let safetyRejectedSegments = 0;
+    let producerSinks = 0;
 
     for (const body of leaves) {
         const segments = [];
@@ -355,6 +419,7 @@ function scheduleVmRegisterUses(source, ast) {
 
             const scheduled = scheduleStatementList(statements, stateName);
             if (scheduled.safetyRejected) safetyRejectedSegments++;
+            producerSinks += scheduled.producerSinks || 0;
             if (scheduled.swaps === 0) continue;
 
             edits.push({
@@ -368,7 +433,7 @@ function scheduleVmRegisterUses(source, ast) {
     }
 
     if (edits.length === 0) {
-        return { source, found: true, applied: false, blocksChanged: 0, swaps: 0, safetyRejectedSegments };
+        return { source, found: true, applied: false, blocksChanged: 0, swaps: 0, producerSinks, safetyRejectedSegments };
     }
 
     return {
@@ -377,6 +442,7 @@ function scheduleVmRegisterUses(source, ast) {
         applied: true,
         blocksChanged,
         swaps,
+        producerSinks,
         safetyRejectedSegments,
     };
 }

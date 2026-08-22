@@ -31,13 +31,9 @@ function schedule(source) {
         'C = _env[A]',
         'D = C(B)',
     ].join("\n");
-    assert.deepStrictEqual(schedule(source), [
-        'A = "print"',
-        'C = _env[A]',
-        'B = "arg"',
-        'D = C(B)',
-        'X = 1',
-    ]);
+    const out = schedule(source);
+    assert.ok(out.indexOf('A = "print"') + 1 === out.indexOf('C = _env[A]'), 'A producer not adjacent to C');
+    assert.ok(out.indexOf('B = "arg"') + 1 === out.indexOf('D = C(B)'), 'B producer not adjacent to D');
 }
 
 {
@@ -52,15 +48,42 @@ function schedule(source) {
 }
 
 {
-    const source = ['A = 1', 'X = 2', 'A = 3', 'C = A'].join("\n");
+    const source = ['A = f()', 'X = 2', 'A = 3', 'C = A'].join("\n");
     const out = schedule(source);
-    assert.ok(out.indexOf('A = 1') < out.indexOf('A = 3'), 'WAW order changed');
+    assert.ok(out.indexOf('A = f()') < out.indexOf('A = 3'), 'effectful WAW order changed');
 }
 
 {
     const source = ['A = f()', 'X = 1', 'B = g()', 'C = A', 'D = B'].join("\n");
     const out = schedule(source);
     assert.ok(out.indexOf('A = f()') < out.indexOf('B = g()'), 'effectful call order changed');
+}
+
+{
+    const source = [
+        'B = "print"',
+        'X = f()',
+        'Y = 1',
+        'G = _env[B]',
+    ].join("\n");
+    assert.deepStrictEqual(schedule(source), [
+        'X = f()',
+        'Y = 1',
+        'B = "print"',
+        'G = _env[B]',
+    ]);
+}
+
+{
+    const source = ['A = 1', 'X = 2', 'A = 3', 'C = A'].join("\n");
+    assert.deepStrictEqual(schedule(source), ['X = 2', 'A = 1', 'A = 3', 'C = A']);
+}
+
+{
+    const source = ['A = 1', 'B = A', 'A = 3', 'C = A'].join("\n");
+    const out = schedule(source);
+    assert.ok(out.includes('A = 1'), 'store read before overwrite was removed');
+    assert.ok(out.indexOf('A = 1') < out.indexOf('B = A'), 'producer moved past its read');
 }
 
 console.log("vm register scheduler regression: ok");
