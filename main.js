@@ -5,6 +5,7 @@ const { inlinePrometheusConstantArray } = require("./passes/constant-array");
 const { renameEnvironmentBinding } = require("./passes/environment");
 const { renameCreateClosureBinding } = require("./passes/closure-factory");
 const { renameVmHelperBindings } = require("./passes/vm-helpers");
+const { splitSafeParallelAssignmentsFully } = require("./passes/split-safe-assignments");
 
 const ROOT = __dirname;
 const DEFAULT_INPUT = path.join(ROOT, "sample", "1.txt");
@@ -64,18 +65,21 @@ function runDeobfuscator(inputPath = DEFAULT_INPUT, outputPath = DEFAULT_OUTPUT)
     const createClosureAst = parseLua(createClosure.source, `${inputPath} <after createClosure rename>`);
     const vmHelpers = renameVmHelperBindings(createClosure.source, createClosureAst, parseLua);
 
-    const outputAst = parseLua(vmHelpers.source, outputPath);
-    const resolvedOutput = writeSource(vmHelpers.source, outputPath);
+    const splitAssignments = splitSafeParallelAssignmentsFully(vmHelpers.source, parseLua);
+
+    const outputAst = parseLua(splitAssignments.source, outputPath);
+    const resolvedOutput = writeSource(splitAssignments.source, outputPath);
 
     return {
         ...loaded,
         outputAst,
         outputPath: resolvedOutput,
-        outputSource: vmHelpers.source,
+        outputSource: splitAssignments.source,
         constantArray,
         environment,
         createClosure,
         vmHelpers,
+        splitAssignments,
     };
 }
 
@@ -87,6 +91,7 @@ function main() {
     const env = result.environment;
     const createClosure = result.createClosure;
     const vmHelpers = result.vmHelpers;
+    const splitAssignments = result.splitAssignments;
 
     console.log(`Input: ${result.inputPath}`);
     console.log(`AST root: ${result.ast.type}`);
@@ -123,6 +128,8 @@ function main() {
             console.log(`VM helper skipped: ${item.role}: ${item.reason}`);
         }
     }
+    console.log(`Safe parallel statements split: ${splitAssignments.statementsSplit}`);
+    console.log(`Individual assignments produced: ${splitAssignments.assignmentsProduced}`);
     console.log(`Output: ${result.outputPath}`);
     return result;
 }
