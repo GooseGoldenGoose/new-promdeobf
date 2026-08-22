@@ -1,3 +1,4 @@
+const { applyTextEdits } = require("./text-edits");
 function isNode(value) {
     return value && typeof value === "object" && typeof value.type === "string";
 }
@@ -605,16 +606,7 @@ function collectTerminatorEdits(block, stateName, stateMap) {
 }
 
 function applyRangeEdits(text, baseOffset, edits) {
-    const applicable = edits
-        .filter(edit => edit.start >= baseOffset && edit.end <= baseOffset + text.length)
-        .sort((a, b) => b.start - a.start || b.end - a.end);
-    let output = text;
-    for (const edit of applicable) {
-        const start = edit.start - baseOffset;
-        const end = edit.end - baseOffset;
-        output = output.slice(0, start) + edit.text + output.slice(end);
-    }
-    return output;
+    return applyTextEdits(text, edits, baseOffset);
 }
 
 function isSingleCanonicalStopStatement(block, stateName) {

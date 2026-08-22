@@ -1,3 +1,4 @@
+const { applyTextEdits } = require("./text-edits");
 function isNode(value) {
     return value && typeof value === "object" && typeof value.type === "string";
 }
@@ -345,10 +346,7 @@ function renameFunctionParameterBinding(source, candidate, replacementName = "_e
     for (const edit of edits) unique.set(`${edit.start}:${edit.end}`, edit);
     const ordered = [...unique.values()].sort((a, b) => b.start - a.start);
 
-    let output = source;
-    for (const edit of ordered) {
-        output = output.slice(0, edit.start) + edit.replacement + output.slice(edit.end);
-    }
+    const output = applyTextEdits(source, ordered);
 
     return {
         source: output,

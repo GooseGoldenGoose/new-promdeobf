@@ -68,9 +68,9 @@ function runDeobfuscator(inputPath = DEFAULT_INPUT, outputPath = DEFAULT_OUTPUT)
     const createClosureAst = parseLua(createClosure.source, `${inputPath} <after createClosure rename>`);
     const vmHelpers = renameVmHelperBindings(createClosure.source, createClosureAst, parseLua);
 
-    const splitAssignments = splitSafeParallelAssignmentsFully(vmHelpers.source, parseLua);
+    const splitAssignments = splitSafeParallelAssignmentsFully(vmHelpers.source, parseLua, 8, vmHelpers.ast || null);
 
-    const vmStateAst = parseLua(splitAssignments.source, `${inputPath} <before VM state recovery>`);
+    const vmStateAst = splitAssignments.ast || parseLua(splitAssignments.source, `${inputPath} <before VM state recovery>`);
     const vmState = recoverVmStateGraph(splitAssignments.source, vmStateAst);
     const vmBindings = recoverVmBindings(splitAssignments.source, vmStateAst, vmState);
     const vmStateApplied = vmState.found && vmState.normalized;

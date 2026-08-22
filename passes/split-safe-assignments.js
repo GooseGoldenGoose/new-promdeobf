@@ -1,3 +1,4 @@
+const { applyTextEdits } = require("./text-edits");
 function isNode(value) {
     return value && typeof value === "object" && typeof value.type === "string";
 }
@@ -90,10 +91,7 @@ function splitSafeParallelAssignments(source, ast) {
         count: candidate.variables.length,
     })).sort((a, b) => b.start - a.start);
 
-    let output = source;
-    for (const edit of edits) {
-        output = output.slice(0, edit.start) + edit.replacement + output.slice(edit.end);
-    }
+    const output = applyTextEdits(source, edits);
 
     return {
         source: output,
@@ -104,17 +102,22 @@ function splitSafeParallelAssignments(source, ast) {
     };
 }
 
-function splitSafeParallelAssignmentsFully(source, parseLua, maxPasses = 8) {
+function splitSafeParallelAssignmentsFully(source, parseLua, maxPasses = 8, initialAst = null) {
     let current = source;
+    let currentAst = initialAst;
     let statementsSplit = 0;
     let assignmentsProduced = 0;
     let passes = 0;
     const splits = [];
 
     while (passes < maxPasses) {
-        const ast = parseLua(current, `<safe assignment split pass ${passes + 1}>`);
+        const ast = currentAst || parseLua(current, `<safe assignment split pass ${passes + 1}>`);
+        currentAst = null;
         const result = splitSafeParallelAssignments(current, ast);
-        if (!result.changed) break;
+        if (!result.changed) {
+            currentAst = ast;
+            break;
+        }
 
         current = result.source;
         statementsSplit += result.statementsSplit;
@@ -123,8 +126,13 @@ function splitSafeParallelAssignmentsFully(source, parseLua, maxPasses = 8) {
         passes++;
     }
 
+    if (!currentAst) {
+        currentAst = parseLua(current, `<after safe assignment split pass ${passes}>`);
+    }
+
     return {
         source: current,
+        ast: currentAst,
         changed: statementsSplit > 0,
         splits,
         statementsSplit,

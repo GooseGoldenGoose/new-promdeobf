@@ -1,3 +1,4 @@
+const { applyTextEdits } = require("./text-edits");
 function isNode(value) {
     return value && typeof value === "object" && typeof value.type === "string";
 }
@@ -688,11 +689,7 @@ function inlinePrometheusConstantArray(source, ast) {
         });
     }
 
-    edits.sort((a, b) => b.start - a.start);
-    let output = source;
-    for (const edit of edits) {
-        output = output.slice(0, edit.start) + edit.replacement + output.slice(edit.end);
-    }
+    const output = applyTextEdits(source, edits);
 
     return {
         source: output,

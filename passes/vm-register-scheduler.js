@@ -1,3 +1,4 @@
+const { applyTextEdits } = require("./text-edits");
 const { findVmFunction } = require("./vm-state");
 
 function isNode(value) {
@@ -25,6 +26,9 @@ function isDelayableAssignment(statement, stateName) {
     return isPrimitiveLiteral(rhs) || isIdentifier(rhs);
 }
 
+const READS_CACHE = new WeakMap();
+const WRITES_CACHE = new WeakMap();
+
 function collectExpressionReads(node, out) {
     if (!isNode(node) || node.type === "FunctionDeclaration") return;
     if (node.type === "Identifier") {
@@ -50,24 +54,33 @@ function collectExpressionReads(node, out) {
 }
 
 function statementReads(statement) {
+    if (!statement || typeof statement !== "object") return new Set();
+    const cached = READS_CACHE.get(statement);
+    if (cached) return cached;
     const out = new Set();
     if (statement?.type === "AssignmentStatement" || statement?.type === "LocalStatement") {
         for (const variable of statement.variables || []) {
             if (!isIdentifier(variable)) collectExpressionReads(variable, out);
         }
         for (const rhs of statement.init || []) collectExpressionReads(rhs, out);
-        return out;
+    } else {
+        collectExpressionReads(statement, out);
     }
-    collectExpressionReads(statement, out);
+    READS_CACHE.set(statement, out);
     return out;
 }
 
 function statementWrites(statement) {
+    if (!statement || typeof statement !== "object") return new Set();
+    const cached = WRITES_CACHE.get(statement);
+    if (cached) return cached;
     const out = new Set();
-    if (statement?.type !== "AssignmentStatement" && statement?.type !== "LocalStatement") return out;
-    for (const variable of statement.variables || []) {
-        if (isIdentifier(variable)) out.add(variable.name);
+    if (statement?.type === "AssignmentStatement" || statement?.type === "LocalStatement") {
+        for (const variable of statement.variables || []) {
+            if (isIdentifier(variable)) out.add(variable.name);
+        }
     }
+    WRITES_CACHE.set(statement, out);
     return out;
 }
 
@@ -491,11 +504,7 @@ function renderScheduledBody(source, original, scheduled) {
 }
 
 function applyEdits(source, edits) {
-    let output = source;
-    for (const edit of edits.sort((a, b) => b.start - a.start)) {
-        output = output.slice(0, edit.start) + edit.text + output.slice(edit.end);
-    }
-    return output;
+    return applyTextEdits(source, edits);
 }
 
 function scheduleVmRegisterUses(source, ast) {

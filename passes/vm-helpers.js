@@ -1,5 +1,6 @@
 const { findEnvironmentBinding, renameFunctionParameterBinding } = require("./environment");
 const { analyzeClosureFactory } = require("./closure-factory");
+const { renameFunctionParameterBindingsBatch } = require("./batch-parameter-rename");
 
 function isNode(value) { return value && typeof value === "object" && typeof value.type === "string"; }
 function isIdentifier(node, name = null) { return node?.type === "Identifier" && (name === null || node.name === name); }
@@ -137,10 +138,10 @@ function analyzeVmHelperBindings(ast) {
 }
 
 const ROLE_ORDER = ["unpack", "newproxy", "setmetatable", "getmetatable", "select", "vm", "createUpvalueProxy", "releaseUpvalues", "releaseUpvalue", "allocUpvalue", "upvalueRefCounts", "upvalueValues", "currentUpvalueId", "state", "args", "upvalues", "gcProxy"];
-function renameVmHelperBindings(source, ast, parseSource) {
+function renameVmHelperBindingsSequential(source, ast, parseSource) {
     let currentSource = source, currentAst = ast; const renamedRoles = [], renamedParameters = [], skippedRoles = [];
     const first = analyzeVmHelperBindings(currentAst);
-    if (!first.found) return { source, found: false, renamedRoles, renamedParameters, skippedRoles, reason: first.reason };
+    if (!first.found) return { source, ast: currentAst, found: false, renamedRoles, renamedParameters, skippedRoles, reason: first.reason };
     const initialClosureRoles = [...first.roles.keys()].filter(role => /^createClosure\d+$/.test(role)).sort((a, b) => Number(a.slice("createClosure".length)) - Number(b.slice("createClosure".length)));
     for (const role of [...ROLE_ORDER, ...initialClosureRoles]) {
         const analysis = analyzeVmHelperBindings(currentAst);
@@ -178,7 +179,146 @@ function renameVmHelperBindings(source, ast, parseSource) {
     }
 
     const finalAnalysis = analyzeVmHelperBindings(currentAst);
-    return { source: currentSource, found: true, renamed: renamedRoles.length > 0 || renamedParameters.length > 0, renamedRoles, renamedParameters, skippedRoles, detectedRoles: finalAnalysis.found ? [...finalAnalysis.roles.keys()] : [], refCountsName: finalAnalysis.refCountsName ?? first.refCountsName, valuesName: finalAnalysis.valuesName ?? first.valuesName, allocatorIdName: finalAnalysis.allocatorIdName ?? first.allocatorIdName };
+    return { source: currentSource, ast: currentAst, found: true, renamed: renamedRoles.length > 0 || renamedParameters.length > 0, renamedRoles, renamedParameters, skippedRoles, detectedRoles: finalAnalysis.found ? [...finalAnalysis.roles.keys()] : [], refCountsName: finalAnalysis.refCountsName ?? first.refCountsName, valuesName: finalAnalysis.valuesName ?? first.valuesName, allocatorIdName: finalAnalysis.allocatorIdName ?? first.allocatorIdName };
+}
+
+function findNamedFunctionAssignments(ast, names) {
+    const wanted = new Set(names);
+    const found = new Map();
+    const ambiguous = new Set();
+    walk(ast, node => {
+        if (node.type !== "AssignmentStatement") return;
+        const variables = node.variables || [];
+        const init = node.init || [];
+        const count = Math.min(variables.length, init.length);
+        for (let index = 0; index < count; index++) {
+            const variable = variables[index];
+            const value = init[index];
+            if (!isIdentifier(variable) || !wanted.has(variable.name) || value?.type !== "FunctionDeclaration") continue;
+            if (found.has(variable.name) && found.get(variable.name) !== value) ambiguous.add(variable.name);
+            else found.set(variable.name, value);
+        }
+    });
+    return { found, ambiguous };
+}
+
+function renameVmHelperBindings(source, ast, parseSource) {
+    let currentSource = source;
+    let currentAst = ast;
+    const renamedRoles = [];
+    const renamedParameters = [];
+    const skippedRoles = [];
+
+    const first = analyzeVmHelperBindings(currentAst);
+    if (!first.found) {
+        return { source, found: false, renamedRoles, renamedParameters, skippedRoles, reason: first.reason };
+    }
+
+    const initialClosureRoles = [...first.roles.keys()]
+        .filter(role => /^createClosure\d+$/.test(role))
+        .sort((a, b) => Number(a.slice("createClosure".length)) - Number(b.slice("createClosure".length)));
+    const phaseOneRoles = [...ROLE_ORDER, ...initialClosureRoles];
+    const roleRequests = [];
+
+    for (const role of phaseOneRoles) {
+        const candidate = first.roles.get(role);
+        if (!candidate || candidate.parameter.name === role) continue;
+        roleRequests.push({
+            fn: candidate.fn,
+            parameter: candidate.parameter,
+            replacementName: role,
+            meta: { kind: "role", role },
+        });
+    }
+
+    const roleBatch = renameFunctionParameterBindingsBatch(currentSource, roleRequests, currentAst);
+    if (roleBatch.batchConflict || roleBatch.results.some(result => result.collision)) {
+        return renameVmHelperBindingsSequential(source, ast, parseSource);
+    }
+    for (const result of roleBatch.results) {
+        if (!result.alreadyNamed && result.edits.length > 0) {
+            renamedRoles.push({
+                role: result.meta.role,
+                oldName: result.oldName,
+                newName: result.newName,
+                referencesRenamed: result.referencesRenamed,
+            });
+        }
+    }
+    if (roleBatch.changed) {
+        currentSource = roleBatch.source;
+        currentAst = parseSource(currentSource, "<after VM helper role batch rename>");
+    }
+
+    const closureParameterRoles = [...first.roles.keys()]
+        .filter(role => role === "createClosure" || /^createClosure\d+$/.test(role));
+    const parameterFunctionRoles = [
+        "releaseUpvalue",
+        "createUpvalueProxy",
+        "releaseUpvalues",
+        ...closureParameterRoles,
+    ];
+    const namedFunctions = findNamedFunctionAssignments(currentAst, parameterFunctionRoles);
+    if (namedFunctions.ambiguous.size > 0) {
+        return renameVmHelperBindingsSequential(source, ast, parseSource);
+    }
+
+    const parameterRequests = [];
+    function requestRoleParameter(role, index, replacement) {
+        const fn = namedFunctions.found.get(role);
+        const parameter = fn?.parameters?.[index];
+        if (!isIdentifier(parameter) || parameter.name === replacement) return;
+        parameterRequests.push({
+            fn,
+            parameter,
+            replacementName: replacement,
+            meta: { kind: "parameter", role, index, replacement },
+        });
+    }
+
+    requestRoleParameter("releaseUpvalue", 0, "upvalueId");
+    requestRoleParameter("createUpvalueProxy", 0, "captures");
+    requestRoleParameter("releaseUpvalues", 0, "captures");
+    for (const role of closureParameterRoles) {
+        requestRoleParameter(role, 0, "entryId");
+        requestRoleParameter(role, 1, "captures");
+    }
+
+    const parameterBatch = renameFunctionParameterBindingsBatch(currentSource, parameterRequests, currentAst);
+    if (parameterBatch.batchConflict || parameterBatch.results.some(result => result.collision)) {
+        return renameVmHelperBindingsSequential(source, ast, parseSource);
+    }
+    for (const result of parameterBatch.results) {
+        if (!result.alreadyNamed && result.edits.length > 0) {
+            renamedParameters.push({
+                role: result.meta.role,
+                index: result.meta.index,
+                oldName: result.oldName,
+                newName: result.newName,
+                referencesRenamed: result.referencesRenamed,
+            });
+        }
+    }
+    if (parameterBatch.changed) {
+        currentSource = parameterBatch.source;
+        currentAst = parseSource(currentSource, "<after VM helper parameter batch rename>");
+    }
+
+    const detectedRoles = [...first.roles.keys()];
+    return {
+        source: currentSource,
+        ast: currentAst,
+        found: true,
+        renamed: renamedRoles.length > 0 || renamedParameters.length > 0,
+        renamedRoles,
+        renamedParameters,
+        skippedRoles,
+        detectedRoles,
+        refCountsName: first.roles.has("upvalueRefCounts") ? "upvalueRefCounts" : first.refCountsName,
+        valuesName: first.roles.has("upvalueValues") ? "upvalueValues" : first.valuesName,
+        allocatorIdName: first.roles.has("currentUpvalueId") ? "currentUpvalueId" : first.allocatorIdName,
+        batched: true,
+    };
 }
 
 module.exports = { analyzeVmHelperBindings, renameVmHelperBindings };

@@ -284,6 +284,7 @@ function upvalueValueAccessesInStatement(statement) {
 
 function buildCaptureSlotResolver(captures) {
     const origins = new Map();
+    const resolvedMemo = new Map();
     for (const capture of captures) {
         const key = `${capture.childFunctionId}:${capture.childSlot}`;
         if (!origins.has(key)) origins.set(key, []);
@@ -324,7 +325,16 @@ function buildCaptureSlotResolver(captures) {
         };
     }
 
-    return { origins, resolve };
+    const resolveUncached = resolve;
+    function resolveMemoized(functionId, slot) {
+        const key = `${functionId}:${slot}`;
+        if (resolvedMemo.has(key)) return resolvedMemo.get(key);
+        const result = resolveUncached(functionId, slot, new Set());
+        resolvedMemo.set(key, result);
+        return result;
+    }
+
+    return { origins, resolve: resolveMemoized };
 }
 
 function unionSets(sets) {
@@ -389,16 +399,35 @@ function buildDefinitionLiveness(blockIds, blockSet, root, definitionsById, uses
         for (const defId of use.reachingDefIds) usesByDefinition.get(defId)?.push(use);
     }
 
+    const liveInBlocksByDefinition = new Map();
+    const liveOutBlocksByDefinition = new Map();
+    function appendLiveBlock(target, definitionId, blockId) {
+        if (!target.has(definitionId)) target.set(definitionId, []);
+        target.get(definitionId).push(blockId);
+    }
+    for (const blockId of blockIds) {
+        for (const definitionId of liveInByBlock.get(blockId)) {
+            appendLiveBlock(liveInBlocksByDefinition, definitionId, blockId);
+        }
+        for (const definitionId of liveOutByBlock.get(blockId)) {
+            appendLiveBlock(liveOutBlocksByDefinition, definitionId, blockId);
+        }
+    }
+
     const lifetimes = [];
     for (const def of definitionsById.values()) {
         const defUses = usesByDefinition.get(def.id) || [];
-        const liveInBlockIds = [];
-        const liveOutBlockIds = [];
-        for (const blockId of blockIds) {
-            if (liveInByBlock.get(blockId).has(def.id)) liveInBlockIds.push(blockId);
-            if (liveOutByBlock.get(blockId).has(def.id)) liveOutBlockIds.push(blockId);
+        const liveInBlockIds = liveInBlocksByDefinition.get(def.id) || [];
+        const liveOutBlockIds = liveOutBlocksByDefinition.get(def.id) || [];
+        const useBlockIdSet = new Set();
+        let uniqueUseCount = 0;
+        let ambiguousUseCount = 0;
+        for (const use of defUses) {
+            useBlockIdSet.add(use.blockId);
+            if (use.uniqueDefinitionId === def.id) uniqueUseCount++;
+            else ambiguousUseCount++;
         }
-        const useBlockIds = [...new Set(defUses.map(use => use.blockId))];
+        const useBlockIds = [...useBlockIdSet];
         lifetimes.push({
             definitionId: def.id,
             functionId: def.functionId,
@@ -406,13 +435,13 @@ function buildDefinitionLiveness(blockIds, blockSet, root, definitionsById, uses
             definitionBlockId: def.blockId,
             definitionStatementIndex: def.statementIndex,
             useCount: defUses.length,
-            uniqueUseCount: defUses.filter(use => use.uniqueDefinitionId === def.id).length,
-            ambiguousUseCount: defUses.filter(use => use.uniqueDefinitionId !== def.id).length,
+            uniqueUseCount,
+            ambiguousUseCount,
             useBlockIds,
             liveInBlockIds,
             liveOutBlockIds,
             crossBlock: useBlockIds.some(id => id !== def.blockId) || liveOutBlockIds.some(id => id !== def.blockId),
-            loopCarried: liveInBlockIds.includes(def.blockId),
+            loopCarried: liveInByBlock.get(def.blockId).has(def.id),
         });
     }
 
@@ -616,6 +645,16 @@ function buildFunctionAnalysis(root, functionId) {
     );
 
     const lifetimeByDefinitionId = new Map(definitionLiveness.lifetimes.map(item => [item.definitionId, item]));
+    const nextDefinitionById = new Map();
+    for (const blockId of blockIds) {
+        const nextByName = new Map();
+        const blockDefinitions = definitionsByBlock.get(blockId) || [];
+        for (let index = blockDefinitions.length - 1; index >= 0; index--) {
+            const definition = blockDefinitions[index];
+            nextDefinitionById.set(definition.id, nextByName.get(definition.name) || null);
+            nextByName.set(definition.name, definition);
+        }
+    }
     const bindingEndCandidates = [];
     for (const def of definitions) {
         if (!def.exactRhs || def.rhs?.type !== "NilLiteral") continue;
@@ -625,11 +664,7 @@ function buildFunctionAnalysis(root, functionId) {
         const previousDefinitionId = def.previousReachingDefIds[0];
         const previousLifetime = lifetimeByDefinitionId.get(previousDefinitionId);
         if (!previousLifetime || previousLifetime.useCount === 0) continue;
-        const nextDefinition = definitions.find(other =>
-            other.name === def.name &&
-            other.blockId === def.blockId &&
-            other.statementIndex > def.statementIndex
-        ) || null;
+        const nextDefinition = nextDefinitionById.get(def.id) || null;
         bindingEndCandidates.push({
             definitionId: def.id,
             functionId,
