@@ -541,6 +541,13 @@ without producing unrelated locals.
 - All semantic renames are lexical/binding-aware and fail closed on collision, shadowing, ambiguity, or edit conflicts. Current samples 1-9 apply with zero semantic-name skips.
 - Focused regression `tools/test-semantic-names.js` covers `InitialArgs`, fixed closure `argN`, `gcProxy`, `closure`, `captureIndex`, `upvalueId`, `proxy`, `proxyMetatable`, and `RegisterOverflow`. All focused regressions pass. LuaJIT parity matches samples 1/2/3/4/6/8/9 and both deterministic sample-7 branches; sample 2 uses the existing `warn = print` compatibility shim for stock LuaJIT.
 
+## Sample 10: Natural Register Overflow Regression (2026-08-23)
+
+- Tracked `sample/10.source.lua` / `sample/10.txt` is a natural compiler-level overflow fixture. The readable source declares 110 ordinary locals in one lexical scope, keeps them alive through later mutations/reads, and follows the required `source -> local WeAreDevs Medium -> formatter -> sample/10.txt -> deobfuscator` path. It does not contain VM-shaped or synthetic register-table code.
+- Local compiler instrumentation (in-memory wrapper only; compiler file unchanged) proves the boundary in this fixture: `v98 -> physical register 99` remains scalar, `v99 -> physical register 100 -> RegisterOverflow[1]`, `v100 -> 101 -> RegisterOverflow[2]`, through `v110 -> 111 -> RegisterOverflow[12]`. Later compiler temporaries naturally use higher overflow indices as well.
+- Runtime parity is exact across readable source, formatted obfuscation, and deobfuscated output: `overflow-test 1001 1098 1099 1100 1101 1110`. The semantic naming pass correctly recognizes `RegisterOverflow`.
+- Important current analysis gap exposed by sample 10: Step-4 reaching-definition/liveness analysis still models only scalar identifier register writes/uses. It reports no definition identity for `RegisterOverflow[k]`, so overflow-backed source locals are preserved semantically in emitted Lua but are not yet normalized into the same register-identity model as scalar VM registers. Keep this fixture as the regression for any future overflow-aware binding analysis.
+
 # Immediate Next Steps
 
 1. Keep Step 3 state normalization as the structural emitted-source boundary; the post-Step-3 scheduler may only reorder proven-independent statements for readability. Step 4 remains proof metadata, and source locals must not be reconstructed from register spelling or adjacency.
