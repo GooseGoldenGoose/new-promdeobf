@@ -376,7 +376,7 @@ function renderStateMembership(stateName, ids) {
     return ids.map(id => `${stateName} == ${id}`).join(" or ");
 }
 
-function renderGroupedDispatcher(source, stateWhile, stateName, graphRoots, blocks, complete) {
+function renderOriginalGroupedDispatcher(source, stateWhile, stateName, graphRoots, blocks, complete) {
     const indent = lineIndentAt(source, stateWhile.range[0]);
     const bodyIndent = indent + "    ";
     const groupIndent = bodyIndent + "    ";
@@ -426,6 +426,197 @@ function renderGroupedDispatcher(source, stateWhile, stateName, graphRoots, bloc
     return lines.join("\n");
 }
 
+function buildNormalizedLayout(graphRoots, blocks) {
+    const stateMap = new Map();
+    const groups = [];
+    const ownerByState = new Map();
+    let nextId = 1;
+    let overlap = false;
+
+    graphRoots.forEach((root, rootIndex) => {
+        const items = [];
+        for (const oldId of root.graph.order) {
+            if (!blocks.has(oldId)) continue;
+            if (ownerByState.has(oldId) && ownerByState.get(oldId) !== rootIndex) {
+                overlap = true;
+                continue;
+            }
+            if (stateMap.has(oldId)) continue;
+            ownerByState.set(oldId, rootIndex);
+            const newId = nextId++;
+            stateMap.set(oldId, newId);
+            items.push({ oldId, newId, block: blocks.get(oldId) });
+        }
+        if (!items.length) return;
+        groups.push({
+            root,
+            items,
+            min: items[0].newId,
+            max: items[items.length - 1].newId,
+            entryOldId: root.entryId,
+            entryNewId: stateMap.get(root.entryId) ?? null,
+        });
+    });
+
+    return { stateMap, groups, overlap, count: nextId - 1 };
+}
+
+function collectClosureEntryEdits(node, stateMap, out = []) {
+    if (!isNode(node)) return out;
+    if (node.type === "CallExpression" && isIdentifier(node.base) && isClosureFactoryName(node.base.name)) {
+        const entryNode = (node.arguments || [])[0];
+        const oldId = numericValue(entryNode);
+        const newId = oldId === null ? null : stateMap.get(oldId);
+        if (newId !== undefined && newId !== null && Array.isArray(entryNode?.range)) {
+            out.push({ start: entryNode.range[0], end: entryNode.range[1], text: String(newId) });
+        }
+    }
+    for (const [key, value] of Object.entries(node)) {
+        if (key === "loc" || key === "range") continue;
+        if (Array.isArray(value)) {
+            for (const child of value) collectClosureEntryEdits(child, stateMap, out);
+        } else if (isNode(value)) {
+            collectClosureEntryEdits(value, stateMap, out);
+        }
+    }
+    return out;
+}
+
+function collectTerminatorEdits(block, stateName, stateMap) {
+    const edits = [];
+    const term = block?.terminator;
+    if (!term || term.statementIndex < 0) return edits;
+    const statement = block.body?.[term.statementIndex];
+    const rhs = findStateAssignment(statement, stateName);
+    if (!rhs) return edits;
+
+    if (term.kind === "jump") {
+        const newTarget = stateMap.get(term.target);
+        if (newTarget !== undefined && Array.isArray(rhs.range)) {
+            edits.push({ start: rhs.range[0], end: rhs.range[1], text: String(newTarget) });
+        }
+    } else if (term.kind === "branch" && rhs.type === "LogicalExpression" &&
+        rhs.operator === "or" && rhs.left?.type === "LogicalExpression" && rhs.left.operator === "and") {
+        const trueNode = rhs.left.right;
+        const falseNode = rhs.right;
+        const newTrue = stateMap.get(term.onTrue);
+        const newFalse = stateMap.get(term.onFalse);
+        if (newTrue !== undefined && Array.isArray(trueNode?.range)) {
+            edits.push({ start: trueNode.range[0], end: trueNode.range[1], text: String(newTrue) });
+        }
+        if (newFalse !== undefined && Array.isArray(falseNode?.range)) {
+            edits.push({ start: falseNode.range[0], end: falseNode.range[1], text: String(newFalse) });
+        }
+    }
+    return edits;
+}
+
+function applyRangeEdits(text, baseOffset, edits) {
+    const applicable = edits
+        .filter(edit => edit.start >= baseOffset && edit.end <= baseOffset + text.length)
+        .sort((a, b) => b.start - a.start || b.end - a.end);
+    let output = text;
+    for (const edit of applicable) {
+        const start = edit.start - baseOffset;
+        const end = edit.end - baseOffset;
+        output = output.slice(0, start) + edit.text + output.slice(end);
+    }
+    return output;
+}
+
+function renderNormalizedBlock(source, block, stateName, stateMap, indent) {
+    if (!block?.body?.length) return `${indent}${stateName} = nil`;
+    const termEdits = collectTerminatorEdits(block, stateName, stateMap);
+    return block.body.map(statement => {
+        const edits = collectClosureEntryEdits(statement, stateMap, []).concat(termEdits);
+        const raw = sourceOf(source, statement);
+        const patched = applyRangeEdits(raw, statement.range[0], edits);
+        return indentText(patched, indent);
+    }).join("\n");
+}
+
+function renderInvalidLeaf(lines, stateName, indent) {
+    lines.push(`${indent}-- beta: invalid/unreachable VM state`);
+    lines.push(`${indent}${stateName} = nil`);
+}
+
+function renderStateTree(lines, source, stateName, group, stateMap, start, end, indent) {
+    if (start === end) {
+        const item = group.items[start];
+        const entryComment = item.oldId === group.entryOldId
+            ? ` -- entry ${group.entryOldId} -> ${item.newId}`
+            : "";
+        lines.push(`${indent}if ${stateName} == ${item.newId} then${entryComment}`);
+        lines.push(renderNormalizedBlock(source, item.block, stateName, stateMap, indent + "    "));
+        lines.push(`${indent}else`);
+        renderInvalidLeaf(lines, stateName, indent + "    ");
+        lines.push(`${indent}end`);
+        return;
+    }
+
+    const mid = Math.floor((start + end) / 2);
+    const boundary = group.items[mid].newId;
+    lines.push(`${indent}if ${stateName} <= ${boundary} then`);
+    renderStateTree(lines, source, stateName, group, stateMap, start, mid, indent + "    ");
+    lines.push(`${indent}else`);
+    renderStateTree(lines, source, stateName, group, stateMap, mid + 1, end, indent + "    ");
+    lines.push(`${indent}end`);
+}
+
+function renderGroupLeaf(lines, source, stateName, group, stateMap, indent) {
+    const label = group.root.kind === "root"
+        ? `root entry ${group.entryOldId} -> ${group.entryNewId}, states ${group.min}-${group.max}`
+        : `${group.root.factory} entry ${group.entryOldId} -> ${group.entryNewId}, states ${group.min}-${group.max}`;
+    lines.push(`${indent}-- beta: ${label}`);
+    renderStateTree(lines, source, stateName, group, stateMap, 0, group.items.length - 1, indent);
+}
+
+function renderGroupTree(lines, source, stateName, groups, stateMap, start, end, indent) {
+    if (start === end) {
+        renderGroupLeaf(lines, source, stateName, groups[start], stateMap, indent);
+        return;
+    }
+    const mid = Math.floor((start + end) / 2);
+    const boundary = groups[mid].max;
+    lines.push(`${indent}if ${stateName} <= ${boundary} then`);
+    renderGroupTree(lines, source, stateName, groups, stateMap, start, mid, indent + "    ");
+    lines.push(`${indent}else`);
+    renderGroupTree(lines, source, stateName, groups, stateMap, mid + 1, end, indent + "    ");
+    lines.push(`${indent}end`);
+}
+
+function normalizationIsSafe(layout, blocks) {
+    if (layout.overlap || layout.groups.length === 0 || layout.stateMap.size !== blocks.size) {
+        return false;
+    }
+    for (const block of blocks.values()) {
+        if (!block?.body || block.unresolved) return false;
+        const term = block.terminator;
+        if (!term || !["jump", "branch", "stop"].includes(term.kind)) return false;
+        if (term?.kind === "jump" && !layout.stateMap.has(term.target)) return false;
+        if (term?.kind === "branch" &&
+            (!layout.stateMap.has(term.onTrue) || !layout.stateMap.has(term.onFalse))) return false;
+    }
+    return layout.groups.every(group => group.entryNewId !== null);
+}
+
+function renderNormalizedDispatcher(source, stateWhile, stateName, layout) {
+    const indent = lineIndentAt(source, stateWhile.range[0]);
+    const bodyIndent = indent + "    ";
+    const lines = [`while ${stateName} do`];
+    renderGroupTree(lines, source, stateName, layout.groups, layout.stateMap, 0, layout.groups.length - 1, bodyIndent);
+    lines.push(`${indent}end`);
+    return lines.join("\n");
+}
+
+function applyClosureEntryEditsOutsideDispatcher(source, ast, stateWhile, stateMap, replacement) {
+    const edits = collectClosureEntryEdits(ast, stateMap, []);
+    const prefix = applyRangeEdits(source.slice(0, stateWhile.range[0]), 0,
+        edits.filter(edit => edit.end <= stateWhile.range[0]));
+    const suffix = applyRangeEdits(source.slice(stateWhile.range[1]), stateWhile.range[1],
+        edits.filter(edit => edit.start >= stateWhile.range[1]));
+    return prefix + replacement + suffix;
+}
 function resolveEntryStateGraphBeta(source, ast) {
     const vm = findVmFunction(ast);
     if (!vm) return { source, found: false, reason: "No semantically named vm function was found" };
@@ -455,7 +646,7 @@ function resolveEntryStateGraphBeta(source, ast) {
         for (const id of graph.order) if (!allBlocks.has(id)) allBlocks.set(id, graph.blocks.get(id));
     }
 
-    addRoot("root", rootEntry.factory || "createClosure", rootEntry.entryId);
+    addRoot("root", "createClosure", rootEntry.entryId);
     for (const entry of closureEntries) addRoot("closure", entry.factory, entry.entryId);
 
     const leaves = collectDispatcherLeaves(stateWhile.body || [], source);
@@ -480,13 +671,20 @@ function resolveEntryStateGraphBeta(source, ast) {
         for (const id of root.graph.order) if (!orderedIds.includes(id)) orderedIds.push(id);
     }
 
-    const replacement = renderGroupedDispatcher(source, stateWhile, stateName, graphRoots, allBlocks, complete);
-    const output = source.slice(0, stateWhile.range[0]) + replacement + source.slice(stateWhile.range[1]);
+    const normalization = buildNormalizedLayout(graphRoots, allBlocks);
+    const normalized = complete && normalizationIsSafe(normalization, allBlocks);
+    const replacement = normalized
+        ? renderNormalizedDispatcher(source, stateWhile, stateName, normalization)
+        : renderOriginalGroupedDispatcher(source, stateWhile, stateName, graphRoots, allBlocks, complete);
+    const output = normalized
+        ? applyClosureEntryEditsOutsideDispatcher(source, ast, stateWhile, normalization.stateMap, replacement)
+        : source.slice(0, stateWhile.range[0]) + replacement + source.slice(stateWhile.range[1]);
 
     return {
         source: output,
         found: true,
         rootEntryId: rootEntry.entryId,
+        normalizedRootEntryId: normalized ? normalization.stateMap.get(rootEntry.entryId) : null,
         rootGraph,
         graphRoots,
         blocks: allBlocks,
@@ -495,9 +693,10 @@ function resolveEntryStateGraphBeta(source, ast) {
         resolvedLeafCount: resolvedKeys.size,
         complete,
         collision,
+        normalized,
+        normalization,
     };
 }
-
 module.exports = {
     numericValue,
     findVmFunction,

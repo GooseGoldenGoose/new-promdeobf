@@ -28,6 +28,12 @@ console.log(`Beta input: ${inputPath}`);
 console.log(`Root entry state: ${result.rootEntryId}`);
 console.log(`Dispatcher leaves: ${result.resolvedLeafCount}/${result.dispatcherLeafCount}`);
 console.log(`Complete explicit dispatcher: ${result.complete}`);
+console.log(`Normalized state IDs: ${result.normalized}`);
+if (result.normalized) {
+    for (const group of result.normalization.groups) {
+        console.log(`  normalized ${group.root.kind} ${group.root.factory}(${group.entryOldId}) -> entry ${group.entryNewId}, range ${group.min}-${group.max}`);
+    }
+}
 for (const root of result.graphRoots) {
     console.log(`Graph root: ${root.kind} ${root.factory}(${root.entryId})`);
     for (const id of root.graph.order) {
