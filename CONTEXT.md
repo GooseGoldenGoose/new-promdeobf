@@ -194,6 +194,7 @@ Current implementation:
 - `sample\2.txt`: environment parameter `S -> _env`, 4 bound references renamed; current deobfuscated output is `output\2.lua`.
 - Regression checks cover direct `getgenv()`, `getfenv ... or _ENV`, direct `_ENV`, nested-name shadowing, collision rejection, and operation when ConstantArray is absent.
 - `main.js` reparses after ConstantArray and again after environment renaming; default output is now `output\1.lua`.
+- Full sample-folder validation on 2026-08-22 covers every current fixture (`sample\1.txt`, `sample\2.txt`): both pass steps 1-2, both outputs reparse successfully, and `_env` is only applied to the environment binding while nested same-named parameters remain unchanged.
 
 ## Control-Flow Understanding
 
