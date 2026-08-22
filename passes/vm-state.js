@@ -253,10 +253,14 @@ function isClosureFactoryName(name) {
     return typeof name === "string" && /^createClosure(?:\d+)?$/.test(name);
 }
 
-function findClosureEntryInfo(ast) {
+function collectClosureEntryInfo(root) {
     const entries = [];
     const unsupported = [];
     function walk(node) {
+        if (Array.isArray(node)) {
+            for (const child of node) walk(child);
+            return;
+        }
         if (!isNode(node)) return;
         if (node.type === "CallExpression" && isIdentifier(node.base) &&
             isClosureFactoryName(node.base.name)) {
@@ -271,8 +275,12 @@ function findClosureEntryInfo(ast) {
             else if (isNode(value)) walk(value);
         }
     }
-    walk(ast);
+    walk(root);
     return { entries, unsupported };
+}
+
+function findClosureEntryInfo(ast) {
+    return collectClosureEntryInfo(ast);
 }
 
 function findClosureEntries(ast) {
@@ -710,25 +718,57 @@ function recoverVmStateGraph(source, ast) {
 
     const rootEntry = findRootEntry(ast);
     if (!rootEntry) return { source, found: false, reason: "No root entry was found" };
-
-    const rootGraph = walkStateGraph(stateWhile.body || [], stateName, rootEntry.entryId, source);
-    const closureEntryInfo = findClosureEntryInfo(ast);
-    const closureEntries = closureEntryInfo.entries;
+    const globalClosureEntryInfo = findClosureEntryInfo(ast);
 
     const allBlocks = new Map();
     const graphRoots = [];
     const seenRoots = new Set();
+    const reachableClosureEntries = [];
+    const reachableUnsupportedClosureEntries = [];
 
     function addRoot(kind, factory, entryId) {
-        if (seenRoots.has(entryId)) return;
+        if (seenRoots.has(entryId)) return null;
         seenRoots.add(entryId);
         const graph = walkStateGraph(stateWhile.body || [], stateName, entryId, source);
-        graphRoots.push({ kind, factory, entryId, graph });
+        const root = { kind, factory, entryId, graph };
+        graphRoots.push(root);
         for (const id of graph.order) if (!allBlocks.has(id)) allBlocks.set(id, graph.blocks.get(id));
+        return root;
     }
 
-    addRoot("root", "createClosure", rootEntry.entryId);
-    for (const entry of closureEntries) addRoot("closure", entry.factory, entry.entryId);
+    const rootRoot = addRoot("root", "createClosure", rootEntry.entryId);
+    const pendingRoots = rootRoot ? [rootRoot] : [];
+
+    // Discover nested closure roots only from states that are themselves
+    // reachable from an already-proven root. A createClosure call living in a
+    // dead dispatcher leaf must not keep that dead closure graph alive.
+    while (pendingRoots.length) {
+        const currentRoot = pendingRoots.shift();
+        const bodies = [];
+        for (const id of currentRoot.graph.order) {
+            const block = currentRoot.graph.blocks.get(id);
+            if (block?.body) bodies.push(block.body);
+        }
+        const info = collectClosureEntryInfo(bodies);
+        reachableUnsupportedClosureEntries.push(...info.unsupported);
+        for (const entry of info.entries) {
+            reachableClosureEntries.push(entry);
+            const child = addRoot("closure", entry.factory, entry.entryId);
+            if (child) pendingRoots.push(child);
+        }
+    }
+
+    const rootGraph = rootRoot?.graph || walkStateGraph(stateWhile.body || [], stateName, rootEntry.entryId, source);
+
+    const closureCallKey = call => Array.isArray(call?.range) ? call.range.join(":") : null;
+    const reachableClosureCallKeys = new Set(reachableClosureEntries.map(entry => closureCallKey(entry.call)).filter(Boolean));
+    const rootClosureCallKey = closureCallKey(rootEntry.factoryCall);
+    if (rootClosureCallKey) reachableClosureCallKeys.add(rootClosureCallKey);
+    const ignoredUnreachableClosureEntryCount = globalClosureEntryInfo.entries
+        .filter(entry => {
+            const key = closureCallKey(entry.call);
+            return key && !reachableClosureCallKeys.has(key);
+        }).length;
 
     const leaves = collectDispatcherLeaves(stateWhile.body || [], source);
     const leafKeys = new Set(leaves.map(leaf => leaf.key));
@@ -753,7 +793,7 @@ function recoverVmStateGraph(source, ast) {
     }
 
     const normalization = buildNormalizedLayout(graphRoots, allBlocks);
-    const reachableClosed = closureEntryInfo.unsupported.length === 0 &&
+    const reachableClosed = reachableUnsupportedClosureEntries.length === 0 &&
         normalizationIsSafe(normalization, allBlocks);
     const normalized = reachableClosed;
     const prunedDispatcherLeafCount = normalized
@@ -780,7 +820,9 @@ function recoverVmStateGraph(source, ast) {
         complete,
         collision,
         reachableClosed,
-        unsupportedClosureEntryCount: closureEntryInfo.unsupported.length,
+        reachableClosureEntryCount: reachableClosureEntries.length,
+        ignoredUnreachableClosureEntryCount,
+        unsupportedClosureEntryCount: reachableUnsupportedClosureEntries.length,
         prunedDispatcherLeafCount,
         normalized,
         normalization,

@@ -68,15 +68,15 @@ function schedule(source) {
     ].join("\n");
     assert.deepStrictEqual(schedule(source), [
         'X = f()',
-        'Y = 1',
         'B = "print"',
         'G = _env[B]',
+        'Y = 1',
     ]);
 }
 
 {
     const source = ['A = 1', 'X = 2', 'A = 3', 'C = A'].join("\n");
-    assert.deepStrictEqual(schedule(source), ['X = 2', 'A = 1', 'A = 3', 'C = A']);
+    assert.deepStrictEqual(schedule(source), ['A = 1', 'A = 3', 'X = 2', 'C = A']);
 }
 
 {
@@ -94,10 +94,26 @@ function schedule(source) {
         'B = "print"',
         'G = _env[B]',
         'D = z',
+        'Q = D',
     ].join("\n");
     const out = schedule(source);
     assert.ok(out.indexOf('z = D + G') + 1 === out.indexOf('D = z'), 'identifier copy was not pulled next to its producer');
     assert.ok(out.indexOf('B = "print"') + 1 === out.indexOf('G = _env[B]'), 'literal producer was not sunk next to its read');
+}
+
+{
+    const source = [
+        'A = 1',
+        'C = A',
+        'X = 2',
+        'B = f()',
+        'state = 3',
+    ].join("\n");
+    const out = schedule(source);
+    assert.strictEqual(out[out.length - 1], 'X = 2', 'unread pure write was not sunk to the state tail');
+    assert.ok(out.indexOf('state = 3') < out.indexOf('X = 2'), 'unread write stopped at the state assignment instead of the state-body tail');
+    assert.ok(out.indexOf('A = 1') < out.indexOf('C = A'), 'active producer moved past its read');
+    assert.ok(out.includes('X = 2'), 'unread write was deleted instead of scheduled');
 }
 
 console.log("vm register scheduler regression: ok");

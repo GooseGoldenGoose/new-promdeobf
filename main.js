@@ -159,6 +159,9 @@ function main() {
         if (vmState.prunedDispatcherLeafCount > 0) {
             console.log(`VM unreachable dispatcher leaves pruned: ${vmState.prunedDispatcherLeafCount}`);
         }
+        if (vmState.ignoredUnreachableClosureEntryCount > 0) {
+            console.log(`VM unreachable closure entry calls ignored: ${vmState.ignoredUnreachableClosureEntryCount}`);
+        }
         console.log(`VM state IDs normalized: ${vmState.normalized}`);
         if (vmState.normalized) {
             for (const group of vmState.normalization.groups) {
@@ -169,6 +172,9 @@ function main() {
     console.log(`VM register scheduling applied: ${registerSchedule.applied}`);
     if (registerSchedule.applied) {
         console.log(`VM register scheduling: ${registerSchedule.blocksChanged} blocks, ${registerSchedule.swaps} dependency-safe swaps`);
+        if (registerSchedule.unreadSinks > 0) {
+            console.log(`VM unread register writes sunk: ${registerSchedule.unreadSinks}`);
+        }
         if (registerSchedule.safetyRejectedSegments > 0) {
             console.log(`VM register scheduling safety rejections: ${registerSchedule.safetyRejectedSegments}`);
         }

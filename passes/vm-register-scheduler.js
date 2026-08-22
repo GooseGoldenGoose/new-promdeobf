@@ -182,6 +182,54 @@ function pullIdentifierCopiesTowardProducer(statements, stateName) {
     return { swaps, moved };
 }
 
+function sinkUnreadPureAssignmentsToStateTail(statements, stateName) {
+    const originalOrder = [...statements];
+    let swaps = 0;
+    let moved = 0;
+
+    for (const candidate of originalOrder) {
+        let fromIndex = statements.indexOf(candidate);
+        if (fromIndex < 0 || !isDelayableAssignment(candidate, stateName)) continue;
+        const name = getSingleWrittenIdentifier(candidate);
+        if (!name) continue;
+
+        let nextRead = -1;
+        let nextWrite = -1;
+        for (let i = fromIndex + 1; i < statements.length; i++) {
+            if (statementReads(statements[i]).has(name)) {
+                nextRead = i;
+                break;
+            }
+            if (statementWrites(statements[i]).has(name)) {
+                nextWrite = i;
+                break;
+            }
+        }
+
+        // A read before any overwrite means this definition is active in the
+        // current state and should stay near that use.
+        if (nextRead >= 0) continue;
+
+        // If the value is overwritten without being read, keep both writes but
+        // group them. If the value is not touched again in this state, sink it
+        // to the actual end of the dispatcher leaf. Prometheus may write the
+        // next POS/state value early and still execute later statements, so a
+        // state assignment is not a textual end-of-block boundary.
+        const targetIndex = nextWrite >= 0 ? nextWrite : statements.length;
+        if (targetIndex <= fromIndex + 1) continue;
+
+        if (!canMoveDelayableRightAcrossRange(statements, fromIndex, targetIndex - 1, stateName)) continue;
+
+        const distance = targetIndex - fromIndex - 1;
+        statements.splice(fromIndex, 1);
+        statements.splice(targetIndex - 1, 0, candidate);
+        swaps += distance;
+        moved++;
+    }
+
+    return { swaps, moved };
+}
+
 function findDirectProducerStatements(statements, index) {
     const reads = statementReads(statements[index]);
     const producers = new Set();
@@ -316,12 +364,20 @@ function scheduleStatementList(statements, stateName) {
         swaps += result.swaps;
     }
 
+    // Finally, definitions that are never read again in this state are moved
+    // out of active chains. They are kept (never deleted): overwritten values
+    // are grouped with the next write, while live-out/unused values are placed
+    // at the actual end of the current dispatcher leaf.
+    const unread = sinkUnreadPureAssignmentsToStateTail(scheduled, stateName);
+    swaps += unread.swaps;
+
     if (!validateScheduledOrder(schedulingBaseline, scheduled, stateName)) {
         return {
             statements: [...statements],
             swaps: 0,
             producerSinks: 0,
             producerPulls: 0,
+            unreadSinks: 0,
             safetyRejected: true,
         };
     }
@@ -331,6 +387,7 @@ function scheduleStatementList(statements, stateName) {
         swaps,
         producerSinks: sunk.moved,
         producerPulls: pulled.moved,
+        unreadSinks: unread.moved,
         safetyRejected: false,
     };
 }
@@ -451,6 +508,7 @@ function scheduleVmRegisterUses(source, ast) {
     let safetyRejectedSegments = 0;
     let producerSinks = 0;
     let producerPulls = 0;
+    let unreadSinks = 0;
 
     for (const body of leaves) {
         const segments = [];
@@ -474,6 +532,7 @@ function scheduleVmRegisterUses(source, ast) {
             if (scheduled.safetyRejected) safetyRejectedSegments++;
             producerSinks += scheduled.producerSinks || 0;
             producerPulls += scheduled.producerPulls || 0;
+            unreadSinks += scheduled.unreadSinks || 0;
             if (scheduled.swaps === 0) continue;
 
             edits.push({
@@ -487,7 +546,7 @@ function scheduleVmRegisterUses(source, ast) {
     }
 
     if (edits.length === 0) {
-        return { source, found: true, applied: false, blocksChanged: 0, swaps: 0, producerSinks, producerPulls, safetyRejectedSegments };
+        return { source, found: true, applied: false, blocksChanged: 0, swaps: 0, producerSinks, producerPulls, unreadSinks, safetyRejectedSegments };
     }
 
     return {
@@ -498,6 +557,7 @@ function scheduleVmRegisterUses(source, ast) {
         swaps,
         producerSinks,
         producerPulls,
+        unreadSinks,
         safetyRejectedSegments,
     };
 }
