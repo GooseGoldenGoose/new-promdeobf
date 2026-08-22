@@ -6,6 +6,7 @@ const { renameEnvironmentBinding } = require("./passes/environment");
 const { renameCreateClosureBinding } = require("./passes/closure-factory");
 const { renameVmHelperBindings } = require("./passes/vm-helpers");
 const { splitSafeParallelAssignmentsFully } = require("./passes/split-safe-assignments");
+const { recoverVmStateGraph } = require("./passes/vm-state");
 
 const ROOT = __dirname;
 const DEFAULT_INPUT = path.join(ROOT, "sample", "1.txt");
@@ -67,19 +68,26 @@ function runDeobfuscator(inputPath = DEFAULT_INPUT, outputPath = DEFAULT_OUTPUT)
 
     const splitAssignments = splitSafeParallelAssignmentsFully(vmHelpers.source, parseLua);
 
-    const outputAst = parseLua(splitAssignments.source, outputPath);
-    const resolvedOutput = writeSource(splitAssignments.source, outputPath);
+    const vmStateAst = parseLua(splitAssignments.source, `${inputPath} <before VM state recovery>`);
+    const vmState = recoverVmStateGraph(splitAssignments.source, vmStateAst);
+    const vmStateApplied = vmState.found && vmState.normalized;
+    const finalSource = vmStateApplied ? vmState.source : splitAssignments.source;
+
+    const outputAst = parseLua(finalSource, outputPath);
+    const resolvedOutput = writeSource(finalSource, outputPath);
 
     return {
         ...loaded,
         outputAst,
         outputPath: resolvedOutput,
-        outputSource: splitAssignments.source,
+        outputSource: finalSource,
         constantArray,
         environment,
         createClosure,
         vmHelpers,
         splitAssignments,
+        vmState,
+        vmStateApplied,
     };
 }
 
@@ -92,6 +100,8 @@ function main() {
     const createClosure = result.createClosure;
     const vmHelpers = result.vmHelpers;
     const splitAssignments = result.splitAssignments;
+    const vmState = result.vmState;
+    const vmStateApplied = result.vmStateApplied;
 
     console.log(`Input: ${result.inputPath}`);
     console.log(`AST root: ${result.ast.type}`);
@@ -130,6 +140,17 @@ function main() {
     }
     console.log(`Safe parallel statements split: ${splitAssignments.statementsSplit}`);
     console.log(`Individual assignments produced: ${splitAssignments.assignmentsProduced}`);
+    console.log(`VM state recovery found: ${vmState.found}`);
+    console.log(`VM state recovery applied: ${vmStateApplied}`);
+    if (vmState.found) {
+        console.log(`VM dispatcher leaves: ${vmState.resolvedLeafCount}/${vmState.dispatcherLeafCount}`);
+        console.log(`VM state IDs normalized: ${vmState.normalized}`);
+        if (vmState.normalized) {
+            for (const group of vmState.normalization.groups) {
+                console.log(`VM state range: ${group.root.factory} ${group.min}-${group.max} (entry ${group.entryNewId})`);
+            }
+        }
+    }
     console.log(`Output: ${result.outputPath}`);
     return result;
 }

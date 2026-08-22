@@ -394,7 +394,7 @@ function renderOriginalGroupedDispatcher(source, stateWhile, stateName, graphRoo
         const label = root.kind === "root"
             ? `root entry ${root.entryId}`
             : `${root.factory} entry ${root.entryId}`;
-        lines.push(`${bodyIndent}${keyword} ${renderStateMembership(stateName, ids)} then -- beta: ${label}`);
+        lines.push(`${bodyIndent}${keyword} ${renderStateMembership(stateName, ids)} then -- ${label}`);
 
         if (ids.length === 1) {
             const block = blocks.get(ids[0]);
@@ -415,10 +415,10 @@ function renderOriginalGroupedDispatcher(source, stateWhile, stateName, graphRoo
 
     lines.push(`${bodyIndent}${groupIndex === 0 ? "if true then" : "else"}`);
     if (complete) {
-        lines.push(`${groupIndent}-- beta: invalid/unreachable VM state`);
+        lines.push(`${groupIndent}-- invalid/unreachable VM state`);
         lines.push(`${groupIndent}${stateName} = nil`);
     } else {
-        lines.push(`${groupIndent}-- beta: unresolved state, keep original dispatcher behavior`);
+        lines.push(`${groupIndent}-- unresolved state, keep original dispatcher behavior`);
         lines.push(renderStatements(source, stateWhile.body || [], groupIndent));
     }
     lines.push(`${bodyIndent}end`);
@@ -536,7 +536,7 @@ function renderNormalizedBlock(source, block, stateName, stateMap, indent) {
 }
 
 function renderInvalidLeaf(lines, stateName, indent) {
-    lines.push(`${indent}-- beta: invalid/unreachable VM state`);
+    lines.push(`${indent}-- invalid/unreachable VM state`);
     lines.push(`${indent}${stateName} = nil`);
 }
 
@@ -567,7 +567,7 @@ function renderGroupLeaf(lines, source, stateName, group, stateMap, indent) {
     const label = group.root.kind === "root"
         ? `root entry ${group.entryOldId} -> ${group.entryNewId}, states ${group.min}-${group.max}`
         : `${group.root.factory} entry ${group.entryOldId} -> ${group.entryNewId}, states ${group.min}-${group.max}`;
-    lines.push(`${indent}-- beta: ${label}`);
+    lines.push(`${indent}-- ${label}`);
     renderStateTree(lines, source, stateName, group, stateMap, 0, group.items.length - 1, indent);
 }
 
@@ -617,7 +617,7 @@ function applyClosureEntryEditsOutsideDispatcher(source, ast, stateWhile, stateM
         edits.filter(edit => edit.start >= stateWhile.range[1]));
     return prefix + replacement + suffix;
 }
-function resolveEntryStateGraphBeta(source, ast) {
+function recoverVmStateGraph(source, ast) {
     const vm = findVmFunction(ast);
     if (!vm) return { source, found: false, reason: "No semantically named vm function was found" };
 
@@ -706,5 +706,5 @@ module.exports = {
     analyzeBlockTerminator,
     resolveStateBlock,
     walkStateGraph,
-    resolveEntryStateGraphBeta,
+    recoverVmStateGraph,
 };

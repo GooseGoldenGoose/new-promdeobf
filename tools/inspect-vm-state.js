@@ -1,18 +1,18 @@
 const fs = require("fs");
 const path = require("path");
 const { parseLua } = require("../main");
-const { resolveEntryStateGraphBeta } = require("../passes/entry-state-beta");
+const { recoverVmStateGraph } = require("../passes/vm-state");
 
 const ROOT = path.resolve(__dirname, "..");
 const inputPath = path.resolve(process.argv[2] || path.join(ROOT, "output", "1.lua"));
-const outputPath = path.resolve(process.argv[3] || path.join(ROOT, "output", "1.beta.lua"));
+const outputPath = path.resolve(process.argv[3] || path.join(ROOT, "output", "1.vm-state.lua"));
 
 const source = fs.readFileSync(inputPath, "utf8");
-const ast = parseLua(source, `${inputPath} <beta input>`);
-const result = resolveEntryStateGraphBeta(source, ast);
-if (!result.found) throw new Error(result.reason || "Unable to resolve beta entry-state graph");
+const ast = parseLua(source, `${inputPath} <vm-state input>`);
+const result = recoverVmStateGraph(source, ast);
+if (!result.found) throw new Error(result.reason || "Unable to recover VM state graph");
 
-parseLua(result.source, `${outputPath} <beta output>`);
+parseLua(result.source, `${outputPath} <vm-state output>`);
 fs.mkdirSync(path.dirname(outputPath), { recursive: true });
 fs.writeFileSync(outputPath, result.source, "utf8");
 
@@ -24,7 +24,7 @@ function termText(term) {
     return term.kind;
 }
 
-console.log(`Beta input: ${inputPath}`);
+console.log(`VM-state input: ${inputPath}`);
 console.log(`Root entry state: ${result.rootEntryId}`);
 console.log(`Dispatcher leaves: ${result.resolvedLeafCount}/${result.dispatcherLeafCount}`);
 console.log(`Complete explicit dispatcher: ${result.complete}`);
@@ -42,4 +42,4 @@ for (const root of result.graphRoots) {
         if (block?.path?.length) console.log(`    dispatch path: ${block.path.join(" | ")}`);
     }
 }
-console.log(`Beta output: ${outputPath}`);
+console.log(`VM-state output: ${outputPath}`);
