@@ -5,6 +5,7 @@ print(a)
 do
     local b = 2
     print(b)
+    return;
 end
 
 print(b)
