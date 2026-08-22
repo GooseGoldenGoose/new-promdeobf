@@ -184,22 +184,21 @@ Current implementation:
 - `sample\3.txt` is a controlled scope/upvalue fixture: outer mutable `x`, shadowed block-local `x`, block-local `y`, and two closures (`inc`, `get`) sharing the captured outer `x`.
 - Keep the current Luau parser while sufficient; Rust Moonlight is acceptable if parser limitations become a correctness blocker.
 
-## Environment Binding Step
+## Step 2: VM Wrapper Semantic Naming
 
-- Step 2 currently performs semantic VM-wrapper naming through `passes/environment.js` and `passes/closure-factory.js`.
-- It finds an environment-producing IIFE argument and maps that argument position to the receiving function parameter, rather than renaming by identifier text.
-- Supported environment provenance includes direct global `getgenv()`, Prometheus-style `getfenv and getfenv() or _ENV`, and direct global `_ENV`.
-- The receiving binding is renamed to `_env` with lexical shadow tracking; unrelated nested parameters/locals with the same original name are left unchanged.
-- If an existing `_env` binding would capture a renamed use, the pass reports a collision instead of changing semantics.
-- `sample\1.txt`: environment parameter `U -> _env`, 2 bound references renamed.
-- `sample\2.txt`: environment parameter `S -> _env`, 4 bound references renamed; current deobfuscated output is `output\2.lua`.
-- Regression checks cover direct `getgenv()`, `getfenv ... or _ENV`, direct `_ENV`, nested-name shadowing, collision rejection, and operation when ConstantArray is absent.
-- `passes/closure-factory.js` structurally detects the general vararg Prometheus closure factory from its `(entryId, captures)` wrapper shape and renames its outer binding to `createClosure`; it does not key off generated names or block IDs.
-- Prometheus also emits fixed-arity closure factories (such as 0-arg and 1-arg variants); these are distinct bindings and are intentionally not all renamed to the same `createClosure` identifier.
-- Across current fixtures the detected general factory varies (`b` in samples 1-2, `r` in sample 3), confirming name-independent detection.
-- `main.js` reparses after ConstantArray, environment renaming, and createClosure renaming; default output is `output\1.lua`.
-- Full sample-folder validation now covers `sample\1.txt`, `sample\2.txt`, and `sample\3.txt`; all pass steps 1-2 and reparse successfully.
-- `sample\3.txt` produces `output\3.lua`; runtime comparison with the unobfuscated source matches exactly: `block 10 2`, `before 1`, `after 3 3`, confirming shared mutable upvalue behavior is preserved by current steps.
+- Step 2 now uses `passes/environment.js`, `passes/closure-factory.js`, and `passes/vm-helpers.js`.
+- Environment provenance is recovered from the wrapper call (direct `getgenv()`, Prometheus-style `getfenv and getfenv() or _ENV`, or direct `_ENV`) and the receiving binding is renamed to `_env` with lexical shadow/collision checks.
+- Closure factories are detected by behavior: a factory receives an entry ID and capture list, obtains an upvalue proxy, returns a nested closure, and that closure calls the shared VM with `(entryId, argsTable, captures, proxy)`.
+- The general vararg factory is `createClosure`. Fixed-arity factories are independently named `createClosureN` from the actual nested wrapper arity; do not assume 0/1 or any particular generated binding.
+- The closure-factory graph identifies the shared VM and upvalue-proxy helper without generated-name or numeric-entry-ID assumptions.
+- `passes/vm-helpers.js` currently recovers: `unpack`, `newproxy`, `setmetatable`, `getmetatable`, `select`, `vm`, `createUpvalueProxy`, `releaseUpvalues`, `releaseUpvalue`, `allocUpvalue`, `upvalueRefCounts`, `upvalueValues`, and `currentUpvalueId`.
+- The VM function parameters are renamed structurally to `state`, `args`, `upvalues`, and `gcProxy` from their positions in every detected closure-factory call.
+- Helper parameters are also recovered where proven: `releaseUpvalue(upvalueId)`; proxy/GC helpers use `captures`; closure factories use `(entryId, captures)`.
+- Renaming is binding/scope-aware through `renameFunctionParameterBinding`; collisions are skipped/reported rather than forcing a textual rename.
+- Full sample-folder validation covers `sample\1.txt`, `sample\2.txt`, and `sample\3.txt`; all pass ConstantArray + step-2 recovery and final output reparses.
+- `sample\3.txt` runtime remains identical after semantic naming: `block 10 2`, `before 1`, `after 3 3`.
+- A fresh randomized Medium obfuscation of the same sample-3 source also passed. It changed bindings (for example environment `V`, general factory `O`, VM `W`, proxy `p`) and emitted fixed factories of arity 2 and 5 instead of the tracked fixture's 0 and 1; the pass recovered `createClosure2` / `createClosure5` structurally and the transformed output produced the same runtime result.
+- `main.js` reparses between semantic naming stages and writes `output\1.lua`, `output\2.lua`, or `output\3.lua` when invoked with the corresponding sample/output paths.
 
 ## Control-Flow Understanding
 
