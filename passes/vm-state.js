@@ -253,8 +253,9 @@ function isClosureFactoryName(name) {
     return typeof name === "string" && /^createClosure(?:\d+)?$/.test(name);
 }
 
-function findClosureEntries(ast) {
+function findClosureEntryInfo(ast) {
     const entries = [];
+    const unsupported = [];
     function walk(node) {
         if (!isNode(node)) return;
         if (node.type === "CallExpression" && isIdentifier(node.base) &&
@@ -262,6 +263,7 @@ function findClosureEntries(ast) {
             const args = node.arguments || [];
             const entryId = numericValue(args[0]);
             if (entryId !== null) entries.push({ entryId, factory: node.base.name, call: node });
+            else unsupported.push({ factory: node.base.name, call: node, entryNode: args[0] || null });
         }
         for (const [key, value] of Object.entries(node)) {
             if (key === "loc" || key === "range") continue;
@@ -270,7 +272,11 @@ function findClosureEntries(ast) {
         }
     }
     walk(ast);
-    return entries;
+    return { entries, unsupported };
+}
+
+function findClosureEntries(ast) {
+    return findClosureEntryInfo(ast).entries;
 }
 
 function bodyKey(body) {
@@ -307,11 +313,76 @@ function analyzeBranchTarget(node, source) {
     if (onTrue === null || onFalse === null) return null;
     return {
         kind: "branch",
+        encoding: "direct-and-or",
         condition: sourceOf(source, node.left.left),
         onTrue,
         onFalse,
+        trueTargetNode: node.left.right,
+        falseTargetNode: node.right,
         expression: sourceOf(source, node),
     };
+}
+
+function singleIdentifierAssignment(statement) {
+    if (statement?.type !== "AssignmentStatement") return null;
+    const vars = statement.variables || [];
+    const init = statement.init || [];
+    if (vars.length !== 1 || init.length !== 1 || !isIdentifier(vars[0])) return null;
+    return { name: vars[0].name, rhs: init[0], statement };
+}
+
+function analyzeSplitBranch(body, finalIndex, stateName, source) {
+    if (finalIndex < 3) return null;
+
+    const finalAssign = singleIdentifierAssignment(body[finalIndex]);
+    if (!finalAssign || finalAssign.name !== stateName) return null;
+    const finalRhs = finalAssign.rhs;
+    if (finalRhs?.type !== "LogicalExpression" || finalRhs.operator !== "or" ||
+        !isIdentifier(finalRhs.left, stateName) || !isIdentifier(finalRhs.right)) {
+        return null;
+    }
+
+    const falseLoad = singleIdentifierAssignment(body[finalIndex - 1]);
+    if (!falseLoad || falseLoad.name !== finalRhs.right.name) return null;
+    const onFalse = numericValue(falseLoad.rhs);
+    if (onFalse === null) return null;
+
+    const andAssign = singleIdentifierAssignment(body[finalIndex - 2]);
+    if (!andAssign || andAssign.name !== stateName) return null;
+    const andRhs = andAssign.rhs;
+    if (andRhs?.type !== "LogicalExpression" || andRhs.operator !== "and" ||
+        !isIdentifier(andRhs.right)) {
+        return null;
+    }
+
+    const trueLoad = singleIdentifierAssignment(body[finalIndex - 3]);
+    if (!trueLoad || trueLoad.name !== andRhs.right.name) return null;
+    const onTrue = numericValue(trueLoad.rhs);
+    if (onTrue === null) return null;
+
+    return {
+        kind: "branch",
+        encoding: "split-and-or",
+        condition: sourceOf(source, andRhs.left),
+        onTrue,
+        onFalse,
+        trueTargetNode: trueLoad.rhs,
+        falseTargetNode: falseLoad.rhs,
+        statementIndex: finalIndex,
+        expression: body.slice(finalIndex - 3, finalIndex + 1)
+            .map(statement => sourceOf(source, statement))
+            .join("; "),
+    };
+}
+
+function isCanonicalStopSentinel(node) {
+    if (node?.type === "NilLiteral") return true;
+    if (node?.type !== "IndexExpression" || !isIdentifier(node.base, "_env") ||
+        node.index?.type !== "StringLiteral") {
+        return false;
+    }
+    const raw = node.index.raw || "";
+    return /^["'][A-Za-z0-9]{12,14}["']$/.test(raw);
 }
 
 function analyzeBlockTerminator(body, stateName, source) {
@@ -326,7 +397,17 @@ function analyzeBlockTerminator(body, stateName, source) {
         }
         const branch = analyzeBranchTarget(rhs, source);
         if (branch) return { ...branch, statementIndex: i };
-        return { kind: "stop", statementIndex: i, expression: sourceOf(source, rhs) };
+        const splitBranch = analyzeSplitBranch(body, i, stateName, source);
+        if (splitBranch) return splitBranch;
+        if (isCanonicalStopSentinel(rhs)) {
+            return {
+                kind: "stop",
+                encoding: rhs.type === "NilLiteral" ? "literal-nil" : "prometheus-env-nil",
+                statementIndex: i,
+                expression: sourceOf(source, rhs),
+            };
+        }
+        return { kind: "unknown", statementIndex: i, expression: sourceOf(source, rhs) };
     }
     return { kind: "unknown", statementIndex: -1, expression: null };
 }
@@ -495,10 +576,9 @@ function collectTerminatorEdits(block, stateName, stateMap) {
         if (newTarget !== undefined && Array.isArray(rhs.range)) {
             edits.push({ start: rhs.range[0], end: rhs.range[1], text: String(newTarget) });
         }
-    } else if (term.kind === "branch" && rhs.type === "LogicalExpression" &&
-        rhs.operator === "or" && rhs.left?.type === "LogicalExpression" && rhs.left.operator === "and") {
-        const trueNode = rhs.left.right;
-        const falseNode = rhs.right;
+    } else if (term.kind === "branch") {
+        const trueNode = term.trueTargetNode;
+        const falseNode = term.falseTargetNode;
         const newTrue = stateMap.get(term.onTrue);
         const newFalse = stateMap.get(term.onFalse);
         if (newTrue !== undefined && Array.isArray(trueNode?.range)) {
@@ -632,7 +712,8 @@ function recoverVmStateGraph(source, ast) {
     if (!rootEntry) return { source, found: false, reason: "No root entry was found" };
 
     const rootGraph = walkStateGraph(stateWhile.body || [], stateName, rootEntry.entryId, source);
-    const closureEntries = findClosureEntries(ast);
+    const closureEntryInfo = findClosureEntryInfo(ast);
+    const closureEntries = closureEntryInfo.entries;
 
     const allBlocks = new Map();
     const graphRoots = [];
@@ -672,7 +753,12 @@ function recoverVmStateGraph(source, ast) {
     }
 
     const normalization = buildNormalizedLayout(graphRoots, allBlocks);
-    const normalized = complete && normalizationIsSafe(normalization, allBlocks);
+    const reachableClosed = closureEntryInfo.unsupported.length === 0 &&
+        normalizationIsSafe(normalization, allBlocks);
+    const normalized = reachableClosed;
+    const prunedDispatcherLeafCount = normalized
+        ? Math.max(0, leafKeys.size - resolvedKeys.size)
+        : 0;
     const replacement = normalized
         ? renderNormalizedDispatcher(source, stateWhile, stateName, normalization)
         : renderOriginalGroupedDispatcher(source, stateWhile, stateName, graphRoots, allBlocks, complete);
@@ -693,6 +779,9 @@ function recoverVmStateGraph(source, ast) {
         resolvedLeafCount: resolvedKeys.size,
         complete,
         collision,
+        reachableClosed,
+        unsupportedClosureEntryCount: closureEntryInfo.unsupported.length,
+        prunedDispatcherLeafCount,
         normalized,
         normalization,
     };

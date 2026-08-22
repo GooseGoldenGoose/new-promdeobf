@@ -144,6 +144,9 @@ function main() {
     console.log(`VM state recovery applied: ${vmStateApplied}`);
     if (vmState.found) {
         console.log(`VM dispatcher leaves: ${vmState.resolvedLeafCount}/${vmState.dispatcherLeafCount}`);
+        if (vmState.prunedDispatcherLeafCount > 0) {
+            console.log(`VM unreachable dispatcher leaves pruned: ${vmState.prunedDispatcherLeafCount}`);
+        }
         console.log(`VM state IDs normalized: ${vmState.normalized}`);
         if (vmState.normalized) {
             for (const group of vmState.normalization.groups) {
