@@ -210,14 +210,17 @@ Current implementation:
 - Dispatcher leaves are resolved by evaluating Prometheus nested numeric comparison trees for a candidate state ID. The beta walker then follows numeric POS-register terminators: `state = N` is a jump and `state = condition and A or B` is a branch.
 - Critical rule: Prometheus can temporarily reuse `POS_REGISTER` as an ordinary register, so not every assignment to renamed `state` is a jump. The walker treats the final write to the POS/state binding in a dispatcher block as its control-flow terminator.
 - Graph walking uses a visited set, so loop back-edges are retained without infinite analysis. Closure-created entry IDs are separate graph roots, not CFG successors unless an actual state transition targets them.
-- When every dispatcher leaf has a discovered state ID, beta output removes the binary/range comparison tree and groups states by reachable closure-entry graph. An outer branch uses exact state-membership (`state == entry or state == successor ...`) and multi-state groups contain an inner exact-state dispatcher. Exact membership is used instead of arbitrary numeric ranges because Prometheus state IDs are randomized and ordering has no semantic meaning. Incomplete mappings retain the original dispatcher only for unresolved states.
+- When every dispatcher leaf is recovered and normalization safety checks pass, beta assigns new contiguous VM state IDs by graph root. Random Prometheus IDs become analysis metadata only; executable beta closure-entry arguments and proven CFG jump/branch targets use the normalized IDs. Ordinary temporary values written through the reused POS/state register are not rewritten.
+- Normalization is conservative: it requires complete leaf coverage, no cross-root state overlap, every block resolved, terminators limited to proven `jump` / `branch` / `stop` forms, and every numeric successor present in the recovered state map. If any condition fails, beta falls back to the previous original-ID grouped renderer instead of guessing.
+- Each closure graph receives a contiguous range and beta renders balanced binary range trees both between closure ranges and inside each range. This avoids large `or` membership expressions and long linear `elseif` chains while preserving an exact equality check at final leaves for invalid-state safety.
 - All four tracked beta outputs are generated: `output\1.beta.lua` through `output\4.beta.lua`.
-- `output\1.beta.lua`: root `1383946`, 1/1 dispatcher block mapped, runtime `AD`, exit 0.
-- `output\2.beta.lua`: root `8945882`, 3/3 dispatcher blocks mapped. CFG: `8945882 -> 15467310 / 9224212`, `15467310 -> 9224212`, `9224212 -> stop`. With a minimal Roblox compatibility shim (`warn = print`) and the same fixed RNG seed, stable and beta both print `gg`, `ranf`, exit 0.
-- `output\3.beta.lua`: all 3/3 blocks mapped. Root `2815217` ends in the generated stop sentinel and has no numeric successor; `9377191` (`createClosure1`) and `394074` (`createClosure0`) are separate closure roots. Runtime remains `block 10 2`, `before 1`, `after 3 3`, exit 0.
-- `output\4.beta.lua`: all 16/16 dispatcher blocks mapped into four graph roots. Root `11880897` creates the three closures and stops. `choose` entry `6182694` owns 4 states with a two-way branch merging at `11830003`; `spin` entry `10282259` owns 7 states including loop back-edge `16480121 -> 14232766`; `trim` entry `4023829` owns 4 states with repeat back-edge `7764720 -> 11121242`. Controlled source, stable output, and beta output all print `start 0`, `choose 5`, `spin 10`, `trim 2`, exit 0.
-- A temporary controlled `while` + nested `if` Prometheus fixture resolved 6/6 blocks including the back-edge `9514929 -> 10936248`; stable and beta both printed `mid`, `done 3`, exit 0.
-- `tools/resolve-entry-beta.js` prints each graph root, state terminator, dispatcher path, leaf coverage, and writes the beta output.
+- `output\1.beta.lua`: original root `1383946` normalizes to entry/range `1`; 1/1 block mapped; runtime `AD`, exit 0.
+- `output\2.beta.lua`: original root `8945882` and its 3-state CFG normalize to range `1-3`; stable and beta both print `gg`, `ranf` with the same RNG seed and `warn = print`, exit 0.
+- `output\3.beta.lua`: original root `2815217` normalizes to `1`; closure entries `9377191` and `394074` normalize to `2` and `3`. Runtime remains `block 10 2`, `before 1`, `after 3 3`, exit 0.
+- `output\4.beta.lua`: all 16/16 blocks normalize to four contiguous ranges: root `1`; `choose` `2-5`; `spin` `6-12`; `trim` `13-16`. Closure calls become `createClosure1(2, ...)`, `createClosure2(6, ...)`, `createClosure5(13, ...)`, and the root call becomes `createClosure(1, ...)`. Controlled source, stable output, and beta all print `start 0`, `choose 5`, `spin 10`, `trim 2`, exit 0.
+- The temporary loop regression also normalizes 6/6 blocks to range `1-6`, retains its back-edge, and still prints `mid`, `done 3`, exit 0.
+- A fresh randomized Medium sample-4 obfuscation changed the original IDs to root `6958029` and closure entries `8724652`, `15604649`, `16255422`, with wrappers `createClosure3`, `createClosure2`, `createClosure6`; beta still recovered 16/16 blocks, normalized to ranges `1`, `2-5`, `6-12`, `13-16`, and matched stable runtime exactly.
+- `tools/resolve-entry-beta.js` prints original graph roots/terminators plus whether normalization succeeded and each normalized entry/range.
 ## Control-Flow Understanding
 
 Prometheus-style control-flow flattening should be modeled as a dispatcher/state machine.
@@ -429,7 +432,7 @@ without producing unrelated locals.
 # Immediate Next Steps
 
 1. Keep stable step-2 outputs separate from beta CFG/state recovery.
-2. Use sample 4 grouped entry graphs as the primary CFG regression for later source-level `if`/loop/repeat structuring; do not merge separate closure roots merely because their bodies match.
+2. Use sample 4 normalized contiguous graph ranges as the primary CFG regression for later source-level `if`/loop/repeat structuring; keep closure graphs distinct and preserve proven jump/back-edge semantics.
 3. Keep POS-register temporary reuse distinct from true block terminators; extend terminator recognition only from proven Prometheus compiler patterns.
 4. Keep each pass structural/generalized and reparse/runtime-check transformed outputs before advancing.
 5. If the current parser becomes a correctness blocker, evaluate Rust Moonlight instead of parser-specific hacks.
