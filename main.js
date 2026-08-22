@@ -8,6 +8,7 @@ const { renameVmHelperBindings } = require("./passes/vm-helpers");
 const { splitSafeParallelAssignmentsFully } = require("./passes/split-safe-assignments");
 const { recoverVmStateGraph } = require("./passes/vm-state");
 const { recoverVmBindings } = require("./passes/vm-bindings");
+const { scheduleVmRegisterUses } = require("./passes/vm-register-scheduler");
 
 const ROOT = __dirname;
 const DEFAULT_INPUT = path.join(ROOT, "sample", "1.txt");
@@ -73,7 +74,12 @@ function runDeobfuscator(inputPath = DEFAULT_INPUT, outputPath = DEFAULT_OUTPUT)
     const vmState = recoverVmStateGraph(splitAssignments.source, vmStateAst);
     const vmBindings = recoverVmBindings(splitAssignments.source, vmStateAst, vmState);
     const vmStateApplied = vmState.found && vmState.normalized;
-    const finalSource = vmStateApplied ? vmState.source : splitAssignments.source;
+    const normalizedSource = vmStateApplied ? vmState.source : splitAssignments.source;
+    const normalizedAst = parseLua(normalizedSource, `${inputPath} <before VM register scheduling>`);
+    const registerSchedule = vmStateApplied
+        ? scheduleVmRegisterUses(normalizedSource, normalizedAst)
+        : { source: normalizedSource, found: false, applied: false, blocksChanged: 0, swaps: 0 };
+    const finalSource = registerSchedule.applied ? registerSchedule.source : normalizedSource;
 
     const outputAst = parseLua(finalSource, outputPath);
     const resolvedOutput = writeSource(finalSource, outputPath);
@@ -90,6 +96,7 @@ function runDeobfuscator(inputPath = DEFAULT_INPUT, outputPath = DEFAULT_OUTPUT)
         splitAssignments,
         vmState,
         vmBindings,
+        registerSchedule,
         vmStateApplied,
     };
 }
@@ -105,6 +112,7 @@ function main() {
     const splitAssignments = result.splitAssignments;
     const vmState = result.vmState;
     const vmBindings = result.vmBindings;
+    const registerSchedule = result.registerSchedule;
     const vmStateApplied = result.vmStateApplied;
 
     console.log(`Input: ${result.inputPath}`);
@@ -157,6 +165,10 @@ function main() {
                 console.log(`VM state range: ${group.root.factory} ${group.min}-${group.max} (entry ${group.entryNewId})`);
             }
         }
+    }
+    console.log(`VM register scheduling applied: ${registerSchedule.applied}`);
+    if (registerSchedule.applied) {
+        console.log(`VM register scheduling: ${registerSchedule.blocksChanged} blocks, ${registerSchedule.swaps} dependency-safe swaps`);
     }
     console.log(`VM binding analysis found: ${vmBindings.found}`);
     if (vmBindings.found) {
