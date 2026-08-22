@@ -53,6 +53,7 @@ assert.strictEqual(result.ignoredUnreachableClosureEntryCount, 1, "dead closure 
 assert.ok(result.prunedDispatcherLeafCount >= 2, "dead dispatcher leaves were not pruned");
 assert.ok(!result.source.includes("state == 99"), "dead state 99 survived output");
 assert.ok(!result.source.includes("createClosure1(100"), "closure call from dead state survived output");
+assert.ok(!result.source.includes("invalid/unreachable VM state"), "normalized dispatcher retained invalid-state fallback scaffolding");
 assert.ok(!result.source.includes('_env["ABCDEFGHIJKL"]'), "canonical stop sentinel survived normalization");
 const aPos = result.source.indexOf("A = f()");
 const bPos = result.source.indexOf("B = g()");

@@ -645,10 +645,6 @@ function renderNormalizedBlock(source, block, stateName, stateMap, indent) {
     return lines.join("\n");
 }
 
-function renderInvalidLeaf(lines, stateName, indent) {
-    lines.push(`${indent}-- invalid/unreachable VM state`);
-    lines.push(`${indent}${stateName} = nil`);
-}
 
 function renderStateTree(lines, source, stateName, group, stateMap, start, end, indent) {
     if (start === end) {
@@ -658,8 +654,6 @@ function renderStateTree(lines, source, stateName, group, stateMap, start, end, 
             : "";
         lines.push(`${indent}if ${stateName} == ${item.newId} then${entryComment}`);
         lines.push(renderNormalizedBlock(source, item.block, stateName, stateMap, indent + "    "));
-        lines.push(`${indent}else`);
-        renderInvalidLeaf(lines, stateName, indent + "    ");
         lines.push(`${indent}end`);
         return;
     }
