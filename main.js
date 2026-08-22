@@ -169,6 +169,9 @@ function main() {
     console.log(`VM register scheduling applied: ${registerSchedule.applied}`);
     if (registerSchedule.applied) {
         console.log(`VM register scheduling: ${registerSchedule.blocksChanged} blocks, ${registerSchedule.swaps} dependency-safe swaps`);
+        if (registerSchedule.safetyRejectedSegments > 0) {
+            console.log(`VM register scheduling safety rejections: ${registerSchedule.safetyRejectedSegments}`);
+        }
     }
     console.log(`VM binding analysis found: ${vmBindings.found}`);
     if (vmBindings.found) {

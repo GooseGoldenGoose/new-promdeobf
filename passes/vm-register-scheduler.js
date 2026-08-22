@@ -90,37 +90,134 @@ function canSwapRightAssignmentWithLeftStatement(delayable, current, stateName) 
     return true;
 }
 
-function hasPriorBlockDefinition(statements, index) {
+function findDirectProducerStatements(statements, index) {
     const reads = statementReads(statements[index]);
-    if (reads.size === 0) return false;
+    const producers = new Set();
 
-    const defined = new Set();
-    for (let i = 0; i < index; i++) {
-        for (const name of statementWrites(statements[i])) defined.add(name);
+    for (const name of reads) {
+        for (let i = index - 1; i >= 0; i--) {
+            if (statementWrites(statements[i]).has(name)) {
+                producers.add(statements[i]);
+                break;
+            }
+        }
     }
-    return intersects(reads, defined);
+
+    return producers;
+}
+
+function canMoveDelayableRightAcrossRange(statements, fromIndex, throughIndex, stateName) {
+    const delayable = statements[fromIndex];
+    if (!isDelayableAssignment(delayable, stateName)) return false;
+
+    for (let i = fromIndex + 1; i <= throughIndex; i++) {
+        if (!canSwapRightAssignmentWithLeftStatement(delayable, statements[i], stateName)) {
+            return false;
+        }
+    }
+    return true;
+}
+
+function compactConsumerGap(statements, currentIndex, stateName) {
+    const current = statements[currentIndex];
+    const producers = findDirectProducerStatements(statements, currentIndex);
+    if (producers.size === 0) return { currentIndex, swaps: 0 };
+
+    let earliestProducerIndex = currentIndex;
+    for (let i = 0; i < currentIndex; i++) {
+        if (producers.has(statements[i])) {
+            earliestProducerIndex = Math.min(earliestProducerIndex, i);
+        }
+    }
+
+    let swaps = 0;
+    let index = earliestProducerIndex + 1;
+    while (index < currentIndex) {
+        const candidate = statements[index];
+        if (producers.has(candidate)) {
+            index++;
+            continue;
+        }
+
+        if (!canMoveDelayableRightAcrossRange(statements, index, currentIndex, stateName)) {
+            index++;
+            continue;
+        }
+
+        const distance = currentIndex - index;
+        statements.splice(index, 1);
+        currentIndex--;
+        statements.splice(currentIndex + 1, 0, candidate);
+        swaps += distance;
+        // Re-check the statement that shifted into this gap position.
+    }
+
+    return { currentIndex, swaps };
+}
+
+function hasRegisterHazard(left, right) {
+    const leftReads = statementReads(left);
+    const leftWrites = statementWrites(left);
+    const rightReads = statementReads(right);
+    const rightWrites = statementWrites(right);
+
+    return (
+        intersects(leftWrites, rightReads) ||
+        intersects(leftReads, rightWrites) ||
+        intersects(leftWrites, rightWrites)
+    );
+}
+
+function validateScheduledOrder(original, scheduled, stateName) {
+    if (original.length !== scheduled.length) return false;
+    const finalIndex = new Map(scheduled.map((statement, index) => [statement, index]));
+    if (finalIndex.size !== original.length) return false;
+    for (const statement of original) if (!finalIndex.has(statement)) return false;
+
+    const originalAnchors = original.filter(statement => !isDelayableAssignment(statement, stateName));
+    const scheduledAnchors = scheduled.filter(statement => !isDelayableAssignment(statement, stateName));
+    if (originalAnchors.length !== scheduledAnchors.length) return false;
+    for (let i = 0; i < originalAnchors.length; i++) {
+        if (originalAnchors[i] !== scheduledAnchors[i]) return false;
+    }
+
+    // Any pair whose order changed must be exactly the kind of adjacent swap
+    // we allow: the original left statement is a pure delayable load and the
+    // pair has no RAW, WAR, or WAW dependency.
+    for (let i = 0; i < original.length; i++) {
+        for (let j = i + 1; j < original.length; j++) {
+            const left = original[i];
+            const right = original[j];
+            if (finalIndex.get(left) < finalIndex.get(right)) continue;
+            if (!isDelayableAssignment(left, stateName)) return false;
+            if (hasRegisterHazard(left, right)) return false;
+        }
+    }
+    return true;
 }
 
 function scheduleStatementList(statements, stateName) {
     const scheduled = [...statements];
+    const originalOrder = [...statements];
     let swaps = 0;
 
-    for (let i = 1; i < scheduled.length; i++) {
-        let currentIndex = i;
-        const current = scheduled[currentIndex];
-        if (!hasPriorBlockDefinition(scheduled, currentIndex)) continue;
-
-        while (currentIndex > 0) {
-            const previous = scheduled[currentIndex - 1];
-            if (!canSwapRightAssignmentWithLeftStatement(previous, current, stateName)) break;
-            scheduled[currentIndex - 1] = current;
-            scheduled[currentIndex] = previous;
-            currentIndex--;
-            swaps++;
-        }
+    // Compact each producer -> consumer chain by pushing only independent,
+    // proven-pure register loads out of the gap. Every move is equivalent to
+    // a sequence of adjacent RAW/WAR/WAW-safe swaps, so effectful statements
+    // never change order relative to one another. Process each original
+    // statement once so two movable loads cannot oscillate around each other.
+    for (const current of originalOrder) {
+        const currentIndex = scheduled.indexOf(current);
+        if (currentIndex <= 0) continue;
+        const result = compactConsumerGap(scheduled, currentIndex, stateName);
+        swaps += result.swaps;
     }
 
-    return { statements: scheduled, swaps };
+    if (!validateScheduledOrder(statements, scheduled, stateName)) {
+        return { statements: [...statements], swaps: 0, safetyRejected: true };
+    }
+
+    return { statements: scheduled, swaps, safetyRejected: false };
 }
 
 function findStateWhile(vmFunction, stateName) {
@@ -236,6 +333,7 @@ function scheduleVmRegisterUses(source, ast) {
     const edits = [];
     let blocksChanged = 0;
     let swaps = 0;
+    let safetyRejectedSegments = 0;
 
     for (const body of leaves) {
         const segments = [];
@@ -256,6 +354,7 @@ function scheduleVmRegisterUses(source, ast) {
             if (!hasOnlyWhitespaceBetween(source, statements)) continue;
 
             const scheduled = scheduleStatementList(statements, stateName);
+            if (scheduled.safetyRejected) safetyRejectedSegments++;
             if (scheduled.swaps === 0) continue;
 
             edits.push({
@@ -269,7 +368,7 @@ function scheduleVmRegisterUses(source, ast) {
     }
 
     if (edits.length === 0) {
-        return { source, found: true, applied: false, blocksChanged: 0, swaps: 0 };
+        return { source, found: true, applied: false, blocksChanged: 0, swaps: 0, safetyRejectedSegments };
     }
 
     return {
@@ -278,6 +377,7 @@ function scheduleVmRegisterUses(source, ast) {
         applied: true,
         blocksChanged,
         swaps,
+        safetyRejectedSegments,
     };
 }
 
