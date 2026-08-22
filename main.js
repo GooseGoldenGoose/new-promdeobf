@@ -162,6 +162,7 @@ function main() {
     if (vmBindings.found) {
         console.log(`VM functions analyzed: ${vmBindings.functionCount}`);
         console.log(`VM reaching definitions: ${vmBindings.definitions.length} defs, ${vmBindings.uniqueUseCount}/${vmBindings.uses.length} unique uses`);
+        console.log(`VM definition lifetimes: ${vmBindings.definitionLifetimes.length}, joins: ${vmBindings.definitionJoinGroups.length}, cross-block: ${vmBindings.crossBlockLifetimeCount}, loop-carried: ${vmBindings.loopCarriedLifetimeCount}`);
         console.log(`VM capture slots: ${vmBindings.captures.length}, local cells: ${vmBindings.localCells.length}, shared cells: ${vmBindings.sharedLocalCells.length}`);
         console.log(`VM upvalue cell accesses: ${vmBindings.resolvedCellAccessCount}/${vmBindings.cellAccesses.length} resolved`);
     }

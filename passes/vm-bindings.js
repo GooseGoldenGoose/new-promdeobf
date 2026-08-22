@@ -327,6 +327,140 @@ function buildCaptureSlotResolver(captures) {
     return { origins, resolve };
 }
 
+function unionSets(sets) {
+    const out = new Set();
+    for (const set of sets) for (const value of set) out.add(value);
+    return out;
+}
+
+function reachingIdsAtEntry(reachingMap) {
+    const out = new Set();
+    for (const defs of reachingMap.values()) for (const def of defs) out.add(def);
+    return out;
+}
+
+function buildDefinitionLiveness(blockIds, blockSet, root, definitionsById, uses, inByBlock) {
+    const entryUsesByBlock = new Map(blockIds.map(id => [id, new Set()]));
+    const entryReachByBlock = new Map(blockIds.map(id => [id, reachingIdsAtEntry(inByBlock.get(id) || new Map())]));
+
+    for (const use of uses) {
+        for (const defId of use.reachingDefIds) {
+            const def = definitionsById.get(defId);
+            if (!def) continue;
+            if (def.blockId !== use.blockId || def.statementIndex >= use.statementIndex) {
+                entryUsesByBlock.get(use.blockId)?.add(defId);
+            }
+        }
+    }
+
+    const liveInByBlock = new Map(blockIds.map(id => [id, new Set()]));
+    const liveOutByBlock = new Map(blockIds.map(id => [id, new Set()]));
+    let changed = true;
+    let iterations = 0;
+    const iterationLimit = Math.max(1, blockIds.length * 16);
+
+    while (changed && iterations < iterationLimit) {
+        changed = false;
+        iterations++;
+        for (let index = blockIds.length - 1; index >= 0; index--) {
+            const blockId = blockIds[index];
+            const block = root.graph.blocks.get(blockId);
+            const successorIns = successorsOf(block?.terminator)
+                .filter(id => blockSet.has(id))
+                .map(id => liveInByBlock.get(id));
+            const nextOut = unionSets(successorIns);
+            const nextIn = new Set(entryUsesByBlock.get(blockId));
+            const entryReach = entryReachByBlock.get(blockId);
+            for (const defId of nextOut) if (entryReach.has(defId)) nextIn.add(defId);
+
+            if (!setEquals(liveOutByBlock.get(blockId), nextOut)) {
+                liveOutByBlock.set(blockId, nextOut);
+                changed = true;
+            }
+            if (!setEquals(liveInByBlock.get(blockId), nextIn)) {
+                liveInByBlock.set(blockId, nextIn);
+                changed = true;
+            }
+        }
+    }
+
+    const usesByDefinition = new Map([...definitionsById.keys()].map(id => [id, []]));
+    for (const use of uses) {
+        for (const defId of use.reachingDefIds) usesByDefinition.get(defId)?.push(use);
+    }
+
+    const lifetimes = [];
+    for (const def of definitionsById.values()) {
+        const defUses = usesByDefinition.get(def.id) || [];
+        const liveInBlockIds = [];
+        const liveOutBlockIds = [];
+        for (const blockId of blockIds) {
+            if (liveInByBlock.get(blockId).has(def.id)) liveInBlockIds.push(blockId);
+            if (liveOutByBlock.get(blockId).has(def.id)) liveOutBlockIds.push(blockId);
+        }
+        const useBlockIds = [...new Set(defUses.map(use => use.blockId))];
+        lifetimes.push({
+            definitionId: def.id,
+            functionId: def.functionId,
+            registerName: def.name,
+            definitionBlockId: def.blockId,
+            definitionStatementIndex: def.statementIndex,
+            useCount: defUses.length,
+            uniqueUseCount: defUses.filter(use => use.uniqueDefinitionId === def.id).length,
+            ambiguousUseCount: defUses.filter(use => use.uniqueDefinitionId !== def.id).length,
+            useBlockIds,
+            liveInBlockIds,
+            liveOutBlockIds,
+            crossBlock: useBlockIds.some(id => id !== def.blockId) || liveOutBlockIds.some(id => id !== def.blockId),
+            loopCarried: liveInBlockIds.includes(def.blockId),
+        });
+    }
+
+    const parent = new Map(definitionsById.keys().map(id => [id, id]));
+    function find(id) {
+        let rootId = id;
+        while (parent.get(rootId) !== rootId) rootId = parent.get(rootId);
+        while (parent.get(id) !== id) {
+            const next = parent.get(id);
+            parent.set(id, rootId);
+            id = next;
+        }
+        return rootId;
+    }
+    function unite(a, b) {
+        const ra = find(a);
+        const rb = find(b);
+        if (ra !== rb) parent.set(rb, ra);
+    }
+    for (const use of uses) {
+        if (use.reachingDefIds.length < 2) continue;
+        const [first, ...rest] = use.reachingDefIds;
+        for (const other of rest) unite(first, other);
+    }
+    const groupsByRoot = new Map();
+    for (const defId of definitionsById.keys()) {
+        const rootId = find(defId);
+        if (!groupsByRoot.has(rootId)) groupsByRoot.set(rootId, []);
+        groupsByRoot.get(rootId).push(defId);
+    }
+    const joinGroups = [...groupsByRoot.values()]
+        .filter(ids => ids.length > 1)
+        .map((definitionIds, index) => ({
+            id: `f${definitionIds.length ? definitionsById.get(definitionIds[0]).functionId : "?"}:join${index}`,
+            registerName: definitionsById.get(definitionIds[0])?.name || null,
+            definitionIds,
+        }));
+
+    return {
+        converged: !changed,
+        iterations,
+        liveInByBlock,
+        liveOutByBlock,
+        lifetimes,
+        joinGroups,
+    };
+}
+
 function buildFunctionAnalysis(root, functionId) {
     const blockIds = root.graph.order.filter(id => root.graph.blocks.has(id));
     const blockSet = new Set(blockIds);
@@ -470,6 +604,15 @@ function buildFunctionAnalysis(root, functionId) {
         }
     }
 
+    const definitionLiveness = buildDefinitionLiveness(
+        blockIds,
+        blockSet,
+        root,
+        definitionsById,
+        uses,
+        inByBlock,
+    );
+
     return {
         id: functionId,
         kind: root.kind,
@@ -484,6 +627,14 @@ function buildFunctionAnalysis(root, functionId) {
         uses,
         closureSites,
         cellAccesses,
+        definitionLifetimes: definitionLiveness.lifetimes,
+        definitionJoinGroups: definitionLiveness.joinGroups,
+        liveness: {
+            converged: definitionLiveness.converged,
+            iterations: definitionLiveness.iterations,
+            liveInByBlock: definitionLiveness.liveInByBlock,
+            liveOutByBlock: definitionLiveness.liveOutByBlock,
+        },
         reaching: {
             converged,
             iterations,
@@ -556,6 +707,8 @@ function recoverVmBindings(source, ast, vmState) {
         access.resolvedCellId = access.resolution.kind === "resolved-cell" ? access.resolution.cellId : null;
     }
 
+    const definitionLifetimes = functions.flatMap(fn => fn.definitionLifetimes);
+    const definitionJoinGroups = functions.flatMap(fn => fn.definitionJoinGroups);
     const definitions = functions.flatMap(fn => fn.definitions);
     const uses = functions.flatMap(fn => fn.uses);
     const uniqueUseCount = uses.filter(use => use.uniqueDefinitionId !== null).length;
@@ -578,7 +731,9 @@ function recoverVmBindings(source, ast, vmState) {
         });
     }
 
-    const allConverged = functions.every(fn => fn.reaching.converged);
+    const allConverged = functions.every(fn => fn.reaching.converged && fn.liveness.converged);
+    const crossBlockLifetimeCount = definitionLifetimes.filter(item => item.crossBlock).length;
+    const loopCarriedLifetimeCount = definitionLifetimes.filter(item => item.loopCarried).length;
     const resolvedCellAccessCount = cellAccesses.filter(access => access.resolvedCellId !== null).length;
     const unresolvedCellAccessCount = cellAccesses.length - resolvedCellAccessCount;
 
@@ -588,6 +743,10 @@ function recoverVmBindings(source, ast, vmState) {
         functionCount: functions.length,
         functions,
         definitions,
+        definitionLifetimes,
+        definitionJoinGroups,
+        crossBlockLifetimeCount,
+        loopCarriedLifetimeCount,
         uses,
         captures,
         captureSlotOrigins: captureSlotResolver.origins,
