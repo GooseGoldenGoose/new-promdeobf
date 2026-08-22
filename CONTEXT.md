@@ -26,7 +26,7 @@ When continuing this project in a new chat:
 - Never stage or modify unrelated untracked workspace items. Current intentional untracked items include `formater/` and `sample/5.txt` unless the user explicitly changes that policy.
 - Everything must be structural/generalized: never hardcode sample IDs, state numbers, register names, closure arities, strings, filenames, or random constants. Fix root causes, not output text afterward.
 - After transformations, reparse generated Lua and run runtime regressions whenever executable fixtures permit it. Compare original/readable source, obfuscated input, and deobfuscated output where useful.
-- Prometheus-specific behavior should be verified against canonical `wcrddn/Prometheus` source when exact compiler semantics matter.
+- When the user says **Prometheus**, they mean the local WeAreDevs obfuscator/compiler fixture at `C:\Users\reala\Desktop\!workspaces\promdeobf ova\wearedev obf`. Verify exact behavior against that local source first. Only use the public/canonical repository if the user explicitly asks for canonical/public Prometheus.
 - Preserve stable pipeline behavior when experimenting. A recovery pass must fail closed: if proof is incomplete, preserve the previous safe output rather than guess.
 - End every project-related turn with exactly: `Done for this turn — you can prompt now.`
 
@@ -61,13 +61,13 @@ Current implementation checkpoint before this handoff update is `2ae4bd7 Build c
 - End every project-related assistant turn with exactly: `Done for this turn — you can prompt now.`
 ## Prometheus Reference
 
-Whenever the user says **Prometheus**, use this repository as the reference implementation:
+When the user says **Prometheus**, treat it as the local WeAreDevs obfuscator used by this project:
 
 ```text
-https://github.com/wcrddn/Prometheus
+C:\Users\reala\Desktop\!workspaces\promdeobf ova\wearedev obf
 ```
 
-Do not rely on vague recollection if exact Prometheus behavior matters. Inspect that repository when needed.
+Its compiler source is under `src/prometheus/compiler/compiler.lua`. Use this local implementation as the authority for exact VM/compiler behavior. Do not substitute the public `wcrddn/Prometheus` repository unless the user explicitly asks for the canonical/public implementation.
 
 ## Recommended Implementation Language
 
@@ -476,6 +476,8 @@ without producing unrelated locals.
 - Cross-state register lifetime proof is present in tracked fixtures. Sample 4 has a direct ordinary-register case: normalized state 2 assigns `Z = args[1]`, branches to state 3/4, and state 3 uses the same reaching definition in `state = L + Z` without redefining `Z`. Sample 6 has two such definition identities, including `c` defined in normalized state 2 and consumed in later states plus an upvalue-cell register `Z` allocated in state 5 and reused across later states. Current sample 7 has root-state definitions `O = 3` and `j = allocUpvalue()` in state 1 that reach state 3, where `O` is used by `print` and `j` is used for closure capture/release without redefinition. Samples 1-3 currently have no unique cross-state register definition/use cases. State boundaries therefore cannot be treated as register-scope boundaries.
 
 - Cross-state lifetime classification: this is not limited to conditional `if` branches. Sample 4 has (a) `choose`: state 2 defines `Z = args[1]`, then a branch carries it to state 3 where `Z` is used; (b) `spin`: state 6 defines `Z = args[1]`, then an unconditional jump goes to state 7 where `Z` is used as the loop bound and the same definition remains live across the later backedge `12 -> 7`; (c) `trim`: state 13 defines `Z = args[1]`, then unconditional jumps `13 -> 14 -> 15` carry it to the state-15 comparison, and the same definition survives the loop branch `15 -> 14`. Sample 6 inner `c` crosses the state-2 branch into either state 3 or 4; outer `Z = allocUpvalue()` is created in state 5, then survives both branch arms, the state-9/10 loop, and reaches state 11 closure creation. Sample 7 state 1 carries outer `O = 3` and captured-cell register `j` only along the fallthrough branch to state 3. Untracked sample 5 has 374 unique cross-state definition identities: 272 originate in branch-terminated states and 102 originate in unconditional-jump states (1,486 unique cross-state uses total). A `stop` block cannot originate a later-state use because there is no successor.
+- Local WeAreDevs compiler register-allocation proof: source locals are keyed by `(scope, id)` in `registersForVar`; `getVarRegister(scope, id, ...)` reuses the same reserved `VAR_REGISTER` for repeated reads/writes of that source binding while it is live. `allocRegister(true)` prevents another live variable from taking that occupied register. At lexical block cleanup, `compileBlock` emits `reg = nil` for ordinary locals (or calls the upvalue-release helper for captured locals), then `freeRegister(reg, true)` releases that register for later reuse. Therefore repeated writes to the same VM register can mean mutation of one source binding while its `(scope,id)` remains active, but the same physical register can later represent a different source binding after scope cleanup/release. A visible `reg = nil` is evidence of cleanup only when provenance proves it is the compiler's block-variable cleanup; temporary nil values also exist and must not be treated as scope ends blindly. Captured locals are stronger: the variable register holds an upvalue-cell ID and source assignments update `upvalueValues[cell]`, so a proven identical cell ID is a proven identical captured binding.
+
 
 ## Post-Step-3 VM Register Scheduling
 
@@ -493,6 +495,6 @@ without producing unrelated locals.
 3. For ordinary locals, build conservative register-value epochs from definition/use/liveness connectivity without merging sequential unrelated values. Current sample 7 is the focused conditional-shadowing/early-return regression: one path uses the branch-local `b = 2` and returns, while the fallthrough path uses outer `b = 3` and then a captured closure. Only promote a source local when function ownership, provenance, and lifetime proof are unique.
 4. Relate captured-cell candidates to source initialization/mutation patterns only after dominance/order proof is available; do not infer “initial write” from textual or block order across CFG joins.
 5. Continue CFG structuring separately: sample 4 remains the focused if/while/repeat regression, sample 6 the nested-function ownership regression, and untracked sample 5 the stress case. Preserve backedges and evaluation order.
-6. Keep POS-register temporary reuse distinct from true block terminators; extend Prometheus-specific recognition only from canonical compiler evidence.
+6. Keep POS-register temporary reuse distinct from true block terminators; extend Prometheus-specific recognition only from evidence in the local WeAreDevs compiler unless the user explicitly requests the public/canonical implementation.
 7. Keep every pass structural/generalized, reparse transformed Lua, runtime-check executable fixtures, and update/commit/push `CONTEXT.md` after meaningful work.
 8. If the current parser becomes a correctness blocker, evaluate Rust Moonlight instead of parser-specific hacks.
