@@ -4,6 +4,7 @@ const luaparse = require("./parser/luaparse");
 const { inlinePrometheusConstantArray } = require("./passes/constant-array");
 const { renameEnvironmentBinding } = require("./passes/environment");
 const { renameCreateClosureBinding } = require("./passes/closure-factory");
+const { renameVmHelperBindings } = require("./passes/vm-helpers");
 
 const ROOT = __dirname;
 const DEFAULT_INPUT = path.join(ROOT, "sample", "1.txt");
@@ -60,17 +61,21 @@ function runDeobfuscator(inputPath = DEFAULT_INPUT, outputPath = DEFAULT_OUTPUT)
     const createClosure = renameCreateClosureBinding(environment.source, environmentAst, "createClosure");
     if (createClosure.collision || createClosure.ambiguous) throw new Error(createClosure.reason);
 
-    const outputAst = parseLua(createClosure.source, outputPath);
-    const resolvedOutput = writeSource(createClosure.source, outputPath);
+    const createClosureAst = parseLua(createClosure.source, `${inputPath} <after createClosure rename>`);
+    const vmHelpers = renameVmHelperBindings(createClosure.source, createClosureAst, parseLua);
+
+    const outputAst = parseLua(vmHelpers.source, outputPath);
+    const resolvedOutput = writeSource(vmHelpers.source, outputPath);
 
     return {
         ...loaded,
         outputAst,
         outputPath: resolvedOutput,
-        outputSource: createClosure.source,
+        outputSource: vmHelpers.source,
         constantArray,
         environment,
         createClosure,
+        vmHelpers,
     };
 }
 
@@ -81,6 +86,7 @@ function main() {
     const constants = result.constantArray;
     const env = result.environment;
     const createClosure = result.createClosure;
+    const vmHelpers = result.vmHelpers;
 
     console.log(`Input: ${result.inputPath}`);
     console.log(`AST root: ${result.ast.type}`);
@@ -104,6 +110,18 @@ function main() {
     if (createClosure.found) {
         console.log(`CreateClosure rename: ${createClosure.oldName} -> ${createClosure.newName}`);
         console.log(`CreateClosure references renamed: ${createClosure.referencesRenamed}`);
+    }
+    console.log(`VM helper tracking found: ${vmHelpers.found}`);
+    if (vmHelpers.found) {
+        for (const item of vmHelpers.renamedRoles) {
+            console.log(`VM helper rename: ${item.oldName} -> ${item.newName} (${item.referencesRenamed} refs)`);
+        }
+        for (const item of vmHelpers.renamedParameters || []) {
+            console.log(`VM helper parameter: ${item.role}[${item.index}] ${item.oldName} -> ${item.newName} (${item.referencesRenamed} refs)`);
+        }
+        for (const item of vmHelpers.skippedRoles) {
+            console.log(`VM helper skipped: ${item.role}: ${item.reason}`);
+        }
     }
     console.log(`Output: ${result.outputPath}`);
     return result;
