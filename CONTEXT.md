@@ -173,6 +173,13 @@ Current implementation:
 - Existing untracked `sample/` content should not be modified unless explicitly needed.
 - sample\1.txt is the current normalized fixture copied byte-for-byte from ormater\out.txt; use it as the next-stage deobfuscation sample.
 
+## Constant Folding Step
+
+- `passes/constant-fold.js` performs semantics-safe folding of pure numeric/boolean/nil unary and binary expressions.
+- `main.js` now reads `sample\1.txt` by default, runs the fold pass, reparses the rewritten source for validation, and writes `output\01-constant-fold.lua`.
+- Synthetic verification folds examples such as `(2 + 3) * 4 -> 20`, `not false -> true`, and `-5 % 3 -> 1`.
+- The current normalized sample reports `0` folds because `luau-format --luraph` already removed all pure literal arithmetic; therefore step-1 output is intentionally byte-identical to `sample\1.txt`.
+
 ## Control-Flow Understanding
 
 Prometheus-style control-flow flattening should be modeled as a dispatcher/state machine.
@@ -383,13 +390,7 @@ without producing unrelated locals.
 
 # Immediate Next Steps
 
-The parser and inspection foundation is ready. Do not add broad recovery passes yet.
-
-Immediate task sequence:
-
-1. Keep `CONTEXT.md` synchronized after meaningful work and compact stale/superseded details.
-2. Wire the formatter input/output cleanly so `wearedev obf\input.txt.obfuscated.lua` can be normalized into `new promdeobf\formater\out.txt` reproducibly.
-3. Use `main.js` and `tools/inspect-lua.js` to study the normalized Prometheus output structurally before implementing recovery.
-4. Discuss and validate the user's intended base deobfuscation idea before choosing the first semantic pass.
-5. When scope/upvalue behavior matters, inspect `https://github.com/wcrddn/Prometheus` and model bindings/captures explicitly rather than guessing from register names.
-6. Keep transformations structural and generalized; no fixture/register hardcoding.
+1. Treat `output\01-constant-fold.lua` as the current stage output.
+2. Do not add another recovery pass until the user chooses the next deobfuscation step.
+3. Keep each new pass structural/generalized and reparse its output before advancing.
+4. Update `CONTEXT.md`, commit, and push every project change as a checkpoint.
