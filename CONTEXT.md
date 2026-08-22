@@ -39,6 +39,8 @@ https://github.com/GooseGoldenGoose/new-promdeobf.git
 - Build incrementally and add focused regressions for semantic rules.
 - Test each coherent change before continuing.
 - Treat `CONTEXT.md` as a live handoff: update it after meaningful decisions or implementation work, compact superseded detail, and remove stale topics that have not mattered for a while.
+- After every project change, even a small one, create a Git checkpoint commit and push it to origin/main.
+- At the end of every assistant turn, clearly state that the current work is done and the user can send the next prompt.
 ## Prometheus Reference
 
 Whenever the user says **Prometheus**, use this repository as the reference implementation:
