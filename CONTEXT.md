@@ -182,6 +182,7 @@ Current implementation:
 - `sample\1.txt`: 7 constants recovered and 10 references inlined with 0 unresolved wrapper/array uses.
 - `sample\2.txt`: 11 constants recovered and 14 references inlined with 0 unresolved wrapper/array uses.
 - `sample\3.txt` is a controlled scope/upvalue fixture: outer mutable `x`, shadowed block-local `x`, block-local `y`, and two closures (`inc`, `get`) sharing the captured outer `x`.
+- `sample\4.txt` is a controlled Medium-obfuscated CFG fixture with three closures sharing mutable `total`: `choose(n)` uses if/else, `spin(n)` uses a while loop with nested if/else, and `trim(limit)` uses repeat/until. ConstantArray recovery finds 13 entries and inlines 19 references with 0 unresolved wrapper/array uses.
 - Keep the current Luau parser while sufficient; Rust Moonlight is acceptable if parser limitations become a correctness blocker.
 
 ## Step 2: VM Wrapper Semantic Naming
@@ -196,24 +197,25 @@ Current implementation:
 - Helper parameters are also recovered where proven: `releaseUpvalue(upvalueId)`; proxy/GC helpers use `captures`; closure factories use `(entryId, captures)`.
 - Renaming is binding/scope-aware through `renameFunctionParameterBinding`; collisions are skipped/reported rather than forcing a textual rename.
 - `passes/split-safe-assignments.js` decomposes proven-safe parallel identifier assignments into one assignment per line. It currently permits anonymous function literals, primitive literals, empty table constructors, and signed numeric literals as RHS values; indexed LHS, calls/effectful expressions, local declarations, and other order-sensitive parallel assignments are preserved.
-- Current helper initialization splits: sample 1 -> 9 assignments, sample 2 -> 9 assignments, sample 3 -> 11 assignments. Sample 3 now emits readable statements such as `releaseUpvalue = function(...)`, `createUpvalueProxy = function(...)`, `vm = function(...)`, `upvalueValues = {}`, and `createClosure = function(...)`.
-- Full sample-folder validation covers `sample\1.txt`, `sample\2.txt`, and `sample\3.txt`; all pass ConstantArray + step-2 recovery and final output reparses.
+- Current helper initialization splits: sample 1 -> 9 assignments, sample 2 -> 9 assignments, sample 3 -> 11 assignments, sample 4 -> 12 assignments. Sample 3/4 emit readable helper assignments such as `releaseUpvalue = function(...)`, `createUpvalueProxy = function(...)`, `vm = function(...)`, `upvalueValues = {}`, and closure factories.
+- Full tracked validation covers `sample\1.txt` through `sample\4.txt`; all pass ConstantArray + step-2 recovery and final output reparses.
 - `sample\3.txt` runtime remains identical after semantic naming: `block 10 2`, `before 1`, `after 3 3`.
 - A fresh randomized Medium obfuscation of the same sample-3 source also passed. It changed bindings (for example environment `V`, general factory `O`, VM `W`, proxy `p`) and emitted fixed factories of arity 2 and 5 instead of the tracked fixture's 0 and 1; the pass recovered `createClosure2` / `createClosure5` structurally and the transformed output produced the same runtime result.
-- `main.js` reparses between semantic naming stages and writes `output\1.lua`, `output\2.lua`, or `output\3.lua` when invoked with the corresponding sample/output paths.
+- `main.js` reparses between semantic naming stages and writes stable outputs `output\1.lua` through `output\4.lua` when invoked with the corresponding sample/output paths.
 
 ## Beta Entry-State Recovery
 
-- Experimental state/CFG recovery stays separate from normal step 2; `output\1.lua`, `output\2.lua`, and `output\3.lua` remain stable baseline outputs. Backup tag `backup-before-entry-beta-20260822` points to pre-beta commit `1acf424`.
+- Experimental state/CFG recovery stays separate from normal step 2; `output\1.lua` through `output\4.lua` remain stable baseline outputs. Backup tag `backup-before-entry-beta-20260822` points to pre-beta commit `1acf424`.
 - `passes/entry-state-beta.js` finds the semantic `vm`, root `createClosure(<entry>, ...)`, all `createClosureN(<entry>, ...)` calls, and `while state do`; state IDs and closure arities are discovered structurally.
 - Dispatcher leaves are resolved by evaluating Prometheus nested numeric comparison trees for a candidate state ID. The beta walker then follows numeric POS-register terminators: `state = N` is a jump and `state = condition and A or B` is a branch.
 - Critical rule: Prometheus can temporarily reuse `POS_REGISTER` as an ordinary register, so not every assignment to renamed `state` is a jump. The walker treats the final write to the POS/state binding in a dispatcher block as its control-flow terminator.
 - Graph walking uses a visited set, so loop back-edges are retained without infinite analysis. Closure-created entry IDs are separate graph roots, not CFG successors unless an actual state transition targets them.
-- When every dispatcher leaf has a discovered state ID, beta output replaces the binary/range comparison dispatcher with explicit `if state == ID / elseif ...` cases and no original-tree fallback. Incomplete mappings retain the original dispatcher only for unresolved states.
-- All three tracked beta outputs are generated: `output\1.beta.lua`, `output\2.beta.lua`, and `output\3.beta.lua`.
+- When every dispatcher leaf has a discovered state ID, beta output removes the binary/range comparison tree and groups states by reachable closure-entry graph. An outer branch uses exact state-membership (`state == entry or state == successor ...`) and multi-state groups contain an inner exact-state dispatcher. Exact membership is used instead of arbitrary numeric ranges because Prometheus state IDs are randomized and ordering has no semantic meaning. Incomplete mappings retain the original dispatcher only for unresolved states.
+- All four tracked beta outputs are generated: `output\1.beta.lua` through `output\4.beta.lua`.
 - `output\1.beta.lua`: root `1383946`, 1/1 dispatcher block mapped, runtime `AD`, exit 0.
 - `output\2.beta.lua`: root `8945882`, 3/3 dispatcher blocks mapped. CFG: `8945882 -> 15467310 / 9224212`, `15467310 -> 9224212`, `9224212 -> stop`. With a minimal Roblox compatibility shim (`warn = print`) and the same fixed RNG seed, stable and beta both print `gg`, `ranf`, exit 0.
 - `output\3.beta.lua`: all 3/3 blocks mapped. Root `2815217` ends in the generated stop sentinel and has no numeric successor; `9377191` (`createClosure1`) and `394074` (`createClosure0`) are separate closure roots. Runtime remains `block 10 2`, `before 1`, `after 3 3`, exit 0.
+- `output\4.beta.lua`: all 16/16 dispatcher blocks mapped into four graph roots. Root `11880897` creates the three closures and stops. `choose` entry `6182694` owns 4 states with a two-way branch merging at `11830003`; `spin` entry `10282259` owns 7 states including loop back-edge `16480121 -> 14232766`; `trim` entry `4023829` owns 4 states with repeat back-edge `7764720 -> 11121242`. Controlled source, stable output, and beta output all print `start 0`, `choose 5`, `spin 10`, `trim 2`, exit 0.
 - A temporary controlled `while` + nested `if` Prometheus fixture resolved 6/6 blocks including the back-edge `9514929 -> 10936248`; stable and beta both printed `mid`, `done 3`, exit 0.
 - `tools/resolve-entry-beta.js` prints each graph root, state terminator, dispatcher path, leaf coverage, and writes the beta output.
 ## Control-Flow Understanding
@@ -427,7 +429,7 @@ without producing unrelated locals.
 # Immediate Next Steps
 
 1. Keep stable step-2 outputs separate from beta CFG/state recovery.
-2. Use the beta state graphs as the basis for per-function CFG recovery and later source-level `if`/loop structuring; do not merge separate closure roots merely because their bodies match.
+2. Use sample 4 grouped entry graphs as the primary CFG regression for later source-level `if`/loop/repeat structuring; do not merge separate closure roots merely because their bodies match.
 3. Keep POS-register temporary reuse distinct from true block terminators; extend terminator recognition only from proven Prometheus compiler patterns.
 4. Keep each pass structural/generalized and reparse/runtime-check transformed outputs before advancing.
 5. If the current parser becomes a correctness blocker, evaluate Rust Moonlight instead of parser-specific hacks.
