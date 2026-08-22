@@ -182,6 +182,7 @@ Current implementation:
 - Current fixture result: 7 constants recovered, rotation applied, strings decoded, 10 references inlined, 0 unresolved wrapper/array uses, and the dead ConstantArray prelude removed.
 - Current recovered constants are `__index`, `print`, `__len`, `AD`, `uDe20wqvE6Bx`, `unpack`, and `__gc`.
 - `sample\2.txt` is a second normalized Medium-preset fixture generated from `warn("gg")` plus `if math.random(1, 2) == 1 then print("ranf") end`.
+- The deobfuscated output for sample 2 is named `output\2.lua`.
 - The ConstantArray pass also succeeds on `sample\2.txt`: 11 constants recovered, 14 references inlined, rotation and string decoding applied, 0 unresolved wrapper/array uses, and the dead prelude removed.
 - Keep the current Luau parser while it remains sufficient; switching the parser layer to Rust Moonlight is acceptable if parser limitations begin blocking correct structural recovery.
 
