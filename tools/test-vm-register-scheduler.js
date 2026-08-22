@@ -116,4 +116,17 @@ function schedule(source) {
     assert.ok(out.includes('X = 2'), 'unread write was deleted instead of scheduled');
 }
 
+
+{
+    const source = [
+        'A = 1',
+        'C = A',
+        'X = 2',
+        'state = nil',
+    ].join("\n");
+    const out = schedule(source);
+    assert.strictEqual(out[out.length - 1], 'state = nil', 'canonical stop anchor did not remain last');
+    assert.ok(out.indexOf('X = 2') < out.indexOf('state = nil'), 'unread write moved past canonical stop anchor');
+}
+
 console.log("vm register scheduler regression: ok");

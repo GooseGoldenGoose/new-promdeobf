@@ -612,15 +612,37 @@ function applyRangeEdits(text, baseOffset, edits) {
     return output;
 }
 
+function isSingleCanonicalStopStatement(block, stateName) {
+    const term = block?.terminator;
+    if (term?.kind !== "stop" || term.statementIndex < 0) return false;
+    const statement = block.body?.[term.statementIndex];
+    if (statement?.type !== "AssignmentStatement") return false;
+    const variables = statement.variables || [];
+    const init = statement.init || [];
+    return variables.length === 1 && init.length === 1 &&
+        isIdentifier(variables[0], stateName) && isCanonicalStopSentinel(init[0]);
+}
+
 function renderNormalizedBlock(source, block, stateName, stateMap, indent) {
     if (!block?.body?.length) return `${indent}${stateName} = nil`;
     const termEdits = collectTerminatorEdits(block, stateName, stateMap);
-    return block.body.map(statement => {
+    const relocateStop = isSingleCanonicalStopStatement(block, stateName);
+    const stopIndex = relocateStop ? block.terminator.statementIndex : -1;
+    const lines = [];
+
+    for (let i = 0; i < block.body.length; i++) {
+        if (i === stopIndex) continue;
+        const statement = block.body[i];
         const edits = collectClosureEntryEdits(statement, stateMap, []).concat(termEdits);
         const raw = sourceOf(source, statement);
         const patched = applyRangeEdits(raw, statement.range[0], edits);
-        return indentText(patched, indent);
-    }).join("\n");
+        lines.push(indentText(patched, indent));
+    }
+
+    // A proven canonical stop is compiler control-flow scaffolding. Recover its
+    // semantic value directly and place it at the actual end of the state body.
+    if (relocateStop) lines.push(`${indent}${stateName} = nil`);
+    return lines.join("\n");
 }
 
 function renderInvalidLeaf(lines, stateName, indent) {

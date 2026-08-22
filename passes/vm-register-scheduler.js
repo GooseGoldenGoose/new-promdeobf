@@ -215,7 +215,21 @@ function sinkUnreadPureAssignmentsToStateTail(statements, stateName) {
         // to the actual end of the dispatcher leaf. Prometheus may write the
         // next POS/state value early and still execute later statements, so a
         // state assignment is not a textual end-of-block boundary.
-        const targetIndex = nextWrite >= 0 ? nextWrite : statements.length;
+        let targetIndex = nextWrite >= 0 ? nextWrite : statements.length;
+
+        // After Step 3, a proven Prometheus stop is canonicalized to a final
+        // state = nil. Keep that structural stop as the last statement and sink
+        // unread pure writes immediately before it, not past it.
+        if (nextWrite < 0 && statements.length > 0) {
+            const tail = statements[statements.length - 1];
+            const tailVars = tail?.type === "AssignmentStatement" ? (tail.variables || []) : [];
+            const tailInit = tail?.type === "AssignmentStatement" ? (tail.init || []) : [];
+            if (tailVars.length === 1 && tailInit.length === 1 &&
+                isIdentifier(tailVars[0], stateName) && tailInit[0]?.type === "NilLiteral") {
+                targetIndex = statements.length - 1;
+            }
+        }
+
         if (targetIndex <= fromIndex + 1) continue;
 
         if (!canMoveDelayableRightAcrossRange(statements, fromIndex, targetIndex - 1, stateName)) continue;

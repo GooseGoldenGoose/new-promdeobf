@@ -18,7 +18,9 @@ const source = [
     "    while state do",
     "        if state <= 1 then",
     "            if state == 1 then",
-    "                state = nil",
+    "                A = f()",
+    "                state = _env[\"ABCDEFGHIJKL\"]",
+    "                B = g()",
     "            else",
     "                state = nil",
     "            end",
@@ -51,5 +53,10 @@ assert.strictEqual(result.ignoredUnreachableClosureEntryCount, 1, "dead closure 
 assert.ok(result.prunedDispatcherLeafCount >= 2, "dead dispatcher leaves were not pruned");
 assert.ok(!result.source.includes("state == 99"), "dead state 99 survived output");
 assert.ok(!result.source.includes("createClosure1(100"), "closure call from dead state survived output");
+assert.ok(!result.source.includes('_env["ABCDEFGHIJKL"]'), "canonical stop sentinel survived normalization");
+const aPos = result.source.indexOf("A = f()");
+const bPos = result.source.indexOf("B = g()");
+const stopPos = result.source.indexOf("state = nil", bPos);
+assert.ok(aPos >= 0 && bPos > aPos && stopPos > bPos, "canonical stop was not relocated to the state-body tail");
 
 console.log("vm state reachability regression: ok");
