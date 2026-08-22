@@ -30,7 +30,7 @@ When continuing this project in a new chat:
 - Preserve stable pipeline behavior when experimenting. A recovery pass must fail closed: if proof is incomplete, preserve the previous safe output rather than guess.
 - End every project-related turn with exactly: `Done for this turn — you can prompt now.`
 
-Current implementation checkpoint before this handoff update is `2ae4bd7 Build captured cell binding candidates`; Step 3 state recovery/normalization remains the emitted-source boundary, and Step 4 now builds analysis-only function/definition/liveness/cell-binding proof on top of the proven CFG. Samples 4, 6, and 7 remain focused CFG/closure/scope regressions; untracked sample 5 remains the large 930-state stress regression.
+Current implementation checkpoint is `7442545 Document overflow register scheduling` on `main`, pushed to `origin/main`. The active emitted pipeline includes structural helper/environment naming, safe assignment splitting, closed reachable VM-state normalization, analysis-only VM binding/capture metadata, dependency-safe scalar + proven-overflow register scheduling, VM register naming (`ReturnVal`, `rN`), and structural semantic naming (`InitialArgs`, helper locals, fixed closure args, `RegisterOverflow`). Source lexical-scope reconstruction has NOT been implemented yet.
 
 # Core Knowledge & Rules
 
@@ -559,3 +559,107 @@ without producing unrelated locals.
 6. Keep POS-register temporary reuse distinct from true block terminators; extend Prometheus-specific recognition only from evidence in the local WeAreDevs compiler unless the user explicitly requests the public/canonical implementation.
 7. Keep every pass structural/generalized, reparse transformed Lua, runtime-check executable fixtures, and update/commit/push `CONTEXT.md` after meaningful work.
 8. If the current parser becomes a correctness blocker, evaluate Rust Moonlight instead of parser-specific hacks.
+## Fresh Chat Resume Snapshot (2026-08-23)
+
+### Authoritative workspace / Git
+
+- Workspace: `C:\Users\reala\Desktop\!workspaces\promdeobf ova\new promdeobf`.
+- Branch: `main`.
+- Remote: `https://github.com/GooseGoldenGoose/new-promdeobf.git`.
+- Latest pushed checkpoint at this snapshot: `7442545 Document overflow register scheduling`.
+- Immediately preceding implementation commit: `b7f6185 Schedule overflow VM registers`.
+- Before changing anything in a new chat: read this entire `CONTEXT.md`, run `git status --short --branch`, then `git log -8 --oneline --decorate`. Never assume the checkout is still at this exact commit if newer work exists.
+- Every project code/content change, even small, gets a focused commit and `git push origin main`. Stage only files belonging to the current change.
+- Never stage or modify `formater/` or `sample/5.txt` unless the user explicitly changes that policy. Generated `output/*.log` files may exist from validation and must not be committed accidentally.
+- If the user asks for a risky/broad refactor, create and push a checkpoint BEFORE doing it when requested, then make the refactor in separate focused commits.
+- End every project-related assistant turn exactly with: `Done for this turn — you can prompt now.`
+
+### Prometheus authority / fixture workflow
+
+- In this project, “Prometheus” means the LOCAL WeAreDevs compiler at `C:\Users\reala\Desktop\!workspaces\promdeobf ova\wearedev obf`; compiler authority is `src\prometheus\compiler\compiler.lua`. Do not substitute public/canonical Prometheus unless explicitly requested.
+- Controlled fixtures MUST follow: readable `sample/N.source.lua` -> local WeAreDevs Medium -> `formater/luau-format.exe input.txt --luraph --output=out.txt` -> tracked `sample/N.txt` -> `node main.js sample/N.txt output/N.lua`.
+- Use the absolute LuaJIT path when needed: `C:\Users\reala\AppData\Local\Programs\LuaJIT\bin\luajit.exe`.
+- Compiler instrumentation is allowed only as an in-memory/development probe; do not modify the authoritative compiler file as part of the deobfuscator.
+
+### Non-negotiable design rules
+
+- Everything must be structural/generalized/dynamic. Never hardcode sample filenames, random generated names, state IDs, register spellings, string constants, closure arities, offsets, or fixture-specific behavior.
+- Fix the earliest AST/CFG/data-flow cause. Do not patch final emitted text to conceal a bad analysis.
+- Preserve evaluation order, calls, multi-return behavior, lexical ownership, globals, object/table identity, loops, closure capture semantics, mutations, and upvalue-cell sharing.
+- Globals remain globals unless proven lexical. Do not invent aliases for `game`, `table.insert`, etc.
+- Any uncertain transform fails closed and preserves the previous safe source.
+- Parsing successfully is insufficient: reparse transformed Lua and run runtime/source parity wherever possible.
+
+### Current pipeline
+
+1. Parse Luau.
+2. ConstantArray recovery/inlining.
+3. Environment provenance/rename to `_env`.
+4. Structural closure-factory naming: `createClosure`, `createClosureN`.
+5. VM helper naming: `unpack`, `newproxy`, `setmetatable`, `getmetatable`, `select`, `vm`, upvalue helpers/tables and semantic parameters.
+6. Split only proven-safe parallel assignments.
+7. Step 3 VM-state/CFG recovery: reachability-driven roots, closed graph proof, dead-state pruning, contiguous normalized IDs, balanced dispatcher rendering, canonical stop `state = nil` at actual leaf tail, no normalized invalid/unreachable fallback.
+8. Step 4 VM binding/capture analysis: analysis-only reaching definitions, liveness, definition epochs, capture slots, static upvalue-cell identities, relays, binding-end/ownership-handoff candidates.
+9. Dependency-safe VM register scheduling inside normalized leaves.
+10. VM register presentation naming: the VM’s own final `return unpack(R)` identifies that VM-local binding as `ReturnVal`; every use/write of that same binding inside `vm` is renamed consistently. Other scalar VM registers become deterministic `r1`, `r2`, ... . Same-spelled identifiers outside `vm` are untouched.
+11. Structural semantic naming: wrapper original vararg table -> `InitialArgs`; closure helper locals -> `gcProxy` / `closure`; fixed closure parameters -> `arg1..argN`; `releaseUpvalues` locals -> `captureIndex` / `upvalueId`; proxy helper locals -> `proxy` / `proxyMetatable`; proven overflow bank -> `RegisterOverflow`.
+12. Final reparse and output.
+
+### State / scheduler facts that must not regress
+
+- The compiler’s POS/state register has two roles: expression temporary and dispatcher program counter. A plain `state = value` is NOT automatically a terminator.
+- Only proven final POS/state transitions determine CFG edges. Canonical `setPos(nil)` random `_env[12..14 alphanumeric]` is an obfuscated stop and Step 3 normalizes it to final `state = nil` at the actual end of the state body.
+- Reachability starts from the real root; closure entries are discovered only from reachable states. Dead states cannot “rescue” dead child closures.
+- Reachable graph walk uses Set/Map + cursor queues; pruning traversal is O(V+E) apart from dispatcher-leaf resolution/rendering.
+- Scheduler NEVER deletes stores. It moves only proven pure register assignments through RAW/WAR/WAW-safe crossings and validates every reordered segment fail-closed.
+- Unread pure writes sink toward the actual dispatcher-leaf tail; the final canonical `state = nil` remains the last stop anchor.
+- Scalar scheduler reads/writes are cached per statement.
+- Proven overflow register banks now participate in exactly the same scheduling logic as scalar registers. Detection is structural BEFORE the semantic name `RegisterOverflow` exists: unique empty-table VM bank before scalar declaration; every bank reference must be a positive constant numeric index; no alias/bare use/dynamic index/shadowing. Each slot is an internal identity such as `overflow:1`. Ordinary tables remain conservative.
+
+### Current overflow proof / sample 10
+
+- `sample/10.source.lua` and `sample/10.txt` are the tracked NATURAL overflow regression: 110 ordinary source locals in one lexical scope; no synthetic VM/table code.
+- Compiler probe proves `v98 -> physical register 99` stays scalar; `v99 -> register 100 -> RegisterOverflow[1]`, through `v110 -> register 111 -> RegisterOverflow[12]`.
+- Later compiler temporaries naturally use additional overflow slots.
+- Runtime parity source/obfuscated/deobfuscated: `overflow-test 1001 1098 1099 1100 1101 1110`.
+- Scheduler currently detects 19 used overflow slots in sample 10 and performs overflow-aware compaction; sample 5 detects 62 used slots.
+- IMPORTANT CURRENT GAP: Step-4 reaching-definition/liveness/binding analysis still models scalar identifier registers only. It does NOT yet normalize `RegisterOverflow[k]` slots into definition/use identities. Runtime/emitted Lua is correct; source-binding analysis for overflow-backed locals is incomplete. If implementing this later, reuse the same structural bank detector and model scalar + overflow storage under one VMRegister identity abstraction. Do not treat arbitrary tables as registers.
+
+### Current scope status — DO NOT assume implementation
+
+- The user explicitly said NOT to implement scope recovery yet; the discussion was conceptual only.
+- No source lexical-scope reconstruction pass should be claimed as implemented.
+- What IS known for future work: physical VM register != source variable identity. Dispatcher states are CFG blocks, not lexical scopes. Same source local uses one reserved VAR_REGISTER while alive; compiler cleanup then force-frees it and later bindings can reuse the physical register. `R=nil` alone is never enough to prove scope end. Captured locals use shared upvalue-cell identity, which is stronger proof.
+- Do not use normalized `rN` names, dispatcher nesting, or adjacency as source-scope evidence.
+
+### Fixtures / key validations
+
+- Sample 4: if/while/repeat CFG and shared mutable capture.
+- Sample 6: nested function ownership root -> outer -> inner; runtime `theory 8 10 5`.
+- Sample 7: conditional shadowing + early return + captured closure; deterministic seeds 1 and 3 both parity-tested.
+- Sample 8: ordinary register cleanup/ownership handoff; proves explicit source nil vs compiler cleanup distinction.
+- Sample 9: `local x` / `local y=nil` initialization via special temp + copy; prevents classifying every direct nil as scope cleanup.
+- Sample 10: natural overflow storage boundary and overflow-aware scheduler regression.
+- Untracked sample 5: stress fixture, 938 dispatcher leaves total, 930 reachable, 8 dead pruned, 116 recovered functions. Current overflow-aware scheduling uses 62 slots and ~146,664 dependency-safe crossings with no safety rejection. Step-4 sample-5 cell graph remains intentionally fail-closed where provenance is incomplete.
+- Samples without overflow (1-4, 6-9) remained byte-identical when overflow scheduling was added. Runtime parity covers 1/2/3/4/6/8/9/10 plus sample-7 seeds 1 and 3; source/deobf parity covers controlled source fixtures including 6/7/8/9/10.
+
+### Performance history / boundary
+
+- Pre-audit sample-5 core pipeline was measured around 10.22s. Hot-path optimization (single-pass text edits, batch helper renames, AST reuse, cached scheduler read/write sets, safer metadata construction) reduced it to roughly 1.10s median before later semantic/overflow scheduling additions.
+- Overflow-aware scheduler adds real work on overflow-heavy sample 5; recent measured average was around 1.79s. Do not remove dependency checks just to recover benchmark time.
+- Existing reaching-def/liveness fixed points already converge in few iterations; do not rewrite them without a separate proof/benchmark.
+
+### Most recent commits to recognize
+
+`db021b3 Normalize VM register names`
+`fd6a359 Document VM register naming`
+`638cca8 Track semantic VM names`
+`6e76c14 Document semantic VM naming`
+`d6a96bd Add natural register overflow regression`
+`0b60f90 Record overflow regression`
+`b7f6185 Schedule overflow VM registers`
+`7442545 Document overflow register scheduling`
+
+### New-chat operating instruction
+
+When the user pastes the resume prompt from this snapshot, do NOT merely summarize it. First read `CONTEXT.md`, inspect Git status/log, and then continue the user’s new requested task by actually editing/testing/committing/pushing as needed. Never ask them to repeat information already in this file.
