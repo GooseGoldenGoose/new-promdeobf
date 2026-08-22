@@ -249,102 +249,7 @@ function resolveDispatcherBody(body, stateName, entryId, source, path) {
     return current;
 }
 
-function resolveFirstEntryStateBeta(source, ast) {
-    const vm = findVmFunction(ast);
-    if (!vm) {
-        return {
-            source,
-            found: false,
-            reason: "No semantically named vm function was found",
-        };
-    }
-
-    const params = vm.functionNode.parameters || [];
-    const stateParameter = params[0];
-    if (!isIdentifier(stateParameter)) {
-        return {
-            source,
-            found: false,
-            reason: "VM state parameter is not an identifier",
-        };
-    }
-
-    const rootEntry = findRootEntry(ast);
-    if (!rootEntry) {
-        return {
-            source,
-            found: false,
-            reason: "No root createClosure(<numeric entry>, ...) invocation was found",
-        };
-    }
-
-    const stateWhile = findStateWhile(vm.functionNode, stateParameter.name);
-    if (!stateWhile) {
-        return {
-            source,
-            found: false,
-            entryId: rootEntry.entryId,
-            reason: "No while <state> VM dispatcher was found",
-        };
-    }
-
-    const path = [];
-    const resolvedBody = resolveDispatcherBody(
-        stateWhile.body || [],
-        stateParameter.name,
-        rootEntry.entryId,
-        source,
-        path,
-    );
-
-    if (!resolvedBody.length) {
-        return {
-            source,
-            found: false,
-            entryId: rootEntry.entryId,
-            reason: "The root entry state resolved to an empty dispatcher region",
-        };
-    }
-
-    const indent = lineIndentAt(source, stateWhile.range[0]);
-    const bodyIndent = indent + "    ";
-    const branchIndent = bodyIndent + "    ";
-    const entryRaw = sourceOf(source, rootEntry.entryNode) || String(rootEntry.entryId);
-
-    const resolvedText = renderStatements(source, resolvedBody, branchIndent);
-    const fallbackText = renderStatements(source, stateWhile.body || [], branchIndent);
-    const pathText = path.length ? path.join(" | ") : "direct dispatcher body";
-
-    const replacement = [
-        `while ${stateParameter.name} do`,
-        `${bodyIndent}-- beta: resolved root entry state ${entryRaw}`,
-        `${bodyIndent}-- beta dispatcher path: ${pathText}`,
-        `${bodyIndent}if ${stateParameter.name} == ${entryRaw} then`,
-        resolvedText,
-        `${bodyIndent}else`,
-        fallbackText,
-        `${bodyIndent}end`,
-        `${indent}end`,
-    ].join("\n");
-
-    const output =
-        source.slice(0, stateWhile.range[0]) +
-        replacement +
-        source.slice(stateWhile.range[1]);
-
-    return {
-        source: output,
-        found: true,
-        entryId: rootEntry.entryId,
-        entryRaw,
-        path,
-        resolvedStatementCount: resolvedBody.length,
-        originalDispatcherStatementCount: (stateWhile.body || []).length,
-        vmRange: vm.functionNode.range,
-        whileRange: stateWhile.range,
-    };
-}
-function isClosureFactoryName(name) {
+function isClosureFactoryName(name) {
     return typeof name === "string" && /^createClosure(?:\d+)?$/.test(name);
 }
 
@@ -467,26 +372,54 @@ function walkStateGraph(dispatcherBody, stateName, rootId, source) {
     return { rootId, blocks, order };
 }
 
-function renderExplicitDispatcher(source, stateWhile, stateName, blocks, orderedIds, complete) {
+function renderStateMembership(stateName, ids) {
+    return ids.map(id => `${stateName} == ${id}`).join(" or ");
+}
+
+function renderGroupedDispatcher(source, stateWhile, stateName, graphRoots, blocks, complete) {
     const indent = lineIndentAt(source, stateWhile.range[0]);
     const bodyIndent = indent + "    ";
-    const caseIndent = bodyIndent + "    ";
+    const groupIndent = bodyIndent + "    ";
+    const caseIndent = groupIndent + "    ";
     const lines = [`while ${stateName} do`];
+    const assigned = new Set();
+    let groupIndex = 0;
 
-    orderedIds.forEach((id, index) => {
-        const block = blocks.get(id);
-        lines.push(`${bodyIndent}${index === 0 ? "if" : "elseif"} ${stateName} == ${id} then`);
-        if (block?.body?.length) lines.push(renderStatements(source, block.body, caseIndent));
-        else lines.push(`${caseIndent}${stateName} = nil`);
-    });
+    for (const root of graphRoots) {
+        const ids = root.graph.order.filter(id => blocks.has(id) && !assigned.has(id));
+        if (!ids.length) continue;
+        for (const id of ids) assigned.add(id);
 
-    lines.push(`${bodyIndent}else`);
+        const keyword = groupIndex === 0 ? "if" : "elseif";
+        const label = root.kind === "root"
+            ? `root entry ${root.entryId}`
+            : `${root.factory} entry ${root.entryId}`;
+        lines.push(`${bodyIndent}${keyword} ${renderStateMembership(stateName, ids)} then -- beta: ${label}`);
+
+        if (ids.length === 1) {
+            const block = blocks.get(ids[0]);
+            if (block?.body?.length) lines.push(renderStatements(source, block.body, groupIndent));
+            else lines.push(`${groupIndent}${stateName} = nil`);
+        } else {
+            ids.forEach((id, index) => {
+                const block = blocks.get(id);
+                const entryComment = id === root.entryId ? " -- entry" : "";
+                lines.push(`${groupIndent}${index === 0 ? "if" : "elseif"} ${stateName} == ${id} then${entryComment}`);
+                if (block?.body?.length) lines.push(renderStatements(source, block.body, caseIndent));
+                else lines.push(`${caseIndent}${stateName} = nil`);
+            });
+            lines.push(`${groupIndent}end`);
+        }
+        groupIndex++;
+    }
+
+    lines.push(`${bodyIndent}${groupIndex === 0 ? "if true then" : "else"}`);
     if (complete) {
-        lines.push(`${caseIndent}-- beta: invalid/unreachable VM state`);
-        lines.push(`${caseIndent}${stateName} = nil`);
+        lines.push(`${groupIndent}-- beta: invalid/unreachable VM state`);
+        lines.push(`${groupIndent}${stateName} = nil`);
     } else {
-        lines.push(`${caseIndent}-- beta: unresolved state, keep original dispatcher behavior`);
-        lines.push(renderStatements(source, stateWhile.body || [], caseIndent));
+        lines.push(`${groupIndent}-- beta: unresolved state, keep original dispatcher behavior`);
+        lines.push(renderStatements(source, stateWhile.body || [], groupIndent));
     }
     lines.push(`${bodyIndent}end`);
     lines.push(`${indent}end`);
@@ -547,7 +480,7 @@ function resolveEntryStateGraphBeta(source, ast) {
         for (const id of root.graph.order) if (!orderedIds.includes(id)) orderedIds.push(id);
     }
 
-    const replacement = renderExplicitDispatcher(source, stateWhile, stateName, allBlocks, orderedIds, complete);
+    const replacement = renderGroupedDispatcher(source, stateWhile, stateName, graphRoots, allBlocks, complete);
     const output = source.slice(0, stateWhile.range[0]) + replacement + source.slice(stateWhile.range[1]);
 
     return {
