@@ -1,0 +1,250 @@
+return (function(...)
+    local x = {
+        "XV/uzd1/ulm+pv07Xz==",
+        "HvlMqiu=",
+        "V3r8Ndk=",
+        "HvlMqiT=",
+        "V3rWjZ==",
+        "pdcZjd1f",
+        "HvlMqiI=",
+        "qB/e9Wz=",
+        "jdN7NVI=",
+        "V3re9GmM5U==",
+        "HdcsNVI="
+    }
+    for w, s in ipairs({
+        {
+            1,
+            11
+        },
+        {
+            1,
+            10
+        },
+        {
+            11,
+            11
+        }
+    }) do
+        while s[1] < s[2] do
+            x[s[1]], x[s[2]], s[1], s[2] = x[s[2]], x[s[1]], s[1] + (1), s[2] - (1)
+        end
+    end
+    local function w(w)
+        return x[w + (17162)]
+    end
+    do
+        local w = string.sub
+        local s = type
+        local Y = string.len
+        local a = string.char
+        local d = table.insert
+        local E = x
+        local v = math.floor
+        local l = {
+            A = 35,
+            ["1"] = 13,
+            ["6"] = 2,
+            ["2"] = 10,
+            ["7"] = 52,
+            W = 39,
+            N = 25,
+            ["3"] = 53,
+            Q = 20,
+            ["4"] = 63,
+            X = 19,
+            y = 31,
+            l = 21,
+            z = 16,
+            ["+"] = 49,
+            U = 0,
+            ["0"] = 45,
+            o = 58,
+            Y = 33,
+            E = 11,
+            w = 50,
+            g = 40,
+            T = 4,
+            F = 51,
+            s = 46,
+            S = 18,
+            ["8"] = 44,
+            t = 15,
+            B = 7,
+            H = 26,
+            x = 47,
+            ["5"] = 30,
+            f = 43,
+            q = 28,
+            R = 55,
+            j = 24,
+            b = 36,
+            n = 62,
+            e = 41,
+            M = 37,
+            ["/"] = 9,
+            Z = 48,
+            u = 12,
+            m = 17,
+            L = 59,
+            P = 34,
+            i = 3,
+            I = 8,
+            h = 14,
+            c = 57,
+            d = 22,
+            k = 56,
+            G = 38,
+            J = 42,
+            O = 5,
+            p = 29,
+            r = 61,
+            V = 23,
+            D = 6,
+            ["9"] = 27,
+            a = 1,
+            K = 32,
+            C = 60,
+            v = 54
+        }
+        local j = table.concat
+        for x = 1, #E, 1 do
+            local e = E[x]
+            if s(e) == "string" then
+                local s = Y(e)
+                local i = {}
+                local D = 1
+                local z = 0
+                local G = 0
+                while D <= s do
+                    local x = w(e, D, D)
+                    local Y = l[x]
+                    if Y then
+                        z = z + Y * (64) ^ ((3) - G)
+                        G = G + (1)
+                        if G == 4 then
+                            G = 0
+                            local x = v(z / (65536))
+                            local w = v((z % (65536)) / (256))
+                            local s = z % (256)
+                            d(i, a(x, w, s))
+                            z = 0
+                        end
+                    elseif x == "=" then
+                        d(i, a(v(z / (65536))))
+                        if D >= s or w(e, D + (1), D + (1)) ~= "=" then
+                            d(i, a(v((z % (65536)) / (256))))
+                        end
+                        break
+                    end
+                    D = D + (1)
+                end
+                E[x] = j(i)
+            end
+        end
+    end
+    return (function(x, Y, a, d, E, v, l, D, B, j, s, z, i, e, F, G)
+        e, D, i, s, F, G, z, B, j = {}, 0, function()
+            D = (1) + D
+            e[D] = 1
+            return D
+        end, function(s, a, d, E)
+            local F, l, I, B, N, j, D, z, e, i, G
+            while s do
+                s = 10
+                e = s
+                l = 1
+                s = e + l
+                i = w(-17155)
+                j = a
+                e = s
+                B = w(-17155)
+                D = w(-17159)
+                N = w(-17154)
+                l = x[i]
+                i = l(D, e)
+                G = w(-17156)
+                l = nil
+                s = x[w(-17151)]
+                e = l
+                z = w(-17155)
+                D = x[z]
+                l = {}
+                i = 12
+                e = i
+                F = w(-17152)
+                z = D(G, e)
+                D = 20
+                G = 2
+                z = D + G
+                G = x[B]
+                D = z
+                B = G(F, D)
+                F = w(-17155)
+                D = nil
+                D = 30
+                B = 3
+                G = D + B
+                D = G
+                I = w(-17161)
+                B = x[F]
+                F = B(N, D)
+                D = nil
+                N = w(-17155)
+                F = 4
+                B = e + F
+                F = x[N]
+                e = B
+                N = F(I, e)
+                e = nil
+            end
+            s = #E
+            return Y(l)
+        end, function(x, w)
+            local Y = z(w)
+            local a = function(...)
+                return s(x, {
+                    ...
+                }, w, Y)
+            end
+            return a
+        end, function(x)
+            local w, s = 1, x[1]
+            while s do
+                e[s], w = e[s] - (1), w + (1)
+                if 0 == e[s] then
+                    e[s], j[s] = nil, nil
+                end
+                s = x[w]
+            end
+        end, function(x)
+            for w = 1, #x, 1 do
+                e[x[w]] = (1) + e[x[w]]
+            end
+            if a then
+                local s = a(true)
+                local Y = E(s)
+                Y[w(-17153)], Y[w(-17158)], Y[w(-17160)] = x, G, function()
+                    return 253695
+                end
+                return s
+            else
+                return d({}, {
+                    [w(-17158)] = G,
+                    [w(-17153)] = x,
+                    [w(-17160)] = function()
+                        return 253695
+                    end
+                })
+            end
+        end, function(x)
+            e[x] = e[x] - (1)
+            if e[x] == 0 then
+                e[x], j[x] = nil, nil
+            end
+        end, {}
+        return (F(2936776, {}))(Y(l))
+    end)(getfenv and getfenv() or _ENV, unpack or table[w(-17157)], newproxy, setmetatable, getmetatable, select, {
+        ...
+    })
+end)(...)

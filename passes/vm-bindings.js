@@ -493,6 +493,7 @@ function buildFunctionAnalysis(root, functionId) {
                     rhs: item.rhs,
                     exactRhs: item.exactRhs,
                     statement,
+                    previousReachingDefIds: [],
                     kind: item.exactRhs &&
                         item.rhs?.type === "CallExpression" &&
                         isIdentifier(item.rhs.base, "allocUpvalue") &&
@@ -599,6 +600,7 @@ function buildFunctionAnalysis(root, functionId) {
 
             for (const def of definitionsByBlock.get(blockId) || []) {
                 if (def.statementIndex !== statementIndex) continue;
+                def.previousReachingDefIds = [...(reaching.get(def.name) || [])];
                 reaching.set(def.name, new Set([def.id]));
             }
         }
@@ -612,6 +614,34 @@ function buildFunctionAnalysis(root, functionId) {
         uses,
         inByBlock,
     );
+
+    const lifetimeByDefinitionId = new Map(definitionLiveness.lifetimes.map(item => [item.definitionId, item]));
+    const bindingEndCandidates = [];
+    for (const def of definitions) {
+        if (!def.exactRhs || def.rhs?.type !== "NilLiteral") continue;
+        const lifetime = lifetimeByDefinitionId.get(def.id);
+        if (!lifetime || lifetime.useCount !== 0) continue;
+        if ((def.previousReachingDefIds || []).length !== 1) continue;
+        const previousDefinitionId = def.previousReachingDefIds[0];
+        const previousLifetime = lifetimeByDefinitionId.get(previousDefinitionId);
+        if (!previousLifetime || previousLifetime.useCount === 0) continue;
+        const nextDefinition = definitions.find(other =>
+            other.name === def.name &&
+            other.blockId === def.blockId &&
+            other.statementIndex > def.statementIndex
+        ) || null;
+        bindingEndCandidates.push({
+            definitionId: def.id,
+            functionId,
+            registerName: def.name,
+            blockId: def.blockId,
+            statementIndex: def.statementIndex,
+            previousDefinitionId,
+            nextDefinitionId: nextDefinition?.id || null,
+            registerReusedInBlock: Boolean(nextDefinition),
+            kind: nextDefinition ? "ownership-handoff-candidate" : "binding-end-candidate",
+        });
+    }
 
     return {
         id: functionId,
@@ -629,6 +659,7 @@ function buildFunctionAnalysis(root, functionId) {
         cellAccesses,
         definitionLifetimes: definitionLiveness.lifetimes,
         definitionJoinGroups: definitionLiveness.joinGroups,
+        bindingEndCandidates,
         liveness: {
             converged: definitionLiveness.converged,
             iterations: definitionLiveness.iterations,
@@ -721,6 +752,7 @@ function recoverVmBindings(source, ast, vmState) {
     }
 
     const definitionLifetimes = functions.flatMap(fn => fn.definitionLifetimes);
+    const bindingEndCandidates = functions.flatMap(fn => fn.bindingEndCandidates || []);
     const definitionJoinGroups = functions.flatMap(fn => fn.definitionJoinGroups);
     const definitions = functions.flatMap(fn => fn.definitions);
     const uses = functions.flatMap(fn => fn.uses);
@@ -790,6 +822,8 @@ function recoverVmBindings(source, ast, vmState) {
         definitions,
         definitionLifetimes,
         definitionJoinGroups,
+        bindingEndCandidates,
+        ownershipHandoffCandidates: bindingEndCandidates.filter(item => item.registerReusedInBlock),
         crossBlockLifetimeCount,
         loopCarriedLifetimeCount,
         uses,
