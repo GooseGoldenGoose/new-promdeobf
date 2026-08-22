@@ -191,6 +191,9 @@ function main() {
         if (registerSchedule.unreadSinks > 0) {
             console.log(`VM unread register writes sunk: ${registerSchedule.unreadSinks}`);
         }
+        if (registerSchedule.overflowRegisterBank) {
+            console.log(`VM overflow register scheduling: ${registerSchedule.overflowRegisterSlots} slots`);
+        }
         if (registerSchedule.safetyRejectedSegments > 0) {
             console.log(`VM register scheduling safety rejections: ${registerSchedule.safetyRejectedSegments}`);
         }

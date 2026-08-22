@@ -1,5 +1,6 @@
 const { applyTextEdits } = require("./text-edits");
 const { findVmFunction } = require("./vm-state");
+const { findRegisterOverflowBinding } = require("./vm-register-names");
 
 function isNode(value) {
     return value && typeof value === "object" && typeof value.type === "string";
@@ -13,75 +14,111 @@ function isPrimitiveLiteral(node) {
     return ["StringLiteral", "NumericLiteral", "BooleanLiteral", "NilLiteral"].includes(node?.type);
 }
 
-function isDelayableAssignment(statement, stateName) {
+function numericValue(node) {
+    if (node?.type !== "NumericLiteral") return null;
+    const value = typeof node.value === "number" ? node.value : Number(node.raw);
+    return Number.isInteger(value) ? value : null;
+}
+
+function overflowSlotIdentity(node, overflowName) {
+    if (!overflowName || node?.type !== "IndexExpression" || !isIdentifier(node.base, overflowName)) return null;
+    const index = numericValue(node.index);
+    if (index === null || index < 1) return null;
+    return "@overflow:" + index;
+}
+
+function registerIdentity(node, overflowName) {
+    if (isIdentifier(node)) return node.name;
+    return overflowSlotIdentity(node, overflowName);
+}
+
+function isDelayableAssignment(statement, stateName, overflowName = null) {
     if (statement?.type !== "AssignmentStatement") return false;
     const variables = statement.variables || [];
     const init = statement.init || [];
-    if (variables.length !== 1 || init.length !== 1 || !isIdentifier(variables[0])) return false;
+    if (variables.length !== 1 || init.length !== 1) return false;
 
-    const name = variables[0].name;
-    if ([stateName, "args", "upvalues", "gcProxy"].includes(name)) return false;
+    const destination = registerIdentity(variables[0], overflowName);
+    if (!destination) return false;
+    if (isIdentifier(variables[0]) && [stateName, "args", "upvalues", "gcProxy"].includes(destination)) return false;
 
     const rhs = init[0];
-    return isPrimitiveLiteral(rhs) || isIdentifier(rhs);
+    return isPrimitiveLiteral(rhs) || registerIdentity(rhs, overflowName) !== null;
 }
 
 const READS_CACHE = new WeakMap();
 const WRITES_CACHE = new WeakMap();
 
-function collectExpressionReads(node, out) {
+function cachedSet(cache, statement, overflowName, compute) {
+    if (!statement || typeof statement !== "object") return new Set();
+    const key = overflowName || "";
+    let byContext = cache.get(statement);
+    if (!byContext) {
+        byContext = new Map();
+        cache.set(statement, byContext);
+    }
+    if (byContext.has(key)) return byContext.get(key);
+    const value = compute();
+    byContext.set(key, value);
+    return value;
+}
+
+function collectExpressionReads(node, out, overflowName) {
     if (!isNode(node) || node.type === "FunctionDeclaration") return;
+    const overflowIdentity = overflowSlotIdentity(node, overflowName);
+    if (overflowIdentity) {
+        out.add(overflowIdentity);
+        return;
+    }
     if (node.type === "Identifier") {
         out.add(node.name);
         return;
     }
     if (node.type === "MemberExpression") {
-        collectExpressionReads(node.base, out);
+        collectExpressionReads(node.base, out, overflowName);
         return;
     }
     if (node.type === "TableKeyString") {
-        collectExpressionReads(node.value, out);
+        collectExpressionReads(node.value, out, overflowName);
         return;
     }
     for (const [key, value] of Object.entries(node)) {
         if (key === "loc" || key === "range") continue;
         if (Array.isArray(value)) {
-            for (const child of value) collectExpressionReads(child, out);
+            for (const child of value) collectExpressionReads(child, out, overflowName);
         } else if (isNode(value)) {
-            collectExpressionReads(value, out);
+            collectExpressionReads(value, out, overflowName);
         }
     }
 }
 
-function statementReads(statement) {
-    if (!statement || typeof statement !== "object") return new Set();
-    const cached = READS_CACHE.get(statement);
-    if (cached) return cached;
-    const out = new Set();
-    if (statement?.type === "AssignmentStatement" || statement?.type === "LocalStatement") {
-        for (const variable of statement.variables || []) {
-            if (!isIdentifier(variable)) collectExpressionReads(variable, out);
+function statementReads(statement, overflowName = null) {
+    return cachedSet(READS_CACHE, statement, overflowName, () => {
+        const out = new Set();
+        if (statement?.type === "AssignmentStatement" || statement?.type === "LocalStatement") {
+            for (const variable of statement.variables || []) {
+                if (registerIdentity(variable, overflowName)) continue;
+                collectExpressionReads(variable, out, overflowName);
+            }
+            for (const rhs of statement.init || []) collectExpressionReads(rhs, out, overflowName);
+        } else {
+            collectExpressionReads(statement, out, overflowName);
         }
-        for (const rhs of statement.init || []) collectExpressionReads(rhs, out);
-    } else {
-        collectExpressionReads(statement, out);
-    }
-    READS_CACHE.set(statement, out);
-    return out;
+        return out;
+    });
 }
 
-function statementWrites(statement) {
-    if (!statement || typeof statement !== "object") return new Set();
-    const cached = WRITES_CACHE.get(statement);
-    if (cached) return cached;
-    const out = new Set();
-    if (statement?.type === "AssignmentStatement" || statement?.type === "LocalStatement") {
-        for (const variable of statement.variables || []) {
-            if (isIdentifier(variable)) out.add(variable.name);
+function statementWrites(statement, overflowName = null) {
+    return cachedSet(WRITES_CACHE, statement, overflowName, () => {
+        const out = new Set();
+        if (statement?.type === "AssignmentStatement" || statement?.type === "LocalStatement") {
+            for (const variable of statement.variables || []) {
+                const identity = registerIdentity(variable, overflowName);
+                if (identity) out.add(identity);
+            }
         }
-    }
-    WRITES_CACHE.set(statement, out);
-    return out;
+        return out;
+    });
 }
 
 function intersects(a, b) {
@@ -89,13 +126,13 @@ function intersects(a, b) {
     return false;
 }
 
-function canSwapRightAssignmentWithLeftStatement(delayable, current, stateName) {
-    if (!isDelayableAssignment(delayable, stateName)) return false;
+function canSwapRightAssignmentWithLeftStatement(delayable, current, stateName, overflowName = null) {
+    if (!isDelayableAssignment(delayable, stateName, overflowName)) return false;
 
-    const delayReads = statementReads(delayable);
-    const delayWrites = statementWrites(delayable);
-    const currentReads = statementReads(current);
-    const currentWrites = statementWrites(current);
+    const delayReads = statementReads(delayable, overflowName);
+    const delayWrites = statementWrites(delayable, overflowName);
+    const currentReads = statementReads(current, overflowName);
+    const currentWrites = statementWrites(current, overflowName);
 
     if (intersects(delayWrites, currentReads)) return false;
     if (intersects(delayReads, currentWrites)) return false;
@@ -103,32 +140,32 @@ function canSwapRightAssignmentWithLeftStatement(delayable, current, stateName) 
     return true;
 }
 
-function getSingleWrittenIdentifier(statement) {
+function getSingleWrittenRegister(statement, overflowName = null) {
     if (statement?.type !== "AssignmentStatement") return null;
     const variables = statement.variables || [];
-    if (variables.length !== 1 || !isIdentifier(variables[0])) return null;
-    return variables[0].name;
+    if (variables.length !== 1) return null;
+    return registerIdentity(variables[0], overflowName);
 }
 
-function findNextRegisterTouch(statements, index, name) {
+function findNextRegisterTouch(statements, index, name, overflowName = null) {
     for (let i = index + 1; i < statements.length; i++) {
-        if (statementReads(statements[i]).has(name)) {
+        if (statementReads(statements[i], overflowName).has(name)) {
             return { index: i, kind: "read" };
         }
-        if (statementWrites(statements[i]).has(name)) {
+        if (statementWrites(statements[i], overflowName).has(name)) {
             return { index: i, kind: "write" };
         }
     }
     return null;
 }
 
-function isPrimitiveSourceAssignment(statement, stateName) {
-    if (!isDelayableAssignment(statement, stateName)) return false;
+function isPrimitiveSourceAssignment(statement, stateName, overflowName = null) {
+    if (!isDelayableAssignment(statement, stateName, overflowName)) return false;
     const init = statement.init || [];
     return init.length === 1 && isPrimitiveLiteral(init[0]);
 }
 
-function sinkPureAssignmentsTowardNextTouch(statements, stateName) {
+function sinkPureAssignmentsTowardNextTouch(statements, stateName, overflowName = null) {
     const originalOrder = [...statements];
     let swaps = 0;
     let moved = 0;
@@ -139,14 +176,14 @@ function sinkPureAssignmentsTowardNextTouch(statements, stateName) {
         // the next read or overwrite of the destination register. Identifier
         // copies are handled in the opposite direction below so they stay near
         // the value that produced their RHS.
-        if (fromIndex < 0 || !isPrimitiveSourceAssignment(producer, stateName)) continue;
-        const name = getSingleWrittenIdentifier(producer);
+        if (fromIndex < 0 || !isPrimitiveSourceAssignment(producer, stateName, overflowName)) continue;
+        const name = getSingleWrittenRegister(producer, overflowName);
         if (!name) continue;
 
-        const touch = findNextRegisterTouch(statements, fromIndex, name);
+        const touch = findNextRegisterTouch(statements, fromIndex, name, overflowName);
         if (!touch || touch.index <= fromIndex + 1) continue;
 
-        if (!canMoveDelayableRightAcrossRange(statements, fromIndex, touch.index - 1, stateName)) continue;
+        if (!canMoveDelayableRightAcrossRange(statements, fromIndex, touch.index - 1, stateName, overflowName)) continue;
 
         const distance = touch.index - fromIndex - 1;
         statements.splice(fromIndex, 1);
@@ -158,21 +195,22 @@ function sinkPureAssignmentsTowardNextTouch(statements, stateName) {
     return { swaps, moved };
 }
 
-function pullIdentifierCopiesTowardProducer(statements, stateName) {
+function pullIdentifierCopiesTowardProducer(statements, stateName, overflowName = null) {
     const originalOrder = [...statements];
     let swaps = 0;
     let moved = 0;
 
     for (const consumer of originalOrder) {
         let currentIndex = statements.indexOf(consumer);
-        if (currentIndex <= 0 || !isDelayableAssignment(consumer, stateName)) continue;
+        if (currentIndex <= 0 || !isDelayableAssignment(consumer, stateName, overflowName)) continue;
         const init = consumer.init || [];
-        if (init.length !== 1 || !isIdentifier(init[0])) continue;
+        if (init.length !== 1) continue;
 
-        const producerName = init[0].name;
+        const producerName = registerIdentity(init[0], overflowName);
+        if (!producerName) continue;
         let producerIndex = -1;
         for (let i = currentIndex - 1; i >= 0; i--) {
-            if (statementWrites(statements[i]).has(producerName)) {
+            if (statementWrites(statements[i], overflowName).has(producerName)) {
                 producerIndex = i;
                 break;
             }
@@ -182,7 +220,7 @@ function pullIdentifierCopiesTowardProducer(statements, stateName) {
         let didMove = false;
         while (currentIndex > producerIndex + 1) {
             const previous = statements[currentIndex - 1];
-            if (hasRegisterHazard(previous, consumer)) break;
+            if (hasRegisterHazard(previous, consumer, overflowName)) break;
             statements[currentIndex - 1] = consumer;
             statements[currentIndex] = previous;
             currentIndex--;
@@ -195,25 +233,25 @@ function pullIdentifierCopiesTowardProducer(statements, stateName) {
     return { swaps, moved };
 }
 
-function sinkUnreadPureAssignmentsToStateTail(statements, stateName) {
+function sinkUnreadPureAssignmentsToStateTail(statements, stateName, overflowName = null) {
     const originalOrder = [...statements];
     let swaps = 0;
     let moved = 0;
 
     for (const candidate of originalOrder) {
         let fromIndex = statements.indexOf(candidate);
-        if (fromIndex < 0 || !isDelayableAssignment(candidate, stateName)) continue;
-        const name = getSingleWrittenIdentifier(candidate);
+        if (fromIndex < 0 || !isDelayableAssignment(candidate, stateName, overflowName)) continue;
+        const name = getSingleWrittenRegister(candidate, overflowName);
         if (!name) continue;
 
         let nextRead = -1;
         let nextWrite = -1;
         for (let i = fromIndex + 1; i < statements.length; i++) {
-            if (statementReads(statements[i]).has(name)) {
+            if (statementReads(statements[i], overflowName).has(name)) {
                 nextRead = i;
                 break;
             }
-            if (statementWrites(statements[i]).has(name)) {
+            if (statementWrites(statements[i], overflowName).has(name)) {
                 nextWrite = i;
                 break;
             }
@@ -245,7 +283,7 @@ function sinkUnreadPureAssignmentsToStateTail(statements, stateName) {
 
         if (targetIndex <= fromIndex + 1) continue;
 
-        if (!canMoveDelayableRightAcrossRange(statements, fromIndex, targetIndex - 1, stateName)) continue;
+        if (!canMoveDelayableRightAcrossRange(statements, fromIndex, targetIndex - 1, stateName, overflowName)) continue;
 
         const distance = targetIndex - fromIndex - 1;
         statements.splice(fromIndex, 1);
@@ -257,13 +295,13 @@ function sinkUnreadPureAssignmentsToStateTail(statements, stateName) {
     return { swaps, moved };
 }
 
-function findDirectProducerStatements(statements, index) {
-    const reads = statementReads(statements[index]);
+function findDirectProducerStatements(statements, index, overflowName = null) {
+    const reads = statementReads(statements[index], overflowName);
     const producers = new Set();
 
     for (const name of reads) {
         for (let i = index - 1; i >= 0; i--) {
-            if (statementWrites(statements[i]).has(name)) {
+            if (statementWrites(statements[i], overflowName).has(name)) {
                 producers.add(statements[i]);
                 break;
             }
@@ -273,21 +311,21 @@ function findDirectProducerStatements(statements, index) {
     return producers;
 }
 
-function canMoveDelayableRightAcrossRange(statements, fromIndex, throughIndex, stateName) {
+function canMoveDelayableRightAcrossRange(statements, fromIndex, throughIndex, stateName, overflowName = null) {
     const delayable = statements[fromIndex];
-    if (!isDelayableAssignment(delayable, stateName)) return false;
+    if (!isDelayableAssignment(delayable, stateName, overflowName)) return false;
 
     for (let i = fromIndex + 1; i <= throughIndex; i++) {
-        if (!canSwapRightAssignmentWithLeftStatement(delayable, statements[i], stateName)) {
+        if (!canSwapRightAssignmentWithLeftStatement(delayable, statements[i], stateName, overflowName)) {
             return false;
         }
     }
     return true;
 }
 
-function compactConsumerGap(statements, currentIndex, stateName) {
+function compactConsumerGap(statements, currentIndex, stateName, overflowName = null) {
     const current = statements[currentIndex];
-    const producers = findDirectProducerStatements(statements, currentIndex);
+    const producers = findDirectProducerStatements(statements, currentIndex, overflowName);
     if (producers.size === 0) return { currentIndex, swaps: 0 };
 
     let earliestProducerIndex = currentIndex;
@@ -306,7 +344,7 @@ function compactConsumerGap(statements, currentIndex, stateName) {
             continue;
         }
 
-        if (!canMoveDelayableRightAcrossRange(statements, index, currentIndex, stateName)) {
+        if (!canMoveDelayableRightAcrossRange(statements, index, currentIndex, stateName, overflowName)) {
             index++;
             continue;
         }
@@ -322,11 +360,11 @@ function compactConsumerGap(statements, currentIndex, stateName) {
     return { currentIndex, swaps };
 }
 
-function hasRegisterHazard(left, right) {
-    const leftReads = statementReads(left);
-    const leftWrites = statementWrites(left);
-    const rightReads = statementReads(right);
-    const rightWrites = statementWrites(right);
+function hasRegisterHazard(left, right, overflowName = null) {
+    const leftReads = statementReads(left, overflowName);
+    const leftWrites = statementWrites(left, overflowName);
+    const rightReads = statementReads(right, overflowName);
+    const rightWrites = statementWrites(right, overflowName);
 
     return (
         intersects(leftWrites, rightReads) ||
@@ -335,14 +373,14 @@ function hasRegisterHazard(left, right) {
     );
 }
 
-function validateScheduledOrder(original, scheduled, stateName) {
+function validateScheduledOrder(original, scheduled, stateName, overflowName = null) {
     if (original.length !== scheduled.length) return false;
     const finalIndex = new Map(scheduled.map((statement, index) => [statement, index]));
     if (finalIndex.size !== original.length) return false;
     for (const statement of original) if (!finalIndex.has(statement)) return false;
 
-    const originalAnchors = original.filter(statement => !isDelayableAssignment(statement, stateName));
-    const scheduledAnchors = scheduled.filter(statement => !isDelayableAssignment(statement, stateName));
+    const originalAnchors = original.filter(statement => !isDelayableAssignment(statement, stateName, overflowName));
+    const scheduledAnchors = scheduled.filter(statement => !isDelayableAssignment(statement, stateName, overflowName));
     if (originalAnchors.length !== scheduledAnchors.length) return false;
     for (let i = 0; i < originalAnchors.length; i++) {
         if (originalAnchors[i] !== scheduledAnchors[i]) return false;
@@ -356,14 +394,14 @@ function validateScheduledOrder(original, scheduled, stateName) {
             const left = original[i];
             const right = original[j];
             if (finalIndex.get(left) < finalIndex.get(right)) continue;
-            if (!isDelayableAssignment(left, stateName) && !isDelayableAssignment(right, stateName)) return false;
-            if (hasRegisterHazard(left, right)) return false;
+            if (!isDelayableAssignment(left, stateName, overflowName) && !isDelayableAssignment(right, stateName, overflowName)) return false;
+            if (hasRegisterHazard(left, right, overflowName)) return false;
         }
     }
     return true;
 }
 
-function scheduleStatementList(statements, stateName) {
+function scheduleStatementList(statements, stateName, overflowName = null) {
     const scheduled = [...statements];
     const schedulingBaseline = [...scheduled];
     const originalOrder = [...scheduled];
@@ -372,13 +410,13 @@ function scheduleStatementList(statements, stateName) {
     // First move pure register assignments toward the next semantic touch of
     // the same register. This covers both producer -> read and write -> write
     // compaction while preserving every assignment.
-    const sunk = sinkPureAssignmentsTowardNextTouch(scheduled, stateName);
+    const sunk = sinkPureAssignmentsTowardNextTouch(scheduled, stateName, overflowName);
     swaps += sunk.swaps;
 
     // Identifier-copy assignments are consumers too. Pull them left toward the
     // nearest producer of their RHS when every crossed statement is register-
     // independent. This handles chains such as z = D + G; ...; D = z.
-    const pulled = pullIdentifierCopiesTowardProducer(scheduled, stateName);
+    const pulled = pullIdentifierCopiesTowardProducer(scheduled, stateName, overflowName);
     swaps += pulled.swaps;
 
     // Then compact producer -> consumer gaps by pushing only independent pure
@@ -387,7 +425,7 @@ function scheduleStatementList(statements, stateName) {
     for (const current of originalOrder) {
         const currentIndex = scheduled.indexOf(current);
         if (currentIndex <= 0) continue;
-        const result = compactConsumerGap(scheduled, currentIndex, stateName);
+        const result = compactConsumerGap(scheduled, currentIndex, stateName, overflowName);
         swaps += result.swaps;
     }
 
@@ -395,10 +433,10 @@ function scheduleStatementList(statements, stateName) {
     // out of active chains. They are kept (never deleted): overwritten values
     // are grouped with the next write, while live-out/unused values are placed
     // at the actual end of the current dispatcher leaf.
-    const unread = sinkUnreadPureAssignmentsToStateTail(scheduled, stateName);
+    const unread = sinkUnreadPureAssignmentsToStateTail(scheduled, stateName, overflowName);
     swaps += unread.swaps;
 
-    if (!validateScheduledOrder(schedulingBaseline, scheduled, stateName)) {
+    if (!validateScheduledOrder(schedulingBaseline, scheduled, stateName, overflowName)) {
         return {
             statements: [...statements],
             swaps: 0,
@@ -519,6 +557,8 @@ function scheduleVmRegisterUses(source, ast) {
     }
 
     const stateName = stateParam.name;
+    const overflow = findRegisterOverflowBinding(vm.functionNode);
+    const overflowName = overflow?.name || null;
     const stateWhile = findStateWhile(vm.functionNode, stateName);
     if (!stateWhile) {
         return { source, found: false, applied: false, reason: "No while <state> dispatcher was found", blocksChanged: 0, swaps: 0 };
@@ -551,7 +591,7 @@ function scheduleVmRegisterUses(source, ast) {
             if (!statements.every(statement => Array.isArray(statement.range))) continue;
             if (!hasOnlyWhitespaceBetween(source, statements)) continue;
 
-            const scheduled = scheduleStatementList(statements, stateName);
+            const scheduled = scheduleStatementList(statements, stateName, overflowName);
             if (scheduled.safetyRejected) safetyRejectedSegments++;
             producerSinks += scheduled.producerSinks || 0;
             producerPulls += scheduled.producerPulls || 0;
@@ -569,7 +609,7 @@ function scheduleVmRegisterUses(source, ast) {
     }
 
     if (edits.length === 0) {
-        return { source, found: true, applied: false, blocksChanged: 0, swaps: 0, producerSinks, producerPulls, unreadSinks, safetyRejectedSegments };
+        return { source, found: true, applied: false, blocksChanged: 0, swaps: 0, producerSinks, producerPulls, unreadSinks, safetyRejectedSegments, overflowRegisterBank: overflowName, overflowRegisterSlots: overflow?.indices?.size || 0 };
     }
 
     return {
@@ -582,6 +622,8 @@ function scheduleVmRegisterUses(source, ast) {
         producerPulls,
         unreadSinks,
         safetyRejectedSegments,
+        overflowRegisterBank: overflowName,
+        overflowRegisterSlots: overflow?.indices?.size || 0,
     };
 }
 

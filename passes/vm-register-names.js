@@ -37,6 +37,80 @@ function findRegisterDeclaration(vmFunction, returnName) {
     return matches.length === 1 ? matches[0] : null;
 }
 
+function numericValue(node) {
+    if (node?.type !== "NumericLiteral") return null;
+    const value = typeof node.value === "number" ? node.value : Number(node.raw);
+    return Number.isInteger(value) ? value : null;
+}
+
+function isEmptyTable(node) {
+    return node?.type === "TableConstructorExpression" && (node.fields || []).length === 0;
+}
+
+function findRegisterOverflowBinding(vmFunction) {
+    const returnRegister = findVmReturnRegister(vmFunction);
+    if (!returnRegister) return null;
+    const scalarDeclaration = findRegisterDeclaration(vmFunction, returnRegister.name);
+    if (!scalarDeclaration) return null;
+
+    const body = vmFunction?.body || [];
+    const candidates = [];
+    for (let index = 0; index < scalarDeclaration.index; index++) {
+        const statement = body[index];
+        if (statement?.type !== "LocalStatement") continue;
+        if ((statement.variables || []).length !== 1 || !isIdentifier(statement.variables[0])) continue;
+        if ((statement.init || []).length !== 1 || !isEmptyTable(statement.init[0])) continue;
+        candidates.push({ statement, identifier: statement.variables[0], index });
+    }
+    if (candidates.length !== 1) return null;
+
+    const candidate = candidates[0];
+    const name = candidate.identifier.name;
+    const candidateNames = new Set([name]);
+    if (collectShadowingDeclarations(vmFunction, candidateNames, candidate.statement, []).length > 0) return null;
+
+    const indices = new Set();
+    let valid = true;
+    let referenceCount = 0;
+    function walk(node, parent = null, parentKey = null) {
+        if (!isNode(node) || !valid) return;
+        if (node.type === "Identifier" && node.name === name && node !== candidate.identifier) {
+            referenceCount++;
+            if (parent?.type !== "IndexExpression" || parentKey !== "base" || parent.base !== node) {
+                valid = false;
+                return;
+            }
+            const index = numericValue(parent.index);
+            if (index === null || index < 1) {
+                valid = false;
+                return;
+            }
+            indices.add(index);
+            return;
+        }
+        for (const [key, value] of Object.entries(node)) {
+            if (key === "loc" || key === "range") continue;
+            if (Array.isArray(value)) {
+                for (const child of value) walk(child, node, key);
+            } else if (isNode(value)) {
+                walk(value, node, key);
+            }
+        }
+    }
+    for (let index = candidate.index + 1; index < body.length; index++) walk(body[index]);
+    if (!valid || referenceCount === 0 || indices.size === 0) return null;
+
+    return {
+        name,
+        declaration: candidate.statement,
+        identifier: candidate.identifier,
+        scalarDeclaration,
+        indices,
+        maxIndex: Math.max(...indices),
+        referenceCount,
+    };
+}
+
 function collectShadowingDeclarations(node, candidateNames, candidateDeclaration, out = []) {
     if (!isNode(node)) return out;
     if (node !== candidateDeclaration) {
@@ -220,5 +294,6 @@ function renameVmRegisterBindings(source, ast) {
 module.exports = {
     findVmReturnRegister,
     findRegisterDeclaration,
+    findRegisterOverflowBinding,
     renameVmRegisterBindings,
 };

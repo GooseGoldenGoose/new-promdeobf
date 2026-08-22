@@ -129,4 +129,58 @@ function schedule(source) {
     assert.ok(out.indexOf('X = 2') < out.indexOf('state = nil'), 'unread write moved past canonical stop anchor');
 }
 
+
+function scheduleOverflow(source, overflowName = "Overflow") {
+    const statements = parseStatements(source);
+    const result = scheduleStatementList(statements, "state", overflowName);
+    assert.strictEqual(result.safetyRejected, false);
+    return labels(source, result.statements);
+}
+
+{
+    const source = [
+        "Overflow[1] = 10",
+        "X = 2",
+        "Y = Overflow[1]",
+        "Z = Y",
+    ].join("\n");
+    const out = scheduleOverflow(source);
+    assert.ok(out.indexOf("Overflow[1] = 10") + 1 === out.indexOf("Y = Overflow[1]"), "overflow producer was not compacted next to its read");
+    assert.ok(out.indexOf("Overflow[1] = 10") < out.indexOf("Y = Overflow[1]"), "overflow producer crossed its read");
+}
+
+{
+    const source = [
+        "Overflow[1] = 10",
+        "Overflow[2] = 20",
+        "A = Overflow[1]",
+        "B = Overflow[2]",
+    ].join("\n");
+    const out = scheduleOverflow(source);
+    assert.ok(out.indexOf("Overflow[1] = 10") < out.indexOf("A = Overflow[1]"));
+    assert.ok(out.indexOf("Overflow[2] = 20") < out.indexOf("B = Overflow[2]"));
+}
+
+{
+    const source = [
+        "Overflow[1] = 10",
+        "A = Overflow[1]",
+        "Overflow[1] = 30",
+        "B = Overflow[1]",
+    ].join("\n");
+    const out = scheduleOverflow(source);
+    assert.ok(out.indexOf("Overflow[1] = 10") < out.indexOf("A = Overflow[1]"), "overflow producer crossed its read");
+    assert.ok(out.indexOf("A = Overflow[1]") < out.indexOf("Overflow[1] = 30"), "overflow overwrite crossed prior read");
+}
+
+{
+    const source = [
+        "Other[1] = 10",
+        "X = 2",
+        "Y = Other[1]",
+    ].join("\n");
+    const out = scheduleOverflow(source, "Overflow");
+    assert.ok(out.indexOf("Other[1] = 10") < out.indexOf("Y = Other[1]"), "ordinary table access was treated as overflow storage");
+}
+
 console.log("vm register scheduler regression: ok");

@@ -1,7 +1,7 @@
 ﻿const { findEnvironmentBinding } = require("./environment");
 const { analyzeClosureFactory } = require("./closure-factory");
 const { findVmFunction } = require("./vm-state");
-const { findVmReturnRegister } = require("./vm-register-names");
+const { findRegisterOverflowBinding } = require("./vm-register-names");
 const { renameFunctionParameterBindingsBatch } = require("./batch-parameter-rename");
 const { applyTextEdits } = require("./text-edits");
 
@@ -253,28 +253,9 @@ function collectCreateUpvalueProxyRenames(fn, out) {
 function collectRegisterOverflowRename(ast, out, named = null) {
     const fn = named?.found?.get("vm") || findVmFunction(ast)?.functionNode;
     if (!fn) return;
-    const body = fn.body || [];
-    const scalarDecl = body.find(statement => statement?.type === "LocalStatement" &&
-        (statement.init || []).length === 0 &&
-        (statement.variables || []).some(variable => isIdentifier(variable, "ReturnVal")));
-    if (!scalarDecl) return;
-    const scalarIndex = body.indexOf(scalarDecl);
-    const candidates = body.slice(0, scalarIndex).filter(statement =>
-        statement?.type === "LocalStatement" &&
-        (statement.variables || []).length === 1 && isIdentifier(statement.variables[0]) &&
-        (statement.init || []).length === 1 && isEmptyTable(statement.init[0])
-    );
-    if (candidates.length !== 1) return;
-    const candidate = candidates[0];
-    const oldName = candidate.variables[0].name;
-    let indexedUse = false;
-    for (const statement of body.slice(body.indexOf(candidate) + 1)) {
-        walk(statement, node => {
-            if (node.type === "IndexExpression" && isIdentifier(node.base, oldName) && numericValue(node.index) !== null) indexedUse = true;
-        });
-    }
-    if (!indexedUse) return;
-    out.push(collectLocalBindingRename(body, candidate, candidate.variables[0], "RegisterOverflow", "vm.RegisterOverflow"));
+    const overflow = findRegisterOverflowBinding(fn);
+    if (!overflow) return;
+    out.push(collectLocalBindingRename(fn.body || [], overflow.declaration, overflow.identifier, "RegisterOverflow", "vm.RegisterOverflow"));
 }
 
 function applyLocalRenameResults(source, results) {
