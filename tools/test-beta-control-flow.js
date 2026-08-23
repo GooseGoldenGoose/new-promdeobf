@@ -217,6 +217,67 @@ assert(diamond.source.indexOf("right()") < diamond.source.indexOf("joined()"));
 assert(!diamond.source.includes("state ="));
 parseLua(diamond.source, "<beta-cf-diamond-output>");
 
+
+const sharedContinuationEarlyReturn = solveBetaControlFlow(ast, {
+    applied: true,
+    graph: {
+        cfgComplete: true,
+        entries: [100],
+        states: [
+            { id: 100, predecessors: [], successors: [110, 120], operations: [
+                { kind: "version-define", emittedTarget: "r_v20_1", emittedText: "local r_v20_1 = chooseA()", rhs: "chooseA()", reads: [] },
+                { kind: "state-transition", emittedTarget: "state", emittedText: "state = r_v20_1 and 110 or 120", rhs: "r_v20_1 and 110 or 120", reads: ["r_v20_1"] },
+            ] },
+            { id: 110, predecessors: [100], successors: [130], operations: [
+                { kind: "statement", originalText: "markC()", reads: [] },
+                { kind: "state-transition", emittedTarget: "state", emittedText: "state = 130", rhs: "130", reads: [] },
+            ] },
+            { id: 120, predecessors: [100], successors: [125, 130], operations: [
+                { kind: "version-define", emittedTarget: "r_v21_1", emittedText: "local r_v21_1 = chooseB()", rhs: "chooseB()", reads: [] },
+                { kind: "state-transition", emittedTarget: "state", emittedText: "state = r_v21_1 and 125 or 130", rhs: "r_v21_1 and 125 or 130", reads: ["r_v21_1"] },
+            ] },
+            { id: 125, predecessors: [120], successors: [130], operations: [
+                { kind: "state-transition", emittedTarget: "state", emittedText: "state = 130", rhs: "130", reads: [] },
+                { kind: "statement", originalText: "markG()", reads: [] },
+            ] },
+            { id: 130, predecessors: [110, 120, 125], successors: [140, 150], operations: [
+                { kind: "version-define", emittedTarget: "r_v22_1", emittedText: "local r_v22_1 = chooseC()", rhs: "chooseC()", reads: [] },
+                { kind: "state-transition", emittedTarget: "state", emittedText: "state = r_v22_1 and 140 or 150", rhs: "r_v22_1 and 140 or 150", reads: ["r_v22_1"] },
+            ] },
+            { id: 140, predecessors: [130], successors: [160], operations: [
+                { kind: "state-transition", emittedTarget: "state", emittedText: "state = 160", rhs: "160", reads: [] },
+                { kind: "statement", originalText: "markW()", reads: [] },
+            ] },
+            { id: 150, predecessors: [130], successors: [170, 160], operations: [
+                { kind: "version-define", emittedTarget: "r_v23_1", emittedText: "local r_v23_1 = chooseD()", rhs: "chooseD()", reads: [] },
+                { kind: "state-transition", emittedTarget: "state", emittedText: "state = r_v23_1 and 170 or 160", rhs: "r_v23_1 and 170 or 160", reads: ["r_v23_1"] },
+            ] },
+            { id: 170, predecessors: [150], successors: [], operations: [
+                { kind: "statement", originalText: "markL()", reads: [] },
+                { kind: "return-payload", terminalCompilerReturnPayload: true, returnExpressions: [], emittedText: "ReturnVal = {}", rhs: "{}", reads: [] },
+                { kind: "state-transition", emittedTarget: "state", emittedText: "state = nil", rhs: "nil", reads: [] },
+            ] },
+            { id: 160, predecessors: [140, 150], successors: [], operations: [
+                { kind: "statement", originalText: "finish()", reads: [] },
+                { kind: "return-payload", terminalCompilerReturnPayload: true, returnExpressions: [], emittedText: "ReturnVal = {}", rhs: "{}", reads: [] },
+                { kind: "state-transition", emittedTarget: "state", emittedText: "state = nil", rhs: "nil", reads: [] },
+            ] },
+        ],
+    },
+});
+assert.equal(sharedContinuationEarlyReturn.applied, true);
+assert.equal(sharedContinuationEarlyReturn.mode, "acyclic-structured");
+assert(sharedContinuationEarlyReturn.source.includes("if r_v20_1 then"));
+assert(sharedContinuationEarlyReturn.source.includes("if r_v21_1 then"));
+assert(sharedContinuationEarlyReturn.source.includes("if r_v22_1 then"));
+assert(sharedContinuationEarlyReturn.source.includes("if r_v23_1 then"));
+assert.equal((sharedContinuationEarlyReturn.source.match(/finish\(\)/g) || []).length, 1);
+assert.equal((sharedContinuationEarlyReturn.source.match(/markL\(\)/g) || []).length, 1);
+assert(sharedContinuationEarlyReturn.source.indexOf("markG()") < sharedContinuationEarlyReturn.source.indexOf("local r_v22_1 = chooseC()"));
+assert(sharedContinuationEarlyReturn.source.indexOf("markW()") < sharedContinuationEarlyReturn.source.indexOf("finish()"));
+assert(!sharedContinuationEarlyReturn.source.includes("state ="));
+parseLua(sharedContinuationEarlyReturn.source, "<beta-cf-shared-continuation-output>");
+
 const cyclic = solveBetaControlFlow(ast, {
     applied: true,
     graph: {

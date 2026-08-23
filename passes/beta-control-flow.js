@@ -344,6 +344,70 @@ function immediatePostdominator(stateId, postdominators) {
     return candidates.length === 1 ? candidates[0] : null;
 }
 
+function computeReachableStateSets(states, stateById) {
+    const memo = new Map();
+    const visiting = new Set();
+
+    function visit(stateId) {
+        if (memo.has(stateId)) return memo.get(stateId);
+        if (visiting.has(stateId)) return null;
+        const state = stateById.get(stateId);
+        if (!state) return null;
+        visiting.add(stateId);
+        const reachable = new Set([stateId]);
+        for (const successor of state.successors || []) {
+            const successorReachable = visit(successor);
+            if (!successorReachable) return null;
+            for (const candidate of successorReachable) reachable.add(candidate);
+        }
+        visiting.delete(stateId);
+        memo.set(stateId, reachable);
+        return reachable;
+    }
+
+    for (const state of states) {
+        if (!visit(state.id)) return null;
+    }
+    return memo;
+}
+
+function reachesState(startState, targetState, reachableSets) {
+    return startState === targetState || reachableSets.get(startState)?.has(targetState) === true;
+}
+
+function earliestCommonReachableJoin(onTrue, onFalse, stopState, exitNode, reachableSets) {
+    const trueReachable = reachableSets.get(onTrue);
+    const falseReachable = reachableSets.get(onFalse);
+    if (!trueReachable || !falseReachable) return { join: null, ambiguous: true };
+
+    const common = [...trueReachable].filter(candidate => falseReachable.has(candidate));
+    const inRegion = common.filter(candidate =>
+        stopState === exitNode ||
+        candidate === stopState ||
+        reachesState(candidate, stopState, reachableSets)
+    );
+
+    const earliest = inRegion.filter(candidate =>
+        !inRegion.some(other =>
+            other !== candidate &&
+            reachesState(other, candidate, reachableSets)
+        )
+    );
+
+    if (earliest.length > 1) return { join: null, ambiguous: true };
+    if (earliest.length === 1) return { join: earliest[0], ambiguous: false };
+
+    if (stopState !== exitNode) {
+        const trueReachesStop = reachesState(onTrue, stopState, reachableSets);
+        const falseReachesStop = reachesState(onFalse, stopState, reachableSets);
+        if (trueReachesStop || falseReachesStop) {
+            return { join: stopState, ambiguous: false };
+        }
+    }
+
+    return { join: null, ambiguous: false };
+}
+
 function validateReachableAcyclic(entry, stateById) {
     const visited = new Set();
     const visiting = new Set();
@@ -558,10 +622,55 @@ function solveAcyclicStructured(originalAst, graph) {
         return { applied: false, reason: "Beta CF post-dominator analysis did not converge" };
     }
 
+    const reachableSets = computeReachableStateSets(states, stateById);
+    if (!reachableSets) {
+        return { applied: false, reason: "Beta CF reachability analysis failed on the acyclic graph" };
+    }
+
     const emittedStates = new Set();
     let branchCount = 0;
     let joinCount = 0;
     let guardBranchCount = 0;
+
+    function emitBranchNode(nodes, info, trueResult, falseResult) {
+        const trueReachesJoin = trueResult.reachesStop === true;
+        const falseReachesJoin = falseResult.reachesStop === true;
+
+        if (trueReachesJoin && falseReachesJoin) {
+            if (trueResult.nodes.length && falseResult.nodes.length) {
+                nodes.push(ifNode(info.condition, info.conditionReads, trueResult.nodes, falseResult.nodes));
+            } else if (trueResult.nodes.length) {
+                nodes.push(ifNode(info.condition, info.conditionReads, trueResult.nodes));
+            } else if (falseResult.nodes.length) {
+                nodes.push(ifNode("not (" + info.condition + ")", info.conditionReads, falseResult.nodes));
+            }
+            return;
+        }
+
+        if (!trueReachesJoin && falseReachesJoin) {
+            if (falseResult.nodes.length) {
+                nodes.push(ifNode(info.condition, info.conditionReads, trueResult.nodes, falseResult.nodes));
+            } else {
+                nodes.push(ifNode(info.condition, info.conditionReads, trueResult.nodes));
+            }
+            guardBranchCount++;
+            return;
+        }
+
+        if (trueReachesJoin && !falseReachesJoin) {
+            if (trueResult.nodes.length) {
+                nodes.push(ifNode(info.condition, info.conditionReads, trueResult.nodes, falseResult.nodes));
+            } else {
+                nodes.push(ifNode("not (" + info.condition + ")", info.conditionReads, falseResult.nodes));
+            }
+            guardBranchCount++;
+            return;
+        }
+
+        nodes.push(ifNode(info.condition, info.conditionReads, trueResult.nodes));
+        nodes.push(...falseResult.nodes);
+        guardBranchCount++;
+    }
 
     function emitSequence(startState, stopState) {
         const nodes = [];
@@ -569,20 +678,20 @@ function solveAcyclicStructured(originalAst, graph) {
 
         while (current !== stopState && current !== exitNode) {
             if (emittedStates.has(current)) {
-                throw new Error(`State ${current} would be emitted more than once; CFG is not structurally reducible by the acyclic stage`);
+                throw new Error("State " + current + " would be emitted more than once; CFG is not structurally reducible by the acyclic stage");
             }
             const item = prepared.get(current);
-            if (!item) throw new Error(`Missing prepared state ${current}`);
+            if (!item) throw new Error("Missing prepared state " + current);
             emittedStates.add(current);
             for (const operation of item.bodyOperations) nodes.push(rawNode(operation, current));
 
             const info = item.info;
-            if (info.kind === "return") return { nodes, terminates: true };
+            if (info.kind === "return") return { nodes, reachesStop: false };
             if (info.kind === "jump") {
                 current = info.target;
                 continue;
             }
-            if (info.kind !== "branch") throw new Error(`Unsupported prepared terminator in state ${current}`);
+            if (info.kind !== "branch") throw new Error("Unsupported prepared terminator in state " + current);
 
             branchCount++;
             if (info.onTrue === info.onFalse) {
@@ -590,47 +699,61 @@ function solveAcyclicStructured(originalAst, graph) {
                 continue;
             }
 
-            const join = immediatePostdominator(current, postdominators);
-            if (join === null) throw new Error(`State ${current} has no unique immediate post-dominator`);
+            let join = immediatePostdominator(current, postdominators);
+            if (
+                join === exitNode ||
+                (join !== null &&
+                    stopState !== exitNode &&
+                    join !== stopState &&
+                    !reachesState(join, stopState, reachableSets))
+            ) {
+                join = null;
+            }
 
-            if (join !== exitNode) {
+            if (join === null) {
+                const partial = earliestCommonReachableJoin(
+                    info.onTrue,
+                    info.onFalse,
+                    stopState,
+                    exitNode,
+                    reachableSets
+                );
+                if (partial.ambiguous) {
+                    throw new Error("State " + current + " has multiple incomparable branch continuations");
+                }
+                join = partial.join;
+            }
+
+            if (join !== null && join !== exitNode) {
                 joinCount++;
                 const trueResult = info.onTrue === join
-                    ? { nodes: [], terminates: false }
+                    ? { nodes: [], reachesStop: true }
                     : emitSequence(info.onTrue, join);
                 const falseResult = info.onFalse === join
-                    ? { nodes: [], terminates: false }
+                    ? { nodes: [], reachesStop: true }
                     : emitSequence(info.onFalse, join);
-                if (trueResult.terminates || falseResult.terminates) {
-                    throw new Error(`State ${current} has a real join but one branch terminates before reaching it`);
+
+                if (!trueResult.reachesStop && !falseResult.reachesStop) {
+                    throw new Error("State " + current + " branch continuation " + join + " is unreachable after its terminating arms");
                 }
 
-                if (trueResult.nodes.length && falseResult.nodes.length) {
-                    nodes.push(ifNode(info.condition, info.conditionReads, trueResult.nodes, falseResult.nodes));
-                } else if (trueResult.nodes.length) {
-                    nodes.push(ifNode(info.condition, info.conditionReads, trueResult.nodes));
-                } else if (falseResult.nodes.length) {
-                    nodes.push(ifNode(`not (${info.condition})`, info.conditionReads, falseResult.nodes));
-                }
+                emitBranchNode(nodes, info, trueResult, falseResult);
                 current = join;
                 continue;
             }
 
-            const trueResult = emitSequence(info.onTrue, exitNode);
-            const falseResult = emitSequence(info.onFalse, exitNode);
-            if (!trueResult.terminates || !falseResult.terminates) {
-                throw new Error(`State ${current} branches to function exit but an arm does not terminate`);
+            const trueResult = emitSequence(info.onTrue, stopState);
+            const falseResult = emitSequence(info.onFalse, stopState);
+
+            if (trueResult.reachesStop || falseResult.reachesStop) {
+                throw new Error("State " + current + " reaches its surrounding continuation without a unique join");
             }
 
-            // Prefer a guard-return shape when both branches end the function. This keeps
-            // the non-taken arm as natural fallthrough, matching source-level early return.
-            nodes.push(ifNode(info.condition, info.conditionReads, trueResult.nodes));
-            nodes.push(...falseResult.nodes);
-            guardBranchCount++;
-            return { nodes, terminates: true };
+            emitBranchNode(nodes, info, trueResult, falseResult);
+            return { nodes, reachesStop: false };
         }
 
-        return { nodes, terminates: false };
+        return { nodes, reachesStop: true };
     }
 
     let structured;
@@ -639,8 +762,8 @@ function solveAcyclicStructured(originalAst, graph) {
     } catch (error) {
         return { applied: false, reason: error.message };
     }
-    if (!structured.terminates) {
-        return { applied: false, reason: "The acyclic entry region does not terminate at function exit" };
+    if (structured.reachesStop) {
+        return { applied: false, reason: "The acyclic entry region reaches function exit without a proven return" };
     }
     if (emittedStates.size !== states.length) {
         return { applied: false, reason: `Acyclic structuring emitted ${emittedStates.size}/${states.length} reachable states` };
