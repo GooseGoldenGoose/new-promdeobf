@@ -489,8 +489,18 @@ function whileGuardNode(condition, conditionReads, conditionBody, body) {
     };
 }
 
+function repeatUntilNode(condition, conditionReads, body, conditionBody) {
+    return {
+        type: "repeat-until",
+        condition,
+        reads: [...(conditionReads || [])],
+        body,
+        conditionBody,
+    };
+}
+
 function operationNode(operation, stateId) {
-    if ((operation?.kind === "structured-numeric-for" || operation?.kind === "structured-while") && operation.structuredNode) {
+    if ((operation?.kind === "structured-numeric-for" || operation?.kind === "structured-while" || operation?.kind === "structured-repeat") && operation.structuredNode) {
         return operation.structuredNode;
     }
     return rawNode(operation, stateId);
@@ -526,6 +536,15 @@ function formatStructuredNodes(nodes, depth = 0) {
             parts.push(lines.join("\n"));
             continue;
         }
+        if (node.type === "repeat-until") {
+            const indent = "    ".repeat(depth);
+            const lines = [`${indent}repeat`];
+            if (node.body.length) lines.push("", formatStructuredNodes(node.body, depth + 1));
+            if (node.conditionBody.length) lines.push("", formatStructuredNodes(node.conditionBody, depth + 1));
+            lines.push("", `${indent}until ${node.condition}`);
+            parts.push(lines.join("\n"));
+            continue;
+        }
         if (node.type !== "if") continue;
         const lines = [`${"    ".repeat(depth)}if ${node.condition} then`];
         if (node.thenBody.length) lines.push("", formatStructuredNodes(node.thenBody, depth + 1));
@@ -551,6 +570,9 @@ function countStructuredStatements(nodes) {
         } else if (node.type === "while-guard") {
             count += countStructuredStatements(node.conditionBody);
             count += countStructuredStatements(node.body);
+        } else if (node.type === "repeat-until") {
+            count += countStructuredStatements(node.body);
+            count += countStructuredStatements(node.conditionBody);
         }
     }
     return count;
@@ -563,6 +585,44 @@ function validateStructuredLocalScopes(nodes) {
     const declarations = new Map();
     const reads = [];
 
+    function isAncestor(ancestor, scopeId) {
+        let current = scopeId;
+        while (current !== null && current !== undefined) {
+            if (current === ancestor) return true;
+            current = parentScope.get(current);
+        }
+        return false;
+    }
+
+    function declarationList(name) {
+        if (!declarations.has(name)) declarations.set(name, []);
+        return declarations.get(name);
+    }
+
+    function addRawDeclaration(name, scopeId, declarationSequence) {
+        const list = declarationList(name);
+        if (list.length) return "Beta name " + name + " has multiple local declarations after structuring";
+        list.push({ scopeId, sequence: declarationSequence, kind: "raw" });
+        return null;
+    }
+
+    function addNumericForDeclaration(name, scopeId, parentScopeId, declarationSequence) {
+        const list = declarationList(name);
+        if (list.some(declaration => declaration.scopeId === scopeId)) {
+            return "Beta name " + name + " has multiple local declarations in one structured scope";
+        }
+        if (list.length) {
+            // Lua evaluates numeric-for bounds in the parent scope, then declares
+            // the loop variable in the loop-body scope. `local x = 1; for x = x, ...`
+            // is valid when beta coalesces the start scratch and loop variable.
+            if (list.some(declaration => !isAncestor(declaration.scopeId, parentScopeId))) {
+                return "Beta name " + name + " has unrelated local declarations after structuring";
+            }
+        }
+        list.push({ scopeId, sequence: declarationSequence, kind: "numeric-for" });
+        return null;
+    }
+
     function visit(body, scopeId) {
         for (const node of body) {
             if (node.type === "raw") {
@@ -570,10 +630,8 @@ function validateStructuredLocalScopes(nodes) {
                 const operation = node.operation || {};
                 const text = String(node.text || "").trimStart();
                 if (operation.emittedTarget && text.startsWith("local ")) {
-                    if (declarations.has(operation.emittedTarget)) {
-                        return `Beta name ${operation.emittedTarget} has multiple local declarations after structuring`;
-                    }
-                    declarations.set(operation.emittedTarget, { scopeId, sequence });
+                    const declarationError = addRawDeclaration(operation.emittedTarget, scopeId, sequence);
+                    if (declarationError) return declarationError;
                 }
                 for (const name of node.reads || []) reads.push({ name, scopeId, sequence });
                 continue;
@@ -591,14 +649,23 @@ function validateStructuredLocalScopes(nodes) {
                 if (bodyError) return bodyError;
                 continue;
             }
+            if (node.type === "repeat-until") {
+                const bodyScope = nextScopeId++;
+                parentScope.set(bodyScope, scopeId);
+                const bodyError = visit(node.body, bodyScope);
+                if (bodyError) return bodyError;
+                const conditionError = visit(node.conditionBody, bodyScope);
+                if (conditionError) return conditionError;
+                sequence++;
+                for (const name of node.reads || []) reads.push({ name, scopeId: bodyScope, sequence });
+                continue;
+            }
             for (const name of node.reads || []) reads.push({ name, scopeId, sequence });
             if (node.type === "numeric-for") {
                 const bodyScope = nextScopeId++;
                 parentScope.set(bodyScope, scopeId);
-                if (declarations.has(node.variable)) {
-                    return `Beta name ${node.variable} has multiple local declarations after structuring`;
-                }
-                declarations.set(node.variable, { scopeId: bodyScope, sequence });
+                const declarationError = addNumericForDeclaration(node.variable, bodyScope, scopeId, sequence);
+                if (declarationError) return declarationError;
                 const bodyError = visit(node.body, bodyScope);
                 if (bodyError) return bodyError;
                 continue;
@@ -620,23 +687,15 @@ function validateStructuredLocalScopes(nodes) {
     const traversalError = visit(nodes, 0);
     if (traversalError) return traversalError;
 
-    function isAncestor(ancestor, scopeId) {
-        let current = scopeId;
-        while (current !== null && current !== undefined) {
-            if (current === ancestor) return true;
-            current = parentScope.get(current);
-        }
-        return false;
-    }
-
     for (const read of reads) {
-        const declaration = declarations.get(read.name);
-        if (!declaration) continue;
-        if (!isAncestor(declaration.scopeId, read.scopeId)) {
-            return `Structuring would move ${read.name} outside the Lua scope of its beta declaration`;
+        const list = declarations.get(read.name);
+        if (!list || !list.length) continue;
+        const visible = list.filter(declaration => isAncestor(declaration.scopeId, read.scopeId));
+        if (!visible.length) {
+            return "Structuring would move " + read.name + " outside the Lua scope of its beta declaration";
         }
-        if (declaration.sequence > read.sequence) {
-            return `Structuring would read ${read.name} before its beta declaration`;
+        if (!visible.some(declaration => declaration.sequence <= read.sequence)) {
+            return "Structuring would read " + read.name + " before its beta declaration";
         }
     }
     return null;
@@ -1163,10 +1222,257 @@ function collapseCompilerWhileLoops(graph) {
     return { graph: working, loopCount, bodyBranchCount, bodyJoinCount };
 }
 
+
+function collectRepeatBodyRegion(stateById, predecessors, bodyId, checkId, exitId) {
+    const ids = new Set();
+    const visiting = new Set();
+    const latchIds = new Set();
+    let invalid = false;
+
+    function visit(stateId) {
+        if (invalid || ids.has(stateId)) return;
+        if (stateId === checkId || stateId === exitId || visiting.has(stateId)) {
+            invalid = true;
+            return;
+        }
+        const state = stateById.get(stateId);
+        if (!state || !Array.isArray(state.successors) || state.successors.length === 0) {
+            invalid = true;
+            return;
+        }
+        visiting.add(stateId);
+        for (const successor of state.successors) {
+            if (successor === checkId) {
+                latchIds.add(stateId);
+                continue;
+            }
+            if (successor === exitId || !stateById.has(successor)) {
+                invalid = true;
+                break;
+            }
+            visit(successor);
+            if (invalid) break;
+        }
+        visiting.delete(stateId);
+        ids.add(stateId);
+    }
+
+    visit(bodyId);
+    if (invalid || !ids.size || !latchIds.size) return null;
+
+    const checkIncoming = predecessors.get(checkId) || [];
+    if (!sameMembers(checkIncoming, [...latchIds])) return null;
+
+    const bodyIncoming = predecessors.get(bodyId) || [];
+    const externalBodyIncoming = bodyIncoming.filter(predecessor => predecessor !== checkId && !ids.has(predecessor));
+    if (externalBodyIncoming.length !== 1) return null;
+    const preheaderId = externalBodyIncoming[0];
+    if (!sameMembers(bodyIncoming, [checkId, preheaderId])) return null;
+
+    for (const stateId of ids) {
+        if (stateId === bodyId) continue;
+        const incoming = predecessors.get(stateId) || [];
+        if (incoming.some(predecessor => !ids.has(predecessor))) return null;
+    }
+
+    return { ids, latchIds, preheaderId };
+}
+
+function originalOperationTarget(operation) {
+    const explicit = String(operation?.originalTarget || '').trim();
+    if (explicit) return explicit;
+    const text = String(operation?.originalText || '').trim();
+    const equalsIndex = text.indexOf('=');
+    if (equalsIndex < 0) return '';
+    const lhs = text.slice(0, equalsIndex).trim();
+    return /^[A-Za-z_][A-Za-z0-9_]*$/.test(lhs) ? lhs : '';
+}
+
+function originalOperationRhs(operation) {
+    const text = String(operation?.originalText || '').trim();
+    if (text) {
+        const equalsIndex = text.indexOf('=');
+        if (equalsIndex >= 0) return text.slice(equalsIndex + 1).trim();
+    }
+    return String(operation?.rhs || '').trim();
+}
+
+function canonicalCompilerExpression(node, latestDefinitions) {
+    if (node === null || node === undefined) return node;
+    if (Array.isArray(node)) return node.map(item => canonicalCompilerExpression(item, latestDefinitions));
+    if (typeof node !== 'object') return node;
+    if (node.type === 'Identifier') {
+        const localDefinition = latestDefinitions.get(node.name);
+        return { type: 'Identifier', binding: localDefinition === undefined ? 'external:' + node.name : 'definition:' + localDefinition };
+    }
+    const output = {};
+    for (const key of Object.keys(node).sort()) {
+        if (key === 'loc' || key === 'range' || key === 'raw' || key === 'comments' || key === 'tokens') continue;
+        output[key] = canonicalCompilerExpression(node[key], latestDefinitions);
+    }
+    return output;
+}
+
+function canonicalCompilerOperationSequence(operations) {
+    const latestDefinitions = new Map();
+    const sequence = [];
+    for (let index = 0; index < operations.length; index++) {
+        const operation = operations[index];
+        const rhs = originalOperationRhs(operation);
+        if (!rhs) return null;
+        const parsed = parseTransitionExpression(rhs)?.expression || null;
+        if (!parsed) return null;
+        sequence.push(canonicalCompilerExpression(parsed, latestDefinitions));
+        const target = originalOperationTarget(operation);
+        if (target) latestDefinitions.set(target, index);
+    }
+    return JSON.stringify(sequence);
+}
+
+function findUniqueCompilerOperationSlice(operations, pattern) {
+    if (!pattern.length) return { start: -1, operations: new Set() };
+    const patternSignature = canonicalCompilerOperationSequence(pattern);
+    if (!patternSignature) return null;
+    const candidates = [];
+    for (let start = 0; start + pattern.length <= operations.length; start++) {
+        const candidate = operations.slice(start, start + pattern.length);
+        if (canonicalCompilerOperationSequence(candidate) === patternSignature) candidates.push(start);
+    }
+    if (candidates.length !== 1) return null;
+    const start = candidates[0];
+    return { start, operations: new Set(operations.slice(start, start + pattern.length)) };
+}
+
+function matchCompilerRepeat(graph, checkStateId) {
+    const states = graph.states || [];
+    const stateById = new Map(states.map(state => [state.id, state]));
+    const predecessors = computeGraphPredecessors(states);
+    const check = stateById.get(checkStateId);
+    if (!check || !Array.isArray(check.successors) || check.successors.length !== 2) return null;
+    if (hasUnsafeUnsupportedOperation(check.operations || [])) return null;
+
+    const checkInfo = transitionInfo(check);
+    if (checkInfo.error || checkInfo.kind !== 'branch') return null;
+    const transitionIndex = check.operations.indexOf(checkInfo.operation);
+    if (transitionIndex !== check.operations.length - 1) return null;
+
+    // Local WeAreDevs RepeatStatement lowering is post-test: condition true exits,
+    // condition false jumps back to the body entry.
+    const exitId = checkInfo.onTrue;
+    const bodyId = checkInfo.onFalse;
+    if (!stateById.has(bodyId) || !stateById.has(exitId)) return null;
+
+    const region = collectRepeatBodyRegion(stateById, predecessors, bodyId, check.id, exitId);
+    if (!region) return null;
+    const preheader = stateById.get(region.preheaderId);
+    if (!preheader || !Array.isArray(preheader.successors) || preheader.successors.length !== 1 || preheader.successors[0] !== bodyId) return null;
+    if (hasUnsafeUnsupportedOperation(preheader.operations || [])) return null;
+
+    const preOps = preheader.operations || [];
+    const preTransitionIndex = preOps.findLastIndex(operation => operation?.kind === 'state-transition');
+    if (preTransitionIndex !== preOps.length - 1) return null;
+    const preTransition = preOps[preTransitionIndex];
+    if (directNumericOperationValue({ expression: parseOperationExpression(preTransition) }) !== bodyId) return null;
+
+    const conditionOperations = (check.operations || []).filter(operation => operation !== checkInfo.operation);
+    if (conditionOperations.some(operation => !operationText(operation))) return null;
+
+    // Prometheus compileStatement(RepeatStatement) compiles the same condition once
+    // in the preheader, discards its result, then compiles it again in the real check.
+    // Restore source semantics by removing that compiler-added first evaluation.
+    const preBodyOperations = preOps.slice(0, preTransitionIndex);
+    const junkSlice = findUniqueCompilerOperationSlice(preBodyOperations, conditionOperations);
+    if (!junkSlice) return null;
+    const retainedPreheaderOperations = preBodyOperations.filter(operation => !junkSlice.operations.has(operation));
+
+    const structuredBody = structureLoopBodyRegion(stateById, region, bodyId, check.id, new Set());
+    if (!structuredBody) return null;
+
+    return {
+        preheaderId: preheader.id,
+        checkId: check.id,
+        bodyId,
+        bodyStateIds: [...region.ids],
+        exitId,
+        condition: checkInfo.condition,
+        conditionReads: checkInfo.conditionReads,
+        conditionNodes: conditionOperations.map(operation => operationNode(operation, check.id)),
+        bodyNodes: structuredBody.nodes,
+        bodyBranchCount: structuredBody.branchCount,
+        bodyJoinCount: structuredBody.joinCount,
+        retainedPreheaderOperations,
+        removedCompilerConditionOperationCount: junkSlice.operations.size,
+    };
+}
+
+function collapseCompilerRepeatLoops(graph) {
+    let working = {
+        ...graph,
+        states: (graph.states || []).map(state => ({
+            ...state,
+            predecessors: [...(state.predecessors || [])],
+            successors: [...(state.successors || [])],
+            operations: [...(state.operations || [])],
+        })),
+    };
+    let loopCount = 0;
+    let bodyBranchCount = 0;
+    let bodyJoinCount = 0;
+    let removedCompilerConditionOperationCount = 0;
+
+    while (true) {
+        let match = null;
+        for (const state of working.states) {
+            match = matchCompilerRepeat(working, state.id);
+            if (match) break;
+        }
+        if (!match) break;
+
+        const loopNode = repeatUntilNode(match.condition, match.conditionReads, match.bodyNodes, match.conditionNodes);
+        const structuredOperation = {
+            kind: 'structured-repeat',
+            structuredNode: loopNode,
+            emittedText: formatStructuredNodes([loopNode]),
+            reads: [],
+            returnSinkSafe: false,
+        };
+        const stateName = graph.stateName || 'state';
+        const syntheticTransition = {
+            kind: 'state-transition',
+            emittedTarget: stateName,
+            rhs: String(match.exitId),
+            emittedText: stateName + ' = ' + match.exitId,
+            reads: [],
+        };
+
+        const removed = new Set([match.checkId, ...match.bodyStateIds]);
+        working = {
+            ...working,
+            states: working.states.filter(state => !removed.has(state.id)).map(state => {
+                if (state.id !== match.preheaderId) return state;
+                return {
+                    ...state,
+                    operations: [...match.retainedPreheaderOperations, structuredOperation, syntheticTransition],
+                    successors: [match.exitId],
+                };
+            }),
+        };
+        working = rebuildGraphPredecessors(working);
+        loopCount++;
+        bodyBranchCount += match.bodyBranchCount || 0;
+        bodyJoinCount += match.bodyJoinCount || 0;
+        removedCompilerConditionOperationCount += match.removedCompilerConditionOperationCount || 0;
+    }
+
+    return { graph: working, loopCount, bodyBranchCount, bodyJoinCount, removedCompilerConditionOperationCount };
+}
+
 function collapseCompilerStructuredLoops(graph) {
     let working = graph;
     let numericForLoopCount = 0;
     let whileLoopCount = 0;
+    let repeatLoopCount = 0;
+    let removedRepeatCompilerConditionOperationCount = 0;
     let bodyBranchCount = 0;
     let bodyJoinCount = 0;
 
@@ -1183,10 +1489,25 @@ function collapseCompilerStructuredLoops(graph) {
         bodyBranchCount += whiles.bodyBranchCount || 0;
         bodyJoinCount += whiles.bodyJoinCount || 0;
 
-        if (numeric.loopCount === 0 && whiles.loopCount === 0) break;
+        const repeats = collapseCompilerRepeatLoops(working);
+        working = repeats.graph;
+        repeatLoopCount += repeats.loopCount;
+        removedRepeatCompilerConditionOperationCount += repeats.removedCompilerConditionOperationCount || 0;
+        bodyBranchCount += repeats.bodyBranchCount || 0;
+        bodyJoinCount += repeats.bodyJoinCount || 0;
+
+        if (numeric.loopCount === 0 && whiles.loopCount === 0 && repeats.loopCount === 0) break;
     }
 
-    return { graph: working, numericForLoopCount, whileLoopCount, bodyBranchCount, bodyJoinCount };
+    return {
+        graph: working,
+        numericForLoopCount,
+        whileLoopCount,
+        repeatLoopCount,
+        removedRepeatCompilerConditionOperationCount,
+        bodyBranchCount,
+        bodyJoinCount,
+    };
 }
 
 function rebuildGraphPredecessors(graph) {
@@ -1684,7 +2005,13 @@ function solveSingleEntryControlFlow(originalAst, graph) {
     if (graph.entries.length !== 1) {
         return { applied: false, reason: "Internal beta CF region must have exactly one entry" };
     }
-    if (graph.states.length === 1) return { ...solveSingleState(originalAst, graph), numericForLoopCount: 0, whileLoopCount: 0 };
+    if (graph.states.length === 1) return {
+        ...solveSingleState(originalAst, graph),
+        numericForLoopCount: 0,
+        whileLoopCount: 0,
+        repeatLoopCount: 0,
+        removedRepeatCompilerConditionOperationCount: 0,
+    };
 
     const collapsed = collapseCompilerStructuredLoops(graph);
     const solved = solveAcyclicStructured(originalAst, collapsed.graph);
@@ -1696,6 +2023,8 @@ function solveSingleEntryControlFlow(originalAst, graph) {
         joinCount: (solved.joinCount || 0) + (collapsed.bodyJoinCount || 0),
         numericForLoopCount: collapsed.numericForLoopCount,
         whileLoopCount: collapsed.whileLoopCount,
+        repeatLoopCount: collapsed.repeatLoopCount,
+        removedRepeatCompilerConditionOperationCount: collapsed.removedRepeatCompilerConditionOperationCount,
     };
 }
 
@@ -1785,6 +2114,8 @@ function solveClosureRegions(originalAst, graph) {
         guardBranchCount: sum("guardBranchCount"),
         numericForLoopCount: sum("numericForLoopCount"),
         whileLoopCount: sum("whileLoopCount"),
+        repeatLoopCount: sum("repeatLoopCount"),
+        removedRepeatCompilerConditionOperationCount: sum("removedRepeatCompilerConditionOperationCount"),
         terminalReturnCount: sum("terminalReturnCount"),
         terminalReturnPayloadSunk: results.some(result => result.terminalReturnPayloadSunk),
         terminalReturnPayloadSunkCount: sum("terminalReturnPayloadSunkCount"),
@@ -1828,6 +2159,7 @@ module.exports = {
     lowerTerminalReturn,
     collapseCompilerNumericForLoops,
     collapseCompilerWhileLoops,
+    collapseCompilerRepeatLoops,
     collapseCompilerStructuredLoops,
     solveBetaControlFlow,
 };

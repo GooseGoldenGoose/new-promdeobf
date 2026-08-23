@@ -696,6 +696,52 @@ const bodyIndex = whileGuardStructured.source.indexOf("local sink = consume()");
 assert(whileIndex >= 0 && whileIndex < conditionIndex && conditionIndex < guardIndex && guardIndex < bodyIndex);
 parseLua(whileGuardStructured.source, "<beta-cf-while-guard-output>");
 
+
+const repeatUntilStructured = solveBetaControlFlow(ast, {
+    applied: true,
+    graph: {
+        cfgComplete: true,
+        stateName: "state",
+        entries: [1],
+        states: [
+            { id: 1, predecessors: [], successors: [2], operations: [
+                { kind: "statement", emittedText: "beforeRepeat()", originalText: "beforeRepeat()", reads: [] },
+                { kind: "version-define", emittedTarget: "junkFn", rhs: "getPredicate()", emittedText: "local junkFn = getPredicate()", originalText: "r1 = getPredicate()", reads: [] },
+                { kind: "version-define", emittedTarget: "junkCond", rhs: "junkFn()", emittedText: "local junkCond = junkFn()", originalText: "state = r1()", reads: ["junkFn"] },
+                { kind: "version-define", emittedTarget: "setup", rhs: "args", emittedText: "local setup = args", originalText: "r2 = args", reads: ["args"] },
+                { kind: "state-transition", emittedTarget: "state", rhs: "2", emittedText: "state = 2", originalText: "state = 2", reads: [] },
+            ] },
+            { id: 2, predecessors: [1, 3], successors: [3], operations: [
+                { kind: "statement", emittedText: "consume()", originalText: "consume()", reads: [] },
+                { kind: "state-transition", emittedTarget: "state", rhs: "3", emittedText: "state = 3", originalText: "state = 3", reads: [] },
+            ] },
+            { id: 3, predecessors: [2], successors: [4, 2], operations: [
+                { kind: "version-define", emittedTarget: "realFn", rhs: "getPredicate()", emittedText: "local realFn = getPredicate()", originalText: "r1 = getPredicate()", reads: [] },
+                { kind: "version-define", emittedTarget: "realCond", rhs: "realFn()", emittedText: "local realCond = realFn()", originalText: "state = r1()", reads: ["realFn"] },
+                { kind: "state-transition", emittedTarget: "state", rhs: "realCond and 4 or 2", emittedText: "state = realCond and 4 or 2", originalText: "state = state and 4 or 2", reads: ["realCond"] },
+            ] },
+            { id: 4, predecessors: [3], successors: [], operations: [
+                { kind: "return-payload", terminalCompilerReturnPayload: true, returnExpressions: [], emittedText: "ReturnVal = {}", rhs: "{}", reads: [] },
+                { kind: "state-transition", emittedTarget: "state", emittedText: "state = nil", rhs: "nil", reads: [] },
+            ] },
+        ],
+    },
+});
+assert.equal(repeatUntilStructured.applied, true);
+assert.equal(repeatUntilStructured.repeatLoopCount, 1);
+assert.equal(repeatUntilStructured.numericForLoopCount, 0);
+assert.equal(repeatUntilStructured.whileLoopCount, 0);
+assert.equal(repeatUntilStructured.removedRepeatCompilerConditionOperationCount, 2);
+assert(repeatUntilStructured.source.includes("beforeRepeat()"));
+assert(repeatUntilStructured.source.includes("local setup = args"));
+assert(repeatUntilStructured.source.includes("repeat"));
+assert(repeatUntilStructured.source.includes("consume()"));
+assert(repeatUntilStructured.source.includes("until realCond"));
+assert(!repeatUntilStructured.source.includes("junkFn"));
+assert(!repeatUntilStructured.source.includes("junkCond"));
+assert(!repeatUntilStructured.source.includes("state ="));
+parseLua(repeatUntilStructured.source, "<beta-cf-repeat-until-output>");
+
 const cyclic = solveBetaControlFlow(ast, {
     applied: true,
     graph: {
