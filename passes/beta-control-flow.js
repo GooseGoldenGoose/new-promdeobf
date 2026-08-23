@@ -135,6 +135,7 @@ function solveBetaControlFlow(originalAst, betaResult) {
         }
         headerLines.push(`local _env = ${provider}`);
     }
+    headerLines.push("local args = { ... }");
 
     const sections = ["--headers"];
     if (headerLines.length) sections.push(headerLines.join("\n"));

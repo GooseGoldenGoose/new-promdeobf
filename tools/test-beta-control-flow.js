@@ -32,7 +32,7 @@ assert.equal(result.applied, true);
 assert.equal(result.mode, "single-state");
 assert.equal(result.environmentHeader, "local _env = getfenv()");
 assert.equal(result.terminalReturnPayloadSunk, true);
-assert(result.source.startsWith("--headers\n\nlocal _env = getfenv()\n\n--body\n\n"));
+assert(result.source.startsWith("--headers\n\nlocal _env = getfenv()\nlocal args = { ... }\n\n--body\n\n"));
 assert(!result.source.includes("while state do"));
 assert(!result.source.includes("if state =="));
 assert(result.source.indexOf("r_v3_1 = nil") < result.source.indexOf("ReturnVal = {}"));
