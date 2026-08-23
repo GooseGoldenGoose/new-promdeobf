@@ -30,7 +30,7 @@ When continuing this project in a new chat:
 - Preserve stable pipeline behavior when experimenting. A recovery pass must fail closed: if proof is incomplete, preserve the previous safe output rather than guess.
 - End every project-related turn with exactly: `Done for this turn — you can prompt now.`
 
-Current implementation checkpoint is `7442545 Document overflow register scheduling` on `main`, pushed to `origin/main`. The active emitted pipeline includes structural helper/environment naming, safe assignment splitting, closed reachable VM-state normalization, analysis-only VM binding/capture metadata, dependency-safe scalar + proven-overflow register scheduling, VM register naming (`ReturnVal`, `rN`), and structural semantic naming (`InitialArgs`, helper locals, fixed closure args, `RegisterOverflow`). Source lexical-scope reconstruction has NOT been implemented yet.
+Latest implementation checkpoint is `bf7b107 Run semantic naming with VM helpers` on `main`, pushed to `origin/main`. Structural semantic naming (`InitialArgs`, helper locals, fixed closure args, `RegisterOverflow`) now runs with VM helper recovery before assignment splitting/state recovery instead of as a late post-register pass. The rest of the emitted pipeline remains closed reachable VM-state normalization, analysis-only VM binding/capture metadata, dependency-safe scalar + proven-overflow register scheduling, and VM register naming (`ReturnVal`, `rN`). Source lexical-scope reconstruction has NOT been implemented yet.
 
 # Core Knowledge & Rules
 
@@ -529,12 +529,13 @@ without producing unrelated locals.
 - New primitive regression `tools/test-text-edits.js` covers replacement/text edits, absolute base offsets, and overlap rejection. Current focused regressions all pass: text edits, batch parameter rename, VM register scheduler, and VM state reachability.
 - Performance reference on the same sample-5 stress fixture: the pre-audit stage-timed run measured about 10,223 ms total. After `0f4650a`, five `runDeobfuscator` runs measured 1220.0, 1011.1, 1182.8, 1085.4, and 1097.6 ms (average 1119.4 ms, median 1097.6 ms). Treat this as an approximate ~9x core-pipeline improvement, not a universal hardware-independent guarantee.
 - Semantic validation after optimization is stronger than runtime-only: outputs for samples 1 through 9 are byte-for-byte identical to outputs generated from checkpoint `c224017`. LuaJIT runtime parity also matches samples 1/2/3/4/6/8/9, both deterministic sample-7 seeds, and source/obfuscated/deobfuscated triples for samples 6/7/8/9. Untracked sample 5 remains 930/938 reachable dispatcher leaves, 8 dead leaves pruned, and 116 functions.
+- Semantic naming was moved from the late post-register stage to the VM-helper stage in `bf7b107`. Samples 1-10, including untracked stress sample 5, remained byte-for-byte identical. A five-run alternating sample-5 benchmark measured old 1993.5 ms average vs new 1935.4 ms average (~2.9% faster on that run); treat this as local evidence, not a universal guarantee.
 - Optimization boundary: do not replace the proven reaching-def/liveness fixed points or scheduler semantics merely to chase micro-benchmarks. Their convergence is already small on sample 5 (321 total reaching iterations across 116 functions, max 8; 241 total liveness iterations, max 7). Remaining scheduler `indexOf` operations are local to short state blocks; any more invasive mutable-index/topological rewrite requires a separate correctness proof and benchmark before adoption.
 
 
 ## Semantic Naming Layer (2026-08-23)
 
-- `passes/semantic-names.js` runs after VM register naming and renames only structurally proven compiler roles; it never renames from randomized spelling alone. Scope reconstruction remains unchanged and analysis-only.
+- `passes/semantic-names.js` now runs immediately with VM helper naming, before safe parallel-assignment splitting and Step 3. It renames only structurally proven compiler roles and never from randomized spelling alone. Moving it earlier is presentation-only; scope reconstruction remains unchanged and analysis-only.
 - The outer wrapper parameter receiving the unique `{...}` argument is renamed `InitialArgs`. This is distinct from the VM parameter `args`: `InitialArgs` is the original top-level vararg table passed into the root closure, while `args` is the per-closure invocation argument table.
 - Proven `createClosure*` helpers rename their `createUpvalueProxy(captures)` local to `gcProxy`, returned nested-function local to `closure`, and fixed-arity nested parameters to `arg1`, `arg2`, ...; the vararg factory keeps `...`.
 - `releaseUpvalues` renames its structural iteration locals to `captureIndex` and `upvalueId`. `createUpvalueProxy` renames its numeric-for index to `captureIndex`, the `newproxy(true)` local to `proxy`, and `getmetatable(proxy)` to `proxyMetatable`.
@@ -566,8 +567,8 @@ without producing unrelated locals.
 - Workspace: `C:\Users\reala\Desktop\!workspaces\promdeobf ova\new promdeobf`.
 - Branch: `main`.
 - Remote: `https://github.com/GooseGoldenGoose/new-promdeobf.git`.
-- Latest pushed checkpoint at this snapshot: `7442545 Document overflow register scheduling`.
-- Immediately preceding implementation commit: `b7f6185 Schedule overflow VM registers`.
+- Latest pushed implementation checkpoint at this snapshot: `bf7b107 Run semantic naming with VM helpers`.
+- Immediately preceding checkpoint: `a5ace7e Refresh fresh-chat handoff context`.
 - Before changing anything in a new chat: read this entire `CONTEXT.md`, run `git status --short --branch`, then `git log -8 --oneline --decorate`. Never assume the checkout is still at this exact commit if newer work exists.
 - Every project code/content change, even small, gets a focused commit and `git push origin main`. Stage only files belonging to the current change.
 - Never stage or modify `formater/` or `sample/5.txt` unless the user explicitly changes that policy. Generated `output/*.log` files may exist from validation and must not be committed accidentally.
@@ -596,14 +597,13 @@ without producing unrelated locals.
 2. ConstantArray recovery/inlining.
 3. Environment provenance/rename to `_env`.
 4. Structural closure-factory naming: `createClosure`, `createClosureN`.
-5. VM helper naming: `unpack`, `newproxy`, `setmetatable`, `getmetatable`, `select`, `vm`, upvalue helpers/tables and semantic parameters.
+5. VM helper + structural semantic naming: helper roles (`unpack`, `newproxy`, `setmetatable`, `getmetatable`, `select`, `vm`, upvalue helpers/tables/parameters) plus `InitialArgs`, closure helper locals, fixed closure `argN`, release/proxy locals, and proven `RegisterOverflow`.
 6. Split only proven-safe parallel assignments.
 7. Step 3 VM-state/CFG recovery: reachability-driven roots, closed graph proof, dead-state pruning, contiguous normalized IDs, balanced dispatcher rendering, canonical stop `state = nil` at actual leaf tail, no normalized invalid/unreachable fallback.
 8. Step 4 VM binding/capture analysis: analysis-only reaching definitions, liveness, definition epochs, capture slots, static upvalue-cell identities, relays, binding-end/ownership-handoff candidates.
 9. Dependency-safe VM register scheduling inside normalized leaves.
 10. VM register presentation naming: the VM’s own final `return unpack(R)` identifies that VM-local binding as `ReturnVal`; every use/write of that same binding inside `vm` is renamed consistently. Other scalar VM registers become deterministic `r1`, `r2`, ... . Same-spelled identifiers outside `vm` are untouched.
-11. Structural semantic naming: wrapper original vararg table -> `InitialArgs`; closure helper locals -> `gcProxy` / `closure`; fixed closure parameters -> `arg1..argN`; `releaseUpvalues` locals -> `captureIndex` / `upvalueId`; proxy helper locals -> `proxy` / `proxyMetatable`; proven overflow bank -> `RegisterOverflow`.
-12. Final reparse and output.
+11. Final reparse and output.
 
 ### State / scheduler facts that must not regress
 
@@ -614,7 +614,7 @@ without producing unrelated locals.
 - Scheduler NEVER deletes stores. It moves only proven pure register assignments through RAW/WAR/WAW-safe crossings and validates every reordered segment fail-closed.
 - Unread pure writes sink toward the actual dispatcher-leaf tail; the final canonical `state = nil` remains the last stop anchor.
 - Scalar scheduler reads/writes are cached per statement.
-- Proven overflow register banks now participate in exactly the same scheduling logic as scalar registers. Detection is structural BEFORE the semantic name `RegisterOverflow` exists: unique empty-table VM bank before scalar declaration; every bank reference must be a positive constant numeric index; no alias/bare use/dynamic index/shadowing. Each slot is an internal identity such as `overflow:1`. Ordinary tables remain conservative.
+- Proven overflow register banks participate in exactly the same scheduling logic as scalar registers. Detection is structural and does not depend on the spelling `RegisterOverflow`; semantic naming now runs earlier, so the bank may already carry that name when scheduling starts. Proof still requires a unique empty-table VM bank before the scalar declaration, positive constant numeric indices only, and no alias/bare use/dynamic index/shadowing. Each slot is an internal identity such as `overflow:1`. Ordinary tables remain conservative.
 
 ### Current overflow proof / sample 10
 
@@ -659,6 +659,7 @@ without producing unrelated locals.
 `0b60f90 Record overflow regression`
 `b7f6185 Schedule overflow VM registers`
 `7442545 Document overflow register scheduling`
+`bf7b107 Run semantic naming with VM helpers`
 
 ### New-chat operating instruction
 
