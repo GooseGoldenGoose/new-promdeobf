@@ -30,7 +30,7 @@ When continuing this project in a new chat:
 - Preserve stable pipeline behavior when experimenting. A recovery pass must fail closed: if proof is incomplete, preserve the previous safe output rather than guess.
 - End every project-related turn with exactly: `Done for this turn — you can prompt now.`
 
-Latest beta behavior checkpoint is `ef924ef Restrict beta return payload sinking` on `main`, pushed to `origin/main`. Beta keeps the sparse data-flow register-epoch model from `95aebdc` and now has a separate control-flow presentation stage for the first proven-safe case: one complete CFG entry containing exactly one terminal state. It removes the VM wrapper/dispatcher and emits a flat beta body with a structurally derived environment header. Multi-state CFGs still fail closed; branch/loop structuring is not implemented yet. Beta remains analysis/presentation-only. All tracked fixtures `sample/1` through `sample/11` have matching `.source.lua` + formatter-normalized `.txt` pairs. Source lexical-scope reconstruction has NOT been implemented yet.
+Latest beta behavior checkpoint is `aa1766f Preserve compiler-shaped beta return payloads` on `main`, pushed to `origin/main`. Beta keeps the sparse data-flow register-epoch model from `95aebdc` and now has a separate control-flow presentation stage for the first proven-safe case: one complete CFG entry containing exactly one terminal state. It removes the VM wrapper/dispatcher and emits a flat beta body with a structurally derived environment header. Multi-state CFGs still fail closed; branch/loop structuring is not implemented yet. Beta remains analysis/presentation-only. All tracked fixtures `sample/1` through `sample/12` have matching `.source.lua` + formatter-normalized `.txt` pairs. Source lexical-scope reconstruction has NOT been implemented yet.
 
 # Core Knowledge & Rules
 
@@ -487,7 +487,7 @@ without producing unrelated locals.
 - Sample 8 exposes the current behavior clearly: `D = "keep1"` stays next to its call, `B = "print"` stays next to `_env[B]`, `z = D + G` stays immediately followed by `D = z` because `D` is read later in that state, while truly unread `j = args` now sinks to the state-body tail with the final cleanup writes. The ownership-handoff pair remains adjacent `D = nil; D = 30`. The scheduler intentionally never removes overwritten or unread stores. Its proven random `_env[...]` stop sentinel is now removed by Step 3 and re-emitted as final `state = nil`, so the stop is structurally at the bottom of the state and unread pure writes stay immediately above it.
 - `tools/test-vm-register-scheduler.js` is a focused scheduler regression covering producer/use compaction, pure producer sinking, identifier-copy pulling, write/write adjacency without deletion, unread-to-tail sinking, RAW/WAR/WAW preservation, and effectful-call-order preservation; it currently passes.
 - Current sample 1 scheduling changes 2 blocks with 43 dependency-safe swaps and 3 unread sinks; runtime parity remains exact.
-- Current paired fixture coverage is samples 1-11. New sample 5 schedules 390 blocks with 221,956 dependency-safe swaps, 217 unread sinks, and a structurally proven 23-slot overflow bank. Sample 10 remains the natural overflow-boundary fixture with 19 slots.
+- Current paired fixture coverage is samples 1-12. New sample 5 schedules 390 blocks with 221,956 dependency-safe swaps, 217 unread sinks, and a structurally proven 23-slot overflow bank. Sample 10 remains the natural overflow-boundary fixture with 19 slots.
 
 
 ## Post-Scheduler VM Register Naming
@@ -516,7 +516,7 @@ without producing unrelated locals.
 - Definitions remain `local` inside the state where the epoch begins even when later state blocks reference that name; current beta is analysis/readability output and is intentionally not required to execute. Normal `output/N.lua` behavior is unchanged. Focused regression `tools/test-beta-register-versions.js` covers join coalescing, compiler-shaped reassignment copies, cleanup boundaries, and scratch-before-local separation; beta output is reparsed before writing.
 - Beta graph command: `node tools/beta-register-graph.js <output.lua> [output-base]`. Default `output/11.lua` output base is `output/11.beta.graph`. It writes `.txt`, `.json`, Graphviz `.dot`, and Mermaid `.mmd`; optional SVG still requires Graphviz `dot`. The graph now calls these structures REGISTER EPOCHS and includes definition/use/provenance/merge/cleanup counts. Sample 11 graph is 3 states / 5 register epochs with 1 attached cleanup; sample 5 full-scale generation succeeds at 938 states / 2291 conservative register epochs, with only 2/2 nil writes proven/attached as cleanups. Focused regression: `tools/test-beta-register-graph.js`.
 - Beta control-flow presentation now lives in `passes/beta-control-flow.js` with CLI `node tools/beta-control-flow.js <output.lua> [output.beta.cf.lua]`. The first stage deliberately accepts only a closed CFG with exactly one entry, one state, and a stop terminator; it then emits `--headers`, a structurally derived environment binding such as `local _env = getfenv()`, and the state operations as a flat `--body`. Any multi-state graph, unsupported state operation, unknown environment provider, or non-terminal entry fails closed.
-- The beta CF stage may sink only the structurally proven EMPTY Prometheus terminal payload `ReturnVal = {}` to the cleanup tail immediately before final `state = nil`. Arbitrary table constructors are never treated as movable return payloads because field expressions can execute calls/effects. A beta-side regression proves `ReturnVal = { mark("table") }; mark("after")` must remain in that order; the earlier broad table-valued rule would have reversed those observable calls. Sample 8 still emits 46 flat statements in `output/8.beta.cf.lua`; its compiler-produced empty payload sinks after cleanup writes and before `state = nil`. Focused regression: `tools/test-beta-control-flow.js`.
+- Final `ReturnVal` preservation is now tied to the real local compiler shape, not to empty tables only. `compileStatement(ReturnStatement)` first evaluates every source return expression into VM registers, then emits `ReturnVal = { registerReads... }` (using `unpack(register)` only for the final multi-return expression), then stops the state. Beta therefore preserves/sinks terminal return tables only when every table entry is a proven VM-register read or `unpack(register)`; synthetic/effectful entries such as `{ mark("table") }` are not accepted because the real compiler would have evaluated that call earlier. Sample 8 still sinks its empty bookkeeping payload; tracked sample 12 proves a real non-empty `return { thing2 }` payload is preserved. Focused regressions: `tools/test-beta-register-versions.js` and `tools/test-beta-control-flow.js`.
 
 
 ## Performance Optimization Audit (2026-08-23)
@@ -539,7 +539,7 @@ without producing unrelated locals.
 - Proven `createClosure*` helpers rename their `createUpvalueProxy(captures)` local to `gcProxy`, returned nested-function local to `closure`, and fixed-arity nested parameters to `arg1`, `arg2`, ...; the vararg factory keeps `...`.
 - `releaseUpvalues` renames its structural iteration locals to `captureIndex` and `upvalueId`. `createUpvalueProxy` renames its numeric-for index to `captureIndex`, the `newproxy(true)` local to `proxy`, and `getmetatable(proxy)` to `proxyMetatable`.
 - When a VM overflow-register table is proven structurally as the table-backed register bank before the scalar register declaration, it is renamed `RegisterOverflow`. Current tracked samples 5 and 10 exercise this path; other fixtures do not invent it.
-- Focused regression `tools/test-semantic-names.js` covers `InitialArgs`, fixed closure `argN`, `gcProxy`, `closure`, `captureIndex`, `upvalueId`, `proxy`, `proxyMetatable`, and `RegisterOverflow`. Current paired fixtures 1-11 remain parse/runtime-valid where executable.
+- Focused regression `tools/test-semantic-names.js` covers `InitialArgs`, fixed closure `argN`, `gcProxy`, `closure`, `captureIndex`, `upvalueId`, `proxy`, `proxyMetatable`, and `RegisterOverflow`. Current paired fixtures 1-12 remain parse/runtime-valid where executable.
 
 ## Sample 10: Natural Register Overflow Regression (2026-08-23)
 
@@ -565,9 +565,9 @@ without producing unrelated locals.
 - Workspace: `C:\Users\reala\Desktop\!workspaces\promdeobf ova\new promdeobf`.
 - Branch: `main`.
 - Remote: `https://github.com/GooseGoldenGoose/new-promdeobf.git`.
-- Latest pushed beta behavior checkpoint at this snapshot: `ef924ef Restrict beta return payload sinking`; register-epoch behavior remains from `95aebdc`, and cleanup-first grouping from `cb2a1af` stays superseded.
+- Latest pushed beta behavior checkpoint at this snapshot: `aa1766f Preserve compiler-shaped beta return payloads`; register-epoch behavior remains from `95aebdc`, and cleanup-first grouping from `cb2a1af` stays superseded.
 - Previous beta behavior checkpoint: `88a2dc5 Preserve final VM special writes in beta`; it is superseded by the current rule that preserves all final `state` writes but only terminal table-valued `ReturnVal`.
-- Latest fixture checkpoint: `4717198 Add beta branch sample 11`.
+- Latest fixture checkpoint: `7685b0d Add real return-table compiler fixture`.
 - Immediately preceding context checkpoint: `2643ebc Document restored sample coverage`.
 - Before changing anything in a new chat: read this entire `CONTEXT.md`, run `git status --short --branch`, then `git log -8 --oneline --decorate`. Never assume the checkout is still at this exact commit if newer work exists.
 - Every project code/content change, even small, gets a focused commit and `git push origin main`. Stage only files belonging to the current change.
@@ -645,6 +645,7 @@ without producing unrelated locals.
 - Sample 9: `local x` / `local y=nil` initialization via special temp + copy; prevents classifying every direct nil as scope cleanup.
 - Sample 10: natural overflow storage boundary and overflow-aware scheduler regression.
 - Sample 11: beta branch/join fixture from `local a = 3123; if _G.wasd then print(a); a = 3 end; print(a)`. Normal source/obfuscated/deobfuscated parity: false path prints `3123`; true path prints `3123`, `3`. Normalized VM has 3 states, 20 definitions, one join group, and 2 cross-block lifetimes. Beta now coalesces the two physical `r2` value definitions by reaching-def/join evidence, not because they share a future nil: state 1 starts `r_v2_1`, state 2 mutates it, state 3 reads it from either predecessor, and the final direct `r2 = nil` is independently proven and attached as the epoch end.
+- Sample 12: real source-return compiler fixture: `thing("table")`, then `thing("after")`, then `return { thing2 }`. Source, formatter-normalized obfuscation, and normal deobfuscated output all print `table` then `after`. The root VM proves Prometheus evaluates both calls first, stores the first result in a register, builds the source table from that register, and only then emits the terminal `ReturnVal = { register }`; the nested `thing` closure similarly ends with `ReturnVal = { argRegister }`. Beta now preserves both final non-empty compiler-shaped `ReturnVal` assignments instead of renaming them.
 
 ### Performance history / boundary
 
@@ -674,6 +675,8 @@ without producing unrelated locals.
 `95aebdc Analyze beta register epochs by data flow`
 `555c588 Add beta single-state control-flow output`
 `ef924ef Restrict beta return payload sinking`
+`aa1766f Preserve compiler-shaped beta return payloads`
+`7685b0d Add real return-table compiler fixture`
 
 ### New-chat operating instruction
 
