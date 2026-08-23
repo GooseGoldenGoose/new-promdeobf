@@ -30,7 +30,7 @@ When continuing this project in a new chat:
 - Preserve stable pipeline behavior when experimenting. A recovery pass must fail closed: if proof is incomplete, preserve the previous safe output rather than guess.
 - End every project-related turn with exactly: `Done for this turn — you can prompt now.`
 
-Latest beta behavior checkpoint is `f16b244 Support beta indexed effect writes` on `main`, pushed to `origin/main`. Beta register versioning now classifies structurally simple single-target indexed/member assignments (`base[index] = value` / `base.member = value`) as ordered `effect-write` operations instead of unsupported register definitions. Register reads in the base/index/RHS are still rewritten from proven reaching beta versions, while the write remains exactly once and in its original operation order for CF structuring. Parallel/mixed/ambiguous assignment shapes remain unsupported. Beta CF also refuses to embed any non-root closure region whose terminal VM return was not fully lowered to a real Lua `return`, preventing a nested function from silently changing return semantics. Captured-upvalue recovery from `39f8d40` remains active and consumes upvalue effect-writes normally. All tracked fixtures `sample/1` through `sample/21` remain paired.
+Latest beta behavior checkpoint is `f16b244 Support beta indexed effect writes` on `main`, pushed to `origin/main`. Beta register versioning now classifies structurally simple single-target indexed/member assignments (`base[index] = value` / `base.member = value`) as ordered `effect-write` operations instead of unsupported register definitions. Register reads in the base/index/RHS are still rewritten from proven reaching beta versions, while the write remains exactly once and in its original operation order for CF structuring. Parallel/mixed/ambiguous assignment shapes remain unsupported. Beta CF also refuses to embed any non-root closure region whose terminal VM return was not fully lowered to a real Lua `return`, preventing a nested function from silently changing return semantics. Captured-upvalue recovery from `39f8d40` remains active and consumes upvalue effect-writes normally. All tracked fixtures `sample/1` through `sample/22` remain paired.
 
 # Core Knowledge & Rules
 
@@ -188,7 +188,7 @@ Current implementation:
 - `formater/luau-format.exe` is the normalization stage. Its existing runner formats Lua and simplifies arithmetic/constants before AST processing.
 - Controlled obfuscator fixture source exists at `C:\Users\reala\Desktop\!workspaces\promdeobf ova\wearedev obf`; `run.bat` invokes `luajit cli.lua --preset Medium input.txt`, producing `input.txt.obfuscated.lua`.
 - Both the formatted sample and the direct `wearedev obf\input.txt.obfuscated.lua` parse successfully as a `Chunk` with one top-level statement.
-- Every tracked `sample/N.txt` must have a matching tracked `sample/N.source.lua`. Current paired coverage is samples 1-21.
+- Every tracked `sample/N.txt` must have a matching tracked `sample/N.source.lua`. Current paired coverage is samples 1-22.
 - `sample/1.source.lua` is the baseline fixture. It is obfuscated with local WeAreDevs Medium, formatter-normalized into `sample/1.txt`, then deobfuscated to `output/1.lua`. Runtime parity is `baseline 14 4`.
 - Samples 2-4 were reconstructed from the old tracked fixtures/behavior: sample 2 is the `warn("gg")` + random branch regression; sample 3 is the shadowed block plus shared captured `x` regression; sample 4 is the shared `total` if/while/repeat regression with intentionally varied closure arities.
 - Sample 5 is now a controlled static stress source with 115 closure functions plus the root VM function. Its first 44 workers include an additional branch so the local compiler emits exactly 938 reachable dispatcher states, matching the old stress fixture state scale while retaining a source file.
@@ -487,7 +487,7 @@ without producing unrelated locals.
 - Sample 8 exposes the current behavior clearly: `D = "keep1"` stays next to its call, `B = "print"` stays next to `_env[B]`, `z = D + G` stays immediately followed by `D = z` because `D` is read later in that state, while truly unread `j = args` now sinks to the state-body tail with the final cleanup writes. The ownership-handoff pair remains adjacent `D = nil; D = 30`. The scheduler intentionally never removes overwritten or unread stores. Its proven random `_env[...]` stop sentinel is now removed by Step 3 and re-emitted as final `state = nil`, so the stop is structurally at the bottom of the state and unread pure writes stay immediately above it.
 - `tools/test-vm-register-scheduler.js` is a focused scheduler regression covering producer/use compaction, pure producer sinking, identifier-copy pulling, write/write adjacency without deletion, unread-to-tail sinking, RAW/WAR/WAW preservation, and effectful-call-order preservation; it currently passes.
 - Current sample 1 scheduling changes 2 blocks with 43 dependency-safe swaps and 3 unread sinks; runtime parity remains exact.
-- Current paired fixture coverage is samples 1-21. New sample 5 schedules 390 blocks with 221,956 dependency-safe swaps, 217 unread sinks, and a structurally proven 23-slot overflow bank. Sample 10 remains the natural overflow-boundary fixture with 19 slots.
+- Current paired fixture coverage is samples 1-22. New sample 5 schedules 390 blocks with 221,956 dependency-safe swaps, 217 unread sinks, and a structurally proven 23-slot overflow bank. Sample 10 remains the natural overflow-boundary fixture with 19 slots.
 
 
 ## Post-Scheduler VM Register Naming
@@ -544,7 +544,7 @@ without producing unrelated locals.
 - Proven `createClosure*` helpers rename their `createUpvalueProxy(captures)` local to `gcProxy`, returned nested-function local to `closure`, and fixed-arity nested parameters to `arg1`, `arg2`, ...; the vararg factory keeps `...`.
 - `releaseUpvalues` renames its structural iteration locals to `captureIndex` and `upvalueId`. `createUpvalueProxy` renames its numeric-for index to `captureIndex`, the `newproxy(true)` local to `proxy`, and `getmetatable(proxy)` to `proxyMetatable`.
 - When a VM overflow-register table is proven structurally as the table-backed register bank before the scalar register declaration, it is renamed `RegisterOverflow`. Current tracked samples 5 and 10 exercise this path; other fixtures do not invent it.
-- Focused regression `tools/test-semantic-names.js` covers `InitialArgs`, fixed closure `argN`, `gcProxy`, `closure`, `captureIndex`, `upvalueId`, `proxy`, `proxyMetatable`, and `RegisterOverflow`. Current paired fixtures 1-21 remain parse/runtime-valid where executable.
+- Focused regression `tools/test-semantic-names.js` covers `InitialArgs`, fixed closure `argN`, `gcProxy`, `closure`, `captureIndex`, `upvalueId`, `proxy`, `proxyMetatable`, and `RegisterOverflow`. Current paired fixtures 1-22 remain parse/runtime-valid where executable.
 
 ## Sample 10: Natural Register Overflow Regression (2026-08-23)
 
@@ -666,6 +666,9 @@ without producing unrelated locals.
 - Sample 21: paired reduced language-basics fixture supplied by the user. It keeps global vararg `concat`, fixed-argument `foo`, four if/else assertions, four arithmetic assertions, and a table literal with a closure-valued `tad` field. Required source -> local WeAreDevs Medium -> formatter flow succeeds. Main resolves 24/25 dispatcher leaves (1 dead leaf pruned) across 12 VM functions, with 211 reaching definitions, no capture slots/cells, and 0/0 upvalue accesses. Source, raw Medium, formatted fixture, normal output, beta-only output, and beta-CF output all execute successfully and print `testing language/library basics` then `PASS` plus a process-specific table identity. Beta now reports 24 blocks / 174 versioned assignments / 1 ordered indexed/member effect write / 6 cross-state versions / 0 skipped assignments. The root `_env[key] = closure` from global `concat = function(...)` is preserved as that ordered effect. Beta CF succeeds in `closure-regions` mode: 24 states, 12 closure regions, 11 inlined closure factories, 5 branches, 4 joins, 1 guard-return branch, 13 terminal returns, and all terminal returns lowered. `output/21.beta.cf.lua` executes successfully under LuaJIT.
 
 
+- Sample 22: paired method/member-assignment fixture from `local a = function() print("g") end; local w = {}; function w:hee() print("hee", self) end; w.yai = function(a) print("yai", a) end; w:yai(); w:hee()`. It follows readable source -> local WeAreDevs Medium -> formatter. Main resolves 4/4 states across 4 VM functions, with 41 reaching definitions, no capture slots/cells, and 0/0 upvalue accesses. Beta reports 4 blocks / 33 versioned assignments / 2 ordered indexed/member effect writes / 0 cross-state versions / 0 skipped assignments. Beta CF succeeds in `closure-regions` mode with 4 closure regions, 3 inlined closure factories, and all 4 terminal returns lowered. Source, raw Medium, formatted fixture, normal output, beta output, and beta-CF output all execute with matching behavior: `yai <w table>` then `hee <same w table>`; table addresses vary by process.
+
+
 ### Performance history / boundary
 
 
@@ -711,6 +714,7 @@ without producing unrelated locals.
 `95dda19 Add reduced language basics sample 21`
 `10e9233 Document reduced sample 21 results`
 `f16b244 Support beta indexed effect writes`
+`7bce6a9 Add method assignment sample 22`
 
 ### New-chat operating instruction
 
