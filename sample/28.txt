@@ -1,0 +1,532 @@
+return (function(...)
+    local a = {
+        "18B+axV=",
+        "Z0M6dRhS1y17dE==",
+        "jc2xTWqObhijezU41E==",
+        "d8blZRbQaxBQ1D==",
+        "yGB6d8i7XD==",
+        "kRbYgRb+",
+        "d8blZRbQaxb01xI=",
+        "yGBvTu==",
+        "ZxruTxL9",
+        "kRbYgRb+axz=",
+        "Z0M6dRh=",
+        "kRbYgRb+axV=",
+        "18B+ax7CayZokxU7",
+        "Z0M6dRhSd0iQ",
+        "gWiMgvj=",
+        "g4q6dvj=",
+        "dWbc1yVS18B+",
+        "Z0M6dRhSkxIS18B+",
+        "yGBY1xI=",
+        "18B+axz=",
+        "1RBC1j==",
+        "gQ241zLMdl3eO268Z7h="
+    }
+    for G, i in ipairs({
+        {
+            1,
+            22
+        },
+        {
+            1,
+            16
+        },
+        {
+            17,
+            22
+        }
+    }) do
+        while i[1] < i[2] do
+            a[i[1]], a[i[2]], i[1], i[2] = a[i[2]], a[i[1]], i[1] + (1), i[2] - (1)
+        end
+    end
+    local function G(G)
+        return a[G - (59746)]
+    end
+    do
+        local G = type
+        local i = string.sub
+        local j = {
+            G = 53,
+            ["+"] = 50,
+            U = 49,
+            Z = 29,
+            q = 9,
+            N = 58,
+            L = 13,
+            ["5"] = 3,
+            f = 10,
+            B = 61,
+            i = 17,
+            D = 0,
+            J = 42,
+            ["4"] = 7,
+            A = 2,
+            n = 12,
+            ["0"] = 54,
+            Y = 44,
+            W = 55,
+            K = 47,
+            E = 32,
+            y = 23,
+            v = 39,
+            M = 33,
+            V = 8,
+            C = 46,
+            ["7"] = 37,
+            h = 20,
+            ["1"] = 25,
+            T = 24,
+            ["9"] = 43,
+            Q = 36,
+            w = 59,
+            j = 16,
+            e = 14,
+            k = 26,
+            u = 48,
+            s = 34,
+            ["3"] = 1,
+            d = 27,
+            ["6"] = 41,
+            a = 11,
+            R = 6,
+            O = 19,
+            ["8"] = 38,
+            H = 15,
+            X = 30,
+            c = 52,
+            m = 35,
+            l = 51,
+            b = 21,
+            S = 45,
+            ["/"] = 63,
+            t = 62,
+            P = 60,
+            F = 31,
+            g = 28,
+            o = 40,
+            r = 57,
+            ["2"] = 5,
+            p = 18,
+            z = 4,
+            I = 56,
+            x = 22
+        }
+        local x = a
+        local r = string.len
+        local c = string.char
+        local b = table.concat
+        local B = math.floor
+        local R = table.insert
+        for a = 1, #x, 1 do
+            local M = x[a]
+            if G(M) == "string" then
+                local G = r(M)
+                local P = {}
+                local F = 1
+                local I = 0
+                local O = 0
+                while F <= G do
+                    local a = i(M, F, F)
+                    local x = j[a]
+                    if x then
+                        I = I + x * (64) ^ ((3) - O)
+                        O = O + (1)
+                        if O == 4 then
+                            O = 0
+                            local a = B(I / (65536))
+                            local G = B((I % (65536)) / (256))
+                            local i = I % (256)
+                            R(P, c(a, G, i))
+                            I = 0
+                        end
+                    elseif a == "=" then
+                        R(P, c(B(I / (65536))))
+                        if F >= G or i(M, F + (1), F + (1)) ~= "=" then
+                            R(P, c(B((I % (65536)) / (256))))
+                        end
+                        break
+                    end
+                    F = F + (1)
+                end
+                x[a] = b(P)
+            end
+        end
+    end
+    return (function(a, j, x, r, c, b, B, I, O, J, H, C, M, P, R, F, i)
+        I, H, P, R, i, J, M, C, F, O = function(a)
+            for G = 1, #a, 1 do
+                M[a[G]] = M[a[G]] + (1)
+            end
+            if x then
+                local i = x(true)
+                local j = c(i)
+                j[G(59767)], j[G(59748)], j[G(59759)] = a, O, function()
+                    return -350880
+                end
+                return i
+            else
+                return r({}, {
+                    [G(59748)] = O,
+                    [G(59767)] = a,
+                    [G(59759)] = function()
+                        return -350880
+                    end
+                })
+            end
+        end, function(a, G)
+            local j = I(G)
+            local x = function(...)
+                return i(a, {
+                    ...
+                }, G, j)
+            end
+            return x
+        end, function()
+            F = F + (1)
+            M[F] = 1
+            return F
+        end, {}, function(i, x, r, c)
+            local k, J, P, M, B, O, o, R, H, I, S, F
+            while i do
+                if i < 9371796 then
+                    if i < 3509243 then
+                        if i < 2129326 then
+                            if i < 1471434 then
+                                if i < 536509 then
+                                    i = 16365922
+                                    k = G(59766)
+                                    S = G(59756)
+                                    B = a[S]
+                                    S = B(k, J, H)
+                                else
+                                    M = G(59755)
+                                    R = x
+                                    B = G(59756)
+                                    i = a[B]
+                                    B = i(M)
+                                    i = 1
+                                    M = i
+                                    i = 13140217
+                                end
+                            else
+                                if i < 2100211 then
+                                    H = G(59753)
+                                    J = P
+                                    B = G(59756)
+                                    i = a[B]
+                                    B = i(H, M, J)
+                                    B = 1
+                                    i = J == B
+                                    i = i and 11738074 or 2952575
+                                else
+                                    S = 2
+                                    B = H <= S
+                                    i = B and 7520017 or 14508083
+                                end
+                            end
+                        else
+                            if i < 2734192 then
+                                if i < 2211358 then
+                                    P = P + I
+                                    J = not O
+                                    B = P <= F
+                                    B = J and B
+                                    J = P >= F
+                                    J = O and J
+                                    B = J or B
+                                    J = 15625548
+                                    i = B and J
+                                    B = 11090106
+                                    i = i or B
+                                else
+                                    B = 1
+                                    P = 2
+                                    F = P
+                                    P = 1
+                                    I = P
+                                    P = 0
+                                    O = I < P
+                                    P = B - I
+                                    i = 7152231
+                                end
+                            else
+                                if i < 2987148 then
+                                    i = M * J
+                                    S = G(59763)
+                                    B = G(59756)
+                                    H = i
+                                    i = a[B]
+                                    B = i(S, H)
+                                    i = 14407739
+                                    H = nil
+                                else
+                                    P = 10
+                                    B = R + P
+                                    B = {
+                                        B
+                                    }
+                                    i = a[G(59762)]
+                                end
+                            end
+                        end
+                    else
+                        if i < 6840196 then
+                            if i < 5253857 then
+                                if i < 4280075 then
+                                    S = G(59756)
+                                    i = 16365922
+                                    B = a[S]
+                                    k = G(59747)
+                                    S = B(k, J, H)
+                                else
+                                    H = G(59750)
+                                    B = G(59756)
+                                    i = a[B]
+                                    B = i(H, R, M, J)
+                                    i = 12404921
+                                end
+                            else
+                                if i < 5829028 then
+                                    B = 1
+                                    i = M + B
+                                    M = i
+                                    i = 16709573
+                                else
+                                    B = G(59756)
+                                    i = a[B]
+                                    F = G(59764)
+                                    B = i(F, P)
+                                    i = 10860587
+                                end
+                            end
+                        else
+                            if i < 7472065 then
+                                if i < 7158295 then
+                                    J = not O
+                                    P = P + I
+                                    B = P <= F
+                                    B = J and B
+                                    J = P >= F
+                                    J = O and J
+                                    B = J or B
+                                    J = 7172852
+                                    i = B and J
+                                    B = 5263380
+                                    i = i or B
+                                else
+                                    B = 1
+                                    J = P
+                                    i = J == B
+                                    i = i and 5233714 or 16759877
+                                end
+                            else
+                                if i < 8092081 then
+                                    k = G(59758)
+                                    S = G(59756)
+                                    B = a[S]
+                                    o = 2
+                                    S = B(k, J, H)
+                                    k = J + H
+                                    S = k % o
+                                    k = 0
+                                    B = S == k
+                                    i = B and 3791985 or 394091
+                                else
+                                    P = 2
+                                    B = 1
+                                    F = P
+                                    i = 2130417
+                                    P = 1
+                                    I = P
+                                    P = 0
+                                    O = I < P
+                                    P = B - I
+                                end
+                            end
+                        end
+                    end
+                else
+                    if i < 12821963 then
+                        if i < 11679264 then
+                            if i < 11075838 then
+                                if i < 10392258 then
+                                    J = not O
+                                    P = P + I
+                                    B = P <= F
+                                    B = J and B
+                                    J = P >= F
+                                    J = O and J
+                                    B = J or B
+                                    J = 1477213
+                                    i = B and J
+                                    B = 12184382
+                                    i = i or B
+                                else
+                                    B = 1
+                                    i = 10199383
+                                    P = nil
+                                    P = 2
+                                    F = P
+                                    P = 1
+                                    I = P
+                                    P = 0
+                                    O = I < P
+                                    P = B - I
+                                end
+                            else
+                                if i < 11270143 then
+                                    i = a[G(59765)]
+                                    O = G(59768)
+                                    P = C(11639357, {})
+                                    M = nil
+                                    I = G(59756)
+                                    F = a[I]
+                                    H = 5
+                                    J = {
+                                        P(H)
+                                    }
+                                    I = F(O, j(J))
+                                    O = G(59761)
+                                    I = G(59756)
+                                    F = a[I]
+                                    P = nil
+                                    B = {}
+                                    I = F(O)
+                                else
+                                    R = x[1]
+                                    i = 1
+                                    M = i
+                                    i = 16709573
+                                end
+                            end
+                        else
+                            if i < 12356639 then
+                                if i < 11884003 then
+                                    i = M + J
+                                    B = G(59756)
+                                    H = i
+                                    i = a[B]
+                                    S = G(59760)
+                                    B = i(S, H)
+                                    H = nil
+                                    i = 14407739
+                                else
+                                    B = 1
+                                    i = M + B
+                                    M = i
+                                    i = 13140217
+                                end
+                            else
+                                if i < 12413386 then
+                                    J = nil
+                                    i = 7152231
+                                else
+                                    B = G(59756)
+                                    i = a[B]
+                                    F = G(59754)
+                                    B = i(F, P)
+                                    i = 10860587
+                                end
+                            end
+                        end
+                    else
+                        if i < 15523894 then
+                            if i < 13348819 then
+                                if i < 13167159 then
+                                    B = 2
+                                    i = M <= B
+                                    i = i and 13227742 or 8111732
+                                else
+                                    B = G(59756)
+                                    P = G(59751)
+                                    i = a[B]
+                                    B = i(P, M)
+                                    B = 10
+                                    i = M * B
+                                    P = i
+                                    F = 2
+                                    B = M % F
+                                    F = 0
+                                    i = B == F
+                                    i = i and 6555165 or 12418522
+                                end
+                            else
+                                if i < 14434644 then
+                                    i = 10199383
+                                    J = nil
+                                else
+                                    J = nil
+                                    i = 2130417
+                                    H = nil
+                                end
+                            end
+                        else
+                            if i < 16367757 then
+                                if i < 16278344 then
+                                    i = 2125445
+                                    H = G(59756)
+                                    S = G(59757)
+                                    J = P
+                                    B = a[H]
+                                    H = B(S, J)
+                                    B = 1
+                                    H = B
+                                else
+                                    S = 1
+                                    B = H + S
+                                    i = 2125445
+                                    H = B
+                                end
+                            else
+                                if i < 16721757 then
+                                    B = 2
+                                    i = M <= B
+                                    i = i and 2414184 or 3012133
+                                else
+                                    B = G(59756)
+                                    i = a[B]
+                                    H = G(59752)
+                                    B = i(H, R, M, J)
+                                    i = 12404921
+                                end
+                            end
+                        end
+                    end
+                end
+            end
+            i = #c
+            return j(B)
+        end, function(a)
+            M[a] = M[a] - (1)
+            if 0 == M[a] then
+                M[a], R[a] = nil, nil
+            end
+        end, {}, function(a, G)
+            local j = I(G)
+            local x = function(x, r, c, b, B)
+                return i(a, {
+                    x,
+                    r,
+                    c,
+                    b,
+                    B
+                }, G, j)
+            end
+            return x
+        end, 0, function(a)
+            local G, i = 1, a[1]
+            while i do
+                M[i], G = M[i] - (1), G + (1)
+                if M[i] == 0 then
+                    M[i], R[i] = nil, nil
+                end
+                i = a[G]
+            end
+        end
+        return (H(1465295, {}))(j(B))
+    end)(getfenv and getfenv() or _ENV, unpack or table[G(59749)], newproxy, setmetatable, getmetatable, select, {
+        ...
+    })
+end)(...)
