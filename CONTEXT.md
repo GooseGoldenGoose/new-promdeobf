@@ -30,7 +30,7 @@ When continuing this project in a new chat:
 - Preserve stable pipeline behavior when experimenting. A recovery pass must fail closed: if proof is incomplete, preserve the previous safe output rather than guess.
 - End every project-related turn with exactly: `Done for this turn — you can prompt now.`
 
-Latest beta behavior checkpoint is `95aebdc Analyze beta register epochs by data flow` on `main`, pushed to `origin/main`. Beta now separates scalar value definitions from ordinary-register ownership epochs: it computes sparse reaching definitions, def/use provenance, ordinary-register liveness, CFG join evidence, and union-find epoch coalescing. Direct `rN = nil` is no longer the thing that creates/merges a local lifetime; it is accepted only as supporting termination evidence for an already-proven epoch. The graph tooling now reports register epochs and analysis counts. Beta remains analysis/presentation-only and block-local names may intentionally be referenced across state blocks. All tracked fixtures `sample/1` through `sample/11` have matching `.source.lua` + formatter-normalized `.txt` pairs. Source lexical-scope reconstruction has NOT been implemented yet.
+Latest beta behavior checkpoint is `555c588 Add beta single-state control-flow output` on `main`, pushed to `origin/main`. Beta keeps the sparse data-flow register-epoch model from `95aebdc` and now has a separate control-flow presentation stage for the first proven-safe case: one complete CFG entry containing exactly one terminal state. It removes the VM wrapper/dispatcher and emits a flat beta body with a structurally derived environment header. Multi-state CFGs still fail closed; branch/loop structuring is not implemented yet. Beta remains analysis/presentation-only. All tracked fixtures `sample/1` through `sample/11` have matching `.source.lua` + formatter-normalized `.txt` pairs. Source lexical-scope reconstruction has NOT been implemented yet.
 
 # Core Knowledge & Rules
 
@@ -515,6 +515,8 @@ without producing unrelated locals.
 - Real fixture evidence: sample 8 now separates physical `r6` scratch values (`"keep1"`, then an environment lookup) from the block-local `inner` epoch, kills that epoch at its proven cleanup, then starts a distinct `after` epoch on the reused physical register. Sample 9 separates early scratch uses of physical `r2` from the `y` epoch initialized by a nil temporary-copy; the final direct `r2 = nil` terminates only that epoch. Sample 11 still coalesces the two branch values of source-like `a` into one `r_v2_1` epoch because both definitions reach the same join use.
 - Definitions remain `local` inside the state where the epoch begins even when later state blocks reference that name; current beta is analysis/readability output and is intentionally not required to execute. Normal `output/N.lua` behavior is unchanged. Focused regression `tools/test-beta-register-versions.js` covers join coalescing, compiler-shaped reassignment copies, cleanup boundaries, and scratch-before-local separation; beta output is reparsed before writing.
 - Beta graph command: `node tools/beta-register-graph.js <output.lua> [output-base]`. Default `output/11.lua` output base is `output/11.beta.graph`. It writes `.txt`, `.json`, Graphviz `.dot`, and Mermaid `.mmd`; optional SVG still requires Graphviz `dot`. The graph now calls these structures REGISTER EPOCHS and includes definition/use/provenance/merge/cleanup counts. Sample 11 graph is 3 states / 5 register epochs with 1 attached cleanup; sample 5 full-scale generation succeeds at 938 states / 2291 conservative register epochs, with only 2/2 nil writes proven/attached as cleanups. Focused regression: `tools/test-beta-register-graph.js`.
+- Beta control-flow presentation now lives in `passes/beta-control-flow.js` with CLI `node tools/beta-control-flow.js <output.lua> [output.beta.cf.lua]`. The first stage deliberately accepts only a closed CFG with exactly one entry, one state, and a stop terminator; it then emits `--headers`, a structurally derived environment binding such as `local _env = getfenv()`, and the state operations as a flat `--body`. Any multi-state graph, unsupported state operation, unknown environment provider, or non-terminal entry fails closed.
+- The beta CF stage treats the already-proven terminal table-valued `ReturnVal` write as presentation metadata and sinks it to the cleanup tail immediately before final `state = nil`. This is beta-only: the normal runtime-safe scheduler intentionally does not move table constructors because allocation/effect ordering is not generally movable. Sample 8 now emits 46 flat statements in `output/8.beta.cf.lua`; the final tail is cleanup writes, `ReturnVal = {}`, then `state = nil`. Focused regression: `tools/test-beta-control-flow.js`.
 
 
 ## Performance Optimization Audit (2026-08-23)
@@ -563,7 +565,7 @@ without producing unrelated locals.
 - Workspace: `C:\Users\reala\Desktop\!workspaces\promdeobf ova\new promdeobf`.
 - Branch: `main`.
 - Remote: `https://github.com/GooseGoldenGoose/new-promdeobf.git`.
-- Latest pushed beta behavior checkpoint at this snapshot: `95aebdc Analyze beta register epochs by data flow`; it supersedes cleanup-first grouping from `cb2a1af`.
+- Latest pushed beta behavior checkpoint at this snapshot: `555c588 Add beta single-state control-flow output`; register-epoch behavior remains from `95aebdc`, and cleanup-first grouping from `cb2a1af` stays superseded.
 - Previous beta behavior checkpoint: `88a2dc5 Preserve final VM special writes in beta`; it is superseded by the current rule that preserves all final `state` writes but only terminal table-valued `ReturnVal`.
 - Latest fixture checkpoint: `4717198 Add beta branch sample 11`.
 - Immediately preceding context checkpoint: `2643ebc Document restored sample coverage`.
@@ -670,6 +672,7 @@ without producing unrelated locals.
 `cb2a1af Track beta register lifetime epochs`
 `9e9800e Add beta register flow graph tool`
 `95aebdc Analyze beta register epochs by data flow`
+`555c588 Add beta single-state control-flow output`
 
 ### New-chat operating instruction
 
