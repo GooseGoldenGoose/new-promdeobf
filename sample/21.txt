@@ -1,0 +1,604 @@
+return (function(...)
+    local n = {
+        "HyJ2eSrdaSsx1VJL",
+        "raugiaHk",
+        "4g==",
+        "D+rq68HCHFtRrFvq2Ji=",
+        "e17Vy9qW4Cbf2VJj",
+        "I917",
+        "iVpLiVxl",
+        "t8bWD8EmyT1zO91J",
+        "46xFy74yty1A2cQJ/J/=",
+        "UV1lUW1LrQ==",
+        "6WbYaaQJrGx31+xc4K==",
+        "DJ4AIGiu17xg1FH2",
+        "dJpbOW475K==",
+        "r9pcr8EbOWt=",
+        "tC79ydDJtysD6lre4g==",
+        "IG1u",
+        "OCRqHlszD1EN1xiV",
+        "Ag==",
+        "NK==",
+        "dJpTig==",
+        "U7Eva7KVOdHu6a7A",
+        "r91cr97LUfvMiauTraxTU2pMIaEfidEuA9E3tV7Ftg==",
+        "ySx6yg==",
+        "5F7IOC7+yc4MrxUE2K==",
+        "t8EbOT/=",
+        "4Sr7idx7advc664e",
+        "I1rMrWxlOV1vOxHS",
+        "r9xC",
+        "2a43tG1d1+7ztVggig==",
+        "tV1MUaHl",
+        "idHcUdEl",
+        "dJpMUaR="
+    }
+    for K, c in ipairs({
+        {
+            1,
+            32
+        },
+        {
+            1,
+            15
+        },
+        {
+            16,
+            32
+        }
+    }) do
+        while c[1] < c[2] do
+            n[c[1]], n[c[2]], c[1], c[2] = n[c[2]], n[c[1]], c[1] + (1), c[2] - (1)
+        end
+    end
+    local function K(K)
+        return n[K + (52277)]
+    end
+    do
+        local K = string.sub
+        local c = {
+            a = 22,
+            y = 20,
+            R = 56,
+            G = 55,
+            t = 28,
+            H = 13,
+            ["3"] = 33,
+            S = 4,
+            o = 60,
+            e = 14,
+            x = 5,
+            I = 26,
+            Z = 47,
+            u = 57,
+            U = 25,
+            ["4"] = 17,
+            T = 39,
+            Y = 2,
+            w = 63,
+            ["8"] = 7,
+            b = 41,
+            i = 24,
+            q = 49,
+            s = 45,
+            c = 51,
+            ["/"] = 16,
+            K = 0,
+            O = 27,
+            A = 8,
+            h = 10,
+            f = 50,
+            n = 31,
+            j = 34,
+            D = 12,
+            N = 11,
+            W = 38,
+            C = 36,
+            J = 53,
+            F = 35,
+            V = 54,
+            d = 23,
+            ["+"] = 3,
+            ["2"] = 18,
+            r = 29,
+            B = 42,
+            P = 62,
+            Q = 32,
+            ["1"] = 21,
+            m = 15,
+            ["6"] = 19,
+            X = 59,
+            L = 46,
+            v = 1,
+            z = 40,
+            ["0"] = 58,
+            k = 43,
+            p = 61,
+            l = 52,
+            g = 48,
+            ["9"] = 6,
+            M = 44,
+            ["7"] = 37,
+            ["5"] = 30,
+            E = 9
+        }
+        local G = table.insert
+        local H = string.len
+        local o = math.floor
+        local X = table.concat
+        local I = string.char
+        local v = type
+        local u = n
+        for n = 1, #u, 1 do
+            local N = u[n]
+            if v(N) == "string" then
+                local v = H(N)
+                local p = {}
+                local y = 1
+                local T = 0
+                local j = 0
+                while y <= v do
+                    local n = K(N, y, y)
+                    local H = c[n]
+                    if H then
+                        T = T + H * (64) ^ ((3) - j)
+                        j = j + (1)
+                        if j == 4 then
+                            j = 0
+                            local n = o(T / (65536))
+                            local K = o((T % (65536)) / (256))
+                            local c = T % (256)
+                            G(p, I(n, K, c))
+                            T = 0
+                        end
+                    elseif n == "=" then
+                        G(p, I(o(T / (65536))))
+                        if y >= v or K(N, y + (1), y + (1)) ~= "=" then
+                            G(p, I(o((T % (65536)) / (256))))
+                        end
+                        break
+                    end
+                    y = y + (1)
+                end
+                u[n] = X(p)
+            end
+        end
+    end
+    return (function(n, G, H, o, X, I, v, w, s, j, e, E, Q, y, p, c, h, u, N, Z, T, g)
+        Q, c, E, e, p, Z, w, u, y, h, T, N, s, j, g = function(n, K)
+            local G = T(K)
+            local H = function(H, o, X)
+                return c(n, {
+                    H,
+                    o,
+                    X
+                }, K, G)
+            end
+            return H
+        end, function(c, H, o, X)
+            local j, C, T, Y, v, y, u, p, g, N
+            while c do
+                if c < 11520333 then
+                    if c < 10292062 then
+                        if c < 6274054 then
+                            if c < 1993708 then
+                                if c < 961412 then
+                                    c = nil
+                                    u = c
+                                    c = u and 11426635 or 14739222
+                                else
+                                    c = 2
+                                    u = c
+                                    c = 14934056
+                                end
+                            else
+                                if c < 2444683 then
+                                    p = K(-52248)
+                                    v = n[p]
+                                    p = v(u)
+                                    T = K(-52255)
+                                    j = n[T]
+                                    T = j(G(N))
+                                    y = K(-52275)
+                                    v = y .. T
+                                    c = p .. v
+                                    v = {
+                                        c
+                                    }
+                                    c = n[K(-52258)]
+                                else
+                                    c = n[K(-52251)]
+                                    v = {
+                                        u
+                                    }
+                                end
+                            end
+                        else
+                            if c < 8993348 then
+                                if c < 6923215 then
+                                    g = 1
+                                    u = H
+                                    v = K(-52269)
+                                    c = n[v]
+                                    N = K(-52272)
+                                    v = c(N)
+                                    v = K(-52252)
+                                    c = n[v]
+                                    v = c()
+                                    c = w(13637435, {})
+                                    N = v
+                                    v = K(-52255)
+                                    Y = 2
+                                    n[v] = c
+                                    y = K(-52263)
+                                    v = E(15025329, {})
+                                    p = v
+                                    v = n[y]
+                                    T = p(g)
+                                    g = nil
+                                    j = T == g
+                                    y = v(j)
+                                    g = 1
+                                    y = K(-52263)
+                                    v = n[y]
+                                    T = p(g, Y)
+                                    g = 2
+                                    Y = 2
+                                    C = 3
+                                    c = n[K(-52265)]
+                                    j = T == g
+                                    y = v(j)
+                                    g = 1
+                                    y = K(-52263)
+                                    v = n[y]
+                                    T = p(g, Y, C)
+                                    g = 2
+                                    j = T == g
+                                    y = v(j)
+                                    y = K(-52263)
+                                    T = s(10468720, {})
+                                    v = n[y]
+                                    g = T()
+                                    T = 2
+                                    j = g == T
+                                    y = v(j)
+                                    T = h(9658906, {})
+                                    y = K(-52263)
+                                    v = n[y]
+                                    g = T()
+                                    T = nil
+                                    j = g == T
+                                    y = v(j)
+                                    y = K(-52263)
+                                    T = Q(14931416, {})
+                                    v = n[y]
+                                    g = T()
+                                    T = 1
+                                    j = g == T
+                                    y = v(j)
+                                    T = e(67522, {})
+                                    y = K(-52263)
+                                    v = n[y]
+                                    g = T()
+                                    T = 2
+                                    j = g == T
+                                    T = Z(16514151, {})
+                                    Y = K(-52266)
+                                    y = v(j)
+                                    N = nil
+                                    y = K(-52263)
+                                    v = n[y]
+                                    g = T()
+                                    T = 3
+                                    j = g == T
+                                    y = v(j)
+                                    y = K(-52263)
+                                    v = n[y]
+                                    T = e(11356620, {})
+                                    g = T()
+                                    T = -1
+                                    j = g == T
+                                    y = v(j)
+                                    T = s(10638428, {})
+                                    y = K(-52263)
+                                    v = n[y]
+                                    g = T()
+                                    T = 2
+                                    j = g == T
+                                    y = v(j)
+                                    y = K(-52263)
+                                    v = n[y]
+                                    T = Z(15700955, {})
+                                    g = T()
+                                    T = 0.5
+                                    j = g == T
+                                    C = Q(10345306, {})
+                                    T = K(-52246)
+                                    y = v(j)
+                                    y = K(-52256)
+                                    g = 2
+                                    j = 1
+                                    v = {
+                                        [y] = j,
+                                        [T] = g,
+                                        [Y] = C
+                                    }
+                                    j = K(-52269)
+                                    T = K(-52271)
+                                    y = v
+                                    v = n[j]
+                                    j = v(T, y)
+                                    p = nil
+                                    y = nil
+                                    v = {}
+                                else
+                                    v = {
+                                        u
+                                    }
+                                    c = n[K(-52257)]
+                                end
+                            else
+                                c = nil
+                                u = c
+                                c = u and 1061387 or 14934056
+                            end
+                        end
+                    else
+                        if c < 10744519 then
+                            if c < 10553342 then
+                                if c < 10453829 then
+                                    u = K(-52259)
+                                    v = K(-52269)
+                                    c = n[v]
+                                    v = c(u)
+                                    v = {}
+                                    c = n[K(-52261)]
+                                else
+                                    c = 1
+                                    u = c
+                                    c = u and 16580293 or 8293075
+                                end
+                            else
+                                c = 1
+                                u = c
+                                v = 2
+                                c = u * v
+                                u = c
+                                v = {
+                                    u
+                                }
+                                c = n[K(-52250)]
+                            end
+                        else
+                            if c < 11378348 then
+                                if c < 11257550 then
+                                    c = n[K(-52273)]
+                                    u = nil
+                                    v = {}
+                                else
+                                    c = 1
+                                    u = c
+                                    v = 2
+                                    c = u - v
+                                    u = c
+                                    v = {
+                                        u
+                                    }
+                                    c = n[K(-52247)]
+                                end
+                            else
+                                c = 1
+                                u = c
+                                c = 15187027
+                            end
+                        end
+                    end
+                else
+                    if c < 15165024 then
+                        if c < 14930983 then
+                            if c < 14376356 then
+                                if c < 13267040 then
+                                    v = K(-52248)
+                                    c = n[v]
+                                    v = {
+                                        c(u)
+                                    }
+                                    c = n[K(-52245)]
+                                    v = {
+                                        G(v)
+                                    }
+                                else
+                                    p = K(-52264)
+                                    N = {
+                                        I(2, G(H))
+                                    }
+                                    u = H[1]
+                                    y = K(-52276)
+                                    v = n[p]
+                                    p = v(y, G(N))
+                                    v = 0
+                                    c = p == v
+                                    c = c and 11568244 or 2263534
+                                end
+                            else
+                                v = 2
+                                c = 15187027
+                                u = v
+                            end
+                        else
+                            if c < 15021141 then
+                                if c < 14932973 then
+                                    c = 0
+                                    u = c
+                                    c = u and 15636226 or 15247336
+                                else
+                                    v = {
+                                        u
+                                    }
+                                    c = n[K(-52253)]
+                                end
+                            else
+                                u = H[1]
+                                c = n[K(-52267)]
+                                N = H[2]
+                                v = {
+                                    N
+                                }
+                            end
+                        end
+                    else
+                        if c < 15667966 then
+                            if c < 15512750 then
+                                if c < 15194064 then
+                                    v = {
+                                        u
+                                    }
+                                    c = n[K(-52268)]
+                                else
+                                    v = 2
+                                    u = v
+                                    c = 6187259
+                                end
+                            else
+                                c = 1
+                                u = c
+                                c = 6187259
+                            end
+                        else
+                            if c < 16573535 then
+                                if c < 16460698 then
+                                    c = 1
+                                    u = c
+                                    v = 2
+                                    c = u / v
+                                    u = c
+                                    c = n[K(-52270)]
+                                    v = {
+                                        u
+                                    }
+                                else
+                                    c = 1
+                                    v = 2
+                                    u = c
+                                    c = u + v
+                                    u = c
+                                    c = n[K(-52254)]
+                                    v = {
+                                        u
+                                    }
+                                end
+                            else
+                                c = 2
+                                u = c
+                                c = 8293075
+                            end
+                        end
+                    end
+                end
+            end
+            c = #X
+            return G(v)
+        end, function(n, K)
+            local G = T(K)
+            local H = function(H, o, X, I, v, u, N)
+                return c(n, {
+                    H,
+                    o,
+                    X,
+                    I,
+                    v,
+                    u,
+                    N
+                }, K, G)
+            end
+            return H
+        end, function(n, K)
+            local G = T(K)
+            local H = function()
+                return c(n, {}, K, G)
+            end
+            return H
+        end, function()
+            y = y + (1)
+            N[y] = 1
+            return y
+        end, function(n, K)
+            local G = T(K)
+            local H = function(H, o, X, I)
+                return c(n, {
+                    H,
+                    o,
+                    X,
+                    I
+                }, K, G)
+            end
+            return H
+        end, function(n, K)
+            local G = T(K)
+            local H = function(...)
+                return c(n, {
+                    ...
+                }, K, G)
+            end
+            return H
+        end, {}, 0, function(n, K)
+            local G = T(K)
+            local H = function(H, o, X, I, v)
+                return c(n, {
+                    H,
+                    o,
+                    X,
+                    I,
+                    v
+                }, K, G)
+            end
+            return H
+        end, function(n)
+            for K = 1, #n, 1 do
+                N[n[K]] = (1) + N[n[K]]
+            end
+            if H then
+                local c = H(true)
+                local G = X(c)
+                G[K(-52249)], G[K(-52274)], G[K(-52262)] = n, j, function()
+                    return 3398746
+                end
+                return c
+            else
+                return o({}, {
+                    [K(-52274)] = j,
+                    [K(-52249)] = n,
+                    [K(-52262)] = function()
+                        return 3398746
+                    end
+                })
+            end
+        end, {}, function(n, K)
+            local G = T(K)
+            local H = function(H, o)
+                return c(n, {
+                    H,
+                    o
+                }, K, G)
+            end
+            return H
+        end, function(n)
+            local K, c = 1, n[1]
+            while c do
+                N[c], K = N[c] - (1), K + (1)
+                if 0 == N[c] then
+                    N[c], u[c] = nil, nil
+                end
+                c = n[K]
+            end
+        end, function(n)
+            N[n] = N[n] - (1)
+            if N[n] == 0 then
+                N[n], u[n] = nil, nil
+            end
+        end
+        return (w(6761385, {}))(G(v))
+    end)(getfenv and getfenv() or _ENV, unpack or table[K(-52260)], newproxy, setmetatable, getmetatable, select, {
+        ...
+    })
+end)(...)
