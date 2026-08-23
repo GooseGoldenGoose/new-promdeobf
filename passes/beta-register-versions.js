@@ -98,6 +98,14 @@ function isNilLiteral(node) {
     return node?.type === "NilLiteral";
 }
 
+function isReturnSinkSafeExpression(node) {
+    return isIdentifier(node) ||
+        node?.type === "NilLiteral" ||
+        node?.type === "BooleanLiteral" ||
+        node?.type === "NumericLiteral" ||
+        node?.type === "StringLiteral";
+}
+
 function isCompilerReturnRegisterRead(node, candidateNames) {
     if (isIdentifier(node)) return candidateNames.has(node.name);
     if (node?.type !== "CallExpression" || !isIdentifier(node.base, "unpack")) return false;
@@ -525,6 +533,7 @@ function versionVmBlockRegisters(source, ast) {
                     emittedTarget: variables[0].name,
                     rhs,
                     reads: [...usedVersions],
+                    returnSinkSafe: isReturnSinkSafeExpression(init[0]),
                     originalText: source.slice(statement.range[0], statement.range[1]).trim(),
                     emittedText: `${variables[0].name} = ${rhs}`,
                 });
@@ -534,11 +543,16 @@ function versionVmBlockRegisters(source, ast) {
             if (plan.kind === "preserved") {
                 const originalRhs = source.slice(init[0].range[0], init[0].range[1]);
                 if (rhs !== originalRhs) edits.push({ start: init[0].range[0], end: init[0].range[1], replacement: rhs });
+                const terminalCompilerReturnPayload =
+                    plan.originalName === returnName && isCompilerReturnPayload(init[0], candidateNames);
+                const returnExpressions = terminalCompilerReturnPayload
+                    ? (init[0].fields || []).map(field => rewriteExpression(source, field.value, latestVersions))
+                    : null;
                 graphOperations.push({
                     index: graphOperations.length + 1,
                     kind: plan.originalName === stateName ? "state-transition" : "return-payload",
-                    terminalCompilerReturnPayload:
-                        plan.originalName === returnName && isCompilerReturnPayload(init[0], candidateNames),
+                    terminalCompilerReturnPayload,
+                    returnExpressions,
                     originalTarget: plan.originalName,
                     emittedTarget: plan.originalName,
                     rhs,
@@ -568,6 +582,7 @@ function versionVmBlockRegisters(source, ast) {
                     emittedTarget: plan.newName,
                     rhs,
                     reads: [...usedVersions],
+                    returnSinkSafe: isReturnSinkSafeExpression(init[0]),
                     originalText: source.slice(statement.range[0], statement.range[1]).trim(),
                     emittedText,
                     registerEpoch: plan.registerEpoch || null,

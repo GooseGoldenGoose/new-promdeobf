@@ -36,6 +36,7 @@ function main() {
     console.log(`Entry state: ${generated.controlFlow.entryState}`);
     console.log(`Statements: ${generated.controlFlow.statementCount}`);
     console.log(`Return payload sunk: ${generated.controlFlow.terminalReturnPayloadSunk}`);
+    console.log(`Terminal return lowered: ${generated.controlFlow.terminalReturnLowered}`);
     if (generated.controlFlow.environmentHeader) console.log(`Header: ${generated.controlFlow.environmentHeader}`);
     console.log(`Output: ${generated.outputPath}`);
 }

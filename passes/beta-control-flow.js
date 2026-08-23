@@ -65,6 +65,21 @@ function operationText(operation) {
     return operation?.emittedText || operation?.originalText || null;
 }
 
+function canSinkTerminalReturnAcross(payload, operation) {
+    const expressions = payload?.returnExpressions;
+    if (!Array.isArray(expressions)) return false;
+
+    // Empty compiler returns carry no value dependency. In beta CF they represent the
+    // function's terminal no-value return, so the marker can be placed at the proven stop.
+    if (expressions.length === 0) return true;
+
+    // Non-empty returns may only cross compiler bookkeeping that is structurally pure.
+    // Never cross a write to a version consumed by the return payload.
+    if (operation?.returnSinkSafe !== true) return false;
+    const returnedReads = new Set(payload.reads || []);
+    return !returnedReads.has(operation.emittedTarget);
+}
+
 function sinkTerminalReturnPayload(operations) {
     const result = [...operations];
     const finalTransitionIndex = result.findLastIndex(operation => operation.kind === "state-transition");
@@ -78,15 +93,44 @@ function sinkTerminalReturnPayload(operations) {
     }
     if (payloadIndexes.length !== 1) return { operations: result, moved: false };
 
-    // Prometheus compiles source return expressions into VM registers first, then
-    // builds ReturnVal from register reads (or unpack(register) for a final
-    // multi-return expression). Arbitrary table field calls are not this shape.
     const payloadIndex = payloadIndexes[0];
     if (payloadIndex === finalTransitionIndex - 1) return { operations: result, moved: false };
-    const [payload] = result.splice(payloadIndex, 1);
+    const payload = result[payloadIndex];
+    const crossed = result.slice(payloadIndex + 1, finalTransitionIndex);
+    if (!crossed.every(operation => canSinkTerminalReturnAcross(payload, operation))) {
+        return { operations: result, moved: false };
+    }
+
+    result.splice(payloadIndex, 1);
     const newTransitionIndex = result.findLastIndex(operation => operation.kind === "state-transition");
     result.splice(newTransitionIndex, 0, payload);
     return { operations: result, moved: true };
+}
+
+function lowerTerminalReturn(operations) {
+    const result = [...operations];
+    const finalTransitionIndex = result.findLastIndex(operation => operation.kind === "state-transition");
+    if (finalTransitionIndex < 1) return { operations: result, lowered: false, returnText: null };
+    const transition = result[finalTransitionIndex];
+    if (String(transition.rhs || "").trim() !== "nil") {
+        return { operations: result, lowered: false, returnText: null };
+    }
+
+    const payloadIndex = finalTransitionIndex - 1;
+    const payload = result[payloadIndex];
+    if (payload?.kind !== "return-payload" || payload.terminalCompilerReturnPayload !== true || !Array.isArray(payload.returnExpressions)) {
+        return { operations: result, lowered: false, returnText: null };
+    }
+
+    const returnText = payload.returnExpressions.length
+        ? `return ${payload.returnExpressions.join(", ")}`
+        : "return";
+    result.splice(payloadIndex, 2, {
+        kind: "return",
+        emittedText: returnText,
+        returnExpressions: [...payload.returnExpressions],
+    });
+    return { operations: result, lowered: true, returnText };
 }
 
 function solveBetaControlFlow(originalAst, betaResult) {
@@ -124,7 +168,8 @@ function solveBetaControlFlow(originalAst, betaResult) {
     }
 
     const sunk = sinkTerminalReturnPayload(state.operations);
-    const bodyLines = sunk.operations.map(operationText);
+    const lowered = lowerTerminalReturn(sunk.operations);
+    const bodyLines = lowered.operations.map(operationText);
     const bodyText = bodyLines.join("\n\n");
 
     const headerLines = [];
@@ -149,8 +194,10 @@ function solveBetaControlFlow(originalAst, betaResult) {
         mode: "single-state",
         entryState: state.id,
         stateCount: graph.states.length,
-        statementCount: sunk.operations.length,
+        statementCount: lowered.operations.length,
         terminalReturnPayloadSunk: sunk.moved,
+        terminalReturnLowered: lowered.lowered,
+        terminalReturnText: lowered.returnText,
         environmentHeader: headerLines[0] || null,
     };
 }
@@ -158,5 +205,6 @@ function solveBetaControlFlow(originalAst, betaResult) {
 module.exports = {
     displayEnvironmentProvider,
     sinkTerminalReturnPayload,
+    lowerTerminalReturn,
     solveBetaControlFlow,
 };
