@@ -1,6 +1,6 @@
 const { applyTextEdits } = require("./text-edits");
 const { findVmFunction } = require("./vm-state");
-const { findRegisterOverflowBinding } = require("./vm-register-names");
+const { findVmReturnRegister, findRegisterOverflowBinding } = require("./vm-register-names");
 
 function isNode(value) {
     return value && typeof value === "object" && typeof value.type === "string";
@@ -163,6 +163,99 @@ function isPrimitiveSourceAssignment(statement, stateName, overflowName = null) 
     if (!isDelayableAssignment(statement, stateName, overflowName)) return false;
     const init = statement.init || [];
     return init.length === 1 && isPrimitiveLiteral(init[0]);
+}
+
+function isCanonicalNilStop(statement, stateName) {
+    if (statement?.type !== "AssignmentStatement") return false;
+    const variables = statement.variables || [];
+    const init = statement.init || [];
+    return variables.length === 1 && init.length === 1 &&
+        isIdentifier(variables[0], stateName) && init[0]?.type === "NilLiteral";
+}
+
+function isCompilerReturnRegisterRead(node) {
+    if (isIdentifier(node)) return true;
+    if (node?.type !== "CallExpression" || !isIdentifier(node.base, "unpack")) return false;
+    const args = node.arguments || [];
+    return args.length === 1 && isIdentifier(args[0]);
+}
+
+function isCompilerReturnPayloadAssignment(statement, returnName) {
+    if (!returnName || statement?.type !== "AssignmentStatement") return false;
+    const variables = statement.variables || [];
+    const init = statement.init || [];
+    if (variables.length !== 1 || init.length !== 1 || !isIdentifier(variables[0], returnName)) return false;
+    const table = init[0];
+    if (table?.type !== "TableConstructorExpression") return false;
+    return (table.fields || []).every(field =>
+        field?.type === "TableValue" && isCompilerReturnRegisterRead(field.value)
+    );
+}
+
+function isPureTerminalTailBookkeeping(statement, stateName, returnName, overflowName, payloadReads) {
+    if (statement?.type !== "AssignmentStatement") return false;
+    const variables = statement.variables || [];
+    const init = statement.init || [];
+    if (variables.length !== 1 || init.length !== 1) return false;
+
+    const rhs = init[0];
+    const simpleRegisterRead = isPrimitiveLiteral(rhs) || registerIdentity(rhs, overflowName) !== null;
+    const fixedArgumentRead = rhs?.type === "IndexExpression" &&
+        isIdentifier(rhs.base, "args") && numericValue(rhs.index) !== null;
+
+    // Captured source arguments/locals are initialized through the proven
+    // Prometheus upvalueValues table. This write is compiler bookkeeping that
+    // must complete before the VM returns, but moving the return payload table
+    // construction after it does not move or duplicate the write itself.
+    const upvalueCellWrite = variables[0]?.type === "IndexExpression" &&
+        isIdentifier(variables[0].base, "upvalueValues") &&
+        (simpleRegisterRead || fixedArgumentRead);
+    if (upvalueCellWrite) {
+        const reads = statementReads(statement, overflowName);
+        return !returnName || !reads.has(returnName);
+    }
+
+    const target = registerIdentity(variables[0], overflowName);
+    if (!target) return false;
+    if (isIdentifier(variables[0]) && [returnName, "args", "upvalues", "gcProxy"].includes(target)) return false;
+    // Inside a Step-3-normalized terminal leaf, any earlier write to the state
+    // register is proven non-terminating POS-register reuse. It may participate
+    // in compiler bookkeeping, but never cross the return payload when that
+    // payload itself reads the temporary state value.
+    if (payloadReads.has(target)) return false;
+    if (!simpleRegisterRead && !fixedArgumentRead) return false;
+
+    const reads = statementReads(statement, overflowName);
+    if (returnName && reads.has(returnName)) return false;
+    return true;
+}
+
+function canonicalizeTerminalReturnPayload(statements, stateName, returnName, overflowName = null) {
+    if (!returnName || statements.length < 2) return { swaps: 0, moved: 0 };
+    const stopIndex = statements.length - 1;
+    if (!isCanonicalNilStop(statements[stopIndex], stateName)) return { swaps: 0, moved: 0 };
+
+    let payloadIndex = -1;
+    for (let index = stopIndex - 1; index >= 0; index--) {
+        if (!statementWrites(statements[index], overflowName).has(returnName)) continue;
+        if (!isCompilerReturnPayloadAssignment(statements[index], returnName)) return { swaps: 0, moved: 0 };
+        payloadIndex = index;
+        break;
+    }
+    if (payloadIndex < 0 || payloadIndex === stopIndex - 1) return { swaps: 0, moved: 0 };
+
+    const payload = statements[payloadIndex];
+    const payloadReads = statementReads(payload, overflowName);
+    const crossed = statements.slice(payloadIndex + 1, stopIndex);
+    if (!crossed.every(statement =>
+        isPureTerminalTailBookkeeping(statement, stateName, returnName, overflowName, payloadReads)
+    )) {
+        return { swaps: 0, moved: 0 };
+    }
+
+    statements.splice(payloadIndex, 1);
+    statements.splice(statements.length - 1, 0, payload);
+    return { swaps: stopIndex - payloadIndex - 1, moved: 1 };
 }
 
 function sinkPureAssignmentsTowardNextTouch(statements, stateName, overflowName = null) {
@@ -401,7 +494,7 @@ function validateScheduledOrder(original, scheduled, stateName, overflowName = n
     return true;
 }
 
-function scheduleStatementList(statements, stateName, overflowName = null) {
+function scheduleStatementList(statements, stateName, overflowName = null, returnName = null) {
     const scheduled = [...statements];
     const schedulingBaseline = [...scheduled];
     const originalOrder = [...scheduled];
@@ -446,6 +539,13 @@ function scheduleStatementList(statements, stateName, overflowName = null) {
             safetyRejected: true,
         };
     }
+
+    // Step 3 guarantees a proven terminal stop is the final state = nil.
+    // Canonicalize the compiler return payload immediately before that stop,
+    // but only across structurally pure VM bookkeeping such as fixed args[n]
+    // loads. This is a separate proven move from generic register scheduling.
+    const terminalReturn = canonicalizeTerminalReturnPayload(scheduled, stateName, returnName, overflowName);
+    swaps += terminalReturn.swaps;
 
     return {
         statements: scheduled,
@@ -557,6 +657,8 @@ function scheduleVmRegisterUses(source, ast) {
     }
 
     const stateName = stateParam.name;
+    const returnRegister = findVmReturnRegister(vm.functionNode);
+    const returnName = returnRegister?.name || null;
     const overflow = findRegisterOverflowBinding(vm.functionNode);
     const overflowName = overflow?.name || null;
     const stateWhile = findStateWhile(vm.functionNode, stateName);
@@ -591,7 +693,7 @@ function scheduleVmRegisterUses(source, ast) {
             if (!statements.every(statement => Array.isArray(statement.range))) continue;
             if (!hasOnlyWhitespaceBetween(source, statements)) continue;
 
-            const scheduled = scheduleStatementList(statements, stateName, overflowName);
+            const scheduled = scheduleStatementList(statements, stateName, overflowName, returnName);
             if (scheduled.safetyRejected) safetyRejectedSegments++;
             producerSinks += scheduled.producerSinks || 0;
             producerPulls += scheduled.producerPulls || 0;

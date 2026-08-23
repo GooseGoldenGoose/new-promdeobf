@@ -16,9 +16,9 @@ function labels(source, statements) {
     return statements.map(statement => source.slice(statement.range[0], statement.range[1]).trim());
 }
 
-function schedule(source) {
+function schedule(source, returnName = null) {
     const statements = parseStatements(source);
-    const result = scheduleStatementList(statements, "state");
+    const result = scheduleStatementList(statements, "state", null, returnName);
     assert.strictEqual(result.safetyRejected, false);
     return labels(source, result.statements);
 }
@@ -127,6 +127,76 @@ function schedule(source) {
     const out = schedule(source);
     assert.strictEqual(out[out.length - 1], 'state = nil', 'canonical stop anchor did not remain last');
     assert.ok(out.indexOf('X = 2') < out.indexOf('state = nil'), 'unread write moved past canonical stop anchor');
+}
+
+{
+    const source = [
+        'B = args[2]',
+        'ReturnReg = { B }',
+        'A = args[1]',
+        'state = nil',
+    ].join("\n");
+    const out = schedule(source, "ReturnReg");
+    assert.deepStrictEqual(out.slice(-3), [
+        'A = args[1]',
+        'ReturnReg = { B }',
+        'state = nil',
+    ], 'terminal return payload was not canonicalized immediately before state = nil');
+}
+
+{
+    const source = [
+        'Cell = allocUpvalue()',
+        'Closure = makeClosure()',
+        'ReturnReg = { Closure }',
+        'upvalueValues[Cell] = args[1]',
+        'state = nil',
+    ].join("\n");
+    const out = schedule(source, "ReturnReg");
+    assert.deepStrictEqual(out.slice(-3), [
+        'upvalueValues[Cell] = args[1]',
+        'ReturnReg = { Closure }',
+        'state = nil',
+    ], 'terminal return payload did not move after proven upvalue initialization bookkeeping');
+}
+
+{
+    const source = [
+        'Closure = makeClosure()',
+        'ReturnReg = { Closure }',
+        'state = 2',
+        'upvalueValues[Cell] = state',
+        'state = nil',
+    ].join("\n");
+    const out = schedule(source, "ReturnReg");
+    assert.deepStrictEqual(out.slice(-4), [
+        'state = 2',
+        'upvalueValues[Cell] = state',
+        'ReturnReg = { Closure }',
+        'state = nil',
+    ], 'terminal return payload did not move after proven non-terminal POS bookkeeping');
+}
+
+{
+    const source = [
+        'B = args[2]',
+        'ReturnReg = { B }',
+        'A = f()',
+        'state = nil',
+    ].join("\n");
+    const out = schedule(source, "ReturnReg");
+    assert.ok(out.indexOf('ReturnReg = { B }') < out.indexOf('A = f()'), 'terminal return crossed an effectful tail');
+}
+
+{
+    const source = [
+        'B = 1',
+        'ReturnReg = { B }',
+        'B = 2',
+        'state = nil',
+    ].join("\n");
+    const out = schedule(source, "ReturnReg");
+    assert.ok(out.indexOf('ReturnReg = { B }') < out.indexOf('B = 2'), 'terminal return crossed a write to a returned register');
 }
 
 
