@@ -188,7 +188,7 @@ Current implementation:
 - `formater/luau-format.exe` is the normalization stage. Its existing runner formats Lua and simplifies arithmetic/constants before AST processing.
 - Controlled obfuscator fixture source exists at `C:\Users\reala\Desktop\!workspaces\promdeobf ova\wearedev obf`; `run.bat` invokes `luajit cli.lua --preset Medium input.txt`, producing `input.txt.obfuscated.lua`.
 - Both the formatted sample and the direct `wearedev obf\input.txt.obfuscated.lua` parse successfully as a `Chunk` with one top-level statement.
-- Every tracked `sample/N.txt` must have a matching tracked `sample/N.source.lua`. Current paired coverage is samples 1-13.
+- Every tracked `sample/N.txt` must have a matching tracked `sample/N.source.lua`. Current paired coverage is samples 1-14.
 - `sample/1.source.lua` is the baseline fixture. It is obfuscated with local WeAreDevs Medium, formatter-normalized into `sample/1.txt`, then deobfuscated to `output/1.lua`. Runtime parity is `baseline 14 4`.
 - Samples 2-4 were reconstructed from the old tracked fixtures/behavior: sample 2 is the `warn("gg")` + random branch regression; sample 3 is the shadowed block plus shared captured `x` regression; sample 4 is the shared `total` if/while/repeat regression with intentionally varied closure arities.
 - Sample 5 is now a controlled static stress source with 115 closure functions plus the root VM function. Its first 44 workers include an additional branch so the local compiler emits exactly 938 reachable dispatcher states, matching the old stress fixture state scale while retaining a source file.
@@ -487,7 +487,7 @@ without producing unrelated locals.
 - Sample 8 exposes the current behavior clearly: `D = "keep1"` stays next to its call, `B = "print"` stays next to `_env[B]`, `z = D + G` stays immediately followed by `D = z` because `D` is read later in that state, while truly unread `j = args` now sinks to the state-body tail with the final cleanup writes. The ownership-handoff pair remains adjacent `D = nil; D = 30`. The scheduler intentionally never removes overwritten or unread stores. Its proven random `_env[...]` stop sentinel is now removed by Step 3 and re-emitted as final `state = nil`, so the stop is structurally at the bottom of the state and unread pure writes stay immediately above it.
 - `tools/test-vm-register-scheduler.js` is a focused scheduler regression covering producer/use compaction, pure producer sinking, identifier-copy pulling, write/write adjacency without deletion, unread-to-tail sinking, RAW/WAR/WAW preservation, and effectful-call-order preservation; it currently passes.
 - Current sample 1 scheduling changes 2 blocks with 43 dependency-safe swaps and 3 unread sinks; runtime parity remains exact.
-- Current paired fixture coverage is samples 1-13. New sample 5 schedules 390 blocks with 221,956 dependency-safe swaps, 217 unread sinks, and a structurally proven 23-slot overflow bank. Sample 10 remains the natural overflow-boundary fixture with 19 slots.
+- Current paired fixture coverage is samples 1-14. New sample 5 schedules 390 blocks with 221,956 dependency-safe swaps, 217 unread sinks, and a structurally proven 23-slot overflow bank. Sample 10 remains the natural overflow-boundary fixture with 19 slots.
 
 
 ## Post-Scheduler VM Register Naming
@@ -541,7 +541,7 @@ without producing unrelated locals.
 - Proven `createClosure*` helpers rename their `createUpvalueProxy(captures)` local to `gcProxy`, returned nested-function local to `closure`, and fixed-arity nested parameters to `arg1`, `arg2`, ...; the vararg factory keeps `...`.
 - `releaseUpvalues` renames its structural iteration locals to `captureIndex` and `upvalueId`. `createUpvalueProxy` renames its numeric-for index to `captureIndex`, the `newproxy(true)` local to `proxy`, and `getmetatable(proxy)` to `proxyMetatable`.
 - When a VM overflow-register table is proven structurally as the table-backed register bank before the scalar register declaration, it is renamed `RegisterOverflow`. Current tracked samples 5 and 10 exercise this path; other fixtures do not invent it.
-- Focused regression `tools/test-semantic-names.js` covers `InitialArgs`, fixed closure `argN`, `gcProxy`, `closure`, `captureIndex`, `upvalueId`, `proxy`, `proxyMetatable`, and `RegisterOverflow`. Current paired fixtures 1-13 remain parse/runtime-valid where executable.
+- Focused regression `tools/test-semantic-names.js` covers `InitialArgs`, fixed closure `argN`, `gcProxy`, `closure`, `captureIndex`, `upvalueId`, `proxy`, `proxyMetatable`, and `RegisterOverflow`. Current paired fixtures 1-14 remain parse/runtime-valid where executable.
 
 ## Sample 10: Natural Register Overflow Regression (2026-08-23)
 
@@ -569,7 +569,7 @@ without producing unrelated locals.
 - Remote: `https://github.com/GooseGoldenGoose/new-promdeobf.git`.
 - Latest pushed beta behavior checkpoint at this snapshot: `d2ad98b Lower beta terminal return payloads`; cleanup-first grouping remains superseded, terminal-return anchoring remains part of the sparse data-flow epoch model, and one-state beta CF now reconstructs terminal Lua `return` syntax.
 - Previous beta behavior checkpoint: `88a2dc5 Preserve final VM special writes in beta`; it is superseded by the current rule that preserves all final `state` writes but only terminal table-valued `ReturnVal`.
-- Latest fixture checkpoint: `69a84c2 Add returned-local sample 13`.
+- Latest fixture checkpoint: `25fbddb Add early-return branch sample 14`.
 - Immediately preceding context checkpoint: `2643ebc Document restored sample coverage`.
 - Before changing anything in a new chat: read this entire `CONTEXT.md`, run `git status --short --branch`, then `git log -8 --oneline --decorate`. Never assume the checkout is still at this exact commit if newer work exists.
 - Every project code/content change, even small, gets a focused commit and `git push origin main`. Stage only files belonging to the current change.
@@ -649,6 +649,7 @@ without producing unrelated locals.
 - Sample 11: beta branch/join fixture from `local a = 3123; if _G.wasd then print(a); a = 3 end; print(a)`. Normal source/obfuscated/deobfuscated parity: false path prints `3123`; true path prints `3123`, `3`. Normalized VM has 3 states, 20 definitions, one join group, and 2 cross-block lifetimes. Beta now coalesces the two physical `r2` value definitions by reaching-def/join evidence, not because they share a future nil: state 1 starts `r_v2_1`, state 2 mutates it, state 3 reads it from either predecessor, and the final direct `r2 = nil` is independently proven and attached as the epoch end.
 - Sample 12: real source-return compiler fixture: `thing("table")`, then `thing("after")`, then `return { thing2 }`. Source, formatter-normalized obfuscation, and normal deobfuscated output all print `table` then `after`. The root VM proves Prometheus evaluates both calls first, stores the first result in a register, builds the source table from that register, and only then emits the terminal `ReturnVal = { register }`; the nested `thing` closure similarly ends with `ReturnVal = { argRegister }`. Beta now preserves both final non-empty compiler-shaped `ReturnVal` assignments instead of renaming them.
 - Sample 13: returned-local mutation fixture: `local a = 3; print(a); a = 4; return a`. It is source-backed through local WeAreDevs Medium + formatter, resolves to one terminal state, and has exact runtime parity: prints `3` and returns `4`. Beta keeps one lifetime for `a` and beta CF now ends directly with `return r_v2_1`; `ReturnVal = { r_v2_1 }` and `state = nil` are removed. The generated beta CF file itself was executed under LuaJIT and prints `3`, returns `4`.
+- Sample 14: paired branch/early-return fixture from `local a = 1; print(a); if math.random(1,2) == 1 then a = 2 end; if math.random(2,3) == 3 then print(a); return end; a = 3; print(a)`. It follows the required source -> local WeAreDevs Medium -> formatter workflow. Main resolves 5/5 states in one function. Deterministic LuaJIT seeds 1-12 match exactly across readable source, formatter-normalized obfuscation, and normal deobfuscated output, covering early-return outputs `1|1` / `1|2` and fallthrough output `1|3`.
 
 ### Performance history / boundary
 
@@ -681,6 +682,7 @@ without producing unrelated locals.
 `aa1766f Preserve compiler-shaped beta return payloads`
 `7685b0d Add real return-table compiler fixture`
 `69a84c2 Add returned-local sample 13`
+`25fbddb Add early-return branch sample 14`
 `8b9ffdb Merge returned local beta lifetimes`
 `d2ad98b Lower beta terminal return payloads`
 
