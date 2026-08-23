@@ -69,8 +69,15 @@ function runDeobfuscator(inputPath = DEFAULT_INPUT, outputPath = DEFAULT_OUTPUT)
 
     const createClosureAst = parseLua(createClosure.source, `${inputPath} <after createClosure rename>`);
     const vmHelpers = renameVmHelperBindings(createClosure.source, createClosureAst, parseLua);
+    const semanticNames = vmHelpers.found
+        ? renameSemanticBindings(vmHelpers.source, vmHelpers.ast || parseLua(vmHelpers.source, `${inputPath} <before semantic naming>`), parseLua)
+        : { source: vmHelpers.source, found: false, applied: false, mapping: [], skipped: [] };
+    const semanticNamedSource = semanticNames.applied ? semanticNames.source : vmHelpers.source;
+    const semanticNamedAst = semanticNames.applied
+        ? parseLua(semanticNamedSource, `${inputPath} <after semantic naming>`)
+        : (vmHelpers.ast || null);
 
-    const splitAssignments = splitSafeParallelAssignmentsFully(vmHelpers.source, parseLua, 8, vmHelpers.ast || null);
+    const splitAssignments = splitSafeParallelAssignmentsFully(semanticNamedSource, parseLua, 8, semanticNamedAst);
 
     const vmStateAst = splitAssignments.ast || parseLua(splitAssignments.source, `${inputPath} <before VM state recovery>`);
     const vmState = recoverVmStateGraph(splitAssignments.source, vmStateAst);
@@ -86,12 +93,7 @@ function runDeobfuscator(inputPath = DEFAULT_INPUT, outputPath = DEFAULT_OUTPUT)
     const registerNames = vmStateApplied
         ? renameVmRegisterBindings(scheduledSource, scheduledAst)
         : { source: scheduledSource, found: false, applied: false, mapping: [] };
-    const registerNamedSource = registerNames.applied ? registerNames.source : scheduledSource;
-    const registerNamedAst = parseLua(registerNamedSource, `${inputPath} <before semantic naming>`);
-    const semanticNames = vmStateApplied
-        ? renameSemanticBindings(registerNamedSource, registerNamedAst, parseLua)
-        : { source: registerNamedSource, found: false, applied: false, mapping: [], skipped: [] };
-    const finalSource = semanticNames.applied ? semanticNames.source : registerNamedSource;
+    const finalSource = registerNames.applied ? registerNames.source : scheduledSource;
 
     const outputAst = parseLua(finalSource, outputPath);
     const resolvedOutput = writeSource(finalSource, outputPath);
@@ -166,6 +168,14 @@ function main() {
             console.log(`VM helper skipped: ${item.role}: ${item.reason}`);
         }
     }
+    console.log(`Semantic naming applied: ${semanticNames.applied}`);
+    if (semanticNames.applied) {
+        if (semanticNames.initialArgsRenamed) console.log(`Semantic name: InitialArgs`);
+        if (semanticNames.closureArgumentRenameCount > 0) console.log(`Semantic closure arguments renamed: ${semanticNames.closureArgumentRenameCount}`);
+        if (semanticNames.helperLocalRenameCount > 0) console.log(`Semantic helper locals renamed: ${semanticNames.helperLocalRenameCount}`);
+        if (semanticNames.registerOverflowRenamed) console.log(`Semantic name: RegisterOverflow`);
+    }
+    if ((semanticNames.skipped || []).length > 0) console.log(`Semantic naming skips: ${semanticNames.skipped.length}`);
     console.log(`Safe parallel statements split: ${splitAssignments.statementsSplit}`);
     console.log(`Individual assignments produced: ${splitAssignments.assignmentsProduced}`);
     console.log(`VM state recovery found: ${vmState.found}`);
@@ -205,14 +215,6 @@ function main() {
     } else if (registerNames.found && registerNames.reason) {
         console.log(`VM register naming skipped: ${registerNames.reason}`);
     }
-    console.log(`Semantic naming applied: ${semanticNames.applied}`);
-    if (semanticNames.applied) {
-        if (semanticNames.initialArgsRenamed) console.log(`Semantic name: InitialArgs`);
-        if (semanticNames.closureArgumentRenameCount > 0) console.log(`Semantic closure arguments renamed: ${semanticNames.closureArgumentRenameCount}`);
-        if (semanticNames.helperLocalRenameCount > 0) console.log(`Semantic helper locals renamed: ${semanticNames.helperLocalRenameCount}`);
-        if (semanticNames.registerOverflowRenamed) console.log(`Semantic name: RegisterOverflow`);
-    }
-    if ((semanticNames.skipped || []).length > 0) console.log(`Semantic naming skips: ${semanticNames.skipped.length}`);
     console.log(`VM binding analysis found: ${vmBindings.found}`);
     if (vmBindings.found) {
         console.log(`VM functions analyzed: ${vmBindings.functionCount}`);
