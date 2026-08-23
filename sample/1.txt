@@ -1,207 +1,266 @@
 return (function(...)
-    local U = {
-        "8bGi1PL=",
-        "tdYhmxV=",
-        "LlL=",
-        "/lzWpc5N8tm3wrGV",
-        "/xMTfxws",
-        "tdYPfT==",
-        "tdYi1vzW2a=="
+    local j = {
+        "B2j/CWrx0xUg0aUx",
+        "BzepfzKA",
+        "HWjEk5u=",
+        "f7nxJzdEk7C=",
+        "cRMSJz6=",
+        "KzdayCfxzzeVCyEUHct=",
+        "cRM5fp==",
+        "cRMEk7Vr8w=="
     }
-    for F, n in ipairs({
+    for T, M in ipairs({
         {
             1,
-            7
+            8
         },
         {
             1,
-            1
+            3
         },
         {
-            2,
-            7
+            4,
+            8
         }
     }) do
-        while n[1] < n[2] do
-            U[n[1]], U[n[2]], n[1], n[2] = U[n[2]], U[n[1]], n[1] + (1), n[2] - (1)
+        while M[1] < M[2] do
+            j[M[1]], j[M[2]], M[1], M[2] = j[M[2]], j[M[1]], M[1] + (1), M[2] - (1)
         end
     end
-    local function F(F)
-        return U[F + (35176)]
+    local function T(T)
+        return j[T - (30091)]
     end
     do
-        local F = table.insert
-        local n = U
-        local z = {
-            R = 42,
-            m = 25,
-            q = 15,
-            K = 3,
-            Q = 59,
-            N = 55,
-            G = 9,
-            l = 20,
-            ["2"] = 30,
-            Y = 61,
-            X = 50,
-            u = 32,
-            x = 22,
-            O = 62,
-            L = 16,
-            T = 48,
-            B = 4,
-            ["8"] = 28,
-            c = 35,
-            H = 33,
-            e = 26,
-            g = 46,
-            ["1"] = 27,
-            s = 43,
-            ["4"] = 58,
-            r = 36,
-            P = 39,
-            n = 60,
-            V = 56,
-            b = 7,
-            j = 18,
-            ["0"] = 14,
-            y = 2,
-            D = 19,
-            v = 38,
-            a = 0,
-            ["/"] = 29,
-            i = 41,
-            C = 11,
-            d = 53,
-            p = 12,
-            t = 23,
-            S = 51,
+        local T = string.char
+        local M = j
+        local h = string.len
+        local O = table.concat
+        local n = type
+        local R = table.insert
+        local e = math.floor
+        local p = {
+            ["9"] = 3,
+            z = 22,
+            x = 51,
+            v = 10,
+            X = 54,
+            i = 52,
+            q = 8,
+            I = 11,
+            ["6"] = 56,
+            k = 27,
+            M = 61,
+            D = 26,
+            w = 0,
+            O = 2,
+            Y = 4,
+            d = 49,
+            F = 18,
+            ["2"] = 55,
             Z = 31,
-            I = 21,
+            g = 45,
+            B = 29,
+            L = 63,
+            ["8"] = 30,
+            Q = 62,
+            S = 44,
+            u = 16,
+            E = 41,
+            ["1"] = 32,
+            a = 19,
+            r = 37,
+            ["4"] = 6,
+            R = 53,
+            P = 14,
+            c = 23,
+            ["3"] = 33,
+            h = 40,
+            p = 48,
+            N = 60,
+            t = 36,
+            W = 7,
+            A = 43,
+            ["/"] = 35,
+            ["7"] = 38,
+            G = 50,
+            ["+"] = 59,
+            C = 20,
+            o = 58,
+            j = 9,
+            y = 21,
+            T = 34,
+            b = 42,
+            l = 46,
+            ["0"] = 12,
+            J = 25,
+            e = 57,
+            U = 1,
+            s = 47,
+            H = 28,
+            m = 15,
             f = 24,
-            h = 44,
-            F = 45,
-            A = 54,
-            E = 6,
-            ["6"] = 10,
-            k = 52,
-            ["9"] = 34,
-            z = 17,
-            J = 40,
-            ["3"] = 5,
-            ["7"] = 8,
-            w = 13,
-            ["+"] = 47,
-            U = 49,
-            ["5"] = 1,
-            W = 37,
-            M = 57,
-            o = 63
+            K = 13,
+            ["5"] = 39,
+            n = 5,
+            V = 17
         }
-        local N = table.concat
-        local D = string.len
-        local A = type
-        local P = string.char
-        local R = string.sub
-        local V = math.floor
-        for U = 1, #n, 1 do
-            local q = n[U]
-            if A(q) == "string" then
-                local A = D(q)
-                local S = {}
-                local l = 1
-                local O = 0
-                local W = 0
-                while l <= A do
-                    local U = R(q, l, l)
-                    local n = z[U]
-                    if n then
-                        O = O + n * (64) ^ ((3) - W)
-                        W = W + (1)
-                        if W == 4 then
-                            W = 0
-                            local U = V(O / (65536))
-                            local n = V((O % (65536)) / (256))
-                            local z = O % (256)
-                            F(S, P(U, n, z))
-                            O = 0
+        local c = string.sub
+        for j = 1, #M, 1 do
+            local V = M[j]
+            if n(V) == "string" then
+                local n = h(V)
+                local y = {}
+                local H = 1
+                local g = 0
+                local x = 0
+                while H <= n do
+                    local j = c(V, H, H)
+                    local M = p[j]
+                    if M then
+                        g = g + M * (64) ^ ((3) - x)
+                        x = x + (1)
+                        if x == 4 then
+                            x = 0
+                            local j = e(g / (65536))
+                            local M = e((g % (65536)) / (256))
+                            local h = g % (256)
+                            R(y, T(j, M, h))
+                            g = 0
                         end
-                    elseif U == "=" then
-                        F(S, P(V(O / (65536))))
-                        if l >= A or R(q, l + (1), l + (1)) ~= "=" then
-                            F(S, P(V((O % (65536)) / (256))))
+                    elseif j == "=" then
+                        R(y, T(e(g / (65536))))
+                        if H >= n or c(V, H + (1), H + (1)) ~= "=" then
+                            R(y, T(e((g % (65536)) / (256))))
                         end
                         break
                     end
-                    l = l + (1)
+                    H = H + (1)
                 end
-                n[U] = N(S)
+                M[j] = O(y)
             end
         end
     end
-    return (function(U, z, N, D, A, P, R, l, n, W, S, q, V, b, O, Q)
-        O, V, q, Q, l, S, b, W, n = function(U)
-            for F = 1, #U, 1 do
-                q[U[F]] = (1) + q[U[F]]
+    return (function(j, h, O, n, R, e, p, y, x, m, w, c, M, V, d, g, H)
+        m, g, d, y, V, M, H, w, x, c = function(j, T)
+            local h = g(T)
+            local O = function(...)
+                return M(j, {
+                    ...
+                }, T, h)
             end
-            if N then
-                local n = N(true)
-                local z = A(n)
-                z[F(-35175)], z[F(-35169)], z[F(-35173)] = U, W, function()
-                    return 1046131
+            return O
+        end, function(j)
+            for T = 1, #j, 1 do
+                V[j[T]] = V[j[T]] + (1)
+            end
+            if O then
+                local M = O(true)
+                local h = R(M)
+                h[T(30094)], h[T(30093)], h[T(30099)] = j, x, function()
+                    return -3987229
                 end
-                return n
+                return M
             else
-                return D({}, {
-                    [F(-35169)] = W,
-                    [F(-35175)] = U,
-                    [F(-35173)] = function()
-                        return 1046131
+                return n({}, {
+                    [T(30093)] = x,
+                    [T(30094)] = j,
+                    [T(30099)] = function()
+                        return -3987229
                     end
                 })
             end
-        end, {}, {}, function(U)
-            q[U] = q[U] - (1)
-            if 0 == q[U] then
-                q[U], V[U] = nil, nil
+        end, function(j)
+            V[j] = V[j] - (1)
+            if 0 == V[j] then
+                V[j], c[j] = nil, nil
             end
-        end, 0, function()
-            l = l + (1)
-            q[l] = 1
-            return l
-        end, function(U, F)
-            local z = O(F)
-            local N = function(...)
-                return n(U, {
-                    ...
-                }, F, z)
-            end
-            return N
-        end, function(U)
-            local F, n = 1, U[1]
-            while n do
-                q[n], F = q[n] - (1), (1) + F
-                if 0 == q[n] then
-                    q[n], V[n] = nil, nil
+        end, function()
+            H = (1) + H
+            V[H] = 1
+            return H
+        end, {}, function(M, O, n, R)
+            local x, p, m, K, a, g, H, V
+            while M do
+                if M < 14214874 then
+                    if M < 12452391 then
+                        if M < 9988311 then
+                            V = O
+                            H = y()
+                            M = 4
+                            a = 1
+                            c[H] = M
+                            M = w(15351943, {
+                                H
+                            })
+                            m = 3
+                            g = M
+                            p = T(30097)
+                            H = d(H)
+                            x = T(30098)
+                            M = j[p]
+                            K = g(m)
+                            m = {
+                                g(a)
+                            }
+                            p = M(x, K, h(m))
+                            g = nil
+                            M = j[T(30095)]
+                            p = {}
+                        else
+                            M = j[T(30092)]
+                            p = {
+                                H
+                            }
+                        end
+                    else
+                        p = 2
+                        M = H * p
+                        H = M
+                        M = 12426098
+                    end
+                else
+                    if M < 15849151 then
+                        p = c[n[1]]
+                        V = O[1]
+                        M = p + V
+                        H = M
+                        p = 6
+                        M = H > p
+                        M = M and 12724566 or 15900131
+                    else
+                        g = 1
+                        p = H - g
+                        M = 12426098
+                        H = p
+                    end
                 end
-                n = U[F]
             end
-        end, function(n, N, D, A)
-            local q, R, V
-            while n do
-                R = F(-35174)
-                q = F(-35172)
-                V = N
-                n = U[R]
-                R = n(q)
-                n = U[F(-35171)]
-                R = {}
+            M = #R
+            return h(p)
+        end, 0, function(j, T)
+            local h = g(T)
+            local O = function(O, n, R, e, p)
+                return M(j, {
+                    O,
+                    n,
+                    R,
+                    e,
+                    p
+                }, T, h)
             end
-            n = #A
-            return z(R)
-        end
-        return (b(1383946, {}))(z(R))
-    end)(getfenv and getfenv() or _ENV, unpack or table[F(-35170)], newproxy, setmetatable, getmetatable, select, {
+            return O
+        end, function(j)
+            local T, M = 1, j[1]
+            while M do
+                V[M], T = V[M] - (1), (1) + T
+                if 0 == V[M] then
+                    V[M], c[M] = nil, nil
+                end
+                M = j[T]
+            end
+        end, {}
+        return (m(7031306, {}))(h(p))
+    end)(getfenv and getfenv() or _ENV, unpack or table[T(30096)], newproxy, setmetatable, getmetatable, select, {
         ...
     })
 end)(...)
