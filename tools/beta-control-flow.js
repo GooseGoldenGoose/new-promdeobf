@@ -34,7 +34,12 @@ function main() {
     const generated = generateBetaControlFlow(inputArg, process.argv[3] || null);
     console.log(`Mode: ${generated.controlFlow.mode}`);
     console.log(`Entry state: ${generated.controlFlow.entryState}`);
+    console.log(`States: ${generated.controlFlow.stateCount}`);
     console.log(`Statements: ${generated.controlFlow.statementCount}`);
+    console.log(`Branches: ${generated.controlFlow.branchCount || 0}`);
+    if (generated.controlFlow.joinCount !== undefined) console.log(`Branch joins: ${generated.controlFlow.joinCount}`);
+    if (generated.controlFlow.guardBranchCount !== undefined) console.log(`Guard-return branches: ${generated.controlFlow.guardBranchCount}`);
+    if (generated.controlFlow.terminalReturnCount !== undefined) console.log(`Terminal returns: ${generated.controlFlow.terminalReturnCount}`);
     console.log(`Return payload sunk: ${generated.controlFlow.terminalReturnPayloadSunk}`);
     console.log(`Terminal return lowered: ${generated.controlFlow.terminalReturnLowered}`);
     if (generated.controlFlow.environmentHeader) console.log(`Header: ${generated.controlFlow.environmentHeader}`);
