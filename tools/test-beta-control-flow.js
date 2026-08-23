@@ -470,6 +470,8 @@ const indexedEffectPassthrough = solveBetaControlFlow(ast, {
                 { kind: "version-define", emittedTarget: "r_v1_1", emittedText: 'local r_v1_1 = "concat"', rhs: '"concat"', reads: [] },
                 { kind: "version-define", emittedTarget: "r_v2_1", emittedText: "local r_v2_1 = function() return 1 end", rhs: "function() return 1 end", reads: [] },
                 { kind: "effect-write", emittedText: "_env[r_v1_1] = r_v2_1", originalText: "_env[r1] = state", reads: ["r_v1_1", "r_v2_1"] },
+                { kind: "statement", originalText: "mark()", reads: [] },
+                { kind: "effect-write", emittedText: "r_v1_1.value = r_v2_1", originalText: "r1.value = state", reads: ["r_v1_1", "r_v2_1"] },
                 { kind: "return-payload", terminalCompilerReturnPayload: true, returnExpressions: [], emittedText: "ReturnVal = {}", rhs: "{}", reads: [] },
                 { kind: "state-transition", emittedTarget: "state", emittedText: "state = nil", rhs: "nil", reads: [] },
             ],
@@ -478,6 +480,15 @@ const indexedEffectPassthrough = solveBetaControlFlow(ast, {
 });
 assert.equal(indexedEffectPassthrough.applied, true);
 assert(indexedEffectPassthrough.source.includes("_env[r_v1_1] = r_v2_1"));
+assert(indexedEffectPassthrough.source.includes("r_v1_1.value = r_v2_1"));
+assert(
+    indexedEffectPassthrough.source.indexOf("_env[r_v1_1] = r_v2_1") <
+    indexedEffectPassthrough.source.indexOf("mark()")
+);
+assert(
+    indexedEffectPassthrough.source.indexOf("mark()") <
+    indexedEffectPassthrough.source.indexOf("r_v1_1.value = r_v2_1")
+);
 assert(!indexedEffectPassthrough.source.includes("state = nil"));
 parseLua(indexedEffectPassthrough.source, "<beta-cf-indexed-effect-output>");
 

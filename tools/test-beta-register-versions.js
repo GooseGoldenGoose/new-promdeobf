@@ -359,4 +359,27 @@ assert(memberEffect);
 assert(memberEffect.emittedText.includes(`${indexedR1Base}_1.value = ${indexedStateBase}_1`));
 parseLua(indexedAssignmentReadResult.source, "<beta-indexed-assignment-read-output>");
 
+const ambiguousIndexedWriteSource = `vm = function(state, args, upvalues, gcProxy)
+    local r1, ReturnVal
+    while state do
+        if state == 1 then
+            r1 = 5
+            state = 9
+            upvalueValues[r1], r1.value = state, state
+            ReturnVal = {}
+            state = nil
+        end
+    end
+    state = #gcProxy
+    return unpack(ReturnVal)
+end
+root = createClosure(1, {})`;
+const ambiguousIndexedWriteResult = versionVmBlockRegisters(
+    ambiguousIndexedWriteSource,
+    parseLua(ambiguousIndexedWriteSource, "<beta-ambiguous-indexed-write-test>")
+);
+assert.equal(ambiguousIndexedWriteResult.orderedEffectWriteCount, 0);
+assert.equal(ambiguousIndexedWriteResult.skippedAssignments, 1);
+assert(ambiguousIndexedWriteResult.graph.states[0].operations.some(operation => operation.kind === "unsupported"));
+
 console.log("beta register versioning tests passed");
