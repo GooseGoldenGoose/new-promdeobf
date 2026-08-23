@@ -1,0 +1,246 @@
+return (function(...)
+    local d = {
+        "KR9AKVl5qz4Ei5dmqh==",
+        "t+b9X+8c",
+        "q04pYzQ=",
+        "LjgzX9==",
+        "LjgpYkKliC==",
+        "13bdXOUL3jHPYOe4",
+        "LjgGH+v="
+    }
+    local function c(c)
+        return d[c - (47650)]
+    end
+    for c, K in ipairs({
+        {
+            1,
+            7
+        },
+        {
+            1,
+            6
+        },
+        {
+            7,
+            7
+        }
+    }) do
+        while K[1] < K[2] do
+            d[K[1]], d[K[2]], K[1], K[2] = d[K[2]], d[K[1]], K[1] + (1), K[2] - (1)
+        end
+    end
+    do
+        local c = table.concat
+        local K = math.floor
+        local C = string.char
+        local z = type
+        local t = table.insert
+        local X = string.sub
+        local B = {
+            s = 34,
+            l = 37,
+            ["0"] = 7,
+            Q = 16,
+            u = 47,
+            b = 57,
+            ["4"] = 9,
+            g = 61,
+            Z = 51,
+            i = 30,
+            I = 40,
+            L = 23,
+            q = 28,
+            w = 58,
+            G = 44,
+            j = 53,
+            B = 18,
+            ["2"] = 11,
+            T = 62,
+            ["5"] = 4,
+            P = 50,
+            F = 8,
+            U = 33,
+            p = 41,
+            N = 10,
+            ["+"] = 22,
+            K = 17,
+            O = 35,
+            R = 36,
+            Y = 27,
+            ["3"] = 20,
+            W = 54,
+            t = 29,
+            S = 3,
+            h = 32,
+            J = 42,
+            m = 19,
+            ["/"] = 2,
+            k = 38,
+            X = 24,
+            E = 26,
+            d = 45,
+            A = 55,
+            n = 59,
+            x = 14,
+            z = 39,
+            v = 56,
+            f = 15,
+            ["6"] = 31,
+            C = 0,
+            V = 5,
+            c = 43,
+            ["1"] = 12,
+            y = 46,
+            ["7"] = 6,
+            M = 63,
+            ["8"] = 13,
+            ["9"] = 48,
+            a = 49,
+            r = 60,
+            D = 21,
+            o = 52,
+            H = 25,
+            e = 1
+        }
+        local F = string.len
+        local h = d
+        for d = 1, #h, 1 do
+            local q = h[d]
+            if z(q) == "string" then
+                local z = F(q)
+                local Q = {}
+                local O = 1
+                local T = 0
+                local E = 0
+                while O <= z do
+                    local d = X(q, O, O)
+                    local c = B[d]
+                    if c then
+                        T = T + c * (64) ^ ((3) - E)
+                        E = E + (1)
+                        if E == 4 then
+                            E = 0
+                            local d = K(T / (65536))
+                            local c = K((T % (65536)) / (256))
+                            local z = T % (256)
+                            t(Q, C(d, c, z))
+                            T = 0
+                        end
+                    elseif d == "=" then
+                        t(Q, C(K(T / (65536))))
+                        if O >= z or X(q, O + (1), O + (1)) ~= "=" then
+                            t(Q, C(K((T % (65536)) / (256))))
+                        end
+                        break
+                    end
+                    O = O + (1)
+                end
+                h[d] = c(Q)
+            end
+        end
+    end
+    return (function(d, C, z, t, X, B, F, W, O, h, A, E, Q, b, q, K, T)
+        q, T, A, b, h, K, W, O, Q, E = {}, function(d)
+            for c = 1, #d, 1 do
+                q[d[c]] = q[d[c]] + (1)
+            end
+            if z then
+                local K = z(true)
+                local C = X(K)
+                C[c(47654)], C[c(47653)], C[c(47656)] = d, E, function()
+                    return 3737295
+                end
+                return K
+            else
+                return t({}, {
+                    [c(47653)] = E,
+                    [c(47654)] = d,
+                    [c(47656)] = function()
+                        return 3737295
+                    end
+                })
+            end
+        end, function(d)
+            q[d] = q[d] - (1)
+            if 0 == q[d] then
+                q[d], h[d] = nil, nil
+            end
+        end, function(d, c)
+            local C = T(c)
+            local z = function(...)
+                return K(d, {
+                    ...
+                }, c, C)
+            end
+            return z
+        end, {}, function(K, z, t, X)
+            local F, O, T, E, q
+            while K do
+                if K < 9569675 then
+                    F = h[t[1]]
+                    q = 1
+                    K = F + q
+                    h[t[1]] = K
+                    F = true
+                    F = {
+                        F
+                    }
+                    K = d[c(47655)]
+                else
+                    O = Q()
+                    F = c(47652)
+                    q = z
+                    K = 123
+                    h[O] = K
+                    K = W(7837307, {
+                        O
+                    })
+                    T = K
+                    K = d[F]
+                    E = {
+                        T()
+                    }
+                    T = nil
+                    F = K(C(E))
+                    F = c(47652)
+                    K = d[F]
+                    E = h[O]
+                    F = K(E)
+                    O = A(O)
+                    F = {}
+                    K = d[c(47657)]
+                end
+            end
+            K = #X
+            return C(F)
+        end, function(d, c)
+            local C = T(c)
+            local z = function(z, t, X, B, F)
+                return K(d, {
+                    z,
+                    t,
+                    X,
+                    B,
+                    F
+                }, c, C)
+            end
+            return z
+        end, 0, function()
+            O = (1) + O
+            q[O] = 1
+            return O
+        end, function(d)
+            local c, K = 1, d[1]
+            while K do
+                q[K], c = q[K] - (1), c + (1)
+                if 0 == q[K] then
+                    q[K], h[K] = nil, nil
+                end
+                K = d[c]
+            end
+        end
+        return (b(10319247, {}))(C(F))
+    end)(getfenv and getfenv() or _ENV, unpack or table[c(47651)], newproxy, setmetatable, getmetatable, select, {
+        ...
+    })
+end)(...)
