@@ -422,6 +422,26 @@ function recoverBetaUpvalues(betaResult) {
             cell.bindingName = cell.registerName;
             cell.bindingMode = "cell-register-binding";
         }
+
+        // A closure may be created before the compiler emits the cell's first
+        // value initialization (captured parameters are a real example). A Lua
+        // local declared only at that later initialization point would not be in
+        // lexical scope for the already-created nested function. In that case,
+        // keep the recovered cell binding name but hoist only its declaration to
+        // the original allocUpvalue site, then assign the value at the original
+        // initialization site. Region ownership is single-state here, so the
+        // operation order is a proven lexical order inside one function region.
+        const firstCaptureIndex = factorySites
+            .filter(site =>
+                site.ownerEntry === cell.ownerEntry &&
+                site.stateId === cell.allocation.stateId &&
+                site.captures.some(capture => resolveCellIndex(site.ownerEntry, capture) === cellId)
+            )
+            .reduce((best, site) => Math.min(best, site.operationIndex), Infinity);
+        if (firstCaptureIndex < cell.initialization.operationIndex) {
+            cell.bindingName = cell.registerName;
+            cell.bindingMode = "hoisted-cell-binding";
+        }
     }
 
     const bindingByCell = new Map([...cells.values()].filter(cell => capturedCellIds.has(cell.id)).map(cell => [cell.id, cell.bindingName]));
@@ -475,21 +495,36 @@ function recoverBetaUpvalues(betaResult) {
 
     for (const cellId of capturedCellIds) {
         const cell = cells.get(cellId);
-        removals.add(cell.allocation.operation);
+        if (cell.bindingMode === "hoisted-cell-binding") {
+            replacements.set(cell.allocation.operation, {
+                ...cell.allocation.operation,
+                kind: "upvalue-binding-declaration",
+                originalTarget: cell.registerName,
+                emittedTarget: cell.bindingName,
+                rhs: null,
+                reads: [],
+                emittedText: `local ${cell.bindingName}`,
+                returnSinkSafe: false,
+            });
+        } else {
+            removals.add(cell.allocation.operation);
+        }
+
         if (cell.bindingMode === "existing-beta-binding") {
             removals.add(cell.initialization.operation);
         } else {
             const initRhsText = cell.initialization.parsed.source.slice(cell.initialization.value.range[0], cell.initialization.value.range[1]);
             const rewritten = rewriteExpressionUpvalues(initRhsText, cell.ownerEntry, resolveCellIndex, bindingByCell);
             if (rewritten.error) return { applied: false, safe: false, reason: rewritten.error };
+            const hoisted = cell.bindingMode === "hoisted-cell-binding";
             replacements.set(cell.initialization.operation, {
                 ...cell.initialization.operation,
-                kind: "upvalue-binding-start",
+                kind: hoisted ? "upvalue-binding-init" : "upvalue-binding-start",
                 originalTarget: cell.registerName,
                 emittedTarget: cell.bindingName,
                 rhs: rewritten.text,
                 reads: [...new Set([...(cell.initialization.operation.reads || []).filter(name => !localCellNames.has(name)), ...rewritten.bindingReads])],
-                emittedText: `local ${cell.bindingName} = ${rewritten.text}`,
+                emittedText: `${hoisted ? "" : "local "}${cell.bindingName} = ${rewritten.text}`,
                 returnSinkSafe: false,
             });
         }

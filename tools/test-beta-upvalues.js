@@ -166,6 +166,46 @@ assert(liveRoot.some(op => op.emittedText === "local r_v1_1 = r_v2_1"));
 assert(liveRoot.some(op => op.rhs === "observe(r_v2_1)"));
 assert(liveChild.some(op => op.emittedText === "r_v1_1 = 9"));
 
+const captureBeforeInitialization = recoverBetaUpvalues({
+    applied: true,
+    graph: {
+        cfgComplete: true,
+        entries: [1, 2],
+        states: [
+            {
+                id: 1,
+                predecessors: [],
+                successors: [],
+                operations: [
+                    { kind: "epoch-start", emittedTarget: "r_v1_1", emittedText: "local r_v1_1 = allocUpvalue()", rhs: "allocUpvalue()", reads: [] },
+                    { kind: "version-define", emittedTarget: "r_v2_1", emittedText: "local r_v2_1 = createClosure2(2, { r_v1_1 })", rhs: "createClosure2(2, { r_v1_1 })", reads: ["r_v1_1"] },
+                    { kind: "return-payload", terminalCompilerReturnPayload: true, returnExpressions: ["r_v2_1"], emittedTarget: "ReturnVal", emittedText: "ReturnVal = { r_v2_1 }", rhs: "{ r_v2_1 }", reads: ["r_v2_1"] },
+                    { kind: "unsupported", emittedText: "upvalueValues[r_v1_1] = args[1]", reads: ["r_v1_1"] },
+                    { kind: "state-transition", emittedTarget: "state", emittedText: "state = nil", rhs: "nil", reads: [] },
+                ],
+            },
+            {
+                id: 2,
+                predecessors: [],
+                successors: [],
+                operations: [
+                    { kind: "version-define", emittedTarget: "r_v3_1", emittedText: "local r_v3_1 = upvalueValues[upvalues[1]]", rhs: "upvalueValues[upvalues[1]]", reads: [] },
+                    { kind: "return-payload", terminalCompilerReturnPayload: true, returnExpressions: ["r_v3_1"], emittedTarget: "ReturnVal", emittedText: "ReturnVal = { r_v3_1 }", rhs: "{ r_v3_1 }", reads: ["r_v3_1"] },
+                    { kind: "state-transition", emittedTarget: "state", emittedText: "state = nil", rhs: "nil", reads: [] },
+                ],
+            },
+        ],
+    },
+});
+assert.equal(captureBeforeInitialization.safe, true);
+assert.equal(captureBeforeInitialization.applied, true);
+const captureBeforeRoot = captureBeforeInitialization.graph.states.find(state => state.id === 1).operations;
+assert.equal(captureBeforeInitialization.cells[0].bindingMode, "hoisted-cell-binding");
+assert.equal(captureBeforeRoot[0].emittedText, "local r_v1_1");
+assert(captureBeforeRoot.some(op => op.emittedText === "r_v1_1 = args[1]"));
+assert(captureBeforeRoot.some(op => op.rhs === "createClosure2(2, {})"));
+
+
 const escaped = recoverBetaUpvalues({
     applied: true,
     graph: {
