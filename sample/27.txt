@@ -1,0 +1,229 @@
+return (function(...)
+    local F = {
+        "ZkwMnsz8",
+        "bFz4fkaYTR==",
+        "bFz0nXr=",
+        "Zo74fcC=",
+        "ZVaHXQhvfXhWCBYqtFQ=",
+        "NXDUlXAE",
+        "fXwWOR==",
+        "bFzclU=="
+    }
+    local function r(r)
+        return F[r + (4802)]
+    end
+    for r, R in ipairs({
+        {
+            1,
+            8
+        },
+        {
+            1,
+            4
+        },
+        {
+            5,
+            8
+        }
+    }) do
+        while R[1] < R[2] do
+            F[R[1]], F[R[2]], R[1], R[2] = F[R[2]], F[R[1]], R[1] + (1), R[2] - (1)
+        end
+    end
+    do
+        local r = table.concat
+        local R = string.sub
+        local Q = math.floor
+        local y = type
+        local j = table.insert
+        local C = {
+            B = 19,
+            G = 2,
+            ["7"] = 9,
+            ["/"] = 32,
+            Q = 36,
+            W = 52,
+            M = 46,
+            P = 4,
+            t = 20,
+            C = 16,
+            S = 62,
+            O = 26,
+            ["2"] = 11,
+            Z = 28,
+            z = 61,
+            J = 47,
+            y = 3,
+            i = 1,
+            ["9"] = 34,
+            a = 17,
+            X = 22,
+            c = 39,
+            q = 35,
+            s = 6,
+            R = 0,
+            V = 51,
+            ["5"] = 49,
+            u = 21,
+            ["4"] = 41,
+            f = 27,
+            U = 48,
+            L = 55,
+            e = 58,
+            T = 30,
+            ["8"] = 45,
+            A = 13,
+            E = 43,
+            w = 5,
+            h = 33,
+            p = 15,
+            x = 50,
+            n = 25,
+            k = 38,
+            H = 18,
+            v = 14,
+            g = 60,
+            N = 29,
+            ["6"] = 40,
+            d = 42,
+            ["3"] = 12,
+            j = 31,
+            b = 23,
+            o = 7,
+            K = 10,
+            D = 57,
+            l = 24,
+            r = 56,
+            m = 63,
+            I = 8,
+            Y = 37,
+            ["1"] = 54,
+            ["+"] = 59,
+            F = 53,
+            ["0"] = 44
+        }
+        local a = F
+        local o = string.len
+        local X = string.char
+        for F = 1, #a, 1 do
+            local N = a[F]
+            if y(N) == "string" then
+                local y = o(N)
+                local Y = {}
+                local x = 1
+                local g = 0
+                local S = 0
+                while x <= y do
+                    local F = R(N, x, x)
+                    local r = C[F]
+                    if r then
+                        g = g + r * (64) ^ ((3) - S)
+                        S = S + (1)
+                        if S == 4 then
+                            S = 0
+                            local F = Q(g / (65536))
+                            local r = Q((g % (65536)) / (256))
+                            local R = g % (256)
+                            j(Y, X(F, r, R))
+                            g = 0
+                        end
+                    elseif F == "=" then
+                        j(Y, X(Q(g / (65536))))
+                        if x >= y or R(N, x + (1), x + (1)) ~= "=" then
+                            j(Y, X(Q((g % (65536)) / (256))))
+                        end
+                        break
+                    end
+                    x = x + (1)
+                end
+                a[F] = r(Y)
+            end
+        end
+    end
+    return (function(F, Q, y, j, C, a, o, g, K, S, s, N, X, Y, x, R)
+        Y, g, S, K, N, X, s, x, R = function()
+            x = (1) + x
+            N[x] = 1
+            return x
+        end, function(F)
+            for r = 1, #F, 1 do
+                N[F[r]] = N[F[r]] + (1)
+            end
+            if y then
+                local R = y(true)
+                local Q = C(R)
+                Q[r(-4796)], Q[r(-4798)], Q[r(-4795)] = F, S, function()
+                    return -2342742
+                end
+                return R
+            else
+                return j({}, {
+                    [r(-4798)] = S,
+                    [r(-4796)] = F,
+                    [r(-4795)] = function()
+                        return -2342742
+                    end
+                })
+            end
+        end, function(F)
+            local r, R = 1, F[1]
+            while R do
+                N[R], r = N[R] - (1), r + (1)
+                if 0 == N[R] then
+                    N[R], X[R] = nil, nil
+                end
+                R = F[r]
+            end
+        end, function(F)
+            N[F] = N[F] - (1)
+            if 0 == N[F] then
+                N[F], X[F] = nil, nil
+            end
+        end, {}, {}, function(F, r)
+            local Q = g(r)
+            local y = function(...)
+                return R(F, {
+                    ...
+                }, r, Q)
+            end
+            return y
+        end, 0, function(R, y, j, C)
+            local o, Y, x, X, N
+            while R do
+                if R < 11739531 then
+                    if R < 10340956 then
+                        X = y
+                        R = 16425952
+                    else
+                        R = F[r(-4801)]
+                        o = {}
+                    end
+                else
+                    if R < 13050319 then
+                        o = r(-4794)
+                        R = F[o]
+                        Y = 27
+                        o = R(Y)
+                        R = 16425952
+                    else
+                        N = r(-4799)
+                        Y = F[N]
+                        N = r(-4797)
+                        o = Y[N]
+                        N = 1
+                        x = 2
+                        Y = o(N, x)
+                        o = 1
+                        R = Y == o
+                        R = R and 11767288 or 11144257
+                    end
+                end
+            end
+            R = #C
+            return Q(o)
+        end
+        return (s(9908920, {}))(Q(o))
+    end)(getfenv and getfenv() or _ENV, unpack or table[r(-4800)], newproxy, setmetatable, getmetatable, select, {
+        ...
+    })
+end)(...)
