@@ -1,0 +1,387 @@
+return (function(...)
+    local q = {
+        "Wq6sWJ==",
+        "vSU8WzVEW5lx",
+        "uSyRupJ=",
+        "A5lCI5+h",
+        "WzUmIUb3t2+j5wUN",
+        "z36dvwyH1i==",
+        "e5lsWzVEWzWHvo==",
+        "z36MW5P=",
+        "I5W8WzVEvq6Gui==",
+        "IwUwvSZHm50GvSi=",
+        "z36pIC==",
+        "unZdvpJ=",
+        "vSU8WzV=",
+        "e5lsWzVEv9yx"
+    }
+    for T, R in ipairs({
+        {
+            1,
+            14
+        },
+        {
+            1,
+            3
+        },
+        {
+            4,
+            14
+        }
+    }) do
+        while R[1] < R[2] do
+            q[R[1]], q[R[2]], R[1], R[2] = q[R[2]], q[R[1]], R[1] + (1), R[2] - (1)
+        end
+    end
+    local function T(T)
+        return q[T - (53936)]
+    end
+    do
+        local T = math.floor
+        local R = q
+        local c = string.sub
+        local Q = type
+        local f = string.char
+        local v = table.insert
+        local e = {
+            v = 27,
+            o = 32,
+            f = 20,
+            i = 0,
+            S = 55,
+            y = 17,
+            J = 16,
+            ["8"] = 52,
+            F = 3,
+            B = 35,
+            W = 25,
+            l = 57,
+            C = 48,
+            G = 47,
+            u = 28,
+            I = 24,
+            g = 34,
+            R = 33,
+            ["2"] = 4,
+            x = 36,
+            L = 10,
+            c = 31,
+            h = 43,
+            r = 63,
+            ["0"] = 49,
+            ["1"] = 30,
+            A = 29,
+            ["+"] = 13,
+            ["3"] = 53,
+            ["7"] = 60,
+            ["4"] = 58,
+            e = 26,
+            Z = 9,
+            Q = 42,
+            p = 39,
+            k = 12,
+            K = 5,
+            Y = 1,
+            m = 11,
+            t = 18,
+            T = 62,
+            w = 38,
+            q = 6,
+            j = 50,
+            H = 37,
+            E = 45,
+            M = 44,
+            s = 46,
+            d = 41,
+            ["6"] = 61,
+            P = 56,
+            O = 15,
+            z = 23,
+            a = 2,
+            b = 40,
+            N = 19,
+            U = 21,
+            ["5"] = 22,
+            D = 14,
+            ["9"] = 54,
+            n = 7,
+            V = 8,
+            X = 51,
+            ["/"] = 59
+        }
+        local n = string.len
+        local B = table.concat
+        for q = 1, #R, 1 do
+            local U = R[q]
+            if Q(U) == "string" then
+                local Q = n(U)
+                local Y = {}
+                local O = 1
+                local w = 0
+                local u = 0
+                while O <= Q do
+                    local q = c(U, O, O)
+                    local R = e[q]
+                    if R then
+                        w = w + R * (64) ^ ((3) - u)
+                        u = u + (1)
+                        if u == 4 then
+                            u = 0
+                            local q = T(w / (65536))
+                            local R = T((w % (65536)) / (256))
+                            local c = w % (256)
+                            v(Y, f(q, R, c))
+                            w = 0
+                        end
+                    elseif q == "=" then
+                        v(Y, f(T(w / (65536))))
+                        if O >= Q or c(U, O + (1), O + (1)) ~= "=" then
+                            v(Y, f(T((w % (65536)) / (256))))
+                        end
+                        break
+                    end
+                    O = O + (1)
+                end
+                R[q] = B(Y)
+            end
+        end
+    end
+    return (function(q, c, Q, f, v, e, n, u, U, o, Y, O, R, D, w, B)
+        u, R, O, U, w, Y, D, B, o = function(q)
+            local T, R = 1, q[1]
+            while R do
+                U[R], T = U[R] - (1), (1) + T
+                if 0 == U[R] then
+                    U[R], B[R] = nil, nil
+                end
+                R = q[T]
+            end
+        end, function(R, Q, f, v)
+            local F, n, Y, J, r, P, w, U, u, B, D, O, o, K
+            while R do
+                if R < 11173253 then
+                    if R < 5075250 then
+                        if R < 3290542 then
+                            if R < 2846333 then
+                                F = T(53946)
+                                n = T(53937)
+                                R = q[n]
+                                n = R(F, u, K)
+                                R = 5142249
+                            else
+                                U = 3
+                                n = 1
+                                Y = U
+                                U = 1
+                                O = U
+                                U = 0
+                                R = 7230746
+                                w = O < U
+                                U = n - O
+                            end
+                        else
+                            if R < 3680516 then
+                                u = U
+                                n = T(53937)
+                                D = T(53949)
+                                R = q[n]
+                                n = R(D, u)
+                                u = nil
+                                R = 10994409
+                            else
+                                D = D + r
+                                K = not J
+                                n = D <= o
+                                n = K and n
+                                K = D >= o
+                                K = J and K
+                                n = K or n
+                                K = 16159920
+                                R = n and K
+                                n = 13689501
+                                R = R or n
+                            end
+                        end
+                    else
+                        if R < 5888905 then
+                            if R < 5352093 then
+                                K = nil
+                                R = 3756055
+                            else
+                                n = T(53937)
+                                D = T(53948)
+                                u = U
+                                R = q[n]
+                                n = R(D, u)
+                                R = 12057205
+                                u = nil
+                            end
+                        else
+                            if R < 7842930 then
+                                u = not w
+                                U = U + O
+                                n = U <= Y
+                                n = u and n
+                                u = U >= Y
+                                u = w and u
+                                n = u or n
+                                u = 14408612
+                                R = n and u
+                                n = 15398777
+                                R = R or n
+                            else
+                                U = U + O
+                                n = U <= Y
+                                u = not w
+                                n = u and n
+                                u = U >= Y
+                                u = w and u
+                                n = u or n
+                                u = 3623352
+                                R = n and u
+                                n = 3045608
+                                R = R or n
+                            end
+                        end
+                    end
+                else
+                    if R < 14080740 then
+                        if R < 12374219 then
+                            if R < 11541715 then
+                                n = T(53937)
+                                U = T(53940)
+                                R = q[n]
+                                n = R(U)
+                                n = {}
+                                R = q[T(53944)]
+                            else
+                                u = not w
+                                U = U + O
+                                n = U <= Y
+                                n = u and n
+                                u = U >= Y
+                                u = w and u
+                                n = u or n
+                                u = 5501766
+                                R = n and u
+                                n = 11288834
+                                R = R or n
+                            end
+                        else
+                            if R < 13469587 then
+                                U = T(53942)
+                                n = T(53937)
+                                R = q[n]
+                                n = R(U)
+                                U = 2
+                                B = Q
+                                n = 1
+                                Y = U
+                                U = 1
+                                O = U
+                                U = 0
+                                R = 10994409
+                                w = O < U
+                                U = n - O
+                            else
+                                D = T(53941)
+                                n = T(53937)
+                                R = q[n]
+                                n = R(D, u)
+                                R = 7230746
+                                u = nil
+                            end
+                        end
+                    else
+                        if R < 15291625 then
+                            if R < 14513479 then
+                                n = T(53937)
+                                R = q[n]
+                                u = U
+                                D = T(53938)
+                                n = R(D, u)
+                                R = 3756055
+                                D = 2
+                                n = 1
+                                o = D
+                                D = 1
+                                r = D
+                                D = 0
+                                J = r < D
+                                D = n - r
+                            else
+                                n = T(53937)
+                                F = T(53939)
+                                R = q[n]
+                                n = R(F, u, K)
+                                R = 5142249
+                            end
+                        else
+                            if R < 15845051 then
+                                U = 1
+                                Y = U
+                                n = 3
+                                U = -1
+                                O = U
+                                U = 0
+                                R = 12057205
+                                w = O < U
+                                U = n - O
+                            else
+                                P = 2
+                                K = D
+                                F = u + K
+                                n = F % P
+                                F = 0
+                                R = n == F
+                                R = R and 1270788 or 15273186
+                            end
+                        end
+                    end
+                end
+            end
+            R = #v
+            return c(n)
+        end, 0, {}, function(q)
+            for T = 1, #q, 1 do
+                U[q[T]] = (1) + U[q[T]]
+            end
+            if Q then
+                local R = Q(true)
+                local c = v(R)
+                c[T(53945)], c[T(53950)], c[T(53947)] = q, u, function()
+                    return 468453
+                end
+                return R
+            else
+                return f({}, {
+                    [T(53950)] = u,
+                    [T(53945)] = q,
+                    [T(53947)] = function()
+                        return 468453
+                    end
+                })
+            end
+        end, function()
+            O = (1) + O
+            U[O] = 1
+            return O
+        end, function(q)
+            U[q] = U[q] - (1)
+            if 0 == U[q] then
+                U[q], B[q] = nil, nil
+            end
+        end, {}, function(q, T)
+            local c = w(T)
+            local Q = function(...)
+                return R(q, {
+                    ...
+                }, T, c)
+            end
+            return Q
+        end
+        return (o(13346489, {}))(c(n))
+    end)(getfenv and getfenv() or _ENV, unpack or table[T(53943)], newproxy, setmetatable, getmetatable, select, {
+        ...
+    })
+end)(...)
