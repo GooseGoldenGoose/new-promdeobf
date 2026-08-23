@@ -98,8 +98,8 @@ function isNilLiteral(node) {
     return node?.type === "NilLiteral";
 }
 
-function isTableConstructor(node) {
-    return node?.type === "TableConstructorExpression";
+function isEmptyTableConstructor(node) {
+    return node?.type === "TableConstructorExpression" && (node.fields || []).length === 0;
 }
 
 function collectClosureEntryStates(rootNode) {
@@ -248,7 +248,7 @@ function versionVmBlockRegisters(source, ast) {
         const preservesReturnValue =
             finalReturnWrite &&
             finalStateWrite &&
-            isTableConstructor(finalReturnWrite.value) &&
+            isEmptyTableConstructor(finalReturnWrite.value) &&
             isNilLiteral(finalStateWrite.value) &&
             finalReturnWrite.index < finalStateWrite.index;
 
@@ -527,6 +527,7 @@ function versionVmBlockRegisters(source, ast) {
                 graphOperations.push({
                     index: graphOperations.length + 1,
                     kind: plan.originalName === stateName ? "state-transition" : "return-payload",
+                    terminalEmptyReturnPayload: plan.originalName === returnName && isEmptyTableConstructor(init[0]),
                     originalTarget: plan.originalName,
                     emittedTarget: plan.originalName,
                     rhs,

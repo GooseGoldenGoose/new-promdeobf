@@ -19,7 +19,7 @@ const betaResult = {
             operations: [
                 { kind: "version-define", emittedText: 'local r_v1_1 = "print"', rhs: '"print"' },
                 { kind: "version-define", emittedText: "local r_v2_1 = _env[r_v1_1]", rhs: "_env[r_v1_1]" },
-                { kind: "return-payload", emittedText: "ReturnVal = {}", rhs: "{}" },
+                { kind: "return-payload", terminalEmptyReturnPayload: true, emittedText: "ReturnVal = {}", rhs: "{}" },
                 { kind: "epoch-kill", emittedText: "r_v3_1 = nil", rhs: "nil" },
                 { kind: "state-transition", emittedText: "state = nil", rhs: "nil" },
             ],
@@ -38,6 +38,25 @@ assert(!result.source.includes("if state =="));
 assert(result.source.indexOf("r_v3_1 = nil") < result.source.indexOf("ReturnVal = {}"));
 assert(result.source.indexOf("ReturnVal = {}") < result.source.indexOf("state = nil"));
 parseLua(result.source, "<beta-cf-output>");
+
+const effectfulPayload = solveBetaControlFlow(ast, {
+    applied: true,
+    graph: {
+        cfgComplete: true,
+        entries: [1],
+        states: [{
+            id: 1, predecessors: [], successors: [], operations: [
+                { kind: "version-define", emittedText: 'local r_v1_1 = "x"', rhs: '"x"' },
+                { kind: "return-payload", terminalEmptyReturnPayload: false, emittedText: 'ReturnVal = { mark("table") }', rhs: '{ mark("table") }' },
+                { kind: "statement", originalText: 'mark("after")' },
+                { kind: "state-transition", emittedText: "state = nil", rhs: "nil" },
+            ],
+        }],
+    },
+});
+assert.equal(effectfulPayload.applied, true);
+assert.equal(effectfulPayload.terminalReturnPayloadSunk, false);
+assert(effectfulPayload.source.indexOf('ReturnVal = { mark("table") }') < effectfulPayload.source.indexOf('mark("after")'));
 
 const multiState = solveBetaControlFlow(ast, {
     applied: true,

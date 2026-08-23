@@ -74,13 +74,12 @@ function sinkTerminalReturnPayload(operations) {
 
     const payloadIndexes = [];
     for (let index = 0; index < finalTransitionIndex; index++) {
-        if (result[index].kind === "return-payload") payloadIndexes.push(index);
+        if (result[index].kind === "return-payload" && result[index].terminalEmptyReturnPayload === true) payloadIndexes.push(index);
     }
     if (payloadIndexes.length !== 1) return { operations: result, moved: false };
 
-    // beta-register-versions only emits return-payload for the structurally proven
-    // final table-valued ReturnVal write in a stopping state. Beta CF is a
-    // presentation pass, so place that payload next to the stop/cleanup tail.
+    // Only the structurally proven empty Prometheus terminal ReturnVal = {} payload
+    // may move. Arbitrary table constructors can execute field expressions/calls.
     const payloadIndex = payloadIndexes[0];
     if (payloadIndex === finalTransitionIndex - 1) return { operations: result, moved: false };
     const [payload] = result.splice(payloadIndex, 1);
