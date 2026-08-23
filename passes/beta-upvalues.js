@@ -28,40 +28,57 @@ function walk(node, visit) {
     }
 }
 
+const PARSE_CACHE_LIMIT = 4096;
+const expressionParseCache = new Map();
+const statementParseCache = new Map();
+
+function cacheParse(cache, key, parse) {
+    if (cache.has(key)) return cache.get(key);
+    const value = parse();
+    if (cache.size >= PARSE_CACHE_LIMIT) cache.clear();
+    cache.set(key, value);
+    return value;
+}
+
 function parseExpression(text) {
-    const prefix = "local __beta_upvalue_expr = ";
-    const source = prefix + String(text || "");
-    try {
-        const ast = luaparse.parse(source, {
-            luaVersion: "luau",
-            comments: false,
-            scope: false,
-            locations: false,
-            ranges: true,
-        });
-        const statement = ast.body?.[0];
-        const expression = statement?.type === "LocalStatement" ? statement.init?.[0] : null;
-        return expression ? { source, prefix, expression } : null;
-    } catch {
-        return null;
-    }
+    const key = String(text || "");
+    return cacheParse(expressionParseCache, key, () => {
+        const prefix = "local __beta_upvalue_expr = ";
+        const source = prefix + key;
+        try {
+            const ast = luaparse.parse(source, {
+                luaVersion: "luau",
+                comments: false,
+                scope: false,
+                locations: false,
+                ranges: true,
+            });
+            const statement = ast.body?.[0];
+            const expression = statement?.type === "LocalStatement" ? statement.init?.[0] : null;
+            return expression ? { source, prefix, expression } : null;
+        } catch {
+            return null;
+        }
+    });
 }
 
 function parseStatement(text) {
     const source = String(text || "");
-    try {
-        const ast = luaparse.parse(source, {
-            luaVersion: "luau",
-            comments: false,
-            scope: false,
-            locations: false,
-            ranges: true,
-        });
-        if ((ast.body || []).length !== 1) return null;
-        return { source, statement: ast.body[0] };
-    } catch {
-        return null;
-    }
+    return cacheParse(statementParseCache, source, () => {
+        try {
+            const ast = luaparse.parse(source, {
+                luaVersion: "luau",
+                comments: false,
+                scope: false,
+                locations: false,
+                ranges: true,
+            });
+            if ((ast.body || []).length !== 1) return null;
+            return { source, statement: ast.body[0] };
+        } catch {
+            return null;
+        }
+    });
 }
 
 function isCall(node, name, argCount = null) {

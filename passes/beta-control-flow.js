@@ -212,24 +212,30 @@ function solveSingleState(originalAst, graph) {
     };
 }
 
+const TRANSITION_PARSE_CACHE_LIMIT = 4096;
+const transitionParseCache = new Map();
+
 function parseTransitionExpression(rhs) {
+    const key = String(rhs || "");
+    if (transitionParseCache.has(key)) return transitionParseCache.get(key);
     const prefix = "local __beta_cf_transition = ";
-    const source = prefix + rhs;
-    let ast;
+    const source = prefix + key;
+    let result = null;
     try {
-        ast = luaparse.parse(source, {
+        const ast = luaparse.parse(source, {
             luaVersion: "luau",
             comments: false,
             scope: false,
             locations: false,
             ranges: true,
         });
-    } catch {
-        return null;
-    }
-    const statement = ast.body?.[0];
-    const expression = statement?.type === "LocalStatement" ? statement.init?.[0] : null;
-    return expression ? { source, expression } : null;
+        const statement = ast.body?.[0];
+        const expression = statement?.type === "LocalStatement" ? statement.init?.[0] : null;
+        if (expression) result = { source, expression };
+    } catch {}
+    if (transitionParseCache.size >= TRANSITION_PARSE_CACHE_LIMIT) transitionParseCache.clear();
+    transitionParseCache.set(key, result);
+    return result;
 }
 
 function transitionInfo(state) {
