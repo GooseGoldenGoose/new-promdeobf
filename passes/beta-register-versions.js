@@ -85,9 +85,17 @@ function findLastSingleWrites(statements, names) {
         const variables = statement.variables || [];
         const init = statement.init || [];
         if (variables.length !== 1 || init.length !== 1 || !isIdentifier(variables[0])) continue;
-        if (names.has(variables[0].name)) last.set(variables[0].name, index);
+        if (names.has(variables[0].name)) last.set(variables[0].name, { index, statement, value: init[0] });
     }
     return last;
+}
+
+function isNilLiteral(node) {
+    return node?.type === "NilLiteral";
+}
+
+function isTableConstructor(node) {
+    return node?.type === "TableConstructorExpression";
 }
 
 function versionVmBlockRegisters(source, ast) {
@@ -141,6 +149,14 @@ function versionVmBlockRegisters(source, ast) {
         const latestVersions = new Map();
         const statements = (leaf.body || []).filter(statement => statement?.type !== "CommentStatement");
         const lastSpecialWrites = findLastSingleWrites(statements, specialFinalNames);
+        const finalStateWrite = lastSpecialWrites.get(stateName);
+        const finalReturnWrite = lastSpecialWrites.get(returnName);
+        const preservesReturnValue =
+            finalReturnWrite &&
+            finalStateWrite &&
+            isTableConstructor(finalReturnWrite.value) &&
+            isNilLiteral(finalStateWrite.value) &&
+            finalReturnWrite.index < finalStateWrite.index;
 
         for (let statementIndex = 0; statementIndex < statements.length; statementIndex++) {
             const statement = statements[statementIndex];
@@ -175,9 +191,10 @@ function versionVmBlockRegisters(source, ast) {
                 continue;
             }
 
+            const lastWrite = lastSpecialWrites.get(originalName);
             const isPreservedFinalWrite =
-                specialFinalNames.has(originalName) &&
-                lastSpecialWrites.get(originalName) === statementIndex;
+                (originalName === stateName && lastWrite?.index === statementIndex) ||
+                (originalName === returnName && preservesReturnValue && lastWrite?.index === statementIndex);
 
             if (isPreservedFinalWrite) {
                 const originalRhs = source.slice(init[0].range[0], init[0].range[1]);
