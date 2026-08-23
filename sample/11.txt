@@ -1,0 +1,227 @@
+return (function(...)
+    local W = {
+        "Tr1s1LBNdS+i2S1MTL/=",
+        "m0yt2RoOpK==",
+        "IrnhbK==",
+        "m0yMbw8=",
+        "mgd=",
+        "m0yjXY==",
+        "IwiYXw1J",
+        "dAEt2j6="
+    }
+    for M, e in ipairs({
+        {
+            1,
+            8
+        },
+        {
+            1,
+            5
+        },
+        {
+            6,
+            8
+        }
+    }) do
+        while e[1] < e[2] do
+            W[e[1]], W[e[2]], e[1], e[2] = W[e[2]], W[e[1]], e[1] + (1), e[2] - (1)
+        end
+    end
+    local function M(M)
+        return W[M + (21602)]
+    end
+    do
+        local M = table.insert
+        local e = string.sub
+        local G = type
+        local U = table.concat
+        local k = string.len
+        local w = W
+        local l = math.floor
+        local Q = {
+            j = 39,
+            x = 33,
+            ["2"] = 27,
+            m = 23,
+            Z = 6,
+            ["0"] = 53,
+            ["9"] = 15,
+            ["1"] = 13,
+            I = 29,
+            Q = 19,
+            V = 3,
+            f = 34,
+            R = 38,
+            C = 55,
+            T = 18,
+            ["7"] = 58,
+            M = 44,
+            u = 60,
+            X = 24,
+            o = 17,
+            L = 36,
+            P = 47,
+            D = 31,
+            g = 52,
+            ["3"] = 32,
+            z = 2,
+            h = 51,
+            e = 59,
+            b = 25,
+            W = 40,
+            F = 14,
+            Y = 48,
+            t = 41,
+            k = 1,
+            O = 37,
+            a = 62,
+            c = 50,
+            A = 7,
+            y = 61,
+            U = 4,
+            H = 46,
+            ["8"] = 56,
+            p = 30,
+            w = 22,
+            ["/"] = 20,
+            l = 8,
+            ["6"] = 16,
+            E = 9,
+            N = 49,
+            ["+"] = 12,
+            i = 57,
+            s = 11,
+            r = 54,
+            G = 10,
+            S = 21,
+            ["5"] = 26,
+            d = 28,
+            J = 43,
+            K = 0,
+            ["4"] = 42,
+            q = 35,
+            n = 5,
+            v = 63,
+            B = 45
+        }
+        local n = string.char
+        for W = 1, #w, 1 do
+            local Z = w[W]
+            if G(Z) == "string" then
+                local G = k(Z)
+                local h = {}
+                local R = 1
+                local Y = 0
+                local N = 0
+                while R <= G do
+                    local W = e(Z, R, R)
+                    local U = Q[W]
+                    if U then
+                        Y = Y + U * (64) ^ ((3) - N)
+                        N = N + (1)
+                        if N == 4 then
+                            N = 0
+                            local W = l(Y / (65536))
+                            local e = l((Y % (65536)) / (256))
+                            local G = Y % (256)
+                            M(h, n(W, e, G))
+                            Y = 0
+                        end
+                    elseif W == "=" then
+                        M(h, n(l(Y / (65536))))
+                        if R >= G or e(Z, R + (1), R + (1)) ~= "=" then
+                            M(h, n(l((Y % (65536)) / (256))))
+                        end
+                        break
+                    end
+                    R = R + (1)
+                end
+                w[W] = U(h)
+            end
+        end
+    end
+    return (function(W, G, U, k, w, l, Q, h, n, Y, R, q, Z, P, N, e)
+        Y, N, q, e, P, n, h, R, Z = function(W)
+            for M = 1, #W, 1 do
+                Z[W[M]] = Z[W[M]] + (1)
+            end
+            if U then
+                local e = U(true)
+                local G = w(e)
+                G[M(-21595)], G[M(-21599)], G[M(-21601)] = W, N, function()
+                    return 2841565
+                end
+                return e
+            else
+                return k({}, {
+                    [M(-21599)] = N,
+                    [M(-21595)] = W,
+                    [M(-21601)] = function()
+                        return 2841565
+                    end
+                })
+            end
+        end, function(W)
+            local M, e = 1, W[1]
+            while e do
+                Z[e], M = Z[e] - (1), (1) + M
+                if Z[e] == 0 then
+                    Z[e], n[e] = nil, nil
+                end
+                e = W[M]
+            end
+        end, function(W)
+            Z[W] = Z[W] - (1)
+            if 0 == Z[W] then
+                Z[W], n[W] = nil, nil
+            end
+        end, function(e, U, k, w)
+            local n, Z, Q, h
+            while e do
+                if e < 12794248 then
+                    if e < 8250509 then
+                        n = U
+                        e = 3123
+                        h = M(-21600)
+                        Z = e
+                        Q = W[h]
+                        h = M(-21594)
+                        e = Q[h]
+                        e = e and 14799853 or 9668265
+                    else
+                        h = M(-21597)
+                        Q = W[h]
+                        h = Q(Z)
+                        Z = nil
+                        Q = {}
+                        e = W[M(-21596)]
+                    end
+                else
+                    Q = M(-21597)
+                    e = W[Q]
+                    Q = e(Z)
+                    e = 3
+                    Z = e
+                    e = 9668265
+                end
+            end
+            e = #w
+            return G(Q)
+        end, function(W, M)
+            local G = Y(M)
+            local U = function(...)
+                return e(W, {
+                    ...
+                }, M, G)
+            end
+            return U
+        end, {}, function()
+            R = (1) + R
+            Z[R] = 1
+            return R
+        end, 0, {}
+        return (P(7878032, {}))(G(Q))
+    end)(getfenv and getfenv() or _ENV, unpack or table[M(-21598)], newproxy, setmetatable, getmetatable, select, {
+        ...
+    })
+end)(...)
