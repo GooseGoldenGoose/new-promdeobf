@@ -30,7 +30,7 @@ When continuing this project in a new chat:
 - Preserve stable pipeline behavior when experimenting. A recovery pass must fail closed: if proof is incomplete, preserve the previous safe output rather than guess.
 - End every project-related turn with exactly: `Done for this turn — you can prompt now.`
 
-Latest fixture checkpoint is `edc805b Restore paired samples 2 through 5` on `main`, pushed to `origin/main`. All tracked fixtures `sample/1` through `sample/10` now have matching `.source.lua` + formatter-normalized `.txt` pairs. Samples 2-4 restore the old regression semantics; sample 5 is a new controlled stress fixture intentionally matching the old stress scale at 938 dispatcher states and 116 recovered VM functions. Source lexical-scope reconstruction has NOT been implemented yet.
+Latest implementation checkpoint is `56784a1 Add beta register versioning` on `main`, pushed to `origin/main`. All tracked fixtures `sample/1` through `sample/10` now have matching `.source.lua` + formatter-normalized `.txt` pairs. Samples 2-4 restore the old regression semantics; sample 5 is a new controlled stress fixture intentionally matching the old stress scale at 938 dispatcher states and 116 recovered VM functions. Source lexical-scope reconstruction has NOT been implemented yet.
 
 # Core Knowledge & Rules
 
@@ -501,6 +501,17 @@ without producing unrelated locals.
 - `tools/test-vm-register-names.js` proves full same-binding rename inside `vm`, `rN` scalar renaming, member-key preservation, unrelated same-spelling bindings outside `vm` remaining untouched, and fail-closed behavior when a candidate register name is shadowed. Runtime parity still matches all executable fixtures and both deterministic sample-7 branches.
 
 
+## Experimental Beta Register Versioning (2026-08-23)
+
+- This is a separate analysis/presentation experiment and is NOT part of the normal deobfuscation pipeline. It consumes an already-generated normal output file and writes a sibling beta file.
+- Command: `node tools/beta-register-versions.js <output.lua> [output.beta.lua]`. If the second path is omitted, `output/2.lua` becomes `output/2.beta.lua` generically; no sample number is hardcoded in the transformer.
+- `passes/beta-register-versions.js` finds exact normalized dispatcher leaves (`state == N`) inside the semantic VM and versions only the VM scalar-register bindings plus the VM state/POS binding.
+- The first write encountered for an original register gets a stable base such as `ReturnVal -> r_v1`, `state -> r_v2`, `r1 -> r_v3`. Every later write to that same original register increments the suffix: `r_v1_1`, `r_v1_2`, etc. Reads within the same dispatcher leaf are rewritten to the latest local version, and each supported assignment becomes a `local` declaration.
+- Sample 2 currently transforms 3 dispatcher leaves / 22 assignments with 0 skips. Its first block starts exactly as requested: `local r_v1_1 = "warn"; local r_v2_1 = _env[r_v1_1]; local r_v3_1 = "gg"; local r_v1_2 = r_v2_1(r_v3_1)`.
+- This beta form is intentionally analysis-only right now: per-leaf latest-value tracking resets at block boundaries and no phi/reaching-definition merge is emitted. Because dispatcher `state` writes are also localized, the beta file is not claimed runtime-equivalent yet. Normal `output/N.lua` behavior is unchanged.
+- Focused regression: `tools/test-beta-register-versions.js`; beta output is reparsed before writing.
+
+
 ## Performance Optimization Audit (2026-08-23)
 
 - Historical performance measurements before `edc805b` used the previous unpaired sample 5 and remain historical only. The current source-backed sample 5 deliberately matches its 938-state / 116-function scale but is different source, so benchmark numbers are not directly comparable.
@@ -547,8 +558,8 @@ without producing unrelated locals.
 - Workspace: `C:\Users\reala\Desktop\!workspaces\promdeobf ova\new promdeobf`.
 - Branch: `main`.
 - Remote: `https://github.com/GooseGoldenGoose/new-promdeobf.git`.
-- Latest pushed fixture checkpoint at this snapshot: `edc805b Restore paired samples 2 through 5`.
-- Immediately preceding context checkpoint: `6202e55 Refresh fixture handoff context`.
+- Latest pushed implementation checkpoint at this snapshot: `56784a1 Add beta register versioning`.
+- Immediately preceding context checkpoint: `2643ebc Document restored sample coverage`.
 - Before changing anything in a new chat: read this entire `CONTEXT.md`, run `git status --short --branch`, then `git log -8 --oneline --decorate`. Never assume the checkout is still at this exact commit if newer work exists.
 - Every project code/content change, even small, gets a focused commit and `git push origin main`. Stage only files belonging to the current change.
 - `formater/` remains intentionally untracked. Generated `output/*.log` or temporary output files must not be committed accidentally. All tracked `sample/N.txt` files must have matching tracked source files.
@@ -640,6 +651,8 @@ without producing unrelated locals.
 `7442545 Document overflow register scheduling`
 `bf7b107 Run semantic naming with VM helpers`
 `edc805b Restore paired samples 2 through 5`
+`2643ebc Document restored sample coverage`
+`56784a1 Add beta register versioning`
 
 ### New-chat operating instruction
 
