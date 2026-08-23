@@ -1,0 +1,306 @@
+return (function(...)
+    local l = {
+        "MYHmpY/K",
+        "FjIAeVo5",
+        "qt==",
+        "im==",
+        "Gm==",
+        "Zsolpm==",
+        "ZsohdjiDwt==",
+        "ZsoceYB=",
+        "XZUBixICYxIm4Y49iG==",
+        "eqiZelR+iLUldbu/Fm==",
+        "FnUhdlG=",
+        "Rm==",
+        "dYI96t=="
+    }
+    for m, Z in ipairs({
+        {
+            1,
+            13
+        },
+        {
+            1,
+            6
+        },
+        {
+            7,
+            13
+        }
+    }) do
+        while Z[1] < Z[2] do
+            l[Z[1]], l[Z[2]], Z[1], Z[2] = l[Z[2]], l[Z[1]], Z[1] + (1), Z[2] - (1)
+        end
+    end
+    local function m(m)
+        return l[m - (2150)]
+    end
+    do
+        local m = math.floor
+        local Z = l
+        local x = string.char
+        local y = type
+        local g = string.sub
+        local O = string.len
+        local B = table.insert
+        local n = table.concat
+        local h = {
+            H = 57,
+            ["4"] = 20,
+            o = 61,
+            u = 49,
+            B = 56,
+            R = 21,
+            Y = 22,
+            ["8"] = 10,
+            i = 17,
+            e = 25,
+            I = 5,
+            q = 19,
+            L = 4,
+            ["9"] = 52,
+            ["1"] = 8,
+            ["3"] = 32,
+            Z = 23,
+            w = 30,
+            b = 54,
+            T = 40,
+            d = 27,
+            p = 24,
+            ["/"] = 13,
+            N = 14,
+            x = 36,
+            ["2"] = 18,
+            W = 3,
+            M = 29,
+            k = 55,
+            O = 1,
+            f = 62,
+            ["6"] = 26,
+            n = 7,
+            r = 50,
+            y = 2,
+            j = 38,
+            P = 59,
+            z = 15,
+            c = 44,
+            ["0"] = 34,
+            g = 33,
+            t = 0,
+            F = 28,
+            ["7"] = 31,
+            s = 53,
+            S = 47,
+            K = 43,
+            v = 58,
+            U = 9,
+            C = 35,
+            V = 6,
+            X = 12,
+            D = 37,
+            l = 39,
+            ["5"] = 45,
+            Q = 60,
+            a = 63,
+            h = 41,
+            m = 48,
+            ["+"] = 51,
+            E = 42,
+            J = 11,
+            A = 46,
+            G = 16
+        }
+        for l = 1, #Z, 1 do
+            local P = Z[l]
+            if y(P) == "string" then
+                local y = O(P)
+                local G = {}
+                local E = 1
+                local H = 0
+                local r = 0
+                while E <= y do
+                    local l = g(P, E, E)
+                    local Z = h[l]
+                    if Z then
+                        H = H + Z * (64) ^ ((3) - r)
+                        r = r + (1)
+                        if r == 4 then
+                            r = 0
+                            local l = m(H / (65536))
+                            local Z = m((H % (65536)) / (256))
+                            local y = H % (256)
+                            B(G, x(l, Z, y))
+                            H = 0
+                        end
+                    elseif l == "=" then
+                        B(G, x(m(H / (65536))))
+                        if E >= y or g(P, E + (1), E + (1)) ~= "=" then
+                            B(G, x(m((H % (65536)) / (256))))
+                        end
+                        break
+                    end
+                    E = E + (1)
+                end
+                Z[l] = n(G)
+            end
+        end
+    end
+    return (function(l, x, y, g, O, B, n, G, r, P, Z, E, H, W, h, u)
+        h, P, G, E, Z, H, W, r, u = {}, {}, function()
+            E = (1) + E
+            P[E] = 1
+            return E
+        end, 0, function(Z, y, g, O)
+            local r, n, G, u, H, W, P, h, E
+            while Z do
+                if Z < 11685207 then
+                    if Z < 3483993 then
+                        if Z < 1799176 then
+                            if Z < 459207 then
+                                P = nil
+                                n = {}
+                                Z = l[m(2152)]
+                            else
+                                E = m(2154)
+                                u = m(2156)
+                                W = 2
+                                H = l[E]
+                                E = H(P)
+                                r = l[u]
+                                u = m(2158)
+                                G = r[u]
+                                u = 1
+                                r = G(u, W)
+                                G = 1
+                                E = r == G
+                                H = not E
+                                Z = H and 12131676 or 16380715
+                            end
+                        else
+                            Z = 213
+                            P = Z
+                            h = y
+                            G = m(2156)
+                            E = l[G]
+                            G = m(2158)
+                            r = 2
+                            H = E[G]
+                            G = 1
+                            E = H(G, r)
+                            H = 1
+                            n = E == H
+                            Z = not n
+                            Z = Z and 13459894 or 9978803
+                        end
+                    else
+                        if Z < 9830412 then
+                            Z = 622019
+                            G = m(2160)
+                            n = 2
+                            E = m(2154)
+                            P = n
+                            H = l[E]
+                            E = H(G)
+                        else
+                            G = m(2156)
+                            E = l[G]
+                            G = m(2158)
+                            H = E[G]
+                            r = 2
+                            G = 1
+                            E = H(G, r)
+                            H = 1
+                            n = E == H
+                            Z = n and 3563342 or 622019
+                        end
+                    end
+                else
+                    if Z < 13467989 then
+                        if Z < 13354346 then
+                            E = m(2154)
+                            H = l[E]
+                            Z = 350111
+                            G = m(2155)
+                            E = H(G)
+                        else
+                            Z = 1
+                            E = m(2161)
+                            H = m(2154)
+                            n = l[H]
+                            P = Z
+                            H = n(E)
+                            Z = 622019
+                        end
+                    else
+                        if Z < 15656135 then
+                            E = m(2154)
+                            H = l[E]
+                            Z = l[m(2153)]
+                            G = m(2159)
+                            E = H(G)
+                            n = {}
+                        else
+                            r = m(2156)
+                            G = l[r]
+                            u = 2
+                            r = m(2158)
+                            E = G[r]
+                            r = 1
+                            G = E(r, u)
+                            E = 1
+                            H = G == E
+                            Z = H and 13482755 or 350111
+                        end
+                    end
+                end
+            end
+            Z = #O
+            return x(n)
+        end, function(l)
+            for m = 1, #l, 1 do
+                P[l[m]] = (1) + P[l[m]]
+            end
+            if y then
+                local Z = y(true)
+                local x = O(Z)
+                x[m(2163)], x[m(2162)], x[m(2151)] = l, r, function()
+                    return -1927550
+                end
+                return Z
+            else
+                return g({}, {
+                    [m(2162)] = r,
+                    [m(2163)] = l,
+                    [m(2151)] = function()
+                        return -1927550
+                    end
+                })
+            end
+        end, function(l, m)
+            local x = H(m)
+            local y = function(...)
+                return Z(l, {
+                    ...
+                }, m, x)
+            end
+            return y
+        end, function(l)
+            local m, Z = 1, l[1]
+            while Z do
+                P[Z], m = P[Z] - (1), (1) + m
+                if P[Z] == 0 then
+                    P[Z], h[Z] = nil, nil
+                end
+                Z = l[m]
+            end
+        end, function(l)
+            P[l] = P[l] - (1)
+            if P[l] == 0 then
+                P[l], h[l] = nil, nil
+            end
+        end
+        return (W(2055284, {}))(x(n))
+    end)(getfenv and getfenv() or _ENV, unpack or table[m(2157)], newproxy, setmetatable, getmetatable, select, {
+        ...
+    })
+end)(...)
