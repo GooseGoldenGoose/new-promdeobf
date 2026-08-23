@@ -461,6 +461,25 @@ function ifNode(condition, conditionReads, thenBody, elseBody = null) {
     };
 }
 
+function numericForNode(variable, initial, limit, step, body, reads = []) {
+    return {
+        type: "numeric-for",
+        variable,
+        initial,
+        limit,
+        step,
+        body,
+        reads: [...reads],
+    };
+}
+
+function operationNode(operation, stateId) {
+    if (operation?.kind === "structured-numeric-for" && operation.structuredNode) {
+        return operation.structuredNode;
+    }
+    return rawNode(operation, stateId);
+}
+
 function indentText(text, depth) {
     const prefix = "    ".repeat(depth);
     return String(text).split("\n").map(line => prefix + line).join("\n");
@@ -471,6 +490,14 @@ function formatStructuredNodes(nodes, depth = 0) {
     for (const node of nodes) {
         if (node.type === "raw") {
             parts.push(indentText(node.text, depth));
+            continue;
+        }
+        if (node.type === "numeric-for") {
+            const header = `${"    ".repeat(depth)}for ${node.variable} = ${node.initial}, ${node.limit}, ${node.step} do`;
+            const lines = [header];
+            if (node.body.length) lines.push("", formatStructuredNodes(node.body, depth + 1));
+            lines.push("", `${"    ".repeat(depth)}end`);
+            parts.push(lines.join("\n"));
             continue;
         }
         if (node.type !== "if") continue;
@@ -493,6 +520,8 @@ function countStructuredStatements(nodes) {
         if (node.type === "if") {
             count += countStructuredStatements(node.thenBody);
             if (node.elseBody) count += countStructuredStatements(node.elseBody);
+        } else if (node.type === "numeric-for") {
+            count += countStructuredStatements(node.body);
         }
     }
     return count;
@@ -523,6 +552,17 @@ function validateStructuredLocalScopes(nodes) {
 
             sequence++;
             for (const name of node.reads || []) reads.push({ name, scopeId, sequence });
+            if (node.type === "numeric-for") {
+                const bodyScope = nextScopeId++;
+                parentScope.set(bodyScope, scopeId);
+                if (declarations.has(node.variable)) {
+                    return `Beta name ${node.variable} has multiple local declarations after structuring`;
+                }
+                declarations.set(node.variable, { scopeId: bodyScope, sequence });
+                const bodyError = visit(node.body, bodyScope);
+                if (bodyError) return bodyError;
+                continue;
+            }
             const thenScope = nextScopeId++;
             parentScope.set(thenScope, scopeId);
             const thenError = visit(node.thenBody, thenScope);
@@ -560,6 +600,295 @@ function validateStructuredLocalScopes(nodes) {
         }
     }
     return null;
+}
+
+function parseOperationExpression(operation) {
+    const rhs = String(operation?.rhs || "").trim();
+    if (!rhs) return null;
+    return parseTransitionExpression(rhs)?.expression || null;
+}
+
+function identifierName(node) {
+    return isIdentifier(node) ? node.name : null;
+}
+
+function lastOperationDefinition(operations, name, beforeIndex = null) {
+    const limit = beforeIndex === null ? operations.length : beforeIndex;
+    for (let index = limit - 1; index >= 0; index--) {
+        const operation = operations[index];
+        if (operation?.emittedTarget !== name) continue;
+        return { operation, index, expression: parseOperationExpression(operation) };
+    }
+    return null;
+}
+
+function directNumericOperationValue(definition) {
+    return definition ? numericValue(definition.expression) : null;
+}
+
+function computeGraphPredecessors(states) {
+    const predecessors = new Map(states.map(state => [state.id, []]));
+    for (const state of states) {
+        for (const successor of state.successors || []) {
+            if (!predecessors.has(successor)) continue;
+            predecessors.get(successor).push(state.id);
+        }
+    }
+    return predecessors;
+}
+
+function sameMembers(values, expected) {
+    if (values.length !== expected.length) return false;
+    const left = [...values].sort((a, b) => a - b);
+    const right = [...expected].sort((a, b) => a - b);
+    return left.every((value, index) => value === right[index]);
+}
+
+function matchCompilerNumericFor(graph, checkStateId) {
+    const states = graph.states || [];
+    const stateById = new Map(states.map(state => [state.id, state]));
+    const predecessors = computeGraphPredecessors(states);
+    const check = stateById.get(checkStateId);
+    if (!check || !Array.isArray(check.successors) || check.successors.length !== 2) return null;
+
+    const bodyCandidates = check.successors.filter(id => {
+        const state = stateById.get(id);
+        return state && Array.isArray(state.successors) && state.successors.length === 1 && state.successors[0] === check.id;
+    });
+    if (bodyCandidates.length !== 1) return null;
+    const bodyId = bodyCandidates[0];
+    const exitId = check.successors.find(id => id !== bodyId);
+    if (exitId === undefined) return null;
+    const body = stateById.get(bodyId);
+    const exit = stateById.get(exitId);
+    if (!body || !exit) return null;
+
+    const checkPreds = predecessors.get(check.id) || [];
+    const preheaderCandidates = checkPreds.filter(id => id !== bodyId);
+    if (preheaderCandidates.length !== 1 || !sameMembers(checkPreds, [preheaderCandidates[0], bodyId])) return null;
+    if (!sameMembers(predecessors.get(bodyId) || [], [check.id])) return null;
+    const preheader = stateById.get(preheaderCandidates[0]);
+    if (!preheader || !Array.isArray(preheader.successors) || preheader.successors.length !== 1 || preheader.successors[0] !== check.id) return null;
+
+    const checkOps = check.operations || [];
+    if (!checkOps.length) return null;
+    const transitionIndex = checkOps.findLastIndex(operation => operation?.kind === "state-transition");
+    if (transitionIndex !== checkOps.length - 1) return null;
+    const transition = checkOps[transitionIndex];
+    const transitionExpr = parseOperationExpression(transition);
+    if (transitionExpr?.type !== "LogicalExpression" || transitionExpr.operator !== "or") return null;
+    const stateTmpName = identifierName(transitionExpr.left);
+    const exitLoadName = identifierName(transitionExpr.right);
+    if (!stateTmpName || !exitLoadName) return null;
+
+    const exitLoad = lastOperationDefinition(checkOps, exitLoadName, transitionIndex);
+    if (directNumericOperationValue(exitLoad) !== exitId) return null;
+    const stateTmp = lastOperationDefinition(checkOps, stateTmpName, transitionIndex);
+    const stateTmpExpr = stateTmp?.expression;
+    if (stateTmpExpr?.type !== "LogicalExpression" || stateTmpExpr.operator !== "and") return null;
+    const conditionName = identifierName(stateTmpExpr.left);
+    const bodyLoadName = identifierName(stateTmpExpr.right);
+    if (!conditionName || !bodyLoadName) return null;
+    const bodyLoad = lastOperationDefinition(checkOps, bodyLoadName, stateTmp.index);
+    if (directNumericOperationValue(bodyLoad) !== bodyId) return null;
+
+    const conditionDef = lastOperationDefinition(checkOps, conditionName, stateTmp.index);
+    const conditionExpr = conditionDef?.expression;
+    if (conditionExpr?.type !== "LogicalExpression" || conditionExpr.operator !== "or") return null;
+    const negativeArmName = identifierName(conditionExpr.left);
+    const positiveArmName = identifierName(conditionExpr.right);
+    if (!negativeArmName || !positiveArmName) return null;
+
+    const negativeArm = lastOperationDefinition(checkOps, negativeArmName, conditionDef.index);
+    const negativeExpr = negativeArm?.expression;
+    if (negativeExpr?.type !== "LogicalExpression" || negativeExpr.operator !== "and") return null;
+    const negativeFlagName = identifierName(negativeExpr.left);
+    const greaterEqualName = identifierName(negativeExpr.right);
+    if (!negativeFlagName || !greaterEqualName) return null;
+    const greaterEqual = lastOperationDefinition(checkOps, greaterEqualName, negativeArm.index);
+    const greaterEqualExpr = greaterEqual?.expression;
+    if (greaterEqualExpr?.type !== "BinaryExpression" || greaterEqualExpr.operator !== ">=") return null;
+    const currentName = identifierName(greaterEqualExpr.left);
+    const finalName = identifierName(greaterEqualExpr.right);
+    if (!currentName || !finalName) return null;
+
+    const positiveArm = lastOperationDefinition(checkOps, positiveArmName, conditionDef.index);
+    const positiveExpr = positiveArm?.expression;
+    if (positiveExpr?.type !== "LogicalExpression" || positiveExpr.operator !== "and") return null;
+    const notNegativeName = identifierName(positiveExpr.left);
+    const lessEqualName = identifierName(positiveExpr.right);
+    if (!notNegativeName || !lessEqualName) return null;
+    const notNegative = lastOperationDefinition(checkOps, notNegativeName, positiveArm.index);
+    const notNegativeExpr = notNegative?.expression;
+    if (notNegativeExpr?.type !== "UnaryExpression" || notNegativeExpr.operator !== "not" || identifierName(notNegativeExpr.argument) !== negativeFlagName) return null;
+    const lessEqual = lastOperationDefinition(checkOps, lessEqualName, positiveArm.index);
+    const lessEqualExpr = lessEqual?.expression;
+    if (lessEqualExpr?.type !== "BinaryExpression" || lessEqualExpr.operator !== "<=" ||
+        identifierName(lessEqualExpr.left) !== currentName || identifierName(lessEqualExpr.right) !== finalName) return null;
+
+    const currentAddCandidates = checkOps.map((operation, index) => ({ operation, index, expression: parseOperationExpression(operation) })).filter(item =>
+        item.operation?.emittedTarget === currentName &&
+        item.expression?.type === "BinaryExpression" && item.expression.operator === "+" &&
+        identifierName(item.expression.left) === currentName && identifierName(item.expression.right)
+    );
+    if (currentAddCandidates.length !== 1) return null;
+    const currentAdd = currentAddCandidates[0];
+    const stepName = identifierName(currentAdd.expression.right);
+    if (!stepName) return null;
+    if (identifierName(greaterEqualExpr.left) !== currentName || identifierName(greaterEqualExpr.right) !== finalName) return null;
+
+    const matchedCheckOperations = new Set([
+        transition, exitLoad.operation, stateTmp.operation, bodyLoad.operation, conditionDef.operation,
+        negativeArm.operation, greaterEqual.operation, positiveArm.operation, notNegative.operation,
+        lessEqual.operation, currentAdd.operation,
+    ]);
+    if (matchedCheckOperations.size !== checkOps.length || checkOps.some(operation => !matchedCheckOperations.has(operation))) return null;
+
+    const preOps = preheader.operations || [];
+    const preTransitionIndex = preOps.findLastIndex(operation => operation?.kind === "state-transition");
+    if (preTransitionIndex !== preOps.length - 1) return null;
+    const preTransition = preOps[preTransitionIndex];
+    if (directNumericOperationValue({ expression: parseOperationExpression(preTransition) }) !== check.id) return null;
+
+    const currentInit = lastOperationDefinition(preOps, currentName, preTransitionIndex);
+    const currentInitExpr = currentInit?.expression;
+    if (currentInitExpr?.type !== "BinaryExpression" || currentInitExpr.operator !== "-") return null;
+    const startName = identifierName(currentInitExpr.left);
+    if (!startName || identifierName(currentInitExpr.right) !== stepName) return null;
+
+    const negativeFlag = lastOperationDefinition(preOps, negativeFlagName, preTransitionIndex);
+    const negativeFlagExpr = negativeFlag?.expression;
+    if (negativeFlagExpr?.type !== "BinaryExpression" || negativeFlagExpr.operator !== "<" || identifierName(negativeFlagExpr.left) !== stepName) return null;
+    const zeroName = identifierName(negativeFlagExpr.right);
+    if (!zeroName) return null;
+    const zeroDef = lastOperationDefinition(preOps, zeroName, negativeFlag.index);
+    if (directNumericOperationValue(zeroDef) !== 0) return null;
+
+    const startDef = lastOperationDefinition(preOps, startName, preTransitionIndex);
+    const finalDef = lastOperationDefinition(preOps, finalName, preTransitionIndex);
+    const stepDef = lastOperationDefinition(preOps, stepName, preTransitionIndex);
+    if (!startDef || !finalDef || !stepDef) return null;
+
+    const bodyOps = body.operations || [];
+    const bodyTransitionIndex = bodyOps.findLastIndex(operation => operation?.kind === "state-transition");
+    if (bodyTransitionIndex !== bodyOps.length - 1) return null;
+    const bodyTransition = bodyOps[bodyTransitionIndex];
+    if (directNumericOperationValue({ expression: parseOperationExpression(bodyTransition) }) !== check.id) return null;
+
+    const loopVariableCandidates = [];
+    for (let index = 0; index < bodyTransitionIndex; index++) {
+        const definition = { operation: bodyOps[index], index, expression: parseOperationExpression(bodyOps[index]) };
+        if (identifierName(definition.expression) !== currentName || !definition.operation?.emittedTarget) continue;
+        const cleanup = bodyOps.map((operation, cleanupIndex) => ({ operation, cleanupIndex, expression: parseOperationExpression(operation) })).find(item =>
+            item.cleanupIndex > index && item.cleanupIndex < bodyTransitionIndex &&
+            item.operation?.emittedTarget === definition.operation.emittedTarget && item.expression?.type === "NilLiteral" &&
+            (!definition.operation.registerEpoch || !item.operation.registerEpoch || definition.operation.registerEpoch === item.operation.registerEpoch)
+        );
+        if (cleanup) loopVariableCandidates.push({ definition, cleanup });
+    }
+    if (loopVariableCandidates.length !== 1) return null;
+    const loopVariable = loopVariableCandidates[0].definition.operation.emittedTarget;
+    const loopVariableDefinition = loopVariableCandidates[0].definition.operation;
+    const loopVariableCleanup = loopVariableCandidates[0].cleanup.operation;
+
+    const bodyCoreOperations = bodyOps.filter(operation =>
+        operation !== loopVariableDefinition && operation !== loopVariableCleanup && operation !== bodyTransition
+    );
+    if (bodyCoreOperations.some(operation => (operation.reads || []).includes(currentName))) return null;
+
+    const removeFromPreheader = new Set([currentInit.operation, negativeFlag.operation, zeroDef.operation, preTransition]);
+    const retainedPreheaderOperations = preOps.filter(operation => !removeFromPreheader.has(operation));
+    if (retainedPreheaderOperations.some(operation =>
+        (operation.reads || []).includes(negativeFlagName) || (operation.reads || []).includes(zeroName)
+    )) return null;
+
+    return {
+        preheaderId: preheader.id,
+        checkId: check.id,
+        bodyId,
+        exitId,
+        startName,
+        finalName,
+        stepName,
+        loopVariable,
+        retainedPreheaderOperations,
+        bodyCoreOperations,
+    };
+}
+
+function rebuildGraphPredecessors(graph) {
+    const predecessors = computeGraphPredecessors(graph.states || []);
+    return {
+        ...graph,
+        states: (graph.states || []).map(state => ({
+            ...state,
+            predecessors: [...(predecessors.get(state.id) || [])],
+        })),
+    };
+}
+
+function collapseCompilerNumericForLoops(graph) {
+    let working = {
+        ...graph,
+        states: (graph.states || []).map(state => ({
+            ...state,
+            predecessors: [...(state.predecessors || [])],
+            successors: [...(state.successors || [])],
+            operations: [...(state.operations || [])],
+        })),
+    };
+    let loopCount = 0;
+
+    while (true) {
+        let match = null;
+        for (const state of working.states) {
+            match = matchCompilerNumericFor(working, state.id);
+            if (match) break;
+        }
+        if (!match) break;
+
+        const bodyNodes = match.bodyCoreOperations.map(operation => operationNode(operation, match.bodyId));
+        const loopNode = numericForNode(
+            match.loopVariable,
+            match.startName,
+            match.finalName,
+            match.stepName,
+            bodyNodes,
+            [match.startName, match.finalName, match.stepName]
+        );
+        const structuredOperation = {
+            kind: "structured-numeric-for",
+            structuredNode: loopNode,
+            emittedText: formatStructuredNodes([loopNode]),
+            reads: [match.startName, match.finalName, match.stepName],
+            returnSinkSafe: false,
+        };
+        const stateName = graph.stateName || "state";
+        const syntheticTransition = {
+            kind: "state-transition",
+            emittedTarget: stateName,
+            rhs: String(match.exitId),
+            emittedText: `${stateName} = ${match.exitId}`,
+            reads: [],
+        };
+
+        const removed = new Set([match.checkId, match.bodyId]);
+        working = {
+            ...working,
+            states: working.states.filter(state => !removed.has(state.id)).map(state => {
+                if (state.id !== match.preheaderId) return state;
+                return {
+                    ...state,
+                    operations: [...match.retainedPreheaderOperations, structuredOperation, syntheticTransition],
+                    successors: [match.exitId],
+                };
+            }),
+        };
+        working = rebuildGraphPredecessors(working);
+        loopCount++;
+    }
+
+    return { graph: working, loopCount };
 }
 
 function solveAcyclicStructured(originalAst, graph) {
@@ -688,7 +1017,7 @@ function solveAcyclicStructured(originalAst, graph) {
             const item = prepared.get(current);
             if (!item) throw new Error("Missing prepared state " + current);
             emittedStates.add(current);
-            for (const operation of item.bodyOperations) nodes.push(rawNode(operation, current));
+            for (const operation of item.bodyOperations) nodes.push(operationNode(operation, current));
 
             const info = item.info;
             if (info.kind === "return") return { nodes, reachesStop: false };
@@ -978,8 +1307,16 @@ function solveSingleEntryControlFlow(originalAst, graph) {
     if (graph.entries.length !== 1) {
         return { applied: false, reason: "Internal beta CF region must have exactly one entry" };
     }
-    if (graph.states.length === 1) return solveSingleState(originalAst, graph);
-    return solveAcyclicStructured(originalAst, graph);
+    if (graph.states.length === 1) return { ...solveSingleState(originalAst, graph), numericForLoopCount: 0 };
+
+    const collapsed = collapseCompilerNumericForLoops(graph);
+    const solved = solveAcyclicStructured(originalAst, collapsed.graph);
+    if (!solved.applied) return solved;
+    return {
+        ...solved,
+        stateCount: graph.states.length,
+        numericForLoopCount: collapsed.loopCount,
+    };
 }
 
 function solveClosureRegions(originalAst, graph) {
@@ -1066,6 +1403,7 @@ function solveClosureRegions(originalAst, graph) {
         branchCount: sum("branchCount"),
         joinCount: sum("joinCount"),
         guardBranchCount: sum("guardBranchCount"),
+        numericForLoopCount: sum("numericForLoopCount"),
         terminalReturnCount: sum("terminalReturnCount"),
         terminalReturnPayloadSunk: results.some(result => result.terminalReturnPayloadSunk),
         terminalReturnPayloadSunkCount: sum("terminalReturnPayloadSunkCount"),
@@ -1107,5 +1445,6 @@ module.exports = {
     displayEnvironmentProvider,
     sinkTerminalReturnPayload,
     lowerTerminalReturn,
+    collapseCompilerNumericForLoops,
     solveBetaControlFlow,
 };
