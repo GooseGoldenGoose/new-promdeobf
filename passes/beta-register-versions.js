@@ -1,6 +1,7 @@
 const { findVmFunction } = require("./vm-state");
 const { findVmReturnRegister, findRegisterDeclaration } = require("./vm-register-names");
 const { applyTextEdits } = require("./text-edits");
+const { analyzeBetaRegisterLifetimes } = require("./beta-register-lifetimes");
 
 function isNode(value) {
     return value && typeof value === "object" && typeof value.type === "string";
@@ -188,112 +189,6 @@ function uniqueVersionMap(definitions) {
     return result;
 }
 
-function unionSets(sets) {
-    const out = new Set();
-    for (const set of sets) for (const value of set || []) out.add(value);
-    return out;
-}
-
-function uniqueConcreteKill(set, noKill) {
-    if (!set || set.size !== 1 || set.has(noKill)) return null;
-    return set.values().next().value;
-}
-
-function computeCleanupDelimitedEpochs(blocks, candidateNames, stateName, returnName) {
-    const ordinaryNames = new Set([...candidateNames].filter(name => name !== stateName && name !== returnName));
-    const noKill = "<no-kill>";
-    const killIdByStatement = new Map();
-
-    for (const block of blocks) {
-        for (const statement of block.statements) {
-            if (statement?.type !== "AssignmentStatement") continue;
-            const variables = statement.variables || [];
-            const init = statement.init || [];
-            if (variables.length !== 1 || init.length !== 1 || !isIdentifier(variables[0])) continue;
-            const name = variables[0].name;
-            if (!ordinaryNames.has(name) || !isNilLiteral(init[0])) continue;
-            killIdByStatement.set(statement, `kill:${block.stateId}:${statement.range?.[0] ?? 0}:${name}`);
-        }
-    }
-
-    const blockByState = new Map(blocks.map(block => [block.stateId, block]));
-    const entry = new Map(blocks.map(block => [block.stateId, new Map()]));
-
-    let changed = true;
-    let rounds = 0;
-    while (changed && rounds++ < blocks.length * 4 + 8) {
-        changed = false;
-        for (let blockIndex = blocks.length - 1; blockIndex >= 0; blockIndex--) {
-            const block = blocks[blockIndex];
-            const current = new Map();
-            for (const name of ordinaryNames) {
-                if (!Array.isArray(block.successors)) {
-                    current.set(name, new Set([noKill]));
-                    continue;
-                }
-                if (block.successors.length === 0) {
-                    current.set(name, new Set([noKill]));
-                    continue;
-                }
-                const successorSets = block.successors.map(target => entry.get(target)?.get(name) || new Set());
-                const merged = unionSets(successorSets);
-                if (merged.size === 0 && block.successors.some(target => !blockByState.has(target))) merged.add(noKill);
-                current.set(name, merged);
-            }
-
-            for (let statementIndex = block.statements.length - 1; statementIndex >= 0; statementIndex--) {
-                const statement = block.statements[statementIndex];
-                const killId = killIdByStatement.get(statement);
-                if (!killId) continue;
-                const variable = statement.variables?.[0];
-                if (isIdentifier(variable)) current.set(variable.name, new Set([killId]));
-            }
-
-            const previous = entry.get(block.stateId);
-            if (!mapOfSetsEquals(previous, current)) {
-                entry.set(block.stateId, current);
-                changed = true;
-            }
-        }
-    }
-
-    if (changed) return { epochByStatement: new Map(), killIdByStatement, converged: false };
-
-    const epochByStatement = new Map();
-    for (const block of blocks) {
-        const current = new Map();
-        for (const name of ordinaryNames) {
-            if (!Array.isArray(block.successors) || block.successors.length === 0) {
-                current.set(name, new Set([noKill]));
-            } else {
-                current.set(name, unionSets(block.successors.map(target => entry.get(target)?.get(name) || new Set())));
-            }
-        }
-
-        for (let statementIndex = block.statements.length - 1; statementIndex >= 0; statementIndex--) {
-            const statement = block.statements[statementIndex];
-            if (statement?.type !== "AssignmentStatement") continue;
-            const variables = statement.variables || [];
-            const init = statement.init || [];
-            if (variables.length !== 1 || init.length !== 1 || !isIdentifier(variables[0])) continue;
-            const name = variables[0].name;
-            if (!ordinaryNames.has(name)) continue;
-
-            const killId = killIdByStatement.get(statement);
-            if (killId) {
-                current.set(name, new Set([killId]));
-                epochByStatement.set(statement, { key: killId, isKill: true });
-                continue;
-            }
-
-            const key = uniqueConcreteKill(current.get(name), noKill);
-            if (key) epochByStatement.set(statement, { key, isKill: false });
-        }
-    }
-
-    return { epochByStatement, killIdByStatement, converged: true };
-}
-
 function versionVmBlockRegisters(source, ast) {
     const vm = findVmFunction(ast);
     if (!vm) {
@@ -431,13 +326,18 @@ function versionVmBlockRegisters(source, ast) {
     const closureEntries = collectClosureEntryStates(ast);
     if (closureEntries.size === 0 || [...closureEntries].some(entry => !blockByState.has(entry))) cfgComplete = false;
 
-    if (cfgComplete) {
-        const { epochByStatement } = computeCleanupDelimitedEpochs(
+    const lifetimeAnalysis = cfgComplete
+        ? analyzeBetaRegisterLifetimes({
             blocks,
             candidateNames,
             stateName,
-            returnName
-        );
+            returnName,
+            closureEntries,
+        })
+        : null;
+
+    if (cfgComplete) {
+        const epochByStatement = lifetimeAnalysis?.converged ? lifetimeAnalysis.epochByStatement : new Map();
         const epochNames = new Map();
         const oldVersionInfo = new Map();
         versionCounts.clear();
@@ -469,7 +369,7 @@ function versionVmBlockRegisters(source, ast) {
                     declareVersion = !existing.declared;
                     existing.declared = true;
                     plan.isLifetimeKill = epoch.isKill;
-                    plan.lifetimeEpoch = epoch.key;
+                    plan.registerEpoch = epoch.key;
                 } else {
                     version = (versionCounts.get(plan.originalName) || 0) + 1;
                     versionCounts.set(plan.originalName, version);
@@ -500,7 +400,7 @@ function versionVmBlockRegisters(source, ast) {
                 block.lastDefinitions.set(
                     name,
                     info.isKill
-                        ? `u:lifetime-kill:${block.stateId}:${name}`
+                        ? `u:epoch-kill:${block.stateId}:${name}`
                         : `v:${info.newName}`
                 );
             }
@@ -557,7 +457,7 @@ function versionVmBlockRegisters(source, ast) {
 
     // Phase 2: rewrite reads using the proven incoming definition plus writes seen
     // earlier in the same block. Capture the exact presentation decisions as graph
-    // metadata so developer tools can visualize CFG + lifetime flow without re-deriving it.
+    // metadata so developer tools can visualize CFG + register-epoch flow without re-deriving it.
     const edits = [];
     const graphStates = [];
     for (const block of blocks) {
@@ -646,19 +546,19 @@ function versionVmBlockRegisters(source, ast) {
                     end: statement.range[1],
                     replacement: emittedText,
                 });
-                const isCleanupLifetime = Boolean(plan.lifetimeEpoch);
+                const isRegisterEpoch = Boolean(plan.registerEpoch);
                 graphOperations.push({
                     index: graphOperations.length + 1,
                     kind: plan.isLifetimeKill
-                        ? "lifetime-kill"
-                        : (isCleanupLifetime ? (plan.declareVersion === false ? "lifetime-mutate" : "lifetime-start") : "version-define"),
+                        ? "epoch-kill"
+                        : (isRegisterEpoch ? (plan.declareVersion === false ? "epoch-mutate" : "epoch-start") : "version-define"),
                     originalTarget: plan.originalName,
                     emittedTarget: plan.newName,
                     rhs,
                     reads: [...usedVersions],
                     originalText: source.slice(statement.range[0], statement.range[1]).trim(),
                     emittedText,
-                    lifetimeEpoch: plan.lifetimeEpoch || null,
+                    registerEpoch: plan.registerEpoch || null,
                 });
                 if (plan.isLifetimeKill) latestVersions.delete(plan.originalName);
                 else latestVersions.set(plan.originalName, plan.newName);
@@ -687,30 +587,30 @@ function versionVmBlockRegisters(source, ast) {
 
     const output = applyTextEdits(source, edits);
 
-    const cleanupLifetimeNames = new Set();
+    const registerEpochNames = new Set();
     for (const state of graphStates) {
         for (const operation of state.operations) {
-            if (operation.lifetimeEpoch && operation.emittedTarget) cleanupLifetimeNames.add(operation.emittedTarget);
+            if (operation.registerEpoch && operation.emittedTarget) registerEpochNames.add(operation.emittedTarget);
         }
     }
-    const lifetimeByName = new Map();
-    for (const name of cleanupLifetimeNames) lifetimeByName.set(name, { name, originalRegister: null, events: [] });
+    const epochByName = new Map();
+    for (const name of registerEpochNames) epochByName.set(name, { name, originalRegister: null, events: [] });
     for (const state of graphStates) {
         for (const operation of state.operations) {
-            if (operation.lifetimeEpoch && operation.emittedTarget && lifetimeByName.has(operation.emittedTarget)) {
-                const lifetime = lifetimeByName.get(operation.emittedTarget);
-                lifetime.originalRegister ||= operation.originalTarget;
-                lifetime.events.push({
+            if (operation.registerEpoch && operation.emittedTarget && epochByName.has(operation.emittedTarget)) {
+                const epochInfo = epochByName.get(operation.emittedTarget);
+                epochInfo.originalRegister ||= operation.originalTarget;
+                epochInfo.events.push({
                     state: state.id,
                     operation: operation.index,
-                    kind: operation.kind === "lifetime-start" ? "start" : operation.kind === "lifetime-mutate" ? "mutate" : "kill",
+                    kind: operation.kind === "epoch-start" ? "start" : operation.kind === "epoch-mutate" ? "mutate" : "kill",
                     text: operation.emittedText || `${operation.emittedTarget} = ${operation.rhs}`,
                 });
             }
             for (const read of operation.reads || []) {
-                const lifetime = lifetimeByName.get(read);
-                if (!lifetime) continue;
-                lifetime.events.push({
+                const epochInfo = epochByName.get(read);
+                if (!epochInfo) continue;
+                epochInfo.events.push({
                     state: state.id,
                     operation: operation.index,
                     kind: "read",
@@ -720,8 +620,8 @@ function versionVmBlockRegisters(source, ast) {
         }
     }
     const kindOrder = { start: 0, read: 1, mutate: 2, kill: 3 };
-    for (const lifetime of lifetimeByName.values()) {
-        lifetime.events.sort((left, right) => left.state - right.state || left.operation - right.operation || kindOrder[left.kind] - kindOrder[right.kind]);
+    for (const epochInfo of epochByName.values()) {
+        epochInfo.events.sort((left, right) => left.state - right.state || left.operation - right.operation || kindOrder[left.kind] - kindOrder[right.kind]);
     }
     const graph = {
         stateName,
@@ -729,7 +629,8 @@ function versionVmBlockRegisters(source, ast) {
         cfgComplete,
         entries: [...closureEntries].sort((left, right) => left - right),
         states: graphStates.sort((left, right) => left.id - right.id),
-        lifetimes: [...lifetimeByName.values()].sort((left, right) => left.name.localeCompare(right.name, undefined, { numeric: true })),
+        analysis: lifetimeAnalysis?.stats || null,
+        epochs: [...epochByName.values()].sort((left, right) => left.name.localeCompare(right.name, undefined, { numeric: true })),
     };
 
     return {
@@ -746,6 +647,7 @@ function versionVmBlockRegisters(source, ast) {
         versions,
         edits,
         graph,
+        lifetimeAnalysisStats: lifetimeAnalysis?.stats || null,
     };
 }
 

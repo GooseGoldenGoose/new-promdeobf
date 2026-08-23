@@ -31,6 +31,11 @@ function main() {
     console.log(`Preserved final state/return-table writes: ${result.preservedFinalWrites}`);
     console.log(`Cross-state versions: ${result.crossBlockVersionCount}`);
     console.log(`Skipped assignments: ${result.skippedAssignments}`);
+    if (result.lifetimeAnalysisStats) {
+        const stats = result.lifetimeAnalysisStats;
+        console.log(`Register analysis: defs=${stats.definitionCount}, uses=${stats.useCount}, provenance=${stats.provenanceEdgeCount}`);
+        console.log(`Register epochs: ${stats.epochCount}, merged defs=${stats.mergedDefinitionCount}, cleanups=${stats.attachedCleanupCount}/${stats.provenCleanupCount}`);
+    }
     for (const item of result.mapping) console.log(`Register version base: ${item.originalName} -> ${item.baseName}`);
     console.log(`Output: ${outputPath}`);
     return result;

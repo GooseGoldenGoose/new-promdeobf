@@ -38,29 +38,32 @@ assert.deepEqual(result.graph.states[0].successors, [2, 3]);
 assert.deepEqual(result.graph.states[1].predecessors, [1]);
 assert.deepEqual(result.graph.states[2].predecessors, [1, 2]);
 assert(result.graph.states[1].operations.some(operation => operation.kind === "statement" && operation.originalText === "ping()"));
-assert.equal(result.graph.lifetimes.length, 1);
+assert.equal(result.graph.epochs.length, 1);
 
-const lifetime = result.graph.lifetimes[0];
-assert.equal(lifetime.originalRegister, "r2");
-assert(lifetime.events.some(event => event.kind === "start" && event.state === 1));
-assert(lifetime.events.some(event => event.kind === "read" && event.state === 2));
-assert(lifetime.events.some(event => event.kind === "mutate" && event.state === 2));
-assert(lifetime.events.some(event => event.kind === "read" && event.state === 3));
-assert(lifetime.events.some(event => event.kind === "kill" && event.state === 3));
+const epoch = result.graph.epochs[0];
+assert.equal(epoch.originalRegister, "r2");
+assert(epoch.events.some(event => event.kind === "start" && event.state === 1));
+assert(epoch.events.some(event => event.kind === "read" && event.state === 2));
+assert(epoch.events.some(event => event.kind === "mutate" && event.state === 2));
+assert(epoch.events.some(event => event.kind === "read" && event.state === 3));
+assert(epoch.events.some(event => event.kind === "kill" && event.state === 3));
 
 const text = renderText(result.graph);
 assert(text.includes("ENTRY -> S1"));
 assert(text.includes("S1 -> S2 [true]"));
 assert(text.includes("S1 -> S3 [false]"));
-assert(text.includes("LIFETIMES"));
-assert(text.includes(`${lifetime.originalRegister} => ${lifetime.name}`));
+assert(text.includes("REGISTER EPOCHS"));
+assert(result.graph.analysis);
+assert(result.graph.analysis.definitionCount > 0);
+assert(text.includes("analysis: defs="));
+assert(text.includes(`${epoch.originalRegister} => ${epoch.name}`));
 assert(text.includes("KILL S3"));
 
 const dot = renderDot(result.graph);
 assert(dot.startsWith("digraph BetaRegisterFlow"));
 assert(dot.includes("entry -> s1"));
 assert(dot.includes("s1 -> s2"));
-assert(dot.includes("cluster_lifetimes"));
+assert(dot.includes("cluster_epochs"));
 
 const mermaid = renderMermaid(result.graph);
 assert(mermaid.startsWith("flowchart LR"));

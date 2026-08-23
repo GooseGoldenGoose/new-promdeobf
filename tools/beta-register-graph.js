@@ -18,7 +18,11 @@ function renderText(graph) {
     lines.push("BETA REGISTER FLOW GRAPH");
     lines.push(`entries: ${graph.entries.join(", ") || "none"}`);
     lines.push(`states: ${graph.states.length}`);
-    lines.push(`lifetimes: ${graph.lifetimes.length}`);
+    lines.push(`epochs: ${graph.epochs.length}`);
+    if (graph.analysis) {
+        lines.push(`analysis: defs=${graph.analysis.definitionCount}, uses=${graph.analysis.useCount}, provenance=${graph.analysis.provenanceEdgeCount}`);
+        lines.push(`analysis: merged=${graph.analysis.mergedDefinitionCount}, cleanups=${graph.analysis.attachedCleanupCount}/${graph.analysis.provenCleanupCount}`);
+    }
     lines.push("");
     lines.push("CFG");
     for (const entry of graph.entries) lines.push(`  ENTRY -> S${entry}`);
@@ -40,11 +44,11 @@ function renderText(graph) {
     }
 
     lines.push("");
-    lines.push("LIFETIMES");
-    if (graph.lifetimes.length === 0) lines.push("  none");
-    for (const lifetime of graph.lifetimes) {
-        lines.push(`  ${lifetime.originalRegister} => ${lifetime.name}`);
-        for (const event of lifetime.events) {
+    lines.push("REGISTER EPOCHS");
+    if (graph.epochs.length === 0) lines.push("  none");
+    for (const epoch of graph.epochs) {
+        lines.push(`  ${epoch.originalRegister} => ${epoch.name}`);
+        for (const event of epoch.events) {
             lines.push(`    ${event.kind.toUpperCase()} S${event.state}#${event.operation}: ${oneLine(event.text)}`);
         }
     }
@@ -116,15 +120,15 @@ function renderDot(graph) {
         }
     }
 
-    if (graph.lifetimes.length) {
-        lines.push("  subgraph cluster_lifetimes {");
-        lines.push('    label="Cleanup-delimited local lifetimes";');
+    if (graph.epochs.length) {
+        lines.push("  subgraph cluster_epochs {");
+        lines.push('    label="Proven register epochs";');
         lines.push("    style=dashed;");
-        for (let index = 0; index < graph.lifetimes.length; index++) {
-            const lifetime = graph.lifetimes[index];
-            lines.push(`    life${index} [shape=ellipse, label="${dotEscape(`${lifetime.originalRegister} => ${lifetime.name}`)}"];`);
+        for (let index = 0; index < graph.epochs.length; index++) {
+            const epoch = graph.epochs[index];
+            lines.push(`    life${index} [shape=ellipse, label="${dotEscape(`${epoch.originalRegister} => ${epoch.name}`)}"];`);
             const grouped = new Map();
-            for (const event of lifetime.events) {
+            for (const event of epoch.events) {
                 let kinds = grouped.get(event.state);
                 if (!kinds) grouped.set(event.state, kinds = []);
                 kinds.push(event.kind);
@@ -164,11 +168,11 @@ function renderMermaid(graph) {
             for (let index = 2; index < state.successors.length; index++) lines.push(`  S${state.id} -->|${index + 1}| S${state.successors[index]}`);
         }
     }
-    for (let index = 0; index < graph.lifetimes.length; index++) {
-        const lifetime = graph.lifetimes[index];
-        lines.push(`  L${index}(["${mermaidEscape(`${lifetime.originalRegister} => ${lifetime.name}`)}"])`);
+    for (let index = 0; index < graph.epochs.length; index++) {
+        const epoch = graph.epochs[index];
+        lines.push(`  L${index}(["${mermaidEscape(`${epoch.originalRegister} => ${epoch.name}`)}"])`);
         const grouped = new Map();
-        for (const event of lifetime.events) {
+        for (const event of epoch.events) {
             let kinds = grouped.get(event.state);
             if (!kinds) grouped.set(event.state, kinds = []);
             kinds.push(event.kind);
@@ -219,7 +223,7 @@ function main() {
     if (!inputArg) throw new Error("Usage: node tools/beta-register-graph.js <output.lua> [output-base]");
     const generated = generateGraph(inputArg, process.argv[3] || null);
     console.log(`States: ${generated.result.graph.states.length}`);
-    console.log(`Lifetimes: ${generated.result.graph.lifetimes.length}`);
+    console.log(`Epochs: ${generated.result.graph.epochs.length}`);
     console.log(`Text: ${generated.paths.text}`);
     console.log(`JSON: ${generated.paths.json}`);
     console.log(`DOT: ${generated.paths.dot}`);

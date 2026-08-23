@@ -84,20 +84,22 @@ assert.equal(crossStateResult.crossBlockVersionCount, 1);
 assert(crossStateResult.source.includes("local r_v1_1 = 3123"));
 assert.equal((crossStateResult.source.match(/local r_v1_1/g) || []).length, 1);
 assert(crossStateResult.source.includes("consume(r_v1_1)"));
-assert(crossStateResult.source.includes("consume2(r2)"));
-assert(!crossStateResult.source.includes("consume2(r_v1_1)"));
+assert(crossStateResult.source.includes("consume2(r_v1_1)"));
+assert(!crossStateResult.source.includes("consume2(r2)"));
 assert(!crossStateResult.source.includes("consume2(r_v1_2)"));
 parseLua(crossStateResult.source, "<beta-cross-state-test-output>");
 const lifetimeSource = `vm = function(state, args, upvalues, gcProxy)
-    local r2, ReturnVal
+    local r1, r2, ReturnVal
     while state do
         if state == 1 then
-            r2 = 10
+            r1 = 10
+            r2 = r1
             state = 2
         end
         if state == 2 then
             ReturnVal = consume(r2)
-            r2 = 20
+            r1 = 20
+            r2 = r1
             state = 3
         end
         if state == 3 then
@@ -106,7 +108,8 @@ const lifetimeSource = `vm = function(state, args, upvalues, gcProxy)
             state = 4
         end
         if state == 4 then
-            r2 = 30
+            r1 = 30
+            r2 = r1
             ReturnVal = consume3(r2)
             r2 = nil
             ReturnVal = {}
@@ -127,15 +130,51 @@ assert.equal(lifetimeResult.applied, true);
 assert.equal(lifetimeResult.cfgComplete, true);
 const r2Base = lifetimeResult.mapping.find(item => item.originalName === "r2")?.baseName;
 assert(r2Base);
-assert(lifetimeResult.source.includes(`local ${r2Base}_1 = 10`));
+assert(lifetimeResult.source.includes(`local ${r2Base}_1 = r_v1_1`) || lifetimeResult.source.includes(`local ${r2Base}_1 = r_v2_1`) || lifetimeResult.source.includes(`local ${r2Base}_1 = r_v3_1`));
 assert(lifetimeResult.source.includes(`consume(${r2Base}_1)`));
-assert(lifetimeResult.source.includes(`${r2Base}_1 = 20`));
+assert(lifetimeResult.source.match(new RegExp(`${r2Base}_1 = r_v\\d+_\\d+`)));
 assert(lifetimeResult.source.includes(`consume2(${r2Base}_1)`));
 assert(lifetimeResult.source.includes(`${r2Base}_1 = nil`));
-assert(lifetimeResult.source.includes(`local ${r2Base}_2 = 30`));
+assert(lifetimeResult.source.match(new RegExp(`local ${r2Base}_2 = r_v\\d+_\\d+`)));
 assert(lifetimeResult.source.includes(`consume3(${r2Base}_2)`));
 assert(lifetimeResult.source.includes(`${r2Base}_2 = nil`));
 assert(!lifetimeResult.source.includes(`local ${r2Base}_1 = 20`));
 parseLua(lifetimeResult.source, "<beta-lifetime-test-output>");
+
+const scratchBoundarySource = `vm = function(state, args, upvalues, gcProxy)
+    local r1, r2, ReturnVal
+    while state do
+        if state == 1 then
+            r2 = "scratch"
+            ReturnVal = consume(r2)
+            ReturnVal = nil
+            r2 = ReturnVal
+            ReturnVal = consume2(r2)
+            ReturnVal = 6
+            r2 = ReturnVal
+            ReturnVal = consume3(r2)
+            r2 = nil
+            ReturnVal = {}
+            state = nil
+        end
+    end
+    state = #gcProxy
+    return unpack(ReturnVal)
+end
+root = createClosure(1, {})`;
+
+const scratchBoundaryResult = versionVmBlockRegisters(
+    scratchBoundarySource,
+    parseLua(scratchBoundarySource, "<beta-scratch-boundary-test>")
+);
+const scratchR2Base = scratchBoundaryResult.mapping.find(item => item.originalName === "r2")?.baseName;
+assert(scratchR2Base);
+assert(scratchBoundaryResult.source.includes(`local ${scratchR2Base}_1 = "scratch"`));
+assert(scratchBoundaryResult.source.match(new RegExp(`local ${scratchR2Base}_2 = r_v\\d+_\\d+`)));
+assert.equal((scratchBoundaryResult.source.match(new RegExp(`${scratchR2Base}_2 =`, "g")) || []).length, 3);
+assert(scratchBoundaryResult.source.includes(`${scratchR2Base}_2 = nil`));
+assert(!scratchBoundaryResult.source.includes(`${scratchR2Base}_1 = nil`));
+assert(scratchBoundaryResult.lifetimeAnalysisStats.provenCleanupCount >= 1);
+parseLua(scratchBoundaryResult.source, "<beta-scratch-boundary-test-output>");
 
 console.log("beta register versioning tests passed");
