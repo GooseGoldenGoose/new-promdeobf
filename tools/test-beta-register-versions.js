@@ -317,4 +317,39 @@ assert(
 );
 parseLua(unsafeNonEmptyPlacementResult.source, "<beta-unsafe-nonempty-placement-output>");
 
+const indexedAssignmentReadSource = `vm = function(state, args, upvalues, gcProxy)
+    local r1, ReturnVal
+    while state do
+        if state == 1 then
+            r1 = allocUpvalue()
+            state = 123
+            upvalueValues[r1] = state
+            ReturnVal = {}
+            state = nil
+        end
+    end
+    state = #gcProxy
+    return unpack(ReturnVal)
+end
+root = createClosure(1, {})`;
+
+const indexedAssignmentReadResult = versionVmBlockRegisters(
+    indexedAssignmentReadSource,
+    parseLua(indexedAssignmentReadSource, "<beta-indexed-assignment-read-test>")
+);
+const indexedR1Base = indexedAssignmentReadResult.mapping.find(item => item.originalName === "r1")?.baseName;
+const indexedStateBase = indexedAssignmentReadResult.mapping.find(item => item.originalName === "state")?.baseName;
+assert(indexedR1Base && indexedStateBase);
+assert.equal(indexedAssignmentReadResult.skippedAssignments, 1);
+assert(indexedAssignmentReadResult.source.includes(`upvalueValues[${indexedR1Base}_1] = ${indexedStateBase}_1`));
+assert(!indexedAssignmentReadResult.source.includes("upvalueValues[r1] = state"));
+const indexedUnsupported = indexedAssignmentReadResult.graph.states[0].operations.find(operation =>
+    operation.kind === "unsupported" && String(operation.originalText || "").includes("upvalueValues[")
+);
+assert(indexedUnsupported);
+assert(indexedUnsupported.reads.includes(`${indexedR1Base}_1`));
+assert(indexedUnsupported.reads.includes(`${indexedStateBase}_1`));
+assert(indexedUnsupported.emittedText.includes(`upvalueValues[${indexedR1Base}_1] = ${indexedStateBase}_1`));
+parseLua(indexedAssignmentReadResult.source, "<beta-indexed-assignment-read-output>");
+
 console.log("beta register versioning tests passed");

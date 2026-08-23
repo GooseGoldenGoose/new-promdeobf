@@ -82,6 +82,33 @@ function rewriteExpression(source, expression, latestVersions, usedVersions = nu
     return applyTextEdits(text, edits, start);
 }
 
+function rewriteUnsupportedAssignmentReads(source, statement, latestVersions, usedVersions = null) {
+    if (statement?.type !== "AssignmentStatement" || !Array.isArray(statement.range)) return null;
+    const edits = [];
+
+    // Plain identifier targets are writes, not reads. Complex assignment targets
+    // still evaluate their base/index expressions, so beta versions must flow into
+    // addresses such as table[index] as well as into every RHS expression.
+    for (const variable of statement.variables || []) {
+        if (isIdentifier(variable)) continue;
+        collectIdentifierReadEdits(variable, latestVersions, edits);
+    }
+    for (const value of statement.init || []) {
+        collectIdentifierReadEdits(value, latestVersions, edits);
+    }
+
+    if (usedVersions) {
+        for (const edit of edits) usedVersions.add(edit.replacement);
+    }
+
+    const start = statement.range[0];
+    const end = statement.range[1];
+    return {
+        text: applyTextEdits(source.slice(start, end), edits, start),
+        edits,
+    };
+}
+
 function findLastSingleWrites(statements, names) {
     const last = new Map();
     for (let index = 0; index < statements.length; index++) {
@@ -599,11 +626,20 @@ function versionVmBlockRegisters(source, ast) {
             const init = statement.init || [];
 
             if (!plan || plan.kind === "unsupported") {
+                const usedVersions = new Set();
+                const rewritten = rewriteUnsupportedAssignmentReads(source, statement, latestVersions, usedVersions);
+                if (rewritten) {
+                    for (const edit of rewritten.edits) edits.push(edit);
+                    for (const versionName of usedVersions) {
+                        if (incomingVersionNames.has(versionName)) crossBlockUsedVersions.add(versionName);
+                    }
+                }
                 graphOperations.push({
                     index: graphOperations.length + 1,
                     kind: "unsupported",
                     originalText: Array.isArray(statement.range) ? source.slice(statement.range[0], statement.range[1]).trim() : "",
-                    reads: [],
+                    emittedText: rewritten?.text?.trim() || (Array.isArray(statement.range) ? source.slice(statement.range[0], statement.range[1]).trim() : ""),
+                    reads: [...usedVersions],
                 });
                 for (const variable of variables) {
                     if (isIdentifier(variable) && candidateNames.has(variable.name)) latestVersions.delete(variable.name);
