@@ -1,0 +1,331 @@
+return (function(...)
+    local K = {
+        "Lu==",
+        "CRP02HhGCAH8mdqU",
+        "mX==",
+        "6A1lwu==",
+        "kFeQ9lL=",
+        "Hu==",
+        "9gYtTX==",
+        "k7YxqE1f",
+        "ru==",
+        "rL==",
+        "6A1Q97rG2X==",
+        "2gix27NM+CqSkCeH2L==",
+        "igNuwgh/",
+        "qE1xqL==",
+        "6A14qg8=",
+        "gP=="
+    }
+    local function v(v)
+        return K[v - (51372)]
+    end
+    for v, a in ipairs({
+        {
+            1,
+            16
+        },
+        {
+            1,
+            2
+        },
+        {
+            3,
+            16
+        }
+    }) do
+        while a[1] < a[2] do
+            K[a[1]], K[a[2]], a[1], a[2] = K[a[2]], K[a[1]], a[1] + (1), a[2] - (1)
+        end
+    end
+    do
+        local v = math.floor
+        local a = string.sub
+        local m = table.concat
+        local F = table.insert
+        local Q = string.len
+        local l = string.char
+        local b = type
+        local I = K
+        local g = {
+            f = 45,
+            E = 6,
+            j = 59,
+            ["4"] = 44,
+            q = 25,
+            i = 29,
+            I = 10,
+            C = 20,
+            D = 62,
+            M = 34,
+            d = 35,
+            Q = 41,
+            S = 42,
+            ["3"] = 15,
+            R = 3,
+            U = 50,
+            m = 19,
+            ["0"] = 54,
+            u = 48,
+            ["6"] = 23,
+            A = 53,
+            ["1"] = 61,
+            g = 22,
+            ["7"] = 38,
+            K = 36,
+            ["2"] = 30,
+            ["9"] = 27,
+            e = 9,
+            H = 21,
+            c = 33,
+            V = 47,
+            B = 1,
+            r = 17,
+            O = 49,
+            p = 8,
+            Z = 40,
+            ["/"] = 43,
+            v = 31,
+            P = 32,
+            N = 57,
+            y = 63,
+            L = 16,
+            h = 13,
+            G = 37,
+            W = 2,
+            x = 46,
+            t = 52,
+            ["8"] = 56,
+            k = 28,
+            s = 11,
+            o = 60,
+            w = 24,
+            b = 51,
+            n = 55,
+            l = 39,
+            X = 0,
+            Y = 5,
+            a = 4,
+            F = 7,
+            J = 58,
+            ["5"] = 12,
+            T = 26,
+            z = 18,
+            ["+"] = 14
+        }
+        for K = 1, #I, 1 do
+            local u = I[K]
+            if b(u) == "string" then
+                local b = Q(u)
+                local Y = {}
+                local V = 1
+                local h = 0
+                local i = 0
+                while V <= b do
+                    local K = a(u, V, V)
+                    local m = g[K]
+                    if m then
+                        h = h + m * (64) ^ ((3) - i)
+                        i = i + (1)
+                        if i == 4 then
+                            i = 0
+                            local K = v(h / (65536))
+                            local a = v((h % (65536)) / (256))
+                            local m = h % (256)
+                            F(Y, l(K, a, m))
+                            h = 0
+                        end
+                    elseif K == "=" then
+                        F(Y, l(v(h / (65536))))
+                        if V >= b or a(u, V + (1), V + (1)) ~= "=" then
+                            F(Y, l(v((h % (65536)) / (256))))
+                        end
+                        break
+                    end
+                    V = V + (1)
+                end
+                I[K] = m(Y)
+            end
+        end
+    end
+    return (function(K, m, F, Q, l, b, I, i, a, V, Y, u, g, A, h, c)
+        g, V, i, Y, h, A, u, a, c = {}, 0, function(K)
+            local v, a = 1, K[1]
+            while a do
+                u[a], v = u[a] - (1), (1) + v
+                if 0 == u[a] then
+                    u[a], g[a] = nil, nil
+                end
+                a = K[v]
+            end
+        end, function()
+            V = V + (1)
+            u[V] = 1
+            return V
+        end, function(K)
+            for v = 1, #K, 1 do
+                u[K[v]] = u[K[v]] + (1)
+            end
+            if F then
+                local a = F(true)
+                local m = l(a)
+                m[v(51385)], m[v(51378)], m[v(51373)] = K, i, function()
+                    return 1356734
+                end
+                return a
+            else
+                return Q({}, {
+                    [v(51378)] = i,
+                    [v(51385)] = K,
+                    [v(51373)] = function()
+                        return 1356734
+                    end
+                })
+            end
+        end, function(K, v)
+            local m = h(v)
+            local F = function(...)
+                return a(K, {
+                    ...
+                }, v, m)
+            end
+            return F
+        end, {}, function(a, F, Q, l)
+            local I, A, V, Y, i, c, h, u, g, y
+            while a do
+                if a < 3603836 then
+                    if a < 2253078 then
+                        if a < 2056477 then
+                            if a < 1631883 then
+                                i = 2
+                                Y = v(51381)
+                                V = K[Y]
+                                Y = v(51382)
+                                h = V[Y]
+                                Y = 1
+                                V = h(Y, i)
+                                h = 1
+                                I = V == h
+                                a = I and 6205226 or 2211817
+                            else
+                                c = v(51381)
+                                y = 2
+                                Y = v(51379)
+                                V = K[Y]
+                                Y = V(u)
+                                A = K[c]
+                                c = v(51382)
+                                i = A[c]
+                                c = 1
+                                A = i(c, y)
+                                i = 1
+                                Y = A == i
+                                V = not Y
+                                a = V and 5199275 or 2358013
+                            end
+                        else
+                            h = 3
+                            u = h
+                            Y = v(51379)
+                            i = v(51384)
+                            a = 2017376
+                            V = K[Y]
+                            Y = V(i)
+                        end
+                    else
+                        if a < 2626265 then
+                            if a < 2402653 then
+                                A = v(51381)
+                                i = K[A]
+                                A = v(51382)
+                                c = 2
+                                Y = i[A]
+                                A = 1
+                                i = Y(A, c)
+                                Y = 1
+                                V = i == Y
+                                a = V and 8122696 or 3021895
+                            else
+                                g = F
+                                a = 213
+                                Y = v(51381)
+                                u = a
+                                V = K[Y]
+                                Y = v(51382)
+                                i = 2
+                                h = V[Y]
+                                Y = 1
+                                V = h(Y, i)
+                                h = 1
+                                I = V == h
+                                a = not I
+                                a = a and 14281221 or 1426870
+                            end
+                        else
+                            Y = v(51379)
+                            V = K[Y]
+                            a = 12085755
+                            i = v(51374)
+                            Y = V(i)
+                        end
+                    end
+                else
+                    if a < 10816128 then
+                        if a < 7861661 then
+                            if a < 5455418 then
+                                Y = v(51379)
+                                a = 12085755
+                                V = K[Y]
+                                i = v(51380)
+                                Y = V(i)
+                            else
+                                I = 2
+                                u = I
+                                Y = v(51383)
+                                a = 2017376
+                                V = v(51379)
+                                h = K[V]
+                                V = h(Y)
+                            end
+                        else
+                            Y = v(51379)
+                            i = v(51377)
+                            a = K[v(51386)]
+                            V = K[Y]
+                            I = {}
+                            Y = V(i)
+                        end
+                    else
+                        if a < 12950042 then
+                            a = K[v(51376)]
+                            Y = v(51379)
+                            V = K[Y]
+                            i = v(51388)
+                            I = {}
+                            Y = V(i, u)
+                            u = nil
+                        else
+                            a = 1
+                            u = a
+                            h = v(51379)
+                            a = 2017376
+                            V = v(51375)
+                            I = K[h]
+                            h = I(V)
+                        end
+                    end
+                end
+            end
+            a = #l
+            return m(I)
+        end, function(K)
+            u[K] = u[K] - (1)
+            if 0 == u[K] then
+                u[K], g[K] = nil, nil
+            end
+        end
+        return (A(2442636, {}))(m(I))
+    end)(getfenv and getfenv() or _ENV, unpack or table[v(51387)], newproxy, setmetatable, getmetatable, select, {
+        ...
+    })
+end)(...)
