@@ -1,4 +1,5 @@
 const luaparse = require("../parser/luaparse");
+const { recoverBetaUpvalues } = require("./beta-upvalues");
 
 function isNode(value) {
     return value && typeof value === "object" && typeof value.type === "string";
@@ -1069,12 +1070,27 @@ function solveBetaControlFlow(originalAst, betaResult) {
     if (!betaResult?.graph || !betaResult.applied) {
         return { applied: false, reason: "Beta register analysis is unavailable" };
     }
-    const graph = betaResult.graph;
+    const upvalues = recoverBetaUpvalues(betaResult);
+    if (!upvalues.safe) {
+        return { applied: false, reason: upvalues.reason || "Beta upvalue recovery failed closed" };
+    }
+    const graph = upvalues.graph;
     if (!graph.cfgComplete) {
         return { applied: false, reason: "Beta CFG is incomplete" };
     }
-    if (graph.entries.length === 1) return solveSingleEntryControlFlow(originalAst, graph);
-    return solveClosureRegions(originalAst, graph);
+    const solved = graph.entries.length === 1
+        ? solveSingleEntryControlFlow(originalAst, graph)
+        : solveClosureRegions(originalAst, graph);
+    if (!solved.applied) return solved;
+    return {
+        ...solved,
+        upvalueRecoveryApplied: upvalues.applied,
+        recoveredUpvalueCellCount: upvalues.stats?.recoveredCellCount || 0,
+        recoveredCaptureCount: upvalues.stats?.captureCount || 0,
+        upvalueReadRewriteCount: upvalues.stats?.readRewriteCount || 0,
+        upvalueWriteRewriteCount: upvalues.stats?.writeRewriteCount || 0,
+        upvalueReleaseRemovalCount: upvalues.stats?.releaseRemovalCount || 0,
+    };
 }
 
 module.exports = {

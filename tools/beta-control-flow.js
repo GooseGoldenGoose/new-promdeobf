@@ -42,6 +42,12 @@ function main() {
     if (generated.controlFlow.terminalReturnCount !== undefined) console.log(`Terminal returns: ${generated.controlFlow.terminalReturnCount}`);
     if (generated.controlFlow.closureRegionCount !== undefined) console.log(`Closure regions: ${generated.controlFlow.closureRegionCount}`);
     if (generated.controlFlow.inlinedClosureFactoryCount !== undefined) console.log(`Inlined closure factories: ${generated.controlFlow.inlinedClosureFactoryCount}`);
+    if (generated.controlFlow.upvalueRecoveryApplied) {
+        console.log(`Recovered upvalue cells: ${generated.controlFlow.recoveredUpvalueCellCount}`);
+        console.log(`Recovered capture slots: ${generated.controlFlow.recoveredCaptureCount}`);
+        console.log(`Upvalue reads/writes rewritten: ${generated.controlFlow.upvalueReadRewriteCount}/${generated.controlFlow.upvalueWriteRewriteCount}`);
+        console.log(`Upvalue releases removed: ${generated.controlFlow.upvalueReleaseRemovalCount}`);
+    }
     console.log(`Return payload sunk: ${generated.controlFlow.terminalReturnPayloadSunk}`);
     console.log(`Terminal return lowered: ${generated.controlFlow.terminalReturnLowered}`);
     if (generated.controlFlow.environmentHeader) console.log(`Header: ${generated.controlFlow.environmentHeader}`);

@@ -458,7 +458,7 @@ const capturedClosureRejected = solveBetaControlFlow(ast, {
     },
 });
 assert.equal(capturedClosureRejected.applied, false);
-assert(capturedClosureRejected.reason.includes("capture reconstruction is not implemented"));
+assert(capturedClosureRejected.reason.includes("does not resolve to a proven upvalue cell"));
 
 const cyclic = solveBetaControlFlow(ast, {
     applied: true,
