@@ -30,7 +30,7 @@ When continuing this project in a new chat:
 - Preserve stable pipeline behavior when experimenting. A recovery pass must fail closed: if proof is incomplete, preserve the previous safe output rather than guess.
 - End every project-related turn with exactly: `Done for this turn — you can prompt now.`
 
-Latest fixture checkpoint is `d020d19 Reset tracked sample fixtures` on `main`, pushed to `origin/main`. Current tracked fixtures are paired source/obfuscation samples only: `sample/1`, `sample/6`, `sample/7`, `sample/8`, `sample/9`, and `sample/10`. Structural semantic naming runs with VM helper recovery before assignment splitting/state recovery. Source lexical-scope reconstruction has NOT been implemented yet.
+Latest fixture checkpoint is `edc805b Restore paired samples 2 through 5` on `main`, pushed to `origin/main`. All tracked fixtures `sample/1` through `sample/10` now have matching `.source.lua` + formatter-normalized `.txt` pairs. Samples 2-4 restore the old regression semantics; sample 5 is a new controlled stress fixture intentionally matching the old stress scale at 938 dispatcher states and 116 recovered VM functions. Source lexical-scope reconstruction has NOT been implemented yet.
 
 # Core Knowledge & Rules
 
@@ -188,8 +188,10 @@ Current implementation:
 - `formater/luau-format.exe` is the normalization stage. Its existing runner formats Lua and simplifies arithmetic/constants before AST processing.
 - Controlled obfuscator fixture source exists at `C:\Users\reala\Desktop\!workspaces\promdeobf ova\wearedev obf`; `run.bat` invokes `luajit cli.lua --preset Medium input.txt`, producing `input.txt.obfuscated.lua`.
 - Both the formatted sample and the direct `wearedev obf\input.txt.obfuscated.lua` parse successfully as a `Chunk` with one top-level statement.
-- Every tracked `sample/N.txt` must have a matching tracked `sample/N.source.lua`. Unpaired tracked samples were removed on 2026-08-23.
-- `sample/1.source.lua` is the current baseline fixture. It is obfuscated with local WeAreDevs Medium, formatter-normalized into `sample/1.txt`, then deobfuscated to `output/1.lua`. Runtime parity is `baseline 14 4`.
+- Every tracked `sample/N.txt` must have a matching tracked `sample/N.source.lua`. Current paired coverage is samples 1-10.
+- `sample/1.source.lua` is the baseline fixture. It is obfuscated with local WeAreDevs Medium, formatter-normalized into `sample/1.txt`, then deobfuscated to `output/1.lua`. Runtime parity is `baseline 14 4`.
+- Samples 2-4 were reconstructed from the old tracked fixtures/behavior: sample 2 is the `warn("gg")` + random branch regression; sample 3 is the shadowed block plus shared captured `x` regression; sample 4 is the shared `total` if/while/repeat regression with intentionally varied closure arities.
+- Sample 5 is now a controlled static stress source with 115 closure functions plus the root VM function. Its first 44 workers include an additional branch so the local compiler emits exactly 938 reachable dispatcher states, matching the old stress fixture state scale while retaining a source file.
 
 ## Prometheus ConstantArray Step
 
@@ -197,7 +199,7 @@ Current implementation:
 - `passes/constant-array.js` structurally recovers the literal array, optional rotation, accessor offset, and custom-base64 decoder.
 - Accessor replacement is scope-aware; fixture names, offsets, and constant values are not hardcoded.
 - Missing ConstantArray is now a safe pass-through so later stages still run when that Prometheus step is disabled.
-- `sample/1.txt`: 8 constants recovered and 11 references inlined with 0 unresolved wrapper/array uses.
+- Current ConstantArray coverage: sample 1 -> 8 entries / 11 references; sample 2 -> 11 / 14; sample 3 -> 11 / 16; sample 4 -> 13 / 19; sample 5 -> 122 / 125. All have 0 unresolved wrapper/array uses.
 - Keep the current Luau parser while sufficient; Rust Moonlight is acceptable if parser limitations become a correctness blocker.
 
 ## Step 2: VM Wrapper Semantic Naming
@@ -227,6 +229,8 @@ Current implementation:
 - Safe graphs receive new contiguous IDs by closure root. Only proven closure entry arguments and CFG jump/branch targets are rewritten; ordinary temporary numeric values assigned through the reused state register are left unchanged.
 - Each closure graph gets a contiguous normalized range, and output uses balanced binary range trees between closure ranges and inside each range. Exact equality is retained at final leaves for invalid-state safety, avoiding large `or` expressions and long linear `elseif` chains.
 - Current sample 1 resolves 5/5 dispatcher states: root `1`, fixed closure `createClosure5` states `2-5`. Source, formatted obfuscation, and deobfuscated output all print `baseline 14 4`.
+- Restored sample 2 resolves 3/3 states and preserves `gg` / `ranf` under the existing LuaJIT warn+seed shim. Restored sample 3 resolves 3/3 states across root + two closures and preserves `block 10 2`, `before 1`, `after 3 3`. Restored sample 4 resolves 16/16 states across root + three closures and preserves `start 0`, `choose 5`, `spin 10`, `trim 2`.
+- New sample 5 resolves 938/938 states across 116 VM functions. It is source-backed and intentionally replaces the former unpaired stress file; all states are reachable in this controlled fixture.
 - `tools/inspect-vm-state.js` remains an optional developer inspection utility for printing graph roots, terminators, dispatcher paths, and normalized ranges; it is not required for normal deobfuscation.
 - Closure-root discovery is now reachability-driven instead of global-AST-driven. Recovery starts from the real outer `createClosure` root, walks its closed CFG, discovers `createClosureN(entry, ...)` calls only inside those reachable blocks, then recursively walks the newly discovered child roots. A closure call that exists only in a dead dispatcher leaf can no longer keep its dead closure graph alive. Reachable unsupported closure-entry calls still fail normalization closed; unsupported/dead calls outside the reachable graph do not poison recovery. `tools/test-vm-state-reachability.js` proves a dead state that creates a dead closure is removed together with that child graph.
 - Canonical compiler confirmation: `setPos(scope, nil)` deliberately emits `state = _env[randomString(12..14)]` instead of literal nil (the source comment retains `--Ast.NilExpression()`). Step 3 treats only this compiler-shaped random alphanumeric `_env[...]` lookup (or literal nil) as a stop; other unknown final state writes block normalization instead of being guessed as stops. Once a stop is proven, normalized rendering removes the obfuscator-only random environment lookup and emits semantic `state = nil` at the actual end of that recovered state body. The relocation is structural and restricted to a single canonical stop assignment; ordinary `_env[...]` lookups remain untouched/effectful.
@@ -458,6 +462,7 @@ without producing unrelated locals.
 - `upvalueValues[...]` reads and writes now have explicit access identities. Their cell index is resolved through reaching definitions for local `allocUpvalue()` IDs or recursively through `upvalues[n]` capture-slot relays. A relayed slot is considered resolved only when every static provenance path is complete and converges to one static cell-allocation identity; cycles, multiple cells, and incomplete provenance remain unresolved.
 - `main.js` exposes compact reaching-definition, lifetime, cell-access, and captured-binding-candidate counts. Step 4 remains analysis-only; its metadata is computed from the proven Step-3 graph and is not rewritten by later presentation scheduling. Final emitted Lua is reparsed after all post-Step-3 scheduling.
 - Current sample 1 analysis: 2 recovered functions, 34 definitions, 26/27 uniquely resolved uses, 1 join group, 3 cross-block lifetimes, 0 loop-carried lifetimes, 1 local upvalue cell, 1 capture slot, and 2/2 resolved cell accesses.
+- Restored sample 3 has 3 functions, 43 definitions, 2 capture slots, one shared local cell, and 5/5 resolved cell accesses. Restored sample 4 has 4 functions, 97 definitions, 3 capture slots, one shared local cell, and 17/17 resolved cell accesses. New sample 5 has 116 functions, 4,488 definitions, 115 capture slots, one shared local cell, and 983/983 resolved cell accesses.
 
 
 - Local WeAreDevs compiler register-allocation proof: source locals are keyed by `(scope, id)` in `registersForVar`; `getVarRegister(scope, id, ...)` reuses the same reserved `VAR_REGISTER` for repeated reads/writes of that source binding while it is live. `allocRegister(true)` prevents another live variable from taking that occupied register. At lexical block cleanup, `compileBlock` emits `reg = nil` for ordinary locals (or calls the upvalue-release helper for captured locals), then `freeRegister(reg, true)` releases that register for later reuse. Therefore repeated writes to the same VM register can mean mutation of one source binding while its `(scope,id)` remains active, but the same physical register can later represent a different source binding after scope cleanup/release. A visible `reg = nil` is evidence of cleanup only when provenance proves it is the compiler's block-variable cleanup; temporary nil values also exist and must not be treated as scope ends blindly. Captured locals are stronger: the variable register holds an upvalue-cell ID and source assignments update `upvalueValues[cell]`, so a proven identical cell ID is a proven identical captured binding.
@@ -482,7 +487,7 @@ without producing unrelated locals.
 - Sample 8 exposes the current behavior clearly: `D = "keep1"` stays next to its call, `B = "print"` stays next to `_env[B]`, `z = D + G` stays immediately followed by `D = z` because `D` is read later in that state, while truly unread `j = args` now sinks to the state-body tail with the final cleanup writes. The ownership-handoff pair remains adjacent `D = nil; D = 30`. The scheduler intentionally never removes overwritten or unread stores. Its proven random `_env[...]` stop sentinel is now removed by Step 3 and re-emitted as final `state = nil`, so the stop is structurally at the bottom of the state and unread pure writes stay immediately above it.
 - `tools/test-vm-register-scheduler.js` is a focused scheduler regression covering producer/use compaction, pure producer sinking, identifier-copy pulling, write/write adjacency without deletion, unread-to-tail sinking, RAW/WAR/WAW preservation, and effectful-call-order preservation; it currently passes.
 - Current sample 1 scheduling changes 2 blocks with 43 dependency-safe swaps and 3 unread sinks; runtime parity remains exact.
-- Current paired fixture coverage is samples 1 and 6-10. Sample 10 proves 19 overflow slots; focused scheduler tests cover overflow-slot compaction, independent slots, same-slot hazards, and rejection of ordinary-table treatment.
+- Current paired fixture coverage is samples 1-10. New sample 5 schedules 390 blocks with 221,956 dependency-safe swaps, 217 unread sinks, and a structurally proven 23-slot overflow bank. Sample 10 remains the natural overflow-boundary fixture with 19 slots.
 
 
 ## Post-Scheduler VM Register Naming
@@ -498,7 +503,7 @@ without producing unrelated locals.
 
 ## Performance Optimization Audit (2026-08-23)
 
-- Historical performance measurements that used the removed unpaired sample 5 remain historical only; sample 5 is no longer current fixture coverage.
+- Historical performance measurements before `edc805b` used the previous unpaired sample 5 and remain historical only. The current source-backed sample 5 deliberately matches its 938-state / 116-function scale but is different source, so benchmark numbers are not directly comparable.
 
 - Before the whole-pipeline optimization audit, the user explicitly requested a pushed checkpoint first. Commit `c224017 Optimize VM state traversal queues` is that pre-audit checkpoint. It replaced array `shift()` BFS queues with cursor-based queues, used `Set` membership for queued/ordered state IDs, and kept reachable-state traversal itself O(V + E) aside from dispatcher-leaf resolution/rendering.
 - Optimized implementation checkpoint: `0f4650a Optimize deobfuscator hot paths`. The audit read the complete normal deobfuscation pipeline (main + every current pass) and changed only mechanically equivalent hot paths; parser internals and the proven reaching-def/liveness solver were intentionally not redesigned.
@@ -515,8 +520,8 @@ without producing unrelated locals.
 - The outer wrapper parameter receiving the unique `{...}` argument is renamed `InitialArgs`. This is distinct from the VM parameter `args`: `InitialArgs` is the original top-level vararg table passed into the root closure, while `args` is the per-closure invocation argument table.
 - Proven `createClosure*` helpers rename their `createUpvalueProxy(captures)` local to `gcProxy`, returned nested-function local to `closure`, and fixed-arity nested parameters to `arg1`, `arg2`, ...; the vararg factory keeps `...`.
 - `releaseUpvalues` renames its structural iteration locals to `captureIndex` and `upvalueId`. `createUpvalueProxy` renames its numeric-for index to `captureIndex`, the `newproxy(true)` local to `proxy`, and `getmetatable(proxy)` to `proxyMetatable`.
-- When a VM overflow-register table is proven structurally as the table-backed register bank before the scalar register declaration, it is renamed `RegisterOverflow`. Current tracked sample 10 exercises this path; smaller fixtures do not invent it.
-- Focused regression `tools/test-semantic-names.js` covers `InitialArgs`, fixed closure `argN`, `gcProxy`, `closure`, `captureIndex`, `upvalueId`, `proxy`, `proxyMetatable`, and `RegisterOverflow`. Current paired fixtures 1 and 6-10 remain parse/runtime-valid where executable.
+- When a VM overflow-register table is proven structurally as the table-backed register bank before the scalar register declaration, it is renamed `RegisterOverflow`. Current tracked samples 5 and 10 exercise this path; other fixtures do not invent it.
+- Focused regression `tools/test-semantic-names.js` covers `InitialArgs`, fixed closure `argN`, `gcProxy`, `closure`, `captureIndex`, `upvalueId`, `proxy`, `proxyMetatable`, and `RegisterOverflow`. Current paired fixtures 1-10 remain parse/runtime-valid where executable.
 
 ## Sample 10: Natural Register Overflow Regression (2026-08-23)
 
@@ -531,7 +536,7 @@ without producing unrelated locals.
 2. Add local-vs-environment provenance for VM values so `_env[...]` globals can never be promoted into invented locals, while register-backed source candidates remain distinct from environment lookups.
 3. For ordinary locals, build conservative register-value epochs from definition/use/liveness connectivity without merging sequential unrelated values. Current sample 7 is the focused conditional-shadowing/early-return regression: one path uses the branch-local `b = 2` and returns, while the fallthrough path uses outer `b = 3` and then a captured closure. Only promote a source local when function ownership, provenance, and lifetime proof are unique.
 4. Relate captured-cell candidates to source initialization/mutation patterns only after dominance/order proof is available; do not infer “initial write” from textual or block order across CFG joins.
-5. Continue CFG structuring separately: sample 6 remains the nested-function/if/while regression and sample 7 the branch/early-return regression. Add a new paired repeat/until fixture later if that structure needs focused coverage.
+5. Continue CFG structuring separately: sample 4 is again the focused if/while/repeat + shared-capture regression, sample 6 the nested-function/if/while regression, and sample 7 the branch/early-return regression.
 6. Keep POS-register temporary reuse distinct from true block terminators; extend Prometheus-specific recognition only from evidence in the local WeAreDevs compiler unless the user explicitly requests the public/canonical implementation.
 7. Keep every pass structural/generalized, reparse transformed Lua, runtime-check executable fixtures, and update/commit/push `CONTEXT.md` after meaningful work.
 8. If the current parser becomes a correctness blocker, evaluate Rust Moonlight instead of parser-specific hacks.
@@ -542,8 +547,8 @@ without producing unrelated locals.
 - Workspace: `C:\Users\reala\Desktop\!workspaces\promdeobf ova\new promdeobf`.
 - Branch: `main`.
 - Remote: `https://github.com/GooseGoldenGoose/new-promdeobf.git`.
-- Latest pushed fixture checkpoint at this snapshot: `d020d19 Reset tracked sample fixtures`.
-- Immediately preceding implementation checkpoint: `75b75f9 Document early semantic naming`.
+- Latest pushed fixture checkpoint at this snapshot: `edc805b Restore paired samples 2 through 5`.
+- Immediately preceding context checkpoint: `6202e55 Refresh fixture handoff context`.
 - Before changing anything in a new chat: read this entire `CONTEXT.md`, run `git status --short --branch`, then `git log -8 --oneline --decorate`. Never assume the checkout is still at this exact commit if newer work exists.
 - Every project code/content change, even small, gets a focused commit and `git push origin main`. Stage only files belonging to the current change.
 - `formater/` remains intentionally untracked. Generated `output/*.log` or temporary output files must not be committed accidentally. All tracked `sample/N.txt` files must have matching tracked source files.
@@ -609,8 +614,11 @@ without producing unrelated locals.
 
 ### Fixtures / key validations
 
-- Sample 1: fresh paired baseline (`base`, `compute`, one captured upvalue, branch); runtime `baseline 14 4`; 5/5 states normalized.
-
+- Sample 1: paired baseline (`base`, `compute`, one captured upvalue, branch); runtime `baseline 14 4`; 5/5 states normalized.
+- Sample 2: restored warn/random branch; runtime with deterministic shim `gg`, `ranf`; 3/3 states.
+- Sample 3: restored shadowed block + shared mutable capture; runtime `block 10 2`, `before 1`, `after 3 3`; 3/3 states.
+- Sample 4: restored if/while/repeat + shared `total`; runtime `start 0`, `choose 5`, `spin 10`, `trim 2`; 16/16 states.
+- Sample 5: source-backed stress fixture; 938/938 states, 116 functions, 23 overflow slots; runtime `stress 2 63 182 182`.
 - Sample 6: nested function ownership root -> outer -> inner; runtime `theory 8 10 5`.
 - Sample 7: conditional shadowing + early return + captured closure; deterministic seeds 1 and 3 both parity-tested.
 - Sample 8: ordinary register cleanup/ownership handoff; proves explicit source nil vs compiler cleanup distinction.
@@ -631,6 +639,7 @@ without producing unrelated locals.
 `b7f6185 Schedule overflow VM registers`
 `7442545 Document overflow register scheduling`
 `bf7b107 Run semantic naming with VM helpers`
+`edc805b Restore paired samples 2 through 5`
 
 ### New-chat operating instruction
 
