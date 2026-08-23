@@ -80,13 +80,6 @@ function rewriteExpression(source, expression, latestVersions, usedVersions = nu
     return applyTextEdits(text, edits, start);
 }
 
-function lineIndentAt(source, offset) {
-    const lineStart = source.lastIndexOf("\n", Math.max(0, offset - 1)) + 1;
-    const prefix = source.slice(lineStart, offset);
-    const match = prefix.match(/^[\t ]*/);
-    return match ? match[0] : "";
-}
-
 function findLastSingleWrites(statements, names) {
     const last = new Map();
     for (let index = 0; index < statements.length; index++) {
@@ -424,30 +417,12 @@ function versionVmBlockRegisters(source, ast) {
                     start: statement.range[0],
                     end: statement.range[1],
                     replacement: `local ${plan.newName} = ${rhs}`,
-                    versionName: plan.newName,
                 });
                 latestVersions.set(plan.originalName, plan.newName);
                 continue;
             }
         }
 
-    }
-
-    if (crossBlockUsedVersions.size > 0) {
-        for (const edit of edits) {
-            if (edit.versionName && crossBlockUsedVersions.has(edit.versionName)) {
-                edit.replacement = edit.replacement.replace(/^local /, "");
-            }
-        }
-        const versionOrder = new Map(versions.map((item, index) => [item.newName, index]));
-        const hoisted = [...crossBlockUsedVersions].sort((left, right) => versionOrder.get(left) - versionOrder.get(right));
-        const newline = source.includes("\r\n") ? "\r\n" : "\n";
-        const indent = lineIndentAt(source, registerDeclaration.statement.range[0]);
-        edits.push({
-            start: registerDeclaration.statement.range[1],
-            end: registerDeclaration.statement.range[1],
-            replacement: newline + indent + "local " + hoisted.join(", "),
-        });
     }
 
     if (edits.length === 0) {
