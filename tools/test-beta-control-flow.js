@@ -278,6 +278,188 @@ assert(sharedContinuationEarlyReturn.source.indexOf("markW()") < sharedContinuat
 assert(!sharedContinuationEarlyReturn.source.includes("state ="));
 parseLua(sharedContinuationEarlyReturn.source, "<beta-cf-shared-continuation-output>");
 
+
+const nestedClosureRegions = solveBetaControlFlow(ast, {
+    applied: true,
+    graph: {
+        cfgComplete: true,
+        entries: [1, 20],
+        states: [
+            {
+                id: 1,
+                predecessors: [],
+                successors: [],
+                operations: [
+                    {
+                        kind: "version-define",
+                        emittedTarget: "r_v1_1",
+                        emittedText: "local r_v1_1 = createClosure7(20, {})",
+                        rhs: "createClosure7(20, {})",
+                        reads: [],
+                    },
+                    {
+                        kind: "version-define",
+                        emittedTarget: "r_v2_1",
+                        emittedText: "local r_v2_1 = r_v1_1(3, 4)",
+                        rhs: "r_v1_1(3, 4)",
+                        reads: ["r_v1_1"],
+                    },
+                    {
+                        kind: "return-payload",
+                        terminalCompilerReturnPayload: true,
+                        returnExpressions: [],
+                        emittedText: "ReturnVal = {}",
+                        rhs: "{}",
+                        reads: [],
+                    },
+                    {
+                        kind: "state-transition",
+                        emittedTarget: "state",
+                        emittedText: "state = nil",
+                        rhs: "nil",
+                        reads: [],
+                    },
+                ],
+            },
+            {
+                id: 20,
+                predecessors: [],
+                successors: [21],
+                operations: [
+                    {
+                        kind: "version-define",
+                        emittedTarget: "r_v3_1",
+                        emittedText: "local r_v3_1 = args[1]",
+                        rhs: "args[1]",
+                        reads: [],
+                    },
+                    {
+                        kind: "version-define",
+                        emittedTarget: "r_v4_1",
+                        emittedText: "local r_v4_1 = args[2]",
+                        rhs: "args[2]",
+                        reads: [],
+                    },
+                    {
+                        kind: "state-transition",
+                        emittedTarget: "state",
+                        emittedText: "state = 21",
+                        rhs: "21",
+                        reads: [],
+                    },
+                ],
+            },
+            {
+                id: 21,
+                predecessors: [20],
+                successors: [],
+                operations: [
+                    {
+                        kind: "version-define",
+                        emittedTarget: "r_v5_1",
+                        emittedText: "local r_v5_1 = r_v3_1 + r_v4_1",
+                        rhs: "r_v3_1 + r_v4_1",
+                        reads: ["r_v3_1", "r_v4_1"],
+                    },
+                    {
+                        kind: "return-payload",
+                        terminalCompilerReturnPayload: true,
+                        returnExpressions: ["r_v5_1"],
+                        emittedText: "ReturnVal = { r_v5_1 }",
+                        rhs: "{ r_v5_1 }",
+                        reads: ["r_v5_1"],
+                    },
+                    {
+                        kind: "state-transition",
+                        emittedTarget: "state",
+                        emittedText: "state = nil",
+                        rhs: "nil",
+                        reads: [],
+                    },
+                ],
+            },
+        ],
+    },
+});
+assert.equal(nestedClosureRegions.applied, true);
+assert.equal(nestedClosureRegions.mode, "closure-regions");
+assert.equal(nestedClosureRegions.entryState, 1);
+assert.equal(nestedClosureRegions.stateCount, 3);
+assert.equal(nestedClosureRegions.closureRegionCount, 2);
+assert.equal(nestedClosureRegions.inlinedClosureFactoryCount, 1);
+assert(nestedClosureRegions.source.includes("local r_v1_1 = function(...)"));
+assert(nestedClosureRegions.source.includes("local args = { ... }"));
+assert(nestedClosureRegions.source.includes("local r_v3_1 = args[1]"));
+assert(nestedClosureRegions.source.includes("local r_v4_1 = args[2]"));
+assert(nestedClosureRegions.source.includes("return r_v5_1"));
+assert(!nestedClosureRegions.source.includes("createClosure7("));
+assert(!nestedClosureRegions.source.includes("state ="));
+assert(!nestedClosureRegions.source.includes("ReturnVal ="));
+parseLua(nestedClosureRegions.source, "<beta-cf-nested-closure-output>");
+
+const capturedClosureRejected = solveBetaControlFlow(ast, {
+    applied: true,
+    graph: {
+        cfgComplete: true,
+        entries: [1, 2],
+        states: [
+            {
+                id: 1,
+                predecessors: [],
+                successors: [],
+                operations: [
+                    {
+                        kind: "version-define",
+                        emittedTarget: "r_v1_1",
+                        emittedText: "local r_v1_1 = createClosure4(2, { r_v9_1 })",
+                        rhs: "createClosure4(2, { r_v9_1 })",
+                        reads: ["r_v9_1"],
+                    },
+                    {
+                        kind: "return-payload",
+                        terminalCompilerReturnPayload: true,
+                        returnExpressions: [],
+                        emittedText: "ReturnVal = {}",
+                        rhs: "{}",
+                        reads: [],
+                    },
+                    {
+                        kind: "state-transition",
+                        emittedTarget: "state",
+                        emittedText: "state = nil",
+                        rhs: "nil",
+                        reads: [],
+                    },
+                ],
+            },
+            {
+                id: 2,
+                predecessors: [],
+                successors: [],
+                operations: [
+                    {
+                        kind: "return-payload",
+                        terminalCompilerReturnPayload: true,
+                        returnExpressions: [],
+                        emittedText: "ReturnVal = {}",
+                        rhs: "{}",
+                        reads: [],
+                    },
+                    {
+                        kind: "state-transition",
+                        emittedTarget: "state",
+                        emittedText: "state = nil",
+                        rhs: "nil",
+                        reads: [],
+                    },
+                ],
+            },
+        ],
+    },
+});
+assert.equal(capturedClosureRejected.applied, false);
+assert(capturedClosureRejected.reason.includes("capture reconstruction is not implemented"));
+
 const cyclic = solveBetaControlFlow(ast, {
     applied: true,
     graph: {

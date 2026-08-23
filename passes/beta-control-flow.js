@@ -795,6 +795,276 @@ function solveAcyclicStructured(originalAst, graph) {
     };
 }
 
+
+function parseClosureFactoryCall(rhs) {
+    const parsed = parseTransitionExpression(rhs);
+    const expression = parsed?.expression;
+    if (expression?.type !== "CallExpression" || !isIdentifier(expression.base)) return null;
+    if (!/^createClosure(?:\d+)?$/.test(expression.base.name)) return null;
+    const args = expression.arguments || [];
+    const entry = numericValue(args[0]);
+    const captures = args[1];
+    if (entry === null || captures?.type !== "TableConstructorExpression") return null;
+    return {
+        factoryName: expression.base.name,
+        entry,
+        captureCount: (captures.fields || []).length,
+    };
+}
+
+function partitionClosureRegions(graph) {
+    const entries = [...graph.entries];
+    const entrySet = new Set(entries);
+    const stateById = new Map(graph.states.map(state => [state.id, state]));
+    const ownerByState = new Map();
+
+    for (const entry of entries) {
+        const stack = [entry];
+        const visited = new Set();
+        while (stack.length) {
+            const stateId = stack.pop();
+            if (visited.has(stateId)) continue;
+            visited.add(stateId);
+            const state = stateById.get(stateId);
+            if (!state) return { error: `Closure entry ${entry} reaches missing state ${stateId}` };
+
+            if (stateId !== entry && entrySet.has(stateId)) {
+                return { error: `Closure entry ${entry} transitions into separate closure entry ${stateId}` };
+            }
+
+            const owner = ownerByState.get(stateId);
+            if (owner !== undefined && owner !== entry) {
+                return { error: `State ${stateId} is reachable from closure entries ${owner} and ${entry}` };
+            }
+            ownerByState.set(stateId, entry);
+
+            for (const successor of state.successors || []) stack.push(successor);
+        }
+    }
+
+    if (ownerByState.size !== graph.states.length) {
+        return { error: `Closure-region recovery owns ${ownerByState.size}/${graph.states.length} states` };
+    }
+
+    return { ownerByState, stateById };
+}
+
+function collectClosureFactorySites(graph, ownerByState) {
+    const entrySet = new Set(graph.entries);
+    const sites = [];
+    for (const state of graph.states) {
+        const parentEntry = ownerByState.get(state.id);
+        for (const operation of state.operations || []) {
+            const call = parseClosureFactoryCall(operation.rhs);
+            if (!call || !entrySet.has(call.entry)) continue;
+            sites.push({
+                stateId: state.id,
+                parentEntry,
+                operation,
+                ...call,
+            });
+        }
+    }
+    return sites;
+}
+
+function closureSolveOrder(entries, childEntriesByParent) {
+    const order = [];
+    const visiting = new Set();
+    const visited = new Set();
+
+    function visit(entry) {
+        if (visited.has(entry)) return null;
+        if (visiting.has(entry)) return `Closure-entry dependency cycle includes ${entry}`;
+        visiting.add(entry);
+        for (const child of childEntriesByParent.get(entry) || []) {
+            const error = visit(child);
+            if (error) return error;
+        }
+        visiting.delete(entry);
+        visited.add(entry);
+        order.push(entry);
+        return null;
+    }
+
+    for (const entry of entries) {
+        const error = visit(entry);
+        if (error) return { error };
+    }
+    return { order };
+}
+
+function presentedBody(source) {
+    const marker = "\n\n--body\n\n";
+    const index = String(source).indexOf(marker);
+    if (index < 0) return null;
+    return String(source).slice(index + marker.length).trimEnd();
+}
+
+function nestedFunctionExpression(bodyText) {
+    const body = String(bodyText || "").trim();
+    const lines = [
+        "function(...)",
+        "    --headers",
+        "",
+        "    local args = { ... }",
+        "",
+        "    --body",
+    ];
+    if (body) lines.push("", indentText(body, 1));
+    lines.push("end");
+    return lines.join("\n");
+}
+
+function replaceClosureFactoryOperation(operation, functionExpression) {
+    const text = String(operationText(operation) || "").trimStart();
+    const target = operation?.emittedTarget;
+    if (!target) return null;
+    const localPrefix = text.startsWith("local ") ? "local " : "";
+    return {
+        ...operation,
+        rhs: functionExpression,
+        emittedText: `${localPrefix}${target} = ${functionExpression}`,
+        reads: [],
+        returnSinkSafe: false,
+    };
+}
+
+function regionGraph(graph, entry, ownerByState, solvedBodies) {
+    const states = [];
+    for (const state of graph.states) {
+        if (ownerByState.get(state.id) !== entry) continue;
+        const operations = [];
+        for (const operation of state.operations || []) {
+            const call = parseClosureFactoryCall(operation.rhs);
+            if (call && solvedBodies.has(call.entry)) {
+                if (call.captureCount !== 0) {
+                    return { error: `Closure entry ${call.entry} has ${call.captureCount} capture value(s); capture reconstruction is not implemented` };
+                }
+                const replacement = replaceClosureFactoryOperation(
+                    operation,
+                    nestedFunctionExpression(solvedBodies.get(call.entry))
+                );
+                if (!replacement) {
+                    return { error: `Closure factory for entry ${call.entry} has no replaceable beta assignment target` };
+                }
+                operations.push(replacement);
+            } else {
+                operations.push({ ...operation });
+            }
+        }
+        const predecessors = (state.predecessors || []).filter(id => ownerByState.get(id) === entry);
+        const successors = [...(state.successors || [])];
+        if (successors.some(id => ownerByState.get(id) !== entry)) {
+            return { error: `Closure entry ${entry} has a CFG edge into another closure region` };
+        }
+        states.push({ ...state, predecessors, successors, operations });
+    }
+    return {
+        graph: {
+            ...graph,
+            entries: [entry],
+            states,
+        },
+    };
+}
+
+function solveSingleEntryControlFlow(originalAst, graph) {
+    if (graph.entries.length !== 1) {
+        return { applied: false, reason: "Internal beta CF region must have exactly one entry" };
+    }
+    if (graph.states.length === 1) return solveSingleState(originalAst, graph);
+    return solveAcyclicStructured(originalAst, graph);
+}
+
+function solveClosureRegions(originalAst, graph) {
+    const partition = partitionClosureRegions(graph);
+    if (partition.error) return { applied: false, reason: partition.error };
+
+    const sites = collectClosureFactorySites(graph, partition.ownerByState);
+    const referencedEntries = new Set(sites.map(site => site.entry));
+    const rootEntries = graph.entries.filter(entry => !referencedEntries.has(entry));
+    if (rootEntries.length !== 1) {
+        return {
+            applied: false,
+            reason: `Beta closure solving requires one root entry (found ${rootEntries.length})`,
+        };
+    }
+    const rootEntry = rootEntries[0];
+
+    const childEntriesByParent = new Map(graph.entries.map(entry => [entry, new Set()]));
+    const parentByChildEntry = new Map();
+    for (const site of sites) {
+        if (site.parentEntry === undefined) {
+            return { applied: false, reason: `Closure factory for entry ${site.entry} is outside an owned state region` };
+        }
+        const priorParent = parentByChildEntry.get(site.entry);
+        if (priorParent !== undefined && priorParent !== site.parentEntry) {
+            return { applied: false, reason: `Closure entry ${site.entry} has multiple structural parents (${priorParent}, ${site.parentEntry})` };
+        }
+        parentByChildEntry.set(site.entry, site.parentEntry);
+        if (site.captureCount !== 0) {
+            return {
+                applied: false,
+                reason: `Closure entry ${site.entry} has ${site.captureCount} capture value(s); capture reconstruction is not implemented`,
+            };
+        }
+        childEntriesByParent.get(site.parentEntry).add(site.entry);
+    }
+
+    for (const entry of graph.entries) {
+        if (entry === rootEntry) continue;
+        if (!referencedEntries.has(entry)) {
+            return { applied: false, reason: `Closure entry ${entry} has no structurally proven parent factory call` };
+        }
+    }
+
+    const ordered = closureSolveOrder(graph.entries, childEntriesByParent);
+    if (ordered.error) return { applied: false, reason: ordered.error };
+
+    const solvedBodies = new Map();
+    const solvedResults = new Map();
+
+    for (const entry of ordered.order) {
+        const region = regionGraph(graph, entry, partition.ownerByState, solvedBodies);
+        if (region.error) return { applied: false, reason: region.error };
+        const solved = solveSingleEntryControlFlow(originalAst, region.graph);
+        if (!solved.applied) {
+            return { applied: false, reason: `Closure entry ${entry}: ${solved.reason}` };
+        }
+        const bodyText = presentedBody(solved.source);
+        if (bodyText === null) {
+            return { applied: false, reason: `Closure entry ${entry} produced no structured body section` };
+        }
+        solvedBodies.set(entry, bodyText);
+        solvedResults.set(entry, solved);
+    }
+
+    const rootResult = solvedResults.get(rootEntry);
+    if (!rootResult) return { applied: false, reason: "Root closure entry was not solved" };
+
+    const results = [...solvedResults.values()];
+    const sum = key => results.reduce((total, result) => total + (result[key] || 0), 0);
+
+    return {
+        ...rootResult,
+        mode: "closure-regions",
+        entryState: rootEntry,
+        stateCount: graph.states.length,
+        statementCount: sum("statementCount"),
+        branchCount: sum("branchCount"),
+        joinCount: sum("joinCount"),
+        guardBranchCount: sum("guardBranchCount"),
+        terminalReturnCount: sum("terminalReturnCount"),
+        terminalReturnPayloadSunk: results.some(result => result.terminalReturnPayloadSunk),
+        terminalReturnPayloadSunkCount: sum("terminalReturnPayloadSunkCount"),
+        terminalReturnLowered: results.every(result => result.terminalReturnLowered),
+        terminalReturnText: null,
+        closureRegionCount: graph.entries.length,
+        inlinedClosureFactoryCount: sites.length,
+    };
+}
+
 function solveBetaControlFlow(originalAst, betaResult) {
     if (!betaResult?.graph || !betaResult.applied) {
         return { applied: false, reason: "Beta register analysis is unavailable" };
@@ -803,11 +1073,8 @@ function solveBetaControlFlow(originalAst, betaResult) {
     if (!graph.cfgComplete) {
         return { applied: false, reason: "Beta CFG is incomplete" };
     }
-    if (graph.entries.length !== 1) {
-        return { applied: false, reason: "Beta CF currently requires exactly one CFG entry" };
-    }
-    if (graph.states.length === 1) return solveSingleState(originalAst, graph);
-    return solveAcyclicStructured(originalAst, graph);
+    if (graph.entries.length === 1) return solveSingleEntryControlFlow(originalAst, graph);
+    return solveClosureRegions(originalAst, graph);
 }
 
 module.exports = {
