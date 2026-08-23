@@ -1,0 +1,290 @@
+return (function(...)
+    local J = {
+        "LF3UOxr=",
+        "NIykp+13Obd1/CdeqA==",
+        "Vz/YNYHM/+VKOqlaOc==",
+        "lYeGJY/R",
+        "NG==",
+        "VkjMLV3tl+e7YmdN",
+        "bDjxJG==",
+        "uF/o/zv9YVf69SVSlkG=",
+        "bDjENYa=",
+        "bDjUOzvdZA==",
+        "pBVd",
+        "ZY1U"
+    }
+    for b, O in ipairs({
+        {
+            1,
+            12
+        },
+        {
+            1,
+            2
+        },
+        {
+            3,
+            12
+        }
+    }) do
+        while O[1] < O[2] do
+            J[O[1]], J[O[2]], O[1], O[2] = J[O[2]], J[O[1]], O[1] + (1), O[2] - (1)
+        end
+    end
+    local function b(b)
+        return J[b + (42488)]
+    end
+    do
+        local b = string.len
+        local O = math.floor
+        local Z = type
+        local p = {
+            X = 63,
+            S = 55,
+            I = 36,
+            g = 11,
+            K = 8,
+            l = 29,
+            v = 17,
+            ["8"] = 62,
+            ["0"] = 34,
+            ["7"] = 14,
+            ["3"] = 9,
+            Q = 59,
+            j = 61,
+            a = 56,
+            V = 21,
+            ["/"] = 13,
+            r = 16,
+            f = 1,
+            H = 33,
+            G = 48,
+            D = 53,
+            p = 26,
+            T = 40,
+            J = 24,
+            Z = 30,
+            ["6"] = 46,
+            e = 57,
+            ["+"] = 52,
+            E = 44,
+            R = 43,
+            ["5"] = 58,
+            C = 20,
+            k = 54,
+            M = 15,
+            t = 42,
+            x = 39,
+            c = 32,
+            ["1"] = 5,
+            i = 49,
+            h = 51,
+            ["4"] = 50,
+            B = 6,
+            z = 38,
+            A = 0,
+            ["9"] = 12,
+            L = 28,
+            d = 37,
+            U = 41,
+            ["2"] = 35,
+            O = 27,
+            q = 19,
+            F = 7,
+            N = 25,
+            m = 4,
+            o = 47,
+            y = 45,
+            P = 10,
+            b = 23,
+            w = 3,
+            s = 31,
+            W = 2,
+            u = 18,
+            n = 60,
+            Y = 22
+        }
+        local Q = table.insert
+        local W = J
+        local h = string.sub
+        local N = string.char
+        local m = table.concat
+        for J = 1, #W, 1 do
+            local r = W[J]
+            if Z(r) == "string" then
+                local Z = b(r)
+                local d = {}
+                local P = 1
+                local v = 0
+                local T = 0
+                while P <= Z do
+                    local J = h(r, P, P)
+                    local b = p[J]
+                    if b then
+                        v = v + b * (64) ^ ((3) - T)
+                        T = T + (1)
+                        if T == 4 then
+                            T = 0
+                            local J = O(v / (65536))
+                            local b = O((v % (65536)) / (256))
+                            local Z = v % (256)
+                            Q(d, N(J, b, Z))
+                            v = 0
+                        end
+                    elseif J == "=" then
+                        Q(d, N(O(v / (65536))))
+                        if P >= Z or h(r, P + (1), P + (1)) ~= "=" then
+                            Q(d, N(O((v % (65536)) / (256))))
+                        end
+                        break
+                    end
+                    P = P + (1)
+                end
+                W[J] = m(d)
+            end
+        end
+    end
+    return (function(J, Z, p, Q, W, h, N, u, P, d, S, r, q, O, m, D, k, T, v)
+        r, O, k, m, d, T, D, u, S, q, v, P = {}, function(O, p, Q, W)
+            local m, r, N, d
+            while O do
+                if O < 11842736 then
+                    if O < 8965511 then
+                        m = p
+                        O = k(11922475, {})
+                        r = O
+                        O = {}
+                        N = b(-42487)
+                        d = O
+                        O = D(14386416, {})
+                        d[N] = O
+                        N = u(11788429, {})
+                        O = b(-42486)
+                        d[O] = N
+                        O = b(-42486)
+                        O = d[O]
+                        O = O(d)
+                        O = b(-42487)
+                        r = nil
+                        O = d[O]
+                        N = {}
+                        O = O(d)
+                        d = nil
+                        O = J[b(-42478)]
+                    else
+                        m = p[1]
+                        r = b(-42486)
+                        N = b(-42485)
+                        O = J[N]
+                        N = O(r, m)
+                        m = nil
+                        O = J[b(-42483)]
+                        N = {}
+                    end
+                else
+                    if O < 12007380 then
+                        N = b(-42485)
+                        O = J[N]
+                        m = b(-42481)
+                        N = O(m)
+                        O = J[b(-42484)]
+                        N = {}
+                    else
+                        m = p[1]
+                        N = b(-42485)
+                        r = b(-42487)
+                        O = J[N]
+                        N = O(r, m)
+                        N = {}
+                        O = J[b(-42480)]
+                        m = nil
+                    end
+                end
+            end
+            O = #W
+            return Z(N)
+        end, function(J, b)
+            local Z = v(b)
+            local p = function(p, Q, W, h)
+                return O(J, {
+                    p,
+                    Q,
+                    W,
+                    h
+                }, b, Z)
+            end
+            return p
+        end, {}, function()
+            P = P + (1)
+            r[P] = 1
+            return P
+        end, function(J)
+            local b, O = 1, J[1]
+            while O do
+                r[O], b = r[O] - (1), (1) + b
+                if r[O] == 0 then
+                    r[O], m[O] = nil, nil
+                end
+                O = J[b]
+            end
+        end, function(J, b)
+            local Z = v(b)
+            local p = function(p, Q, W, h, N)
+                return O(J, {
+                    p,
+                    Q,
+                    W,
+                    h,
+                    N
+                }, b, Z)
+            end
+            return p
+        end, function(J, b)
+            local Z = v(b)
+            local p = function(p, Q, W)
+                return O(J, {
+                    p,
+                    Q,
+                    W
+                }, b, Z)
+            end
+            return p
+        end, function(J)
+            r[J] = r[J] - (1)
+            if 0 == r[J] then
+                r[J], m[J] = nil, nil
+            end
+        end, function(J, b)
+            local Z = v(b)
+            local p = function(...)
+                return O(J, {
+                    ...
+                }, b, Z)
+            end
+            return p
+        end, function(J)
+            for b = 1, #J, 1 do
+                r[J[b]] = r[J[b]] + (1)
+            end
+            if p then
+                local O = p(true)
+                local Z = W(O)
+                Z[b(-42476)], Z[b(-42479)], Z[b(-42477)] = J, T, function()
+                    return 978288
+                end
+                return O
+            else
+                return Q({}, {
+                    [b(-42479)] = T,
+                    [b(-42476)] = J,
+                    [b(-42477)] = function()
+                        return 978288
+                    end
+                })
+            end
+        end, 0
+        return (q(8411032, {}))(Z(N))
+    end)(getfenv and getfenv() or _ENV, unpack or table[b(-42482)], newproxy, setmetatable, getmetatable, select, {
+        ...
+    })
+end)(...)
