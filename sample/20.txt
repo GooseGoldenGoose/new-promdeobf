@@ -1,985 +1,986 @@
 return (function(...)
-    local M = {
-        "KXhpc5urzdc2OvxWKz==",
-        "EMJ4z9bLZN4e55CpKm==",
-        "8Jqz7J2ajwJ7KYcE",
-        "xdkUxdJL",
-        "cJ8Oj74CS7MpcEwL",
-        "5wJE5a==",
-        "RLzrQNM5EX4+RMPa",
-        "SPVUGNOB8EqJjVJY",
-        "FdMgO971KNJNjVhoFm==",
-        "xdcHj9jISYGB8P1Uzdu=",
-        "vVkhR3cMZT==",
-        "Gd7y8SOL",
-        "GY4hRXz=",
-        "xz==",
-        "+XjsR9Je7Phe8X7sON0=",
-        "FX4fGNbxc77wxSyV",
-        "8m==",
-        "8wy9KwOecB7e7VOWEa==",
-        "vVky8SC=",
-        "5PJxG548GE8CGdCd",
-        "+LPaS58BcS8AFdJUFz==",
-        "8d7L837Ujm==",
-        "5L4W5YhC7wyBzXJd8ET=",
-        "KfJXZ7MBGSM/+dWx",
-        "x3MWOM7g+7OxS31J",
-        "z7qHZ7J3RY4NGf7sOXP=",
-        "jNkBjY4hR3G=",
-        "FwVc+YhOxBbFKY725z==",
-        "Kd8f7BMoj5yr7f8FEa==",
-        "jN7BjNMU8rqyxSWXjSJX8+kyKS4rxv4W2N4bGdMHGa==",
-        "S7mrSN4F5N29RP0LSXF=",
-        "7LFV8P5LGEO1GS1z",
-        "552rK54pKX41SXq3",
-        "vVkXxa==",
-        "ZHqAcN8u7V8sRfjaST==",
-        "Gwwd7dJNjd0r8vuacvP=",
-        "KLCdEfj9zdVzZ7cq8w0=",
-        "j55VjEM1c9cwjMOIEf2=",
-        "KwMhFY4CO9qHRN4b7vz=",
-        "jLh7RSjVGMOE5PuW",
-        "jSWaxSOo",
-        "K7O3KMq1xXO9Rw17Fdu=",
-        "c3hzELkSz9jEG9ur",
-        "FXOpGPJCZYOej5k2Ez==",
-        "+Sk4Kdpzz7PrKXOy5d2=",
-        "x3mBKLVqGBOz8LbDSm==",
-        "2a==",
-        "+LcbcJTWSwJYjfbq",
-        "7SO8+fM4RPPCGYcYxSL=",
-        "zvONKNWKK77J5PbO",
-        "xvOB8v4L",
-        "gT==",
-        "8d7L",
-        "7NbK5JcU+ET98382ZfP="
+    local Z = {
+        "tJZjiWbY9lbSjjzQYR==",
+        "7oGfYwHlixfQtMGyH69=",
+        "HkLWtU8QLoxcjAG2",
+        "7kbStG88jjLGLUHai2==",
+        "9kZx4+zOM+VfHAbX8R==",
+        "N2==",
+        "5Ab6MkH3mAb4JD8rM+S=",
+        "8U3Y86bcixbK7Y8D",
+        "ioYh4DfstebeFAOS",
+        "coVyf2==",
+        "H+YUH+GuLspSfMZyHMxyL5VSmMzsfczZN+z3iWGwi2==",
+        "jJLxiWGC/jp65yLmHP==",
+        "fWVufWxe",
+        "vR==",
+        "JAH/4M8eHUkCLAaDYt==",
+        "ilzb7yt=",
+        "7DiDtMQ8teVtFybrYt==",
+        "8GPU4xxeM6xb8eb4YyR=",
+        "JkxjJ2==",
+        "Lxp8LcxJ4+HtLXHr52==",
+        "HMZ2fM8B",
+        "fc8ULcze",
+        "FkHO/kGo4XGrfop+FR==",
+        "LWYe",
+        "fWZBmxiotM4WFXzZ",
+        "fGGh5Wxe4ez99ALQ9R==",
+        "jDb5il3UiyLsYAYy",
+        "coVb764GFR==",
+        "9GP2mMLBYxxSYcYt",
+        "iWYSLM8e",
+        "coVSLMC=",
+        "8Up+8DxyMYxZ7GLf7Gf=",
+        "LP==",
+        "mGfeiYYx8GHQiXL3",
+        "mXxY56L+8AYXJAxa4lJ=",
+        "9YLOiXpBi6ZC/cYJ",
+        "MkJo/MtsMjLhFX8p",
+        "/J82iM8g8W4eicpg",
+        "7exciJGWjYxU9x8GJt==",
+        "7WokY6AUmkGLJoGX7Yt=",
+        "t63DHGHcjXxwfwGt",
+        "tjAotULxFAG2/M3h",
+        "8MO+JXNU4YYYjUzE9c9=",
+        "mlbJJ+39fwz9Hext",
+        "M+ztmj9Q9DHc/xLvjAS=",
+        "5+VEjxzk7W3AfMts8R==",
+        "7+kCjxYN4xL4HD3h",
+        "LWYeL6YuHP==",
+        "H+VUHlzb76i=",
+        "HkzCiy8g86Hgjy8NHGa=",
+        "ilYz7wpnJk4fHXNo969=",
+        "LJx88WOC5ALQMXY9",
+        "FwtUMlpXtyzwFxLJt2=="
     }
-    for O, x in ipairs({
+    local function R(R)
+        return Z[R + (27988)]
+    end
+    for R, D in ipairs({
         {
             1,
-            54
+            53
         },
         {
             1,
-            31
+            9
         },
         {
-            32,
-            54
+            10,
+            53
         }
     }) do
-        while x[1] < x[2] do
-            M[x[1]], M[x[2]], x[1], x[2] = M[x[2]], M[x[1]], x[1] + (1), x[2] - (1)
+        while D[1] < D[2] do
+            Z[D[1]], Z[D[2]], D[1], D[2] = Z[D[2]], Z[D[1]], D[1] + (1), D[2] - (1)
         end
     end
-    local function O(O)
-        return M[O + (5757)]
-    end
     do
-        local O = string.len
-        local x = M
-        local u = string.char
-        local F = table.insert
-        local r = table.concat
-        local Y = math.floor
-        local V = {
-            R = 27,
-            a = 48,
-            o = 43,
-            l = 31,
-            ["5"] = 20,
-            B = 51,
-            x = 24,
-            z = 16,
-            v = 23,
-            L = 52,
-            ["0"] = 60,
-            Y = 7,
-            k = 61,
-            y = 44,
-            J = 5,
-            Z = 30,
-            X = 39,
-            M = 37,
-            P = 36,
-            w = 4,
-            ["4"] = 9,
-            d = 54,
-            p = 49,
-            ["6"] = 2,
-            A = 58,
-            ["+"] = 18,
-            g = 11,
-            V = 53,
-            j = 29,
-            f = 3,
-            n = 63,
-            t = 62,
-            q = 1,
-            r = 50,
-            S = 22,
-            ["8"] = 25,
-            ["9"] = 55,
-            c = 17,
-            b = 33,
-            ["1"] = 45,
-            T = 0,
-            F = 12,
-            D = 34,
-            H = 35,
-            I = 15,
-            E = 19,
-            G = 28,
-            u = 40,
-            Q = 14,
-            ["3"] = 38,
+        local R = string.char
+        local D = table.insert
+        local u = type
+        local t = {
+            v = 11,
+            A = 36,
+            c = 23,
+            U = 51,
+            ["8"] = 13,
+            ["6"] = 38,
+            I = 59,
+            ["0"] = 63,
+            x = 5,
+            K = 34,
+            j = 19,
+            D = 55,
+            H = 29,
+            R = 0,
+            Z = 57,
+            o = 53,
+            S = 44,
+            e = 52,
+            ["7"] = 27,
+            a = 40,
+            Q = 49,
+            ["3"] = 33,
+            h = 2,
+            E = 47,
+            ["5"] = 18,
+            O = 45,
+            W = 54,
+            ["2"] = 48,
+            T = 62,
+            P = 32,
+            n = 58,
+            ["9"] = 12,
+            ["1"] = 31,
+            m = 26,
+            p = 1,
+            y = 39,
+            ["4"] = 17,
+            J = 20,
+            d = 60,
+            X = 3,
+            f = 24,
+            z = 9,
+            M = 22,
             C = 56,
-            K = 26,
-            ["2"] = 8,
-            N = 6,
-            s = 10,
-            m = 32,
-            U = 46,
-            e = 47,
-            i = 59,
-            ["/"] = 42,
-            O = 13,
-            W = 57,
-            h = 41,
-            ["7"] = 21
+            r = 10,
+            L = 25,
+            B = 43,
+            ["+"] = 6,
+            u = 46,
+            ["/"] = 14,
+            V = 61,
+            F = 30,
+            t = 16,
+            i = 28,
+            w = 35,
+            l = 7,
+            N = 8,
+            k = 4,
+            g = 15,
+            G = 37,
+            q = 42,
+            Y = 21,
+            b = 41,
+            s = 50
         }
-        local Q = type
-        local b = string.sub
-        for M = 1, #x, 1 do
-            local G = x[M]
-            if Q(G) == "string" then
-                local Q = O(G)
-                local f = {}
-                local l = 1
-                local X = 0
-                local R = 0
-                while l <= Q do
-                    local M = b(G, l, l)
-                    local O = V[M]
-                    if O then
-                        X = X + O * (64) ^ ((3) - R)
-                        R = R + (1)
-                        if R == 4 then
-                            R = 0
-                            local M = Y(X / (65536))
-                            local O = Y((X % (65536)) / (256))
-                            local x = X % (256)
-                            F(f, u(M, O, x))
-                            X = 0
+        local N = string.len
+        local M = table.concat
+        local Q = math.floor
+        local F = Z
+        local v = string.sub
+        for Z = 1, #F, 1 do
+            local g = F[Z]
+            if u(g) == "string" then
+                local u = N(g)
+                local U = {}
+                local w = 1
+                local Y = 0
+                local s = 0
+                while w <= u do
+                    local Z = v(g, w, w)
+                    local N = t[Z]
+                    if N then
+                        Y = Y + N * (64) ^ ((3) - s)
+                        s = s + (1)
+                        if s == 4 then
+                            s = 0
+                            local Z = Q(Y / (65536))
+                            local u = Q((Y % (65536)) / (256))
+                            local t = Y % (256)
+                            D(U, R(Z, u, t))
+                            Y = 0
                         end
-                    elseif M == "=" then
-                        F(f, u(Y(X / (65536))))
-                        if l >= Q or b(G, l + (1), l + (1)) ~= "=" then
-                            F(f, u(Y((X % (65536)) / (256))))
+                    elseif Z == "=" then
+                        D(U, R(Q(Y / (65536))))
+                        if w >= u or v(g, w + (1), w + (1)) ~= "=" then
+                            D(U, R(Q((Y % (65536)) / (256))))
                         end
                         break
                     end
-                    l = l + (1)
+                    w = w + (1)
                 end
-                x[M] = r(f)
+                F[Z] = M(U)
             end
         end
     end
-    return (function(M, u, F, r, Y, V, Q, P, I, x, b, y, X, R, A, G, K, L, f, H, l, t)
-        y, L, l, P, R, X, K, f, b, t, H, A, G, x, I = function(M, O)
-            local u = X(O)
-            local F = function()
-                return x(M, {}, O, u)
+    return (function(Z, u, t, N, M, Q, F, s, g, y, h, D, q, w, Y, L, K, e, v, f, U, k)
+        w, e, K, D, q, y, f, L, Y, s, U, k, g, h, v = 0, function(Z, R)
+            local u = Y(R)
+            local t = function(t)
+                return D(Z, {
+                    t
+                }, R, u)
             end
-            return F
-        end, function(M, O)
-            local u = X(O)
-            local F = function(F, r, Y)
-                return x(M, {
-                    F,
-                    r,
-                    Y
-                }, O, u)
+            return t
+        end, function(Z, R)
+            local u = Y(R)
+            local t = function(t, N, M)
+                return D(Z, {
+                    t,
+                    N,
+                    M
+                }, R, u)
             end
-            return F
-        end, 0, function(M, O)
-            local u = X(O)
-            local F = function(F, r)
-                return x(M, {
-                    F,
-                    r
-                }, O, u)
-            end
-            return F
-        end, function(M)
-            local O, x = 1, M[1]
-            while x do
-                G[x], O = G[x] - (1), (1) + O
-                if 0 == G[x] then
-                    G[x], b[x] = nil, nil
-                end
-                x = M[O]
-            end
-        end, function(M)
-            for O = 1, #M, 1 do
-                G[M[O]] = (1) + G[M[O]]
-            end
-            if F then
-                local x = F(true)
-                local u = Y(x)
-                u[O(-5715)], u[O(-5746)], u[O(-5707)] = M, R, function()
-                    return 2784232
-                end
-                return x
-            else
-                return r({}, {
-                    [O(-5746)] = R,
-                    [O(-5715)] = M,
-                    [O(-5707)] = function()
-                        return 2784232
-                    end
-                })
-            end
-        end, function(M, O)
-            local u = X(O)
-            local F = function(F, r, Y, V, Q)
-                return x(M, {
-                    F,
-                    r,
-                    Y,
-                    V,
-                    Q
-                }, O, u)
-            end
-            return F
-        end, function()
-            l = (1) + l
-            G[l] = 1
-            return l
-        end, {}, function(M, O)
-            local u = X(O)
-            local F = function(F, r, Y, V)
-                return x(M, {
-                    F,
-                    r,
-                    Y,
-                    V
-                }, O, u)
-            end
-            return F
-        end, function(M, O)
-            local u = X(O)
-            local F = function(F)
-                return x(M, {
-                    F
-                }, O, u)
-            end
-            return F
-        end, function(M)
-            G[M] = G[M] - (1)
-            if G[M] == 0 then
-                G[M], b[M] = nil, nil
-            end
-        end, {}, function(x, F, r, Y)
-            local l, D, N, Q, X, a, R, G, p, C
-            while x do
-                if x < 8623523 then
-                    if x < 5529419 then
-                        if x < 2603338 then
-                            if x < 2321992 then
-                                if x < 1748287 then
-                                    if x < 414578 then
-                                        x = H(14765924, {})
-                                        b[r[1]] = x
-                                        x = b[r[1]]
-                                        Q = x()
-                                        x = {
-                                            Q()
+            return t
+        end, function(D, t, N, M)
+            local H, Y, p, J, g, E, s, o, F, P, w
+            while D do
+                if D < 8844939 then
+                    if D < 3827835 then
+                        if D < 1228684 then
+                            if D < 699924 then
+                                if D < 343038 then
+                                    if D < 72262 then
+                                        F = R(-27946)
+                                        g = 5
+                                        D = {
+                                            [F] = g
                                         }
-                                        Q = {
-                                            u(x)
+                                        F = R(-27955)
+                                        g = D
+                                        D = e(13039670, {})
+                                        g[F] = D
+                                        F = R(-27955)
+                                        F = g[F]
+                                        D = {
+                                            F(g)
                                         }
-                                        x = M[O(-5724)]
+                                        F = {
+                                            u(D)
+                                        }
+                                        D = Z[R(-27981)]
                                     else
-                                        x = M[O(-5705)]
-                                        G = F[1]
-                                        l = F[2]
-                                        Q = {
-                                            l
+                                        F = R(-27983)
+                                        D = Z[F]
+                                        F = {
+                                            D(g)
+                                        }
+                                        D = Z[R(-27985)]
+                                        F = {
+                                            u(F)
                                         }
                                     end
                                 else
-                                    x = 2
-                                    G = x
-                                    x = 14986236
+                                    D = 1
+                                    F = 2
+                                    g = D
+                                    D = g - F
+                                    g = D
+                                    F = {
+                                        g
+                                    }
+                                    D = Z[R(-27938)]
                                 end
                             else
-                                if x < 2498526 then
-                                    if x < 2463022 then
-                                        G = 5
-                                        Q = O(-5709)
-                                        x = {
-                                            [Q] = G
+                                if D < 972625 then
+                                    if D < 925225 then
+                                        D = f(14557796, {
+                                            N[1]
+                                        })
+                                        F = {
+                                            D
                                         }
-                                        G = x
-                                        x = K(7112464, {})
-                                        Q = O(-5727)
-                                        G[Q] = x
-                                        Q = O(-5727)
-                                        Q = G[Q]
-                                        x = {
-                                            Q(G)
-                                        }
-                                        Q = {
-                                            u(x)
-                                        }
-                                        x = M[O(-5734)]
+                                        D = Z[R(-27935)]
                                     else
-                                        Q = 2
-                                        x = 1
-                                        G = x
-                                        x = G * Q
-                                        G = x
-                                        Q = {
-                                            G
-                                        }
-                                        x = M[O(-5711)]
+                                        Y = U()
+                                        F = R(-27963)
+                                        H = 2
+                                        J = 3
+                                        D = Z[F]
+                                        w = R(-27968)
+                                        g = t
+                                        F = D(w)
+                                        F = R(-27984)
+                                        D = Z[F]
+                                        F = D()
+                                        s = R(-27957)
+                                        w = F
+                                        F = R(-27966)
+                                        D = L(5613579, {})
+                                        w = nil
+                                        Z[F] = D
+                                        P = 1
+                                        F = K(12561932, {})
+                                        v[Y] = F
+                                        F = Z[s]
+                                        E = v[Y]
+                                        o = E(P)
+                                        E = nil
+                                        p = o == E
+                                        s = F(p)
+                                        s = R(-27957)
+                                        F = Z[s]
+                                        E = v[Y]
+                                        P = 1
+                                        o = E(P, H)
+                                        E = 2
+                                        P = 1
+                                        H = 2
+                                        p = o == E
+                                        s = F(p)
+                                        s = R(-27957)
+                                        F = Z[s]
+                                        E = v[Y]
+                                        o = E(P, H, J)
+                                        E = 2
+                                        p = o == E
+                                        s = F(p)
+                                        s = R(-27957)
+                                        E = f(8257778, {
+                                            Y
+                                        })
+                                        F = Z[s]
+                                        o = E()
+                                        E = 1
+                                        p = o == E
+                                        E = K(11387205, {
+                                            Y
+                                        })
+                                        s = F(p)
+                                        s = R(-27957)
+                                        F = Z[s]
+                                        o = E()
+                                        E = 1
+                                        p = o == E
+                                        E = k(1821836, {
+                                            Y
+                                        })
+                                        s = F(p)
+                                        s = R(-27957)
+                                        F = Z[s]
+                                        o = E()
+                                        E = 1
+                                        p = o == E
+                                        E = q(14964682, {
+                                            Y
+                                        })
+                                        s = F(p)
+                                        s = R(-27957)
+                                        F = Z[s]
+                                        o = E()
+                                        E = 1
+                                        p = o == E
+                                        E = y(12570033, {
+                                            Y
+                                        })
+                                        s = F(p)
+                                        s = R(-27957)
+                                        F = Z[s]
+                                        o = E()
+                                        E = 2
+                                        p = o == E
+                                        s = F(p)
+                                        E = q(11045862, {
+                                            Y
+                                        })
+                                        s = R(-27957)
+                                        F = Z[s]
+                                        o = E()
+                                        E = 2
+                                        p = o == E
+                                        s = F(p)
+                                        s = R(-27957)
+                                        F = Z[s]
+                                        E = k(9176550, {})
+                                        o = E()
+                                        E = 5
+                                        p = o == E
+                                        E = f(11247872, {
+                                            Y
+                                        })
+                                        s = F(p)
+                                        s = R(-27957)
+                                        F = Z[s]
+                                        o = E()
+                                        E = 5
+                                        p = o == E
+                                        s = F(p)
+                                        s = R(-27957)
+                                        F = Z[s]
+                                        E = q(9297471, {})
+                                        o = E()
+                                        E = 2
+                                        p = o == E
+                                        s = F(p)
+                                        s = R(-27957)
+                                        F = Z[s]
+                                        E = y(11745440, {})
+                                        o = E()
+                                        E = nil
+                                        p = o == E
+                                        E = f(11977982, {})
+                                        s = F(p)
+                                        s = R(-27957)
+                                        F = Z[s]
+                                        o = E()
+                                        E = 1
+                                        p = o == E
+                                        s = F(p)
+                                        s = R(-27957)
+                                        F = Z[s]
+                                        E = K(10939078, {})
+                                        o = E()
+                                        E = 2
+                                        p = o == E
+                                        E = f(8517529, {})
+                                        s = F(p)
+                                        s = R(-27957)
+                                        F = Z[s]
+                                        o = E()
+                                        E = 3
+                                        p = o == E
+                                        s = F(p)
+                                        s = R(-27957)
+                                        E = f(445874, {})
+                                        F = Z[s]
+                                        o = E()
+                                        E = -1
+                                        p = o == E
+                                        s = F(p)
+                                        E = q(4050843, {})
+                                        s = R(-27957)
+                                        F = Z[s]
+                                        D = Z[R(-27943)]
+                                        o = E()
+                                        E = 2
+                                        p = o == E
+                                        s = F(p)
+                                        s = R(-27957)
+                                        F = Z[s]
+                                        Y = h(Y)
+                                        E = e(1918424, {})
+                                        o = E()
+                                        E = 0.5
+                                        p = o == E
+                                        s = F(p)
+                                        p = R(-27960)
+                                        s = R(-27963)
+                                        F = Z[s]
+                                        s = F(p)
+                                        F = {}
                                     end
                                 else
-                                    x = 6467797
-                                    Q = 2
-                                    G = Q
+                                    D = v[N[1]]
+                                    F = {
+                                        D
+                                    }
+                                    D = Z[R(-27939)]
                                 end
                             end
                         else
-                            if x < 5016370 then
-                                if x < 3299047 then
-                                    if x < 2903649 then
-                                        x = 1
-                                        G = x
-                                        x = 6467797
+                            if D < 2437756 then
+                                if D < 1836970 then
+                                    if D < 1568200 then
+                                        D = Z[R(-27986)]
+                                        F = {
+                                            g
+                                        }
                                     else
-                                        x = K(16122021, {})
-                                        b[r[1]] = x
-                                        x = b[r[1]]
-                                        Q = x()
-                                        x = {
-                                            Q()
+                                        D = f(9430556, {})
+                                        v[N[1]] = D
+                                        w = 1
+                                        F = v[N[1]]
+                                        g = F(w)
+                                        D = Z[R(-27987)]
+                                        F = {
+                                            g()
                                         }
-                                        Q = {
-                                            u(x)
+                                        F = {
+                                            u(F)
                                         }
-                                        x = M[O(-5741)]
                                     end
                                 else
-                                    x = M[O(-5749)]
-                                    Q = {
-                                        G
+                                    D = 1
+                                    g = D
+                                    F = 2
+                                    D = g / F
+                                    g = D
+                                    D = Z[R(-27975)]
+                                    F = {
+                                        g
                                     }
                                 end
                             else
-                                if x < 5249615 then
-                                    if x < 5149438 then
-                                        x = 1
-                                        G = x
-                                        Q = 2
-                                        x = G / Q
-                                        G = x
-                                        Q = {
-                                            G
+                                if D < 3621816 then
+                                    if D < 2773068 then
+                                        D = Z[R(-27937)]
+                                        F = {
+                                            g
                                         }
-                                        x = M[O(-5726)]
                                     else
-                                        x = b[r[1]]
-                                        Q = {
-                                            x
-                                        }
-                                        x = M[O(-5708)]
+                                        D = 1
+                                        g = D
+                                        D = 2566528
                                     end
                                 else
-                                    Q = b[r[1]]
-                                    G = O(-5709)
-                                    x = Q[G]
-                                    Q = {
-                                        x
+                                    D = nil
+                                    g = D
+                                    D = 1
+                                    w = U()
+                                    v[w] = D
+                                    D = q(15820754, {
+                                        w
+                                    })
+                                    g = D
+                                    F = 2
+                                    w = h(w)
+                                    D = Z[R(-27945)]
+                                    w = F
+                                    F = {
+                                        g
                                     }
-                                    x = M[O(-5737)]
                                 end
                             end
                         end
                     else
-                        if x < 6767872 then
-                            if x < 6275895 then
-                                if x < 5921367 then
-                                    if x < 5835775 then
-                                        x = b[r[1]]
-                                        Q = {
-                                            x
-                                        }
-                                        x = M[O(-5706)]
+                        if D < 7134674 then
+                            if D < 5008812 then
+                                if D < 4258708 then
+                                    if D < 3979363 then
+                                        D = 2
+                                        g = D
+                                        D = 1291990
                                     else
-                                        G = nil
-                                        x = M[O(-5731)]
-                                        Q = {}
+                                        F = 2
+                                        D = 1
+                                        g = D
+                                        D = g * F
+                                        g = D
+                                        F = {
+                                            g
+                                        }
+                                        D = Z[R(-27962)]
                                     end
                                 else
-                                    x = y(15570812, {})
-                                    b[r[1]] = x
-                                    x = b[r[1]]
-                                    Q = {
-                                        x()
+                                    F = {
+                                        g
                                     }
-                                    Q = {
-                                        u(Q)
-                                    }
-                                    x = M[O(-5756)]
+                                    D = Z[R(-27942)]
                                 end
                             else
-                                if x < 6380262 then
-                                    if x < 6357650 then
-                                        x = H(15326280, {})
-                                        G = 1
-                                        b[r[1]] = x
-                                        x = b[r[1]]
-                                        Q = x(G)
-                                        x = {
-                                            Q()
+                                if D < 7121289 then
+                                    if D < 5803757 then
+                                        w = {
+                                            Q(2, u(t))
                                         }
-                                        Q = {
-                                            u(x)
-                                        }
-                                        x = M[O(-5740)]
+                                        g = t[1]
+                                        Y = R(-27949)
+                                        s = R(-27973)
+                                        F = Z[Y]
+                                        Y = F(s, u(w))
+                                        F = 0
+                                        D = Y == F
+                                        D = D and 329936 or 15814889
                                     else
-                                        Q = O(-5753)
-                                        x = M[Q]
-                                        Q = {
-                                            x(G)
+                                        F = {
+                                            g
                                         }
-                                        Q = {
-                                            u(Q)
-                                        }
-                                        x = M[O(-5747)]
+                                        D = Z[R(-27952)]
                                     end
                                 else
-                                    x = M[O(-5723)]
-                                    Q = {
-                                        G
+                                    g = U()
+                                    D = e(8316264, {
+                                        g
+                                    })
+                                    v[g] = t[1]
+                                    F = {
+                                        D()
                                     }
+                                    F = {
+                                        u(F)
+                                    }
+                                    D = Z[R(-27941)]
                                 end
                             end
                         else
-                            if x < 7495927 then
-                                if x < 7464260 then
-                                    if x < 7281317 then
-                                        G = f()
-                                        x = K(14082252, {
-                                            G
-                                        })
-                                        b[G] = F[1]
-                                        Q = {
-                                            x()
+                            if D < 8344417 then
+                                if D < 8315628 then
+                                    if D < 8145480 then
+                                        g = R(-27946)
+                                        F = v[N[1]]
+                                        D = F[g]
+                                        F = {
+                                            D
                                         }
-                                        x = M[O(-5742)]
-                                        Q = {
-                                            u(Q)
-                                        }
+                                        D = Z[R(-27976)]
                                     else
-                                        x = b[r[1]]
-                                        Q = {
-                                            x
+                                        g = U()
+                                        D = 1
+                                        v[g] = D
+                                        D = y(1156591, {
+                                            g
+                                        })
+                                        v[N[1]] = D
+                                        F = v[N[1]]
+                                        w = {
+                                            F()
                                         }
-                                        x = M[O(-5717)]
+                                        F = {
+                                            u(w)
+                                        }
+                                        D = Z[R(-27980)]
                                     end
                                 else
-                                    x = 2
-                                    Q = O(-5712)
-                                    M[Q] = x
-                                    x = M[O(-5718)]
-                                    Q = {}
+                                    F = v[N[1]]
+                                    g = R(-27946)
+                                    D = F[g]
+                                    F = {
+                                        D
+                                    }
+                                    D = Z[R(-27956)]
                                 end
                             else
-                                if x < 8117253 then
-                                    if x < 7862680 then
-                                        x = b[r[1]]
-                                        Q = {
-                                            x
+                                if D < 8641863 then
+                                    if D < 8530485 then
+                                        F = 2
+                                        D = 1
+                                        g = D
+                                        D = g + F
+                                        g = D
+                                        F = {
+                                            g
                                         }
-                                        x = M[O(-5744)]
+                                        D = Z[R(-27936)]
                                     else
-                                        x = y(11825174, {})
-                                        b[r[1]] = x
-                                        x = b[r[1]]
-                                        Q = x()
-                                        x = {
-                                            Q()
-                                        }
-                                        Q = {
-                                            u(x)
-                                        }
-                                        x = M[O(-5745)]
+                                        F = 2
+                                        D = 4621240
+                                        g = F
                                     end
                                 else
-                                    x = 1
-                                    G = x
-                                    x = G and 16627064 or 11168218
+                                    F = {}
+                                    D = Z[R(-27953)]
+                                    g = nil
                                 end
                             end
                         end
                     end
                 else
-                    if x < 12282184 then
-                        if x < 10874618 then
-                            if x < 9046470 then
-                                if x < 8940437 then
-                                    if x < 8905607 then
-                                        G = f()
-                                        x = L(5252042, {
-                                            G
+                    if D < 12492206 then
+                        if D < 10946466 then
+                            if D < 9266021 then
+                                if D < 9070555 then
+                                    if D < 9004908 then
+                                        g = U()
+                                        D = 1
+                                        v[g] = D
+                                        D = f(9065177, {
+                                            g
                                         })
-                                        Q = {
-                                            x
+                                        w = D
+                                        F = {
+                                            w
                                         }
-                                        x = M[O(-5743)]
-                                        b[G] = F[1]
+                                        D = 2
+                                        v[g] = D
+                                        D = Z[R(-27971)]
                                     else
-                                        X = O(-5753)
-                                        p = O(-5722)
-                                        R = O(-5728)
-                                        Q = M[X]
-                                        X = Q(G)
-                                        a = M[p]
-                                        p = a(u(l))
-                                        Q = R .. p
-                                        x = X .. Q
-                                        Q = {
-                                            x
+                                        D = v[N[1]]
+                                        F = {
+                                            D
                                         }
-                                        x = M[O(-5732)]
+                                        D = Z[R(-27979)]
                                     end
                                 else
-                                    Q = O(-5713)
-                                    C = 2
-                                    G = F
-                                    l = O(-5750)
-                                    X = f()
-                                    N = 1
-                                    x = M[Q]
-                                    Q = x(l)
-                                    Q = O(-5704)
-                                    x = M[Q]
-                                    Q = x()
-                                    l = Q
-                                    x = I(15634841, {})
-                                    Q = O(-5722)
-                                    M[Q] = x
-                                    x = P(617966, {})
-                                    b[X] = x
-                                    Q = O(-5729)
-                                    x = M[Q]
-                                    a = b[X]
-                                    p = a(N)
-                                    a = nil
-                                    R = p == a
-                                    Q = x(R)
-                                    Q = O(-5729)
-                                    x = M[Q]
-                                    a = b[X]
-                                    N = 1
-                                    D = 3
-                                    p = a(N, C)
-                                    C = 2
-                                    a = 2
-                                    R = p == a
-                                    Q = x(R)
-                                    Q = O(-5729)
-                                    x = M[Q]
-                                    N = 1
-                                    a = b[X]
-                                    p = a(N, C, D)
-                                    a = 2
-                                    R = p == a
-                                    Q = x(R)
-                                    Q = O(-5729)
-                                    x = M[Q]
-                                    a = y(11296739, {
-                                        X
-                                    })
-                                    p = a()
-                                    a = 1
-                                    R = p == a
-                                    Q = x(R)
-                                    a = y(11348563, {
-                                        X
-                                    })
-                                    Q = O(-5729)
-                                    x = M[Q]
-                                    p = a()
-                                    a = 1
-                                    R = p == a
-                                    Q = x(R)
-                                    Q = O(-5729)
-                                    a = L(6347132, {
-                                        X
-                                    })
-                                    x = M[Q]
-                                    p = a()
-                                    a = 1
-                                    R = p == a
-                                    a = y(8076083, {
-                                        X
-                                    })
-                                    Q = x(R)
-                                    Q = O(-5729)
-                                    x = M[Q]
-                                    p = a()
-                                    a = 1
-                                    R = p == a
-                                    Q = x(R)
-                                    Q = O(-5729)
-                                    a = P(96749, {
-                                        X
-                                    })
-                                    x = M[Q]
-                                    p = a()
-                                    a = 2
-                                    R = p == a
-                                    a = H(6231581, {
-                                        X
-                                    })
-                                    Q = x(R)
-                                    Q = O(-5729)
-                                    x = M[Q]
-                                    p = a()
-                                    a = 2
-                                    R = p == a
-                                    Q = x(R)
-                                    Q = O(-5729)
-                                    a = K(2436462, {})
-                                    x = M[Q]
-                                    l = nil
-                                    p = a()
-                                    a = 5
-                                    R = p == a
-                                    Q = x(R)
-                                    Q = O(-5729)
-                                    a = t(3079885, {
-                                        X
-                                    })
-                                    x = M[Q]
-                                    p = a()
-                                    a = 5
-                                    R = p == a
-                                    Q = x(R)
-                                    Q = O(-5729)
-                                    a = t(8328605, {})
-                                    x = M[Q]
-                                    p = a()
-                                    a = 2
-                                    R = p == a
-                                    Q = x(R)
-                                    Q = O(-5729)
-                                    a = K(10668793, {})
-                                    x = M[Q]
-                                    p = a()
-                                    a = nil
-                                    R = p == a
-                                    Q = x(R)
-                                    Q = O(-5729)
-                                    a = H(10593018, {})
-                                    x = M[Q]
-                                    p = a()
-                                    a = 1
-                                    R = p == a
-                                    a = H(10929666, {})
-                                    Q = x(R)
-                                    Q = O(-5729)
-                                    x = M[Q]
-                                    p = a()
-                                    a = 2
-                                    R = p == a
-                                    Q = x(R)
-                                    a = L(14540851, {})
-                                    Q = O(-5729)
-                                    x = M[Q]
-                                    p = a()
-                                    a = 3
-                                    R = p == a
-                                    a = t(15415334, {})
-                                    Q = x(R)
-                                    Q = O(-5729)
-                                    x = M[Q]
-                                    p = a()
-                                    a = -1
-                                    R = p == a
-                                    Q = x(R)
-                                    Q = O(-5729)
-                                    a = K(2469254, {})
-                                    x = M[Q]
-                                    p = a()
-                                    X = A(X)
-                                    a = 2
-                                    R = p == a
-                                    Q = x(R)
-                                    Q = O(-5729)
-                                    x = M[Q]
-                                    a = K(5102493, {})
-                                    p = a()
-                                    a = 0.5
-                                    R = p == a
-                                    Q = x(R)
-                                    Q = O(-5713)
-                                    R = O(-5720)
-                                    x = M[Q]
-                                    Q = x(R)
-                                    Q = {}
-                                    x = M[O(-5748)]
+                                    F = R(-27946)
+                                    g = 5
+                                    D = {
+                                        [F] = g
+                                    }
+                                    g = D
+                                    D = k(7126039, {})
+                                    F = R(-27955)
+                                    g[F] = D
+                                    F = R(-27955)
+                                    F = g[F]
+                                    D = {
+                                        F(g)
+                                    }
+                                    F = {
+                                        u(D)
+                                    }
+                                    D = Z[R(-27950)]
                                 end
                             else
-                                if x < 10668277 then
-                                    if x < 10253515 then
-                                        x = b[r[1]]
-                                        Q = {
-                                            x
-                                        }
-                                        x = M[O(-5730)]
+                                if D < 10258075 then
+                                    if D < 9326005 then
+                                        D = 1
+                                        g = D
+                                        D = g and 3953271 or 1291990
                                     else
-                                        x = 0
-                                        G = x
-                                        x = G and 2859825 or 2521334
+                                        g = U()
+                                        v[g] = t[1]
+                                        D = f(11914599, {
+                                            g
+                                        })
+                                        F = {
+                                            D
+                                        }
+                                        D = Z[R(-27964)]
                                     end
                                 else
-                                    x = nil
-                                    G = x
-                                    x = G and 2264013 or 14986236
+                                    D = nil
+                                    g = D
+                                    D = g and 3520004 or 13937343
                                 end
                             end
                         else
-                            if x < 11296812 then
-                                if x < 11181182 then
-                                    if x < 11004867 then
-                                        x = nil
-                                        G = x
-                                        x = G and 12000125 or 13891912
+                            if D < 11543212 then
+                                if D < 11273352 then
+                                    if D < 11150350 then
+                                        D = k(16574874, {})
+                                        v[N[1]] = D
+                                        F = v[N[1]]
+                                        g = {
+                                            F()
+                                        }
+                                        F = {
+                                            u(g)
+                                        }
+                                        D = Z[R(-27947)]
                                     else
-                                        x = M[O(-5755)]
-                                        Q = {
-                                            G
+                                        D = y(5308, {})
+                                        v[N[1]] = D
+                                        F = v[N[1]]
+                                        g = F()
+                                        F = {
+                                            g()
+                                        }
+                                        D = Z[R(-27977)]
+                                        F = {
+                                            u(F)
                                         }
                                     end
                                 else
-                                    G = f()
-                                    x = 1
-                                    b[G] = x
-                                    x = t(10082850, {
-                                        G
+                                    g = U()
+                                    D = 1
+                                    v[g] = D
+                                    D = e(802594, {
+                                        g
                                     })
-                                    b[r[1]] = x
-                                    x = b[r[1]]
-                                    Q = {
-                                        x()
+                                    v[N[1]] = D
+                                    F = v[N[1]]
+                                    w = F()
+                                    D = Z[R(-27961)]
+                                    F = {
+                                        w()
                                     }
-                                    x = M[O(-5725)]
-                                    Q = {
-                                        u(Q)
+                                    F = {
+                                        u(F)
                                     }
                                 end
                             else
-                                if x < 11944414 then
-                                    if x < 11562564 then
-                                        x = 1
-                                        G = f()
-                                        b[G] = x
-                                        x = H(12567350, {
-                                            G
-                                        })
-                                        b[r[1]] = x
-                                        x = b[r[1]]
-                                        Q = x()
-                                        x = {
-                                            Q()
-                                        }
-                                        Q = {
-                                            u(x)
-                                        }
-                                        x = M[O(-5754)]
+                                if D < 11944674 then
+                                    if D < 11894140 then
+                                        D = nil
+                                        g = D
+                                        D = g and 16250217 or 6973992
                                     else
-                                        x = nil
-                                        G = x
-                                        x = 1
-                                        l = f()
-                                        b[l] = x
-                                        Q = 2
-                                        x = L(5748296, {
-                                            l
-                                        })
-                                        l = A(l)
-                                        l = Q
-                                        G = x
-                                        x = M[O(-5752)]
-                                        Q = {
-                                            G
+                                        D = v[N[1]]
+                                        F = {
+                                            D
                                         }
+                                        D = Z[R(-27972)]
                                     end
                                 else
-                                    x = 1
-                                    G = x
-                                    x = 3660295
+                                    D = 0
+                                    g = D
+                                    D = g and 14393930 or 8551526
                                 end
                             end
                         end
                     else
-                        if x < 15000023 then
-                            if x < 14211580 then
-                                if x < 13893779 then
-                                    if x < 13268172 then
-                                        x = y(5235084, {
-                                            r[1]
-                                        })
-                                        Q = {
-                                            x
+                        if D < 14952305 then
+                            if D < 13672247 then
+                                if D < 12896348 then
+                                    if D < 12565458 then
+                                        D = Z[R(-27982)]
+                                        w = t[2]
+                                        g = t[1]
+                                        F = {
+                                            w
                                         }
-                                        x = M[O(-5751)]
                                     else
-                                        Q = 2
-                                        G = Q
-                                        x = 3660295
+                                        D = k(8879364, {})
+                                        v[N[1]] = D
+                                        D = Z[R(-27978)]
+                                        F = v[N[1]]
+                                        g = F()
+                                        F = {
+                                            g()
+                                        }
+                                        F = {
+                                            u(F)
+                                        }
                                     end
                                 else
-                                    Q = b[r[1]]
-                                    G = O(-5709)
-                                    x = Q[G]
-                                    Q = {
-                                        x
+                                    g = U()
+                                    v[g] = t[1]
+                                    D = f(7393309, {
+                                        g
+                                    })
+                                    F = {
+                                        D
                                     }
-                                    x = M[O(-5719)]
+                                    D = Z[R(-27967)]
                                 end
                             else
-                                if x < 14906198 then
-                                    if x < 14739649 then
-                                        x = 1
-                                        G = x
-                                        Q = 2
-                                        x = G + Q
-                                        G = x
-                                        Q = {
-                                            G
-                                        }
-                                        x = M[O(-5716)]
+                                if D < 14550482 then
+                                    if D < 14308767 then
+                                        F = 2
+                                        g = F
+                                        D = 2566528
                                     else
-                                        G = f()
-                                        x = 1
-                                        b[G] = x
-                                        x = L(7449004, {
-                                            G
-                                        })
-                                        l = x
-                                        x = 2
-                                        Q = {
-                                            l
-                                        }
-                                        b[G] = x
-                                        x = M[O(-5703)]
+                                        D = 1
+                                        g = D
+                                        D = 4621240
                                     end
                                 else
-                                    Q = {
-                                        G
+                                    D = v[N[1]]
+                                    F = {
+                                        D
                                     }
-                                    x = M[O(-5736)]
+                                    D = Z[R(-27954)]
                                 end
                             end
                         else
-                            if x < 15630003 then
-                                if x < 15447037 then
-                                    if x < 15392140 then
-                                        G = f()
-                                        b[G] = F[1]
-                                        x = H(7496001, {
-                                            G
-                                        })
-                                        Q = {
-                                            x
+                            if D < 15818772 then
+                                if D < 15743873 then
+                                    if D < 15387301 then
+                                        D = K(3676933, {})
+                                        v[N[1]] = D
+                                        F = v[N[1]]
+                                        D = Z[R(-27970)]
+                                        g = F()
+                                        F = {
+                                            g()
                                         }
-                                        x = M[O(-5710)]
+                                        F = {
+                                            u(F)
+                                        }
                                     else
-                                        Q = 2
-                                        x = 1
-                                        G = x
-                                        x = G - Q
-                                        G = x
-                                        x = M[O(-5721)]
-                                        Q = {
-                                            G
-                                        }
+                                        D = 2
+                                        F = {}
+                                        v[N[1]] = D
+                                        D = Z[R(-27940)]
                                     end
                                 else
-                                    G = y(7494159, {})
-                                    x = 1
-                                    Q = x(G)
-                                    x = Q()
-                                    G = x
-                                    Q = {
-                                        G
+                                    Y = R(-27983)
+                                    E = R(-27966)
+                                    F = Z[Y]
+                                    Y = F(g)
+                                    s = R(-27965)
+                                    p = Z[E]
+                                    E = p(u(w))
+                                    F = s .. E
+                                    D = Y .. F
+                                    F = {
+                                        D
                                     }
-                                    x = M[O(-5738)]
+                                    D = Z[R(-27959)]
                                 end
                             else
-                                if x < 16369150 then
-                                    if x < 15949519 then
-                                        G = F[1]
-                                        l = {
-                                            V(2, u(F))
+                                if D < 16447761 then
+                                    if D < 16091448 then
+                                        D = v[N[1]]
+                                        F = {
+                                            D
                                         }
-                                        X = O(-5714)
-                                        R = O(-5733)
-                                        Q = M[X]
-                                        X = Q(R, u(l))
-                                        Q = 0
-                                        x = X == Q
-                                        x = x and 6361654 or 8923577
+                                        D = Z[R(-27974)]
                                     else
-                                        Q = O(-5709)
-                                        G = 5
-                                        x = {
-                                            [Q] = G
-                                        }
-                                        G = x
-                                        x = P(8902644, {})
-                                        Q = O(-5727)
-                                        G[Q] = x
-                                        Q = O(-5727)
-                                        Q = G[Q]
-                                        x = {
-                                            Q(G)
-                                        }
-                                        Q = {
-                                            u(x)
-                                        }
-                                        x = M[O(-5735)]
+                                        D = 2
+                                        g = D
+                                        D = 6973992
                                     end
                                 else
-                                    x = 2
-                                    G = x
-                                    x = 11168218
+                                    g = U()
+                                    D = 1
+                                    v[g] = D
+                                    D = k(15435267, {
+                                        g
+                                    })
+                                    F = D()
+                                    D = v[g]
+                                    F = {
+                                        D
+                                    }
+                                    D = Z[R(-27944)]
                                 end
                             end
                         end
                     end
                 end
             end
-            x = #Y
-            return u(Q)
-        end, function(M, O)
-            local u = X(O)
-            local F = function(...)
-                return x(M, {
-                    ...
-                }, O, u)
+            D = #M
+            return u(F)
+        end, function(Z, R)
+            local u = Y(R)
+            local t = function()
+                return D(Z, {}, R, u)
             end
-            return F
-        end
-        return (I(8943781, {}))(u(Q))
-    end)(getfenv and getfenv() or _ENV, unpack or table[O(-5739)], newproxy, setmetatable, getmetatable, select, {
+            return t
+        end, function(Z, R)
+            local u = Y(R)
+            local t = function(t, N, M, Q, F)
+                return D(Z, {
+                    t,
+                    N,
+                    M,
+                    Q,
+                    F
+                }, R, u)
+            end
+            return t
+        end, function(Z, R)
+            local u = Y(R)
+            local t = function(t, N, M, Q)
+                return D(Z, {
+                    t,
+                    N,
+                    M,
+                    Q
+                }, R, u)
+            end
+            return t
+        end, function(Z, R)
+            local u = Y(R)
+            local t = function(...)
+                return D(Z, {
+                    ...
+                }, R, u)
+            end
+            return t
+        end, function(Z)
+            for R = 1, #Z, 1 do
+                g[Z[R]] = (1) + g[Z[R]]
+            end
+            if t then
+                local D = t(true)
+                local u = M(D)
+                u[R(-27951)], u[R(-27969)], u[R(-27948)] = Z, s, function()
+                    return 2870044
+                end
+                return D
+            else
+                return N({}, {
+                    [R(-27969)] = s,
+                    [R(-27951)] = Z,
+                    [R(-27948)] = function()
+                        return 2870044
+                    end
+                })
+            end
+        end, function(Z)
+            local R, D = 1, Z[1]
+            while D do
+                g[D], R = g[D] - (1), (1) + R
+                if g[D] == 0 then
+                    g[D], v[D] = nil, nil
+                end
+                D = Z[R]
+            end
+        end, function()
+            w = (1) + w
+            g[w] = 1
+            return w
+        end, function(Z, R)
+            local u = Y(R)
+            local t = function(t, N)
+                return D(Z, {
+                    t,
+                    N
+                }, R, u)
+            end
+            return t
+        end, {}, function(Z)
+            g[Z] = g[Z] - (1)
+            if 0 == g[Z] then
+                g[Z], v[Z] = nil, nil
+            end
+        end, {}
+        return (L(961164, {}))(u(F))
+    end)(getfenv and getfenv() or _ENV, unpack or table[R(-27958)], newproxy, setmetatable, getmetatable, select, {
         ...
     })
 end)(...)
