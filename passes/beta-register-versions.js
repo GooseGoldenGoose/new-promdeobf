@@ -99,8 +99,11 @@ function versionVmBlockRegisters(source, ast) {
         return { source, found: true, applied: false, reason: "VM scalar register declaration could not be identified" };
     }
 
-    const candidateNames = new Set(registerDeclaration.variables.map(variable => variable.name));
-    candidateNames.add(stateParameter.name);
+    const candidateNames = new Set(
+        registerDeclaration.variables
+            .map(variable => variable.name)
+            .filter(name => name !== returnRegister.name)
+    );
 
     const leaves = collectStateLeafClauses(vmFunction, stateParameter.name, [])
         .sort((a, b) => a.range[0] - b.range[0]);
@@ -136,12 +139,22 @@ function versionVmBlockRegisters(source, ast) {
             }
 
             const originalName = variables[0].name;
-            if (!candidateNames.has(originalName)) continue;
-
             const rhs = rewriteExpression(source, init[0], latestVersions);
             if (rhs === null || !Array.isArray(statement.range)) {
-                latestVersions.delete(originalName);
+                if (candidateNames.has(originalName)) latestVersions.delete(originalName);
                 skippedAssignments++;
+                continue;
+            }
+
+            if (!candidateNames.has(originalName)) {
+                const originalRhs = source.slice(init[0].range[0], init[0].range[1]);
+                if (rhs !== originalRhs) {
+                    edits.push({
+                        start: init[0].range[0],
+                        end: init[0].range[1],
+                        replacement: rhs,
+                    });
+                }
                 continue;
             }
 
