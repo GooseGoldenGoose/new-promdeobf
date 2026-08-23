@@ -188,6 +188,112 @@ function uniqueVersionMap(definitions) {
     return result;
 }
 
+function unionSets(sets) {
+    const out = new Set();
+    for (const set of sets) for (const value of set || []) out.add(value);
+    return out;
+}
+
+function uniqueConcreteKill(set, noKill) {
+    if (!set || set.size !== 1 || set.has(noKill)) return null;
+    return set.values().next().value;
+}
+
+function computeCleanupDelimitedEpochs(blocks, candidateNames, stateName, returnName) {
+    const ordinaryNames = new Set([...candidateNames].filter(name => name !== stateName && name !== returnName));
+    const noKill = "<no-kill>";
+    const killIdByStatement = new Map();
+
+    for (const block of blocks) {
+        for (const statement of block.statements) {
+            if (statement?.type !== "AssignmentStatement") continue;
+            const variables = statement.variables || [];
+            const init = statement.init || [];
+            if (variables.length !== 1 || init.length !== 1 || !isIdentifier(variables[0])) continue;
+            const name = variables[0].name;
+            if (!ordinaryNames.has(name) || !isNilLiteral(init[0])) continue;
+            killIdByStatement.set(statement, `kill:${block.stateId}:${statement.range?.[0] ?? 0}:${name}`);
+        }
+    }
+
+    const blockByState = new Map(blocks.map(block => [block.stateId, block]));
+    const entry = new Map(blocks.map(block => [block.stateId, new Map()]));
+
+    let changed = true;
+    let rounds = 0;
+    while (changed && rounds++ < blocks.length * 4 + 8) {
+        changed = false;
+        for (let blockIndex = blocks.length - 1; blockIndex >= 0; blockIndex--) {
+            const block = blocks[blockIndex];
+            const current = new Map();
+            for (const name of ordinaryNames) {
+                if (!Array.isArray(block.successors)) {
+                    current.set(name, new Set([noKill]));
+                    continue;
+                }
+                if (block.successors.length === 0) {
+                    current.set(name, new Set([noKill]));
+                    continue;
+                }
+                const successorSets = block.successors.map(target => entry.get(target)?.get(name) || new Set());
+                const merged = unionSets(successorSets);
+                if (merged.size === 0 && block.successors.some(target => !blockByState.has(target))) merged.add(noKill);
+                current.set(name, merged);
+            }
+
+            for (let statementIndex = block.statements.length - 1; statementIndex >= 0; statementIndex--) {
+                const statement = block.statements[statementIndex];
+                const killId = killIdByStatement.get(statement);
+                if (!killId) continue;
+                const variable = statement.variables?.[0];
+                if (isIdentifier(variable)) current.set(variable.name, new Set([killId]));
+            }
+
+            const previous = entry.get(block.stateId);
+            if (!mapOfSetsEquals(previous, current)) {
+                entry.set(block.stateId, current);
+                changed = true;
+            }
+        }
+    }
+
+    if (changed) return { epochByStatement: new Map(), killIdByStatement, converged: false };
+
+    const epochByStatement = new Map();
+    for (const block of blocks) {
+        const current = new Map();
+        for (const name of ordinaryNames) {
+            if (!Array.isArray(block.successors) || block.successors.length === 0) {
+                current.set(name, new Set([noKill]));
+            } else {
+                current.set(name, unionSets(block.successors.map(target => entry.get(target)?.get(name) || new Set())));
+            }
+        }
+
+        for (let statementIndex = block.statements.length - 1; statementIndex >= 0; statementIndex--) {
+            const statement = block.statements[statementIndex];
+            if (statement?.type !== "AssignmentStatement") continue;
+            const variables = statement.variables || [];
+            const init = statement.init || [];
+            if (variables.length !== 1 || init.length !== 1 || !isIdentifier(variables[0])) continue;
+            const name = variables[0].name;
+            if (!ordinaryNames.has(name)) continue;
+
+            const killId = killIdByStatement.get(statement);
+            if (killId) {
+                current.set(name, new Set([killId]));
+                epochByStatement.set(statement, { key: killId, isKill: true });
+                continue;
+            }
+
+            const key = uniqueConcreteKill(current.get(name), noKill);
+            if (key) epochByStatement.set(statement, { key, isKill: false });
+        }
+    }
+
+    return { epochByStatement, killIdByStatement, converged: true };
+}
+
 function versionVmBlockRegisters(source, ast) {
     const vm = findVmFunction(ast);
     if (!vm) {
@@ -325,6 +431,89 @@ function versionVmBlockRegisters(source, ast) {
     const closureEntries = collectClosureEntryStates(ast);
     if (closureEntries.size === 0 || [...closureEntries].some(entry => !blockByState.has(entry))) cfgComplete = false;
 
+    if (cfgComplete) {
+        const { epochByStatement } = computeCleanupDelimitedEpochs(
+            blocks,
+            candidateNames,
+            stateName,
+            returnName
+        );
+        const epochNames = new Map();
+        const oldVersionInfo = new Map();
+        versionCounts.clear();
+        versions.length = 0;
+
+        for (const block of blocks) {
+            for (const statement of block.statements) {
+                const plan = block.plans.get(statement);
+                if (plan?.kind !== "versioned") continue;
+
+                const oldName = plan.newName;
+                const epoch = epochByStatement.get(statement);
+                let newName;
+                let version;
+                let declareVersion = true;
+
+                if (epoch && plan.originalName !== stateName && plan.originalName !== returnName) {
+                    const epochKey = plan.originalName + "\0" + epoch.key;
+                    let existing = epochNames.get(epochKey);
+                    if (!existing) {
+                        version = (versionCounts.get(plan.originalName) || 0) + 1;
+                        versionCounts.set(plan.originalName, version);
+                        const baseId = ensureBase(plan.originalName);
+                        existing = { newName: `r_v${baseId}_${version}`, version, declared: false };
+                        epochNames.set(epochKey, existing);
+                    }
+                    newName = existing.newName;
+                    version = existing.version;
+                    declareVersion = !existing.declared;
+                    existing.declared = true;
+                    plan.isLifetimeKill = epoch.isKill;
+                    plan.lifetimeEpoch = epoch.key;
+                } else {
+                    version = (versionCounts.get(plan.originalName) || 0) + 1;
+                    versionCounts.set(plan.originalName, version);
+                    const baseId = ensureBase(plan.originalName);
+                    newName = `r_v${baseId}_${version}`;
+                }
+
+                plan.oldName = oldName;
+                plan.newName = newName;
+                plan.version = version;
+                plan.declareVersion = declareVersion;
+                oldVersionInfo.set(oldName, { newName, isKill: plan.isLifetimeKill === true });
+                versions.push({
+                    blockState: block.stateId,
+                    originalName: plan.originalName,
+                    baseId: plan.baseId,
+                    version,
+                    newName,
+                });
+            }
+        }
+
+        for (const block of blocks) {
+            for (const [name, definition] of block.lastDefinitions) {
+                if (typeof definition !== "string" || !definition.startsWith("v:")) continue;
+                const info = oldVersionInfo.get(definition.slice(2));
+                if (!info) continue;
+                block.lastDefinitions.set(
+                    name,
+                    info.isKill
+                        ? `u:lifetime-kill:${block.stateId}:${name}`
+                        : `v:${info.newName}`
+                );
+            }
+        }
+    } else {
+        for (const block of blocks) {
+            for (const statement of block.statements) {
+                const plan = block.plans.get(statement);
+                if (plan?.kind === "versioned") plan.declareVersion = true;
+            }
+        }
+    }
+
     const predecessors = new Map(blocks.map(block => [block.stateId, []]));
     if (cfgComplete) {
         for (const block of blocks) {
@@ -416,9 +605,10 @@ function versionVmBlockRegisters(source, ast) {
                 edits.push({
                     start: statement.range[0],
                     end: statement.range[1],
-                    replacement: `local ${plan.newName} = ${rhs}`,
+                    replacement: `${plan.declareVersion === false ? "" : "local "}${plan.newName} = ${rhs}`,
                 });
-                latestVersions.set(plan.originalName, plan.newName);
+                if (plan.isLifetimeKill) latestVersions.delete(plan.originalName);
+                else latestVersions.set(plan.originalName, plan.newName);
                 continue;
             }
         }

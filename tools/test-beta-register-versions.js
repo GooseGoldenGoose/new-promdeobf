@@ -88,4 +88,54 @@ assert(crossStateResult.source.includes("consume2(r2)"));
 assert(!crossStateResult.source.includes("consume2(r_v1_1)"));
 assert(!crossStateResult.source.includes("consume2(r_v1_2)"));
 parseLua(crossStateResult.source, "<beta-cross-state-test-output>");
+const lifetimeSource = `vm = function(state, args, upvalues, gcProxy)
+    local r2, ReturnVal
+    while state do
+        if state == 1 then
+            r2 = 10
+            state = 2
+        end
+        if state == 2 then
+            ReturnVal = consume(r2)
+            r2 = 20
+            state = 3
+        end
+        if state == 3 then
+            ReturnVal = consume2(r2)
+            r2 = nil
+            state = 4
+        end
+        if state == 4 then
+            r2 = 30
+            ReturnVal = consume3(r2)
+            r2 = nil
+            ReturnVal = {}
+            state = nil
+        end
+    end
+    state = #gcProxy
+    return unpack(ReturnVal)
+end
+root = createClosure(1, {})`;
+
+const lifetimeResult = versionVmBlockRegisters(
+    lifetimeSource,
+    parseLua(lifetimeSource, "<beta-lifetime-test>")
+);
+assert.equal(lifetimeResult.found, true);
+assert.equal(lifetimeResult.applied, true);
+assert.equal(lifetimeResult.cfgComplete, true);
+const r2Base = lifetimeResult.mapping.find(item => item.originalName === "r2")?.baseName;
+assert(r2Base);
+assert(lifetimeResult.source.includes(`local ${r2Base}_1 = 10`));
+assert(lifetimeResult.source.includes(`consume(${r2Base}_1)`));
+assert(lifetimeResult.source.includes(`${r2Base}_1 = 20`));
+assert(lifetimeResult.source.includes(`consume2(${r2Base}_1)`));
+assert(lifetimeResult.source.includes(`${r2Base}_1 = nil`));
+assert(lifetimeResult.source.includes(`local ${r2Base}_2 = 30`));
+assert(lifetimeResult.source.includes(`consume3(${r2Base}_2)`));
+assert(lifetimeResult.source.includes(`${r2Base}_2 = nil`));
+assert(!lifetimeResult.source.includes(`local ${r2Base}_1 = 20`));
+parseLua(lifetimeResult.source, "<beta-lifetime-test-output>");
+
 console.log("beta register versioning tests passed");
