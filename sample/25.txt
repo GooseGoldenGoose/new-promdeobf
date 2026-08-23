@@ -1,0 +1,297 @@
+return (function(...)
+    local s = {
+        "Ea/D4aTo",
+        "Na/nuQ0suhP=",
+        "4XbXfqBd",
+        "Q8Kt4D==",
+        "Q8KMuaF=",
+        "4auOuQ0sNa4=",
+        "fqbOuQ0suhP=",
+        "4auOuQ0=",
+        "fhK2gp==",
+        "Q8KZfXcdJp==",
+        "uQudfw==",
+        "5bb0TCTOWCCO4O3kR5==",
+        "fzcC",
+        "gVBZft5="
+    }
+    local function p(p)
+        return s[p + (14437)]
+    end
+    for p, k in ipairs({
+        {
+            1,
+            14
+        },
+        {
+            1,
+            4
+        },
+        {
+            5,
+            14
+        }
+    }) do
+        while k[1] < k[2] do
+            s[k[1]], s[k[2]], k[1], k[2] = s[k[2]], s[k[1]], k[1] + (1), k[2] - (1)
+        end
+    end
+    do
+        local p = string.len
+        local k = string.char
+        local o = {
+            U = 35,
+            ["/"] = 57,
+            T = 13,
+            W = 20,
+            V = 7,
+            k = 34,
+            ["9"] = 2,
+            J = 30,
+            S = 42,
+            z = 54,
+            P = 60,
+            ["+"] = 62,
+            w = 32,
+            v = 3,
+            c = 17,
+            G = 18,
+            A = 40,
+            u = 25,
+            r = 4,
+            O = 52,
+            Y = 10,
+            K = 61,
+            ["2"] = 47,
+            e = 11,
+            B = 9,
+            Q = 23,
+            H = 19,
+            ["7"] = 63,
+            p = 0,
+            n = 46,
+            Z = 41,
+            ["6"] = 1,
+            x = 15,
+            ["5"] = 16,
+            M = 44,
+            h = 6,
+            N = 26,
+            R = 14,
+            l = 59,
+            m = 5,
+            d = 37,
+            ["3"] = 49,
+            ["0"] = 8,
+            q = 55,
+            ["4"] = 24,
+            s = 45,
+            I = 58,
+            ["8"] = 53,
+            L = 50,
+            D = 48,
+            a = 22,
+            ["1"] = 31,
+            t = 39,
+            y = 51,
+            C = 36,
+            F = 56,
+            j = 33,
+            X = 38,
+            b = 21,
+            i = 12,
+            o = 43,
+            E = 29,
+            f = 27,
+            g = 28
+        }
+        local D = table.concat
+        local j = math.floor
+        local d = type
+        local J = s
+        local N = string.sub
+        local I = table.insert
+        for s = 1, #J, 1 do
+            local q = J[s]
+            if d(q) == "string" then
+                local d = p(q)
+                local r = {}
+                local T = 1
+                local B = 0
+                local n = 0
+                while T <= d do
+                    local s = N(q, T, T)
+                    local p = o[s]
+                    if p then
+                        B = B + p * (64) ^ ((3) - n)
+                        n = n + (1)
+                        if n == 4 then
+                            n = 0
+                            local s = j(B / (65536))
+                            local p = j((B % (65536)) / (256))
+                            local o = B % (256)
+                            I(r, k(s, p, o))
+                            B = 0
+                        end
+                    elseif s == "=" then
+                        I(r, k(j(B / (65536))))
+                        if T >= d or N(q, T + (1), T + (1)) ~= "=" then
+                            I(r, k(j((B % (65536)) / (256))))
+                        end
+                        break
+                    end
+                    T = T + (1)
+                end
+                J[s] = D(r)
+            end
+        end
+    end
+    return (function(s, o, D, j, d, J, N, r, B, Z, H, T, I, k, n, q)
+        n, k, H, r, q, Z, I, B, T = function(s)
+            local p, k = 1, s[1]
+            while k do
+                q[k], p = q[k] - (1), (1) + p
+                if 0 == q[k] then
+                    q[k], I[k] = nil, nil
+                end
+                k = s[p]
+            end
+        end, function(k, D, j, d)
+            local B, N, n, r, Z, q, T, I, H
+            while k do
+                if k < 15351681 then
+                    if k < 11115492 then
+                        if k < 3591668 then
+                            n = not B
+                            q = q + T
+                            N = q <= r
+                            N = n and N
+                            n = q >= r
+                            n = B and n
+                            N = n or N
+                            n = 9422898
+                            k = N and n
+                            N = 15368145
+                            k = k or N
+                        else
+                            N = p(-14433)
+                            n = q
+                            k = s[N]
+                            Z = p(-14431)
+                            H = p(-14424)
+                            N = k(H, n)
+                            N = 2
+                            k = n * N
+                            H = k
+                            N = p(-14433)
+                            k = s[N]
+                            N = k(Z, H)
+                            H = nil
+                            H = 2
+                            N = n % H
+                            H = 0
+                            k = N == H
+                            k = k and 14743368 or 15350912
+                        end
+                    else
+                        if k < 15125086 then
+                            N = p(-14433)
+                            k = s[N]
+                            H = p(-14436)
+                            N = k(H, n)
+                            k = 16703840
+                        else
+                            N = p(-14433)
+                            H = p(-14434)
+                            k = s[N]
+                            N = k(H, n)
+                            k = 16703840
+                        end
+                    end
+                else
+                    if k < 16551369 then
+                        if k < 16354377 then
+                            q = p(-14425)
+                            N = p(-14433)
+                            k = s[N]
+                            N = k(q)
+                            k = s[p(-14435)]
+                            N = {}
+                        else
+                            q = p(-14430)
+                            N = p(-14433)
+                            I = D
+                            r = p(-14426)
+                            k = s[N]
+                            N = k(q)
+                            k = 5
+                            N = p(-14433)
+                            q = k
+                            k = s[N]
+                            N = k(r, q)
+                            N = 1
+                            q = nil
+                            q = 5
+                            r = q
+                            k = 2998825
+                            q = 1
+                            T = q
+                            q = 0
+                            B = T < q
+                            q = N - T
+                        end
+                    else
+                        N = p(-14433)
+                        H = p(-14427)
+                        k = s[N]
+                        N = k(H, n)
+                        k = 2998825
+                        n = nil
+                    end
+                end
+            end
+            k = #d
+            return o(N)
+        end, function(s)
+            q[s] = q[s] - (1)
+            if q[s] == 0 then
+                q[s], I[s] = nil, nil
+            end
+        end, function()
+            T = T + (1)
+            q[T] = 1
+            return T
+        end, {}, function(s, p)
+            local o = B(p)
+            local D = function(...)
+                return k(s, {
+                    ...
+                }, p, o)
+            end
+            return D
+        end, {}, function(s)
+            for p = 1, #s, 1 do
+                q[s[p]] = q[s[p]] + (1)
+            end
+            if D then
+                local k = D(true)
+                local o = d(k)
+                o[p(-14423)], o[p(-14429)], o[p(-14428)] = s, n, function()
+                    return 3294426
+                end
+                return k
+            else
+                return j({}, {
+                    [p(-14429)] = n,
+                    [p(-14423)] = s,
+                    [p(-14428)] = function()
+                        return 3294426
+                    end
+                })
+            end
+        end, 0
+        return (Z(16515400, {}))(o(N))
+    end)(getfenv and getfenv() or _ENV, unpack or table[p(-14432)], newproxy, setmetatable, getmetatable, select, {
+        ...
+    })
+end)(...)
