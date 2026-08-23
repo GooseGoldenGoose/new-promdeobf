@@ -74,12 +74,13 @@ function sinkTerminalReturnPayload(operations) {
 
     const payloadIndexes = [];
     for (let index = 0; index < finalTransitionIndex; index++) {
-        if (result[index].kind === "return-payload" && result[index].terminalEmptyReturnPayload === true) payloadIndexes.push(index);
+        if (result[index].kind === "return-payload" && result[index].terminalCompilerReturnPayload === true) payloadIndexes.push(index);
     }
     if (payloadIndexes.length !== 1) return { operations: result, moved: false };
 
-    // Only the structurally proven empty Prometheus terminal ReturnVal = {} payload
-    // may move. Arbitrary table constructors can execute field expressions/calls.
+    // Prometheus compiles source return expressions into VM registers first, then
+    // builds ReturnVal from register reads (or unpack(register) for a final
+    // multi-return expression). Arbitrary table field calls are not this shape.
     const payloadIndex = payloadIndexes[0];
     if (payloadIndex === finalTransitionIndex - 1) return { operations: result, moved: false };
     const [payload] = result.splice(payloadIndex, 1);

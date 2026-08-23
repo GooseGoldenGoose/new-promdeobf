@@ -98,8 +98,18 @@ function isNilLiteral(node) {
     return node?.type === "NilLiteral";
 }
 
-function isEmptyTableConstructor(node) {
-    return node?.type === "TableConstructorExpression" && (node.fields || []).length === 0;
+function isCompilerReturnRegisterRead(node, candidateNames) {
+    if (isIdentifier(node)) return candidateNames.has(node.name);
+    if (node?.type !== "CallExpression" || !isIdentifier(node.base, "unpack")) return false;
+    const args = node.arguments || [];
+    return args.length === 1 && isIdentifier(args[0]) && candidateNames.has(args[0].name);
+}
+
+function isCompilerReturnPayload(node, candidateNames) {
+    if (node?.type !== "TableConstructorExpression") return false;
+    return (node.fields || []).every(field =>
+        field?.type === "TableValue" && isCompilerReturnRegisterRead(field.value, candidateNames)
+    );
 }
 
 function collectClosureEntryStates(rootNode) {
@@ -248,7 +258,7 @@ function versionVmBlockRegisters(source, ast) {
         const preservesReturnValue =
             finalReturnWrite &&
             finalStateWrite &&
-            isEmptyTableConstructor(finalReturnWrite.value) &&
+            isCompilerReturnPayload(finalReturnWrite.value, candidateNames) &&
             isNilLiteral(finalStateWrite.value) &&
             finalReturnWrite.index < finalStateWrite.index;
 
@@ -527,7 +537,8 @@ function versionVmBlockRegisters(source, ast) {
                 graphOperations.push({
                     index: graphOperations.length + 1,
                     kind: plan.originalName === stateName ? "state-transition" : "return-payload",
-                    terminalEmptyReturnPayload: plan.originalName === returnName && isEmptyTableConstructor(init[0]),
+                    terminalCompilerReturnPayload:
+                        plan.originalName === returnName && isCompilerReturnPayload(init[0], candidateNames),
                     originalTarget: plan.originalName,
                     emittedTarget: plan.originalName,
                     rhs,

@@ -177,4 +177,53 @@ assert(!scratchBoundaryResult.source.includes(`${scratchR2Base}_1 = nil`));
 assert(scratchBoundaryResult.lifetimeAnalysisStats.provenCleanupCount >= 1);
 parseLua(scratchBoundaryResult.source, "<beta-scratch-boundary-test-output>");
 
+const compilerReturnPayloadSource = `vm = function(state, args, upvalues, gcProxy)
+    local r1, r2, ReturnVal
+    while state do
+        if state == 1 then
+            r1 = produce()
+            observe()
+            ReturnVal = { r1 }
+            state = nil
+        end
+    end
+    state = #gcProxy
+    return unpack(ReturnVal)
+end
+root = createClosure(1, {})`;
+
+const compilerReturnPayloadResult = versionVmBlockRegisters(
+    compilerReturnPayloadSource,
+    parseLua(compilerReturnPayloadSource, "<beta-compiler-return-payload-test>")
+);
+assert(compilerReturnPayloadResult.source.includes("ReturnVal = { r_v1_1 }"));
+assert(!compilerReturnPayloadResult.source.match(/local r_v\d+_\d+ = \{ r_v1_1 \}/));
+const compilerReturnPayloadGraph = compilerReturnPayloadResult.graph.states[0].operations.find(
+    operation => operation.kind === "return-payload"
+);
+assert(compilerReturnPayloadGraph?.terminalCompilerReturnPayload === true);
+
+const effectfulReturnPayloadSource = `vm = function(state, args, upvalues, gcProxy)
+    local r1, ReturnVal
+    while state do
+        if state == 1 then
+            r1 = "x"
+            ReturnVal = { mark("table") }
+            mark("after")
+            state = nil
+        end
+    end
+    state = #gcProxy
+    return unpack(ReturnVal)
+end
+root = createClosure(1, {})`;
+
+const effectfulReturnPayloadResult = versionVmBlockRegisters(
+    effectfulReturnPayloadSource,
+    parseLua(effectfulReturnPayloadSource, "<beta-effectful-return-payload-test>")
+);
+assert(!effectfulReturnPayloadResult.graph.states[0].operations.some(operation => operation.kind === "return-payload"));
+assert(effectfulReturnPayloadResult.source.indexOf('{ mark("table") }') < effectfulReturnPayloadResult.source.indexOf('mark("after")'));
+parseLua(effectfulReturnPayloadResult.source, "<beta-effectful-return-payload-output>");
+
 console.log("beta register versioning tests passed");

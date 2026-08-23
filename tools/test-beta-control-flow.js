@@ -19,7 +19,7 @@ const betaResult = {
             operations: [
                 { kind: "version-define", emittedText: 'local r_v1_1 = "print"', rhs: '"print"' },
                 { kind: "version-define", emittedText: "local r_v2_1 = _env[r_v1_1]", rhs: "_env[r_v1_1]" },
-                { kind: "return-payload", terminalEmptyReturnPayload: true, emittedText: "ReturnVal = {}", rhs: "{}" },
+                { kind: "return-payload", terminalCompilerReturnPayload: true, emittedText: "ReturnVal = {}", rhs: "{}" },
                 { kind: "epoch-kill", emittedText: "r_v3_1 = nil", rhs: "nil" },
                 { kind: "state-transition", emittedText: "state = nil", rhs: "nil" },
             ],
@@ -47,7 +47,7 @@ const effectfulPayload = solveBetaControlFlow(ast, {
         states: [{
             id: 1, predecessors: [], successors: [], operations: [
                 { kind: "version-define", emittedText: 'local r_v1_1 = "x"', rhs: '"x"' },
-                { kind: "return-payload", terminalEmptyReturnPayload: false, emittedText: 'ReturnVal = { mark("table") }', rhs: '{ mark("table") }' },
+                { kind: "return-payload", terminalCompilerReturnPayload: false, emittedText: 'ReturnVal = { mark("table") }', rhs: '{ mark("table") }' },
                 { kind: "statement", originalText: 'mark("after")' },
                 { kind: "state-transition", emittedText: "state = nil", rhs: "nil" },
             ],
