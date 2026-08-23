@@ -479,8 +479,18 @@ function numericForNode(variable, initial, limit, step, body, reads = []) {
     };
 }
 
+function whileGuardNode(condition, conditionReads, conditionBody, body) {
+    return {
+        type: "while-guard",
+        condition,
+        reads: [...(conditionReads || [])],
+        conditionBody,
+        body,
+    };
+}
+
 function operationNode(operation, stateId) {
-    if (operation?.kind === "structured-numeric-for" && operation.structuredNode) {
+    if ((operation?.kind === "structured-numeric-for" || operation?.kind === "structured-while") && operation.structuredNode) {
         return operation.structuredNode;
     }
     return rawNode(operation, stateId);
@@ -506,6 +516,16 @@ function formatStructuredNodes(nodes, depth = 0) {
             parts.push(lines.join("\n"));
             continue;
         }
+        if (node.type === "while-guard") {
+            const indent = "    ".repeat(depth);
+            const lines = [`${indent}while true do`];
+            if (node.conditionBody.length) lines.push("", formatStructuredNodes(node.conditionBody, depth + 1));
+            lines.push("", `${indent}    if not (${node.condition}) then`, `${indent}        break`, `${indent}    end`);
+            if (node.body.length) lines.push("", formatStructuredNodes(node.body, depth + 1));
+            lines.push("", `${indent}end`);
+            parts.push(lines.join("\n"));
+            continue;
+        }
         if (node.type !== "if") continue;
         const lines = [`${"    ".repeat(depth)}if ${node.condition} then`];
         if (node.thenBody.length) lines.push("", formatStructuredNodes(node.thenBody, depth + 1));
@@ -527,6 +547,9 @@ function countStructuredStatements(nodes) {
             count += countStructuredStatements(node.thenBody);
             if (node.elseBody) count += countStructuredStatements(node.elseBody);
         } else if (node.type === "numeric-for") {
+            count += countStructuredStatements(node.body);
+        } else if (node.type === "while-guard") {
+            count += countStructuredStatements(node.conditionBody);
             count += countStructuredStatements(node.body);
         }
     }
@@ -557,6 +580,17 @@ function validateStructuredLocalScopes(nodes) {
             }
 
             sequence++;
+            if (node.type === "while-guard") {
+                const bodyScope = nextScopeId++;
+                parentScope.set(bodyScope, scopeId);
+                const conditionError = visit(node.conditionBody, bodyScope);
+                if (conditionError) return conditionError;
+                sequence++;
+                for (const name of node.reads || []) reads.push({ name, scopeId: bodyScope, sequence });
+                const bodyError = visit(node.body, bodyScope);
+                if (bodyError) return bodyError;
+                continue;
+            }
             for (const name of node.reads || []) reads.push({ name, scopeId, sequence });
             if (node.type === "numeric-for") {
                 const bodyScope = nextScopeId++;
@@ -650,7 +684,7 @@ function sameMembers(values, expected) {
     return left.every((value, index) => value === right[index]);
 }
 
-function collectNumericForBodyRegion(stateById, predecessors, bodyId, checkId, exitId) {
+function collectLoopBodyRegion(stateById, predecessors, bodyId, checkId, exitId) {
     const ids = new Set();
     const visiting = new Set();
     const latchIds = new Set();
@@ -723,7 +757,7 @@ function computeReachableStateSetsWithExit(states, stateById, exitNode) {
     return memo;
 }
 
-function structureNumericForBodyRegion(stateById, region, bodyId, checkId, skipOperations, currentName) {
+function structureLoopBodyRegion(stateById, region, bodyId, checkId, skipOperations, currentName = null) {
     const exitNode = Symbol('numeric-for-body-exit');
     const states = [];
     const prepared = new Map();
@@ -745,7 +779,7 @@ function structureNumericForBodyRegion(stateById, region, bodyId, checkId, skipO
             operation !== info.operation && !skipOperations.has(operation)
         );
         if (bodyOperations.some(operation => !operationText(operation))) return null;
-        if (bodyOperations.some(operation => (operation.reads || []).includes(currentName))) return null;
+        if (currentName && bodyOperations.some(operation => (operation.reads || []).includes(currentName))) return null;
 
         let mappedInfo;
         if (info.kind === 'jump') {
@@ -779,9 +813,9 @@ function structureNumericForBodyRegion(stateById, region, bodyId, checkId, skipO
         const nodes = [];
         let current = startState;
         while (current !== stopState && current !== exitNode) {
-            if (emittedStates.has(current)) throw new Error('numeric for body state emitted twice');
+            if (emittedStates.has(current)) throw new Error('loop body state emitted twice');
             const item = prepared.get(current);
-            if (!item) throw new Error('missing numeric for body state');
+            if (!item) throw new Error('missing loop body state');
             emittedStates.add(current);
             for (const operation of item.bodyOperations) nodes.push(operationNode(operation, current));
 
@@ -792,8 +826,8 @@ function structureNumericForBodyRegion(stateById, region, bodyId, checkId, skipO
             }
             branchCount++;
             let join = immediatePostdominator(current, postdominators);
-            if (join === null || join === current) throw new Error('numeric for body branch has no unique join');
-            if (join !== exitNode && !region.ids.has(join)) throw new Error('numeric for body branch escapes loop');
+            if (join === null || join === current) throw new Error('loop body branch has no unique join');
+            if (join !== exitNode && !region.ids.has(join)) throw new Error('loop body branch escapes loop');
 
             const trueResult = info.onTrue === join ? { nodes: [] } : emitSequence(info.onTrue, join);
             const falseResult = info.onFalse === join ? { nodes: [] } : emitSequence(info.onFalse, join);
@@ -831,7 +865,7 @@ function matchCompilerNumericFor(graph, checkStateId) {
     for (const bodyId of check.successors) {
         const exitId = check.successors.find(id => id !== bodyId);
         if (exitId === undefined || !stateById.has(exitId)) continue;
-        const region = collectNumericForBodyRegion(stateById, predecessors, bodyId, check.id, exitId);
+        const region = collectLoopBodyRegion(stateById, predecessors, bodyId, check.id, exitId);
         if (region) bodyMatches.push({ bodyId, exitId, region });
     }
     if (bodyMatches.length !== 1) return null;
@@ -980,7 +1014,7 @@ function matchCompilerNumericFor(graph, checkStateId) {
     if (loopVariableWrites.some(operation => operation !== loopVariableDefinition && operation !== loopVariableCleanup)) return null;
 
     const skipOperations = new Set([loopVariableDefinition, loopVariableCleanup]);
-    const structuredBody = structureNumericForBodyRegion(stateById, region, bodyId, check.id, skipOperations, currentName);
+    const structuredBody = structureLoopBodyRegion(stateById, region, bodyId, check.id, skipOperations, currentName);
     if (!structuredBody) return null;
 
     const removeFromPreheader = new Set([currentInit.operation, negativeFlag.operation, zeroDef.operation, preTransition]);
@@ -1004,6 +1038,155 @@ function matchCompilerNumericFor(graph, checkStateId) {
         bodyBranchCount: structuredBody.branchCount,
         bodyJoinCount: structuredBody.joinCount,
     };
+}
+
+function matchCompilerWhile(graph, checkStateId) {
+    // A numeric for has the same natural-loop topology. Let the stricter compiler
+    // signature own it so generic while recovery cannot degrade a for into while true.
+    if (matchCompilerNumericFor(graph, checkStateId)) return null;
+
+    const states = graph.states || [];
+    const stateById = new Map(states.map(state => [state.id, state]));
+    const predecessors = computeGraphPredecessors(states);
+    const check = stateById.get(checkStateId);
+    if (!check || !Array.isArray(check.successors) || check.successors.length !== 2) return null;
+    if (hasUnsafeUnsupportedOperation(check.operations || [])) return null;
+
+    const checkInfo = transitionInfo(check);
+    if (checkInfo.error || checkInfo.kind !== "branch") return null;
+    const transitionIndex = check.operations.indexOf(checkInfo.operation);
+    if (transitionIndex !== check.operations.length - 1) return null;
+
+    // Local WeAreDevs WhileStatement lowering is pre-test: condition true enters
+    // the body, condition false enters the continuation/final block.
+    const bodyId = checkInfo.onTrue;
+    const exitId = checkInfo.onFalse;
+    if (!stateById.has(bodyId) || !stateById.has(exitId)) return null;
+    const region = collectLoopBodyRegion(stateById, predecessors, bodyId, check.id, exitId);
+    if (!region) return null;
+
+    const checkPreds = predecessors.get(check.id) || [];
+    const preheaderCandidates = checkPreds.filter(id => !region.ids.has(id));
+    if (preheaderCandidates.length !== 1) return null;
+    const preheaderId = preheaderCandidates[0];
+    if (!sameMembers(checkPreds, [preheaderId, ...region.latchIds])) return null;
+
+    const preheader = stateById.get(preheaderId);
+    if (!preheader || !Array.isArray(preheader.successors) || preheader.successors.length !== 1 || preheader.successors[0] !== check.id) return null;
+    if (hasUnsafeUnsupportedOperation(preheader.operations || [])) return null;
+    const preOps = preheader.operations || [];
+    const preTransitionIndex = preOps.findLastIndex(operation => operation?.kind === "state-transition");
+    if (preTransitionIndex !== preOps.length - 1) return null;
+    const preTransition = preOps[preTransitionIndex];
+    if (directNumericOperationValue({ expression: parseOperationExpression(preTransition) }) !== check.id) return null;
+
+    const conditionOperations = (check.operations || []).filter(operation => operation !== checkInfo.operation);
+    if (conditionOperations.some(operation => !operationText(operation))) return null;
+    const conditionNodes = conditionOperations.map(operation => operationNode(operation, check.id));
+
+    const structuredBody = structureLoopBodyRegion(stateById, region, bodyId, check.id, new Set());
+    if (!structuredBody) return null;
+
+    return {
+        preheaderId: preheader.id,
+        checkId: check.id,
+        bodyId,
+        bodyStateIds: [...region.ids],
+        exitId,
+        condition: checkInfo.condition,
+        conditionReads: checkInfo.conditionReads,
+        conditionNodes,
+        bodyNodes: structuredBody.nodes,
+        bodyBranchCount: structuredBody.branchCount,
+        bodyJoinCount: structuredBody.joinCount,
+        retainedPreheaderOperations: preOps.filter(operation => operation !== preTransition),
+    };
+}
+
+function collapseCompilerWhileLoops(graph) {
+    let working = {
+        ...graph,
+        states: (graph.states || []).map(state => ({
+            ...state,
+            predecessors: [...(state.predecessors || [])],
+            successors: [...(state.successors || [])],
+            operations: [...(state.operations || [])],
+        })),
+    };
+    let loopCount = 0;
+    let bodyBranchCount = 0;
+    let bodyJoinCount = 0;
+
+    while (true) {
+        let match = null;
+        for (const state of working.states) {
+            match = matchCompilerWhile(working, state.id);
+            if (match) break;
+        }
+        if (!match) break;
+
+        const loopNode = whileGuardNode(match.condition, match.conditionReads, match.conditionNodes, match.bodyNodes);
+        const structuredOperation = {
+            kind: "structured-while",
+            structuredNode: loopNode,
+            emittedText: formatStructuredNodes([loopNode]),
+            reads: [],
+            returnSinkSafe: false,
+        };
+        const stateName = graph.stateName || "state";
+        const syntheticTransition = {
+            kind: "state-transition",
+            emittedTarget: stateName,
+            rhs: String(match.exitId),
+            emittedText: `${stateName} = ${match.exitId}`,
+            reads: [],
+        };
+
+        const removed = new Set([match.checkId, ...match.bodyStateIds]);
+        working = {
+            ...working,
+            states: working.states.filter(state => !removed.has(state.id)).map(state => {
+                if (state.id !== match.preheaderId) return state;
+                return {
+                    ...state,
+                    operations: [...match.retainedPreheaderOperations, structuredOperation, syntheticTransition],
+                    successors: [match.exitId],
+                };
+            }),
+        };
+        working = rebuildGraphPredecessors(working);
+        loopCount++;
+        bodyBranchCount += match.bodyBranchCount || 0;
+        bodyJoinCount += match.bodyJoinCount || 0;
+    }
+
+    return { graph: working, loopCount, bodyBranchCount, bodyJoinCount };
+}
+
+function collapseCompilerStructuredLoops(graph) {
+    let working = graph;
+    let numericForLoopCount = 0;
+    let whileLoopCount = 0;
+    let bodyBranchCount = 0;
+    let bodyJoinCount = 0;
+
+    while (true) {
+        const numeric = collapseCompilerNumericForLoops(working);
+        working = numeric.graph;
+        numericForLoopCount += numeric.loopCount;
+        bodyBranchCount += numeric.bodyBranchCount || 0;
+        bodyJoinCount += numeric.bodyJoinCount || 0;
+
+        const whiles = collapseCompilerWhileLoops(working);
+        working = whiles.graph;
+        whileLoopCount += whiles.loopCount;
+        bodyBranchCount += whiles.bodyBranchCount || 0;
+        bodyJoinCount += whiles.bodyJoinCount || 0;
+
+        if (numeric.loopCount === 0 && whiles.loopCount === 0) break;
+    }
+
+    return { graph: working, numericForLoopCount, whileLoopCount, bodyBranchCount, bodyJoinCount };
 }
 
 function rebuildGraphPredecessors(graph) {
@@ -1501,9 +1684,9 @@ function solveSingleEntryControlFlow(originalAst, graph) {
     if (graph.entries.length !== 1) {
         return { applied: false, reason: "Internal beta CF region must have exactly one entry" };
     }
-    if (graph.states.length === 1) return { ...solveSingleState(originalAst, graph), numericForLoopCount: 0 };
+    if (graph.states.length === 1) return { ...solveSingleState(originalAst, graph), numericForLoopCount: 0, whileLoopCount: 0 };
 
-    const collapsed = collapseCompilerNumericForLoops(graph);
+    const collapsed = collapseCompilerStructuredLoops(graph);
     const solved = solveAcyclicStructured(originalAst, collapsed.graph);
     if (!solved.applied) return solved;
     return {
@@ -1511,7 +1694,8 @@ function solveSingleEntryControlFlow(originalAst, graph) {
         stateCount: graph.states.length,
         branchCount: (solved.branchCount || 0) + (collapsed.bodyBranchCount || 0),
         joinCount: (solved.joinCount || 0) + (collapsed.bodyJoinCount || 0),
-        numericForLoopCount: collapsed.loopCount,
+        numericForLoopCount: collapsed.numericForLoopCount,
+        whileLoopCount: collapsed.whileLoopCount,
     };
 }
 
@@ -1600,6 +1784,7 @@ function solveClosureRegions(originalAst, graph) {
         joinCount: sum("joinCount"),
         guardBranchCount: sum("guardBranchCount"),
         numericForLoopCount: sum("numericForLoopCount"),
+        whileLoopCount: sum("whileLoopCount"),
         terminalReturnCount: sum("terminalReturnCount"),
         terminalReturnPayloadSunk: results.some(result => result.terminalReturnPayloadSunk),
         terminalReturnPayloadSunkCount: sum("terminalReturnPayloadSunkCount"),
@@ -1642,5 +1827,7 @@ module.exports = {
     sinkTerminalReturnPayload,
     lowerTerminalReturn,
     collapseCompilerNumericForLoops,
+    collapseCompilerWhileLoops,
+    collapseCompilerStructuredLoops,
     solveBetaControlFlow,
 };

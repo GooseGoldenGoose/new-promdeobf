@@ -655,6 +655,47 @@ assert(numericForBranchBody.source.includes("afterBranch(loopVar)"));
 assert(!numericForBranchBody.source.includes("state ="));
 parseLua(numericForBranchBody.source, "<beta-cf-numeric-for-branch-body-output>");
 
+const whileGuardStructured = solveBetaControlFlow(ast, {
+    applied: true,
+    graph: {
+        cfgComplete: true,
+        stateName: "state",
+        entries: [1],
+        states: [
+            { id: 1, predecessors: [], successors: [2], operations: [
+                { kind: "version-define", emittedTarget: "setup", rhs: "args", emittedText: "local setup = args", reads: ["args"] },
+                { kind: "state-transition", emittedTarget: "state", rhs: "2", emittedText: "state = 2", reads: [] },
+            ] },
+            { id: 2, predecessors: [1, 3], successors: [3, 4], operations: [
+                { kind: "version-define", emittedTarget: "cond", rhs: "predicate()", emittedText: "local cond = predicate()", reads: [] },
+                { kind: "state-transition", emittedTarget: "state", rhs: "cond and 3 or 4", emittedText: "state = cond and 3 or 4", reads: ["cond"] },
+            ] },
+            { id: 3, predecessors: [2], successors: [2], operations: [
+                { kind: "version-define", emittedTarget: "sink", rhs: "consume()", emittedText: "local sink = consume()", reads: [] },
+                { kind: "state-transition", emittedTarget: "state", rhs: "2", emittedText: "state = 2", reads: [] },
+            ] },
+            { id: 4, predecessors: [2], successors: [], operations: [
+                { kind: "return-payload", terminalCompilerReturnPayload: true, returnExpressions: [], emittedText: "ReturnVal = {}", rhs: "{}", reads: [] },
+                { kind: "state-transition", emittedTarget: "state", rhs: "nil", emittedText: "state = nil", reads: [] },
+            ] },
+        ],
+    },
+});
+assert.equal(whileGuardStructured.applied, true);
+assert.equal(whileGuardStructured.whileLoopCount, 1);
+assert.equal(whileGuardStructured.numericForLoopCount, 0);
+assert(whileGuardStructured.source.includes("while true do"));
+assert(whileGuardStructured.source.includes("if not (cond) then"));
+assert(whileGuardStructured.source.includes("break"));
+assert(whileGuardStructured.source.includes("local sink = consume()"));
+assert(!whileGuardStructured.source.includes("state ="));
+const whileIndex = whileGuardStructured.source.indexOf("while true do");
+const conditionIndex = whileGuardStructured.source.indexOf("local cond = predicate()");
+const guardIndex = whileGuardStructured.source.indexOf("if not (cond) then");
+const bodyIndex = whileGuardStructured.source.indexOf("local sink = consume()");
+assert(whileIndex >= 0 && whileIndex < conditionIndex && conditionIndex < guardIndex && guardIndex < bodyIndex);
+parseLua(whileGuardStructured.source, "<beta-cf-while-guard-output>");
+
 const cyclic = solveBetaControlFlow(ast, {
     applied: true,
     graph: {
