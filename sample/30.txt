@@ -1,0 +1,617 @@
+return (function(...)
+    local R = {
+        "i87wH3g7HSH7lRPCiShaHT0n",
+        "Kgj0sEhyh0x/3Eh/3gp=",
+        "HSxBkT7ekKj7i4h+tXg1",
+        "V4hdi4hBkKj7iRhdtu==",
+        "iShaHT0nkT7ekKt5VTm7kTf=",
+        "IT7MHTPCiShaHT0nkTheHu==",
+        "iZjcIoP=",
+        "KgxdHTM=",
+        "IRhnHKfCiShaHT0n",
+        "Kgxola==",
+        "t8+cI4sCVTMCiShaHT0n",
+        "iShaHT0nkT7ekTHWiO==",
+        "KgxcISN7Yu==",
+        "JTjk37yCI7jAH/y2",
+        "IT7MHTPCiShaHT0nkKJnlKjn",
+        "iShaHT0nkT7ekKt5VTm7kTE=",
+        "tTAalTJ6",
+        "V4hdi4hBkTxwHu==",
+        "i87wH3g7HSH7lRPCl8+7l8CG",
+        "HSxBkT7ekKj7i4h+tXg+",
+        "347BHTh5IENKITATha==",
+        "V4hdi4hBkTh8HTM=",
+        "ULjXTwAktw+NsnHhpO=="
+    }
+    local function T(T)
+        return R[T + (39466)]
+    end
+    for T, F in ipairs({
+        {
+            1,
+            23
+        },
+        {
+            1,
+            8
+        },
+        {
+            9,
+            23
+        }
+    }) do
+        while F[1] < F[2] do
+            R[F[1]], R[F[2]], F[1], F[2] = R[F[2]], R[F[1]], F[1] + (1), F[2] - (1)
+        end
+    end
+    do
+        local T = string.sub
+        local F = string.len
+        local r = type
+        local C = table.insert
+        local p = table.concat
+        local S = {
+            s = 20,
+            b = 62,
+            ["1"] = 34,
+            ["2"] = 42,
+            k = 11,
+            A = 57,
+            ["3"] = 18,
+            ["/"] = 3,
+            F = 59,
+            x = 61,
+            d = 44,
+            R = 55,
+            p = 12,
+            i = 28,
+            M = 56,
+            T = 22,
+            j = 9,
+            G = 51,
+            w = 36,
+            K = 23,
+            g = 53,
+            X = 2,
+            v = 14,
+            ["4"] = 6,
+            P = 16,
+            o = 39,
+            S = 38,
+            ["0"] = 5,
+            ["5"] = 40,
+            n = 52,
+            Q = 15,
+            O = 32,
+            U = 19,
+            m = 49,
+            u = 0,
+            h = 21,
+            H = 25,
+            a = 48,
+            I = 27,
+            t = 29,
+            c = 41,
+            B = 50,
+            Z = 7,
+            z = 10,
+            C = 45,
+            Y = 30,
+            L = 35,
+            ["+"] = 33,
+            E = 4,
+            W = 47,
+            J = 13,
+            f = 8,
+            ["9"] = 58,
+            D = 63,
+            ["6"] = 43,
+            ["8"] = 54,
+            ["7"] = 37,
+            e = 46,
+            r = 60,
+            q = 31,
+            V = 26,
+            y = 1,
+            N = 17,
+            l = 24
+        }
+        local n = R
+        local m = math.floor
+        local G = string.char
+        for R = 1, #n, 1 do
+            local i = n[R]
+            if r(i) == "string" then
+                local r = F(i)
+                local P = {}
+                local e = 1
+                local U = 0
+                local h = 0
+                while e <= r do
+                    local R = T(i, e, e)
+                    local F = S[R]
+                    if F then
+                        U = U + F * (64) ^ ((3) - h)
+                        h = h + (1)
+                        if h == 4 then
+                            h = 0
+                            local R = m(U / (65536))
+                            local T = m((U % (65536)) / (256))
+                            local F = U % (256)
+                            C(P, G(R, T, F))
+                            U = 0
+                        end
+                    elseif R == "=" then
+                        C(P, G(m(U / (65536))))
+                        if e >= r or T(i, e + (1), e + (1)) ~= "=" then
+                            C(P, G(m((U % (65536)) / (256))))
+                        end
+                        break
+                    end
+                    e = e + (1)
+                end
+                n[R] = p(P)
+            end
+        end
+    end
+    return (function(R, r, C, p, S, n, m, h, t, U, E, P, b, F, G, l, e, i)
+        P, b, E, e, G, F, h, l, t, U, i = function()
+            e = (1) + e
+            i[e] = 1
+            return e
+        end, function(R)
+            i[R] = i[R] - (1)
+            if i[R] == 0 then
+                i[R], G[R] = nil, nil
+            end
+        end, function(R, T)
+            local r = U(T)
+            local C = function(C, p, S)
+                return F(R, {
+                    C,
+                    p,
+                    S
+                }, T, r)
+            end
+            return C
+        end, 0, {}, function(F, C, p, S)
+            local h, i, b, t, e, o, v, u, m, B, U, D, K, G, P
+            while F do
+                if F < 9506191 then
+                    if F < 3976628 then
+                        if F < 1260433 then
+                            if F < 986511 then
+                                if F < 573014 then
+                                    if F < 525914 then
+                                        B = T(-39461)
+                                        t = T(-39451)
+                                        F = 3812968
+                                        m = R[t]
+                                        t = m(B, i, b)
+                                    else
+                                        v = 2
+                                        o = t >= v
+                                        F = o and 11779124 or 14190147
+                                    end
+                                else
+                                    F = 14311614
+                                    b = nil
+                                end
+                            else
+                                if F < 1245712 then
+                                    if F < 1134943 then
+                                        e = 2
+                                        F = 10048284
+                                        U = e
+                                        e = 1
+                                        h = e
+                                        P = 1
+                                        e = 0
+                                        b = h < e
+                                        e = P - h
+                                    else
+                                        U = 2
+                                        e = P < U
+                                        F = e and 12202087 or 9626526
+                                    end
+                                else
+                                    B = T(-39463)
+                                    t = T(-39451)
+                                    m = R[t]
+                                    t = m(B, i, b)
+                                    F = 599567
+                                end
+                            end
+                        else
+                            if F < 3682631 then
+                                if F < 3176922 then
+                                    if F < 2309735 then
+                                        m = 1
+                                        F = i + m
+                                        P = 2
+                                        e = P
+                                        m = 1
+                                        P = 1
+                                        U = P
+                                        i = F
+                                        P = 0
+                                        h = U < P
+                                        F = 14311614
+                                        P = m - U
+                                    else
+                                        G = C[1]
+                                        F = 0
+                                        i = F
+                                        F = i >= G
+                                        F = 2306963
+                                    end
+                                else
+                                    t = 0
+                                    P = e
+                                    F = 14190147
+                                    o = 2
+                                    B = t >= o
+                                end
+                            else
+                                if F < 3815924 then
+                                    F = 14468358
+                                    b = nil
+                                else
+                                    b = P
+                                    B = i + b
+                                    o = 2
+                                    t = B % o
+                                    B = 0
+                                    m = t == B
+                                    F = m and 10277507 or 1259561
+                                end
+                            end
+                        end
+                    else
+                        if F < 7456729 then
+                            if F < 5363830 then
+                                if F < 4728177 then
+                                    if F < 4416075 then
+                                        K = T(-39456)
+                                        P = nil
+                                        i = nil
+                                        o = T(-39451)
+                                        D = 2
+                                        v = T(-39462)
+                                        t = R[o]
+                                        u = R[K]
+                                        o = t(v, u)
+                                        F = R[T(-39458)]
+                                        u = T(-39454)
+                                        v = T(-39451)
+                                        o = R[v]
+                                        t = E(3085751, {})
+                                        K = {
+                                            t(D)
+                                        }
+                                        v = o(u, r(K))
+                                        v = T(-39451)
+                                        b = nil
+                                        u = T(-39452)
+                                        t = nil
+                                        o = R[v]
+                                        v = o(u)
+                                        m = {}
+                                    else
+                                        F = 13289884
+                                    end
+                                else
+                                    e = 1
+                                    m = P + e
+                                    U = T(-39451)
+                                    P = m
+                                    h = T(-39447)
+                                    e = R[U]
+                                    F = 8788619
+                                    U = e(h, i, P)
+                                end
+                            else
+                                if F < 5905826 then
+                                    e = T(-39449)
+                                    P = T(-39451)
+                                    m = 1
+                                    F = i + m
+                                    m = R[P]
+                                    i = F
+                                    P = m(e, i)
+                                    m = 1
+                                    P = 2
+                                    F = 14468358
+                                    e = P
+                                    P = 1
+                                    U = P
+                                    P = 0
+                                    h = U < P
+                                    P = m - U
+                                else
+                                    t = 2
+                                    b = U >= t
+                                    F = b and 11555280 or 14012677
+                                end
+                            end
+                        else
+                            if F < 8879057 then
+                                if F < 8640060 then
+                                    if F < 8144800 then
+                                        e = 2
+                                        P = i >= e
+                                        F = P and 997269 or 5498256
+                                    else
+                                        F = 7972116
+                                        P = nil
+                                    end
+                                else
+                                    e = 2
+                                    m = P < e
+                                    F = m and 4818485 or 8440947
+                                end
+                            else
+                                if F < 9237281 then
+                                    F = 6979836
+                                else
+                                    G = C[1]
+                                    P = T(-39456)
+                                    i = T(-39456)
+                                    m = R[i]
+                                    i = 1
+                                    F = m + i
+                                    m = T(-39456)
+                                    R[m] = F
+                                    i = R[P]
+                                    m = i >= G
+                                    F = R[T(-39460)]
+                                    m = {
+                                        m
+                                    }
+                                end
+                            end
+                        end
+                    end
+                else
+                    if F < 13364251 then
+                        if F < 10982889 then
+                            if F < 10215190 then
+                                if F < 10134159 then
+                                    if F < 9716348 then
+                                        U = 0
+                                        b = T(-39456)
+                                        o = 2
+                                        R[b] = U
+                                        b = l(9501593, {})
+                                        F = 15643610
+                                        t = b(o)
+                                    else
+                                        t = not b
+                                        e = e + h
+                                        P = e <= U
+                                        P = t and P
+                                        t = e >= U
+                                        t = b and t
+                                        P = t or P
+                                        t = 3341035
+                                        F = P and t
+                                        P = 15991093
+                                        F = F or P
+                                    end
+                                else
+                                    t = 1
+                                    b = P
+                                    m = b == t
+                                    F = m and 523260 or 15477700
+                                end
+                            else
+                                if F < 10671429 then
+                                    if F < 10385513 then
+                                        t = T(-39451)
+                                        F = 599567
+                                        B = T(-39459)
+                                        m = R[t]
+                                        t = m(B, i, b)
+                                    else
+                                        o = 2
+                                        t = b(o)
+                                        F = t and 4364019 or 15643610
+                                    end
+                                else
+                                    o = T(-39465)
+                                    t = T(-39451)
+                                    b = R[t]
+                                    t = b(o, P, U)
+                                    F = 9055333
+                                end
+                            end
+                        else
+                            if F < 12527307 then
+                                if F < 11962242 then
+                                    if F < 11680744 then
+                                        U = nil
+                                        F = 1169573
+                                    else
+                                        t = nil
+                                        P = nil
+                                        F = 10048284
+                                    end
+                                else
+                                    U = 1
+                                    e = P + U
+                                    P = e
+                                    U = 0
+                                    F = 14012677
+                                    b = 2
+                                    h = U >= b
+                                end
+                            else
+                                if F < 13114346 then
+                                    i = T(-39443)
+                                    m = T(-39451)
+                                    G = C
+                                    F = R[m]
+                                    m = F(i)
+                                    F = 0
+                                    m = 2
+                                    i = F
+                                    F = i >= m
+                                    F = 5498256
+                                else
+                                    m = i >= G
+                                    F = m and 13452625 or 2306963
+                                end
+                            end
+                        end
+                    else
+                        if F < 14850692 then
+                            if F < 14235375 then
+                                if F < 14137535 then
+                                    if F < 13638772 then
+                                        m = {
+                                            i
+                                        }
+                                        F = R[T(-39444)]
+                                    else
+                                        t = 1
+                                        b = 1
+                                        h = U + b
+                                        U = h
+                                        b = U == t
+                                        F = b and 10820755 or 16126178
+                                    end
+                                else
+                                    v = T(-39451)
+                                    o = 1
+                                    B = t + o
+                                    t = B
+                                    o = R[v]
+                                    u = T(-39446)
+                                    v = o(u, P, t)
+                                    F = 527299
+                                end
+                            else
+                                if F < 14451166 then
+                                    b = not h
+                                    P = P + U
+                                    m = P <= e
+                                    m = b and m
+                                    b = P >= e
+                                    b = h and b
+                                    m = b or m
+                                    b = 3824191
+                                    F = m and b
+                                    m = 4482823
+                                    F = F or m
+                                else
+                                    P = P + U
+                                    b = not h
+                                    m = P <= e
+                                    m = b and m
+                                    b = P >= e
+                                    b = h and b
+                                    m = b or m
+                                    b = 10206801
+                                    F = m and b
+                                    m = 16287792
+                                    F = F or m
+                                end
+                            end
+                        else
+                            if F < 16031286 then
+                                if F < 15950041 then
+                                    if F < 15570135 then
+                                        t = T(-39451)
+                                        B = T(-39455)
+                                        F = 3812968
+                                        m = R[t]
+                                        t = m(B, i, b)
+                                    else
+                                        v = T(-39457)
+                                        K = T(-39456)
+                                        o = T(-39451)
+                                        t = R[o]
+                                        F = 10607165
+                                        u = R[K]
+                                        o = t(v, u)
+                                    end
+                                else
+                                    P = 0
+                                    F = 1169573
+                                end
+                            else
+                                if F < 16165934 then
+                                    t = T(-39451)
+                                    b = R[t]
+                                    F = 9055333
+                                    o = T(-39453)
+                                    t = b(o, P, U)
+                                else
+                                    m = 0
+                                    F = 8788619
+                                    P = m
+                                end
+                            end
+                        end
+                    end
+                end
+            end
+            F = #S
+            return r(m)
+        end, function(R)
+            local T, F = 1, R[1]
+            while F do
+                i[F], T = i[F] - (1), T + (1)
+                if i[F] == 0 then
+                    i[F], G[F] = nil, nil
+                end
+                F = R[T]
+            end
+        end, function(R, T)
+            local r = U(T)
+            local C = function(C, p, S, n, m, G)
+                return F(R, {
+                    C,
+                    p,
+                    S,
+                    n,
+                    m,
+                    G
+                }, T, r)
+            end
+            return C
+        end, function(R, T)
+            local r = U(T)
+            local C = function(...)
+                return F(R, {
+                    ...
+                }, T, r)
+            end
+            return C
+        end, function(R)
+            for T = 1, #R, 1 do
+                i[R[T]] = (1) + i[R[T]]
+            end
+            if C then
+                local F = C(true)
+                local r = S(F)
+                r[T(-39445)], r[T(-39448)], r[T(-39450)] = R, h, function()
+                    return 3378672
+                end
+                return F
+            else
+                return p({}, {
+                    [T(-39448)] = h,
+                    [T(-39445)] = R,
+                    [T(-39450)] = function()
+                        return 3378672
+                    end
+                })
+            end
+        end, {}
+        return (t(12788302, {}))(r(m))
+    end)(getfenv and getfenv() or _ENV, unpack or table[T(-39464)], newproxy, setmetatable, getmetatable, select, {
+        ...
+    })
+end)(...)
