@@ -556,21 +556,38 @@ function versionVmBlockRegisters(source, ast) {
     }
 
     // Phase 2: rewrite reads using the proven incoming definition plus writes seen
-    // earlier in the same block.
+    // earlier in the same block. Capture the exact presentation decisions as graph
+    // metadata so developer tools can visualize CFG + lifetime flow without re-deriving it.
     const edits = [];
+    const graphStates = [];
     for (const block of blocks) {
+        const graphOperations = [];
         const latestVersions = cfgComplete
             ? uniqueVersionMap(inDefinitions.get(block.stateId) || new Map())
             : new Map();
         const incomingVersionNames = new Set(latestVersions.values());
 
         for (const statement of block.statements) {
-            if (statement?.type !== "AssignmentStatement") continue;
+            if (statement?.type !== "AssignmentStatement") {
+                graphOperations.push({
+                    index: graphOperations.length + 1,
+                    kind: "statement",
+                    originalText: Array.isArray(statement?.range) ? source.slice(statement.range[0], statement.range[1]).trim() : String(statement?.type || "unknown"),
+                    reads: [],
+                });
+                continue;
+            }
             const plan = block.plans.get(statement);
             const variables = statement.variables || [];
             const init = statement.init || [];
 
             if (!plan || plan.kind === "unsupported") {
+                graphOperations.push({
+                    index: graphOperations.length + 1,
+                    kind: "unsupported",
+                    originalText: Array.isArray(statement.range) ? source.slice(statement.range[0], statement.range[1]).trim() : "",
+                    reads: [],
+                });
                 for (const variable of variables) {
                     if (isIdentifier(variable) && candidateNames.has(variable.name)) latestVersions.delete(variable.name);
                 }
@@ -591,21 +608,57 @@ function versionVmBlockRegisters(source, ast) {
             if (plan.kind === "other") {
                 const originalRhs = source.slice(init[0].range[0], init[0].range[1]);
                 if (rhs !== originalRhs) edits.push({ start: init[0].range[0], end: init[0].range[1], replacement: rhs });
+                graphOperations.push({
+                    index: graphOperations.length + 1,
+                    kind: "other",
+                    originalTarget: variables[0].name,
+                    emittedTarget: variables[0].name,
+                    rhs,
+                    reads: [...usedVersions],
+                    originalText: source.slice(statement.range[0], statement.range[1]).trim(),
+                    emittedText: `${variables[0].name} = ${rhs}`,
+                });
                 continue;
             }
 
             if (plan.kind === "preserved") {
                 const originalRhs = source.slice(init[0].range[0], init[0].range[1]);
                 if (rhs !== originalRhs) edits.push({ start: init[0].range[0], end: init[0].range[1], replacement: rhs });
+                graphOperations.push({
+                    index: graphOperations.length + 1,
+                    kind: plan.originalName === stateName ? "state-transition" : "return-payload",
+                    originalTarget: plan.originalName,
+                    emittedTarget: plan.originalName,
+                    rhs,
+                    reads: [...usedVersions],
+                    originalText: source.slice(statement.range[0], statement.range[1]).trim(),
+                    emittedText: `${plan.originalName} = ${rhs}`,
+                });
                 latestVersions.delete(plan.originalName);
                 continue;
             }
 
             if (plan.kind === "versioned") {
+                const declarationPrefix = plan.declareVersion === false ? "" : "local ";
+                const emittedText = `${declarationPrefix}${plan.newName} = ${rhs}`;
                 edits.push({
                     start: statement.range[0],
                     end: statement.range[1],
-                    replacement: `${plan.declareVersion === false ? "" : "local "}${plan.newName} = ${rhs}`,
+                    replacement: emittedText,
+                });
+                const isCleanupLifetime = Boolean(plan.lifetimeEpoch);
+                graphOperations.push({
+                    index: graphOperations.length + 1,
+                    kind: plan.isLifetimeKill
+                        ? "lifetime-kill"
+                        : (isCleanupLifetime ? (plan.declareVersion === false ? "lifetime-mutate" : "lifetime-start") : "version-define"),
+                    originalTarget: plan.originalName,
+                    emittedTarget: plan.newName,
+                    rhs,
+                    reads: [...usedVersions],
+                    originalText: source.slice(statement.range[0], statement.range[1]).trim(),
+                    emittedText,
+                    lifetimeEpoch: plan.lifetimeEpoch || null,
                 });
                 if (plan.isLifetimeKill) latestVersions.delete(plan.originalName);
                 else latestVersions.set(plan.originalName, plan.newName);
@@ -613,6 +666,19 @@ function versionVmBlockRegisters(source, ast) {
             }
         }
 
+        const predecessorStates = (predecessors.get(block.stateId) || []).map(item => item.stateId);
+        const finalStateWrite = findLastSingleWrites(block.statements, new Set([stateName])).get(stateName);
+        graphStates.push({
+            id: block.stateId,
+            entry: closureEntries.has(block.stateId),
+            predecessors: predecessorStates,
+            successors: Array.isArray(block.successors) ? [...block.successors] : null,
+            transition: graphOperations.find(operation => operation.kind === "state-transition")?.rhs ||
+                (finalStateWrite?.value && Array.isArray(finalStateWrite.value.range)
+                    ? source.slice(finalStateWrite.value.range[0], finalStateWrite.value.range[1]).trim()
+                    : null),
+            operations: graphOperations,
+        });
     }
 
     if (edits.length === 0) {
@@ -620,6 +686,52 @@ function versionVmBlockRegisters(source, ast) {
     }
 
     const output = applyTextEdits(source, edits);
+
+    const cleanupLifetimeNames = new Set();
+    for (const state of graphStates) {
+        for (const operation of state.operations) {
+            if (operation.lifetimeEpoch && operation.emittedTarget) cleanupLifetimeNames.add(operation.emittedTarget);
+        }
+    }
+    const lifetimeByName = new Map();
+    for (const name of cleanupLifetimeNames) lifetimeByName.set(name, { name, originalRegister: null, events: [] });
+    for (const state of graphStates) {
+        for (const operation of state.operations) {
+            if (operation.lifetimeEpoch && operation.emittedTarget && lifetimeByName.has(operation.emittedTarget)) {
+                const lifetime = lifetimeByName.get(operation.emittedTarget);
+                lifetime.originalRegister ||= operation.originalTarget;
+                lifetime.events.push({
+                    state: state.id,
+                    operation: operation.index,
+                    kind: operation.kind === "lifetime-start" ? "start" : operation.kind === "lifetime-mutate" ? "mutate" : "kill",
+                    text: operation.emittedText || `${operation.emittedTarget} = ${operation.rhs}`,
+                });
+            }
+            for (const read of operation.reads || []) {
+                const lifetime = lifetimeByName.get(read);
+                if (!lifetime) continue;
+                lifetime.events.push({
+                    state: state.id,
+                    operation: operation.index,
+                    kind: "read",
+                    text: operation.emittedText || operation.originalText || `${operation.emittedTarget || "?"} = ${operation.rhs || "?"}`,
+                });
+            }
+        }
+    }
+    const kindOrder = { start: 0, read: 1, mutate: 2, kill: 3 };
+    for (const lifetime of lifetimeByName.values()) {
+        lifetime.events.sort((left, right) => left.state - right.state || left.operation - right.operation || kindOrder[left.kind] - kindOrder[right.kind]);
+    }
+    const graph = {
+        stateName,
+        returnName,
+        cfgComplete,
+        entries: [...closureEntries].sort((left, right) => left - right),
+        states: graphStates.sort((left, right) => left.id - right.id),
+        lifetimes: [...lifetimeByName.values()].sort((left, right) => left.name.localeCompare(right.name, undefined, { numeric: true })),
+    };
+
     return {
         source: output,
         found: true,
@@ -633,6 +745,7 @@ function versionVmBlockRegisters(source, ast) {
         mapping: [...baseIds.entries()].map(([originalName, baseId]) => ({ originalName, baseName: `r_v${baseId}` })),
         versions,
         edits,
+        graph,
     };
 }
 
