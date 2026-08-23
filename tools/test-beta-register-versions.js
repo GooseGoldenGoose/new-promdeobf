@@ -260,4 +260,61 @@ assert(returnedLocalResult.lifetimeAnalysisStats.terminalReturnAnchorCount >= 1)
 assert(returnedLocalResult.lifetimeAnalysisStats.terminalReturnCopyMergeCount >= 1);
 parseLua(returnedLocalResult.source, "<beta-returned-local-output>");
 
+const terminalPlacementSource = `vm = function(state, args, upvalues, gcProxy)
+    local r1, ReturnVal
+    while state do
+        if state == 1 then
+            r1 = "x"
+            ReturnVal = {}
+            mark("after")
+            r1 = nil
+            state = nil
+        end
+    end
+    state = #gcProxy
+    return unpack(ReturnVal)
+end
+root = createClosure(1, {})`;
+
+const terminalPlacementResult = versionVmBlockRegisters(
+    terminalPlacementSource,
+    parseLua(terminalPlacementSource, "<beta-terminal-placement-test>")
+);
+assert.equal(terminalPlacementResult.terminalReturnPlacementMoves, 1);
+const terminalMarkIndex = terminalPlacementResult.source.indexOf('mark("after")');
+const terminalPayloadIndex = terminalPlacementResult.source.indexOf('ReturnVal = {}');
+const terminalStopIndex = terminalPlacementResult.source.indexOf('state = nil');
+assert(terminalMarkIndex >= 0 && terminalMarkIndex < terminalPayloadIndex);
+assert(terminalPayloadIndex < terminalStopIndex);
+const terminalOps = terminalPlacementResult.graph.states[0].operations;
+assert.equal(terminalOps[terminalOps.length - 2].kind, "return-payload");
+assert.equal(terminalOps[terminalOps.length - 1].kind, "state-transition");
+parseLua(terminalPlacementResult.source, "<beta-terminal-placement-output>");
+
+const unsafeNonEmptyPlacementSource = `vm = function(state, args, upvalues, gcProxy)
+    local r1, ReturnVal
+    while state do
+        if state == 1 then
+            r1 = produce()
+            ReturnVal = { r1 }
+            mark("after")
+            state = nil
+        end
+    end
+    state = #gcProxy
+    return unpack(ReturnVal)
+end
+root = createClosure(1, {})`;
+
+const unsafeNonEmptyPlacementResult = versionVmBlockRegisters(
+    unsafeNonEmptyPlacementSource,
+    parseLua(unsafeNonEmptyPlacementSource, "<beta-unsafe-nonempty-placement-test>")
+);
+assert.equal(unsafeNonEmptyPlacementResult.terminalReturnPlacementMoves, 0);
+assert(
+    unsafeNonEmptyPlacementResult.source.indexOf('ReturnVal = { r_v1_1 }') <
+    unsafeNonEmptyPlacementResult.source.indexOf('mark("after")')
+);
+parseLua(unsafeNonEmptyPlacementResult.source, "<beta-unsafe-nonempty-placement-output>");
+
 console.log("beta register versioning tests passed");

@@ -2,6 +2,7 @@ const { findVmFunction } = require("./vm-state");
 const { findVmReturnRegister, findRegisterDeclaration } = require("./vm-register-names");
 const { applyTextEdits } = require("./text-edits");
 const { analyzeBetaRegisterLifetimes } = require("./beta-register-lifetimes");
+const luaparse = require("../parser/luaparse");
 
 function isNode(value) {
     return value && typeof value === "object" && typeof value.type === "string";
@@ -118,6 +119,104 @@ function isCompilerReturnPayload(node, candidateNames) {
     return (node.fields || []).every(field =>
         field?.type === "TableValue" && isCompilerReturnRegisterRead(field.value, candidateNames)
     );
+}
+
+function canSinkTerminalReturnAcross(payload, operation) {
+    const expressions = payload?.returnExpressions;
+    if (!Array.isArray(expressions)) return false;
+    if (expressions.length === 0) return true;
+    if (operation?.returnSinkSafe !== true) return false;
+    const returnedReads = new Set(payload.reads || []);
+    return !returnedReads.has(operation.emittedTarget);
+}
+
+function canonicalizeTerminalReturnOperations(operations) {
+    const result = [...operations];
+    const finalTransitionIndex = result.findLastIndex(operation => operation.kind === "state-transition");
+    if (finalTransitionIndex < 0 || finalTransitionIndex !== result.length - 1) {
+        return { operations: result, moved: false };
+    }
+    const transition = result[finalTransitionIndex];
+    if (String(transition.rhs || "").trim() !== "nil") return { operations: result, moved: false };
+
+    const payloadIndexes = [];
+    for (let index = 0; index < finalTransitionIndex; index++) {
+        if (result[index].kind === "return-payload" && result[index].terminalCompilerReturnPayload === true) {
+            payloadIndexes.push(index);
+        }
+    }
+    if (payloadIndexes.length !== 1) return { operations: result, moved: false };
+
+    const payloadIndex = payloadIndexes[0];
+    if (payloadIndex === finalTransitionIndex - 1) return { operations: result, moved: false };
+    const payload = result[payloadIndex];
+    const crossed = result.slice(payloadIndex + 1, finalTransitionIndex);
+    if (!crossed.every(operation => canSinkTerminalReturnAcross(payload, operation))) {
+        return { operations: result, moved: false };
+    }
+
+    result.splice(payloadIndex, 1);
+    result.splice(result.length - 1, 0, payload);
+    for (let index = 0; index < result.length; index++) result[index].index = index + 1;
+    return { operations: result, moved: true };
+}
+
+function parseBetaSource(source) {
+    return luaparse.parse(source, {
+        luaVersion: "luau",
+        comments: true,
+        scope: true,
+        locations: true,
+        ranges: true,
+    });
+}
+
+function lineStart(source, offset) {
+    const previous = source.lastIndexOf("\n", Math.max(0, offset - 1));
+    return previous < 0 ? 0 : previous + 1;
+}
+
+function lineEnd(source, offset) {
+    const next = source.indexOf("\n", offset);
+    return next < 0 ? source.length : next + 1;
+}
+
+function canonicalizeTerminalReturnSource(source, stateName, returnName, movedStateIds) {
+    if (!movedStateIds.size) return source;
+    const ast = parseBetaSource(source);
+    const vm = findVmFunction(ast);
+    if (!vm) return source;
+    const leaves = collectStateLeafClauses(vm.functionNode, stateName, []);
+    const edits = [];
+
+    for (const leaf of leaves) {
+        const stateId = numericValue(leaf.condition.left) ?? numericValue(leaf.condition.right);
+        if (!movedStateIds.has(stateId)) continue;
+        const statements = (leaf.body || []).filter(statement => statement?.type !== "CommentStatement");
+        if (!statements.length) continue;
+        const writes = findLastSingleWrites(statements, new Set([stateName, returnName]));
+        const stateWrite = writes.get(stateName);
+        const returnWrite = writes.get(returnName);
+        if (!stateWrite || !returnWrite) continue;
+        if (!isNilLiteral(stateWrite.value) || stateWrite.index !== statements.length - 1) continue;
+        if (returnWrite.index >= stateWrite.index) continue;
+        if (!Array.isArray(returnWrite.statement.range) || !Array.isArray(stateWrite.statement.range)) continue;
+
+        const returnLineStart = lineStart(source, returnWrite.statement.range[0]);
+        const returnLineEnd = lineEnd(source, returnWrite.statement.range[1]);
+        const stateLineStart = lineStart(source, stateWrite.statement.range[0]);
+        if (returnLineStart >= returnLineEnd || returnLineEnd > stateLineStart) continue;
+
+        const returnChunk = source.slice(returnLineStart, returnLineEnd);
+        const between = source.slice(returnLineEnd, stateLineStart);
+        edits.push({
+            start: returnLineStart,
+            end: stateLineStart,
+            replacement: between + returnChunk,
+        });
+    }
+
+    return edits.length ? applyTextEdits(source, edits) : source;
 }
 
 function collectClosureEntryStates(rootNode) {
@@ -612,7 +711,14 @@ function versionVmBlockRegisters(source, ast) {
         return { source, found: true, applied: false, reason: "No supported VM register assignments were found" };
     }
 
-    const output = applyTextEdits(source, edits);
+    let output = applyTextEdits(source, edits);
+    const movedTerminalReturnStates = new Set();
+    for (const state of graphStates) {
+        const canonical = canonicalizeTerminalReturnOperations(state.operations);
+        state.operations = canonical.operations;
+        if (canonical.moved) movedTerminalReturnStates.add(state.id);
+    }
+    output = canonicalizeTerminalReturnSource(output, stateName, returnName, movedTerminalReturnStates);
 
     const registerEpochNames = new Set();
     for (const state of graphStates) {
@@ -670,6 +776,7 @@ function versionVmBlockRegisters(source, ast) {
         skippedAssignments,
         cfgComplete,
         crossBlockVersionCount: crossBlockUsedVersions.size,
+        terminalReturnPlacementMoves: movedTerminalReturnStates.size,
         mapping: [...baseIds.entries()].map(([originalName, baseId]) => ({ originalName, baseName: `r_v${baseId}` })),
         versions,
         edits,

@@ -29,6 +29,7 @@ function main() {
     console.log(`VM state blocks: ${result.blockCount}`);
     console.log(`Versioned assignments: ${result.versionedAssignmentCount}`);
     console.log(`Preserved final state/return-table writes: ${result.preservedFinalWrites}`);
+    console.log(`Terminal return placement moves: ${result.terminalReturnPlacementMoves}`);
     console.log(`Cross-state versions: ${result.crossBlockVersionCount}`);
     console.log(`Skipped assignments: ${result.skippedAssignments}`);
     if (result.lifetimeAnalysisStats) {
