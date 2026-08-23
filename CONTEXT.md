@@ -30,7 +30,7 @@ When continuing this project in a new chat:
 - Preserve stable pipeline behavior when experimenting. A recovery pass must fail closed: if proof is incomplete, preserve the previous safe output rather than guess.
 - End every project-related turn with exactly: `Done for this turn — you can prompt now.`
 
-Latest beta behavior checkpoint is `cb2a1af Track beta register lifetime epochs` on `main`, pushed to `origin/main`. Beta now treats ordinary scalar-register cleanup `rN = nil` as an end-of-life boundary: writes/reads that provably flow to the same unique cleanup reuse one `r_vN_epoch` name across state blocks, mutations assign that same name, the cleanup emits that same name `= nil`, and a later post-cleanup definition starts the next suffix. `state` and `ReturnVal` keep their temporary/per-write beta versioning rules. Beta remains analysis/presentation-only and block-local names are intentionally allowed to be referenced across state blocks. All tracked fixtures `sample/1` through `sample/11` have matching `.source.lua` + formatter-normalized `.txt` pairs. Source lexical-scope reconstruction has NOT been implemented yet.
+Latest beta tooling checkpoint is `9e9800e Add beta register flow graph tool` on `main`, pushed to `origin/main`. Beta still uses cleanup-delimited ordinary-register lifetimes from `cb2a1af`; it now also exposes exact CFG/state/lifetime presentation metadata and `tools/beta-register-graph.js` renders that metadata as text, JSON, Graphviz DOT, and Mermaid. The graph includes every normalized state, CFG edge, every state-body statement, version/lifetime start, read, mutation, and `= nil` kill. Beta remains analysis/presentation-only and block-local names may intentionally be referenced across state blocks. All tracked fixtures `sample/1` through `sample/11` have matching `.source.lua` + formatter-normalized `.txt` pairs. Source lexical-scope reconstruction has NOT been implemented yet.
 
 # Core Knowledge & Rules
 
@@ -513,6 +513,8 @@ without producing unrelated locals.
 - `state` and `ReturnVal` are excluded from cleanup-delimited lifetime reuse; they keep the beta temporary-version rules plus the existing final-write preservation rules. If cleanup analysis is not uniquely provable, beta keeps the more conservative per-write/raw behavior rather than merging lifetimes. The backward fixed point also fails closed if it does not converge within its bounded iteration budget.
 - Definitions remain `local` inside the state where the lifetime/version begins even when later state blocks reference that name; this is intentional because current beta output is for analysis/readability, not execution. Normal `output/N.lua` behavior is unchanged.
 - Focused regression: `tools/test-beta-register-versions.js`; beta output is reparsed before writing.
+- Beta graph command: `node tools/beta-register-graph.js <output.lua> [output-base]`. Default `output/11.lua` output base is `output/11.beta.graph`. It writes `.txt` (complete human-readable CFG/lifetime trace), `.json` (machine-readable graph metadata), `.dot` (Graphviz), and `.mmd` (Mermaid). If Graphviz `dot` is installed, it also renders `.svg`; the current Windows environment does not have `dot`, so SVG generation is skipped cleanly.
+- Graph metadata is emitted directly by `passes/beta-register-versions.js` from the same decisions used to write beta code; the graph tool does not re-guess lifetimes. Each state records entry/predecessor/successor/transition data and all body statements. Cleanup-delimited lifetimes record start/read/mutate/kill locations. Sample 11 graph is 3 states / 1 lifetime; sample 5 full-scale generation succeeds at 938 states / 97 cleanup-delimited lifetimes. Focused regression: `tools/test-beta-register-graph.js`.
 
 
 ## Performance Optimization Audit (2026-08-23)
@@ -561,7 +563,7 @@ without producing unrelated locals.
 - Workspace: `C:\Users\reala\Desktop\!workspaces\promdeobf ova\new promdeobf`.
 - Branch: `main`.
 - Remote: `https://github.com/GooseGoldenGoose/new-promdeobf.git`.
-- Latest pushed beta behavior checkpoint at this snapshot: `cb2a1af Track beta register lifetime epochs`.
+- Latest pushed beta tooling checkpoint at this snapshot: `9e9800e Add beta register flow graph tool`; lifetime behavior checkpoint remains `cb2a1af Track beta register lifetime epochs`.
 - Previous beta behavior checkpoint: `88a2dc5 Preserve final VM special writes in beta`; it is superseded by the current rule that preserves all final `state` writes but only terminal table-valued `ReturnVal`.
 - Latest fixture checkpoint: `4717198 Add beta branch sample 11`.
 - Immediately preceding context checkpoint: `2643ebc Document restored sample coverage`.
@@ -666,6 +668,7 @@ without producing unrelated locals.
 `826ede5 Propagate proven beta register versions across states`
 `f93cc7a Keep beta versions block local`
 `cb2a1af Track beta register lifetime epochs`
+`9e9800e Add beta register flow graph tool`
 
 ### New-chat operating instruction
 
