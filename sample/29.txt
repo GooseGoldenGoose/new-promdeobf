@@ -1,0 +1,238 @@
+return (function(...)
+    local U = {
+        "RCcUo8==",
+        "RCcmvJ4=",
+        "lAszJSvUsYfCQ+38",
+        "RCcfQZlIKg==",
+        "QJY1ag==",
+        "0ZYTvHc9",
+        "sJP8oJ3e",
+        "0SBfQUr="
+    }
+    for b, J in ipairs({
+        {
+            1,
+            8
+        },
+        {
+            1,
+            7
+        },
+        {
+            8,
+            8
+        }
+    }) do
+        while J[1] < J[2] do
+            U[J[1]], U[J[2]], J[1], J[2] = U[J[2]], U[J[1]], J[1] + (1), J[2] - (1)
+        end
+    end
+    local function b(b)
+        return U[b - (20550)]
+    end
+    do
+        local b = math.floor
+        local J = string.len
+        local a = string.char
+        local S = U
+        local q = {
+            ["8"] = 48,
+            u = 18,
+            d = 47,
+            c = 61,
+            ["6"] = 59,
+            b = 42,
+            j = 8,
+            U = 39,
+            r = 16,
+            ["/"] = 33,
+            R = 23,
+            s = 29,
+            T = 46,
+            O = 36,
+            Q = 27,
+            W = 63,
+            P = 57,
+            Y = 5,
+            H = 6,
+            K = 30,
+            e = 43,
+            E = 20,
+            J = 22,
+            X = 4,
+            k = 60,
+            y = 51,
+            n = 14,
+            D = 55,
+            V = 12,
+            ["1"] = 52,
+            g = 0,
+            ["0"] = 28,
+            ["5"] = 50,
+            ["7"] = 32,
+            m = 44,
+            Z = 38,
+            o = 24,
+            A = 54,
+            S = 7,
+            ["3"] = 13,
+            l = 17,
+            f = 41,
+            G = 40,
+            z = 34,
+            ["2"] = 3,
+            t = 35,
+            w = 31,
+            ["9"] = 45,
+            M = 49,
+            v = 25,
+            C = 53,
+            L = 11,
+            x = 15,
+            B = 9,
+            N = 2,
+            a = 26,
+            F = 21,
+            ["4"] = 56,
+            i = 10,
+            h = 1,
+            I = 37,
+            ["+"] = 19,
+            q = 58,
+            p = 62
+        }
+        local l = table.insert
+        local k = type
+        local A = table.concat
+        local K = string.sub
+        for U = 1, #S, 1 do
+            local Q = S[U]
+            if k(Q) == "string" then
+                local k = J(Q)
+                local Y = {}
+                local z = 1
+                local s = 0
+                local y = 0
+                while z <= k do
+                    local U = K(Q, z, z)
+                    local J = q[U]
+                    if J then
+                        s = s + J * (64) ^ ((3) - y)
+                        y = y + (1)
+                        if y == 4 then
+                            y = 0
+                            local U = b(s / (65536))
+                            local J = b((s % (65536)) / (256))
+                            local S = s % (256)
+                            l(Y, a(U, J, S))
+                            s = 0
+                        end
+                    elseif U == "=" then
+                        l(Y, a(b(s / (65536))))
+                        if z >= k or K(Q, z + (1), z + (1)) ~= "=" then
+                            l(Y, a(b((s % (65536)) / (256))))
+                        end
+                        break
+                    end
+                    z = z + (1)
+                end
+                S[U] = A(Y)
+            end
+        end
+    end
+    return (function(U, a, S, q, l, k, A, s, J, P, y, K, Y, z, H, Q)
+        J, Q, Y, y, s, z, H, K, P = function(J, S, q, l)
+            local K, z, Y, A, Q
+            while J do
+                if J < 6317913 then
+                    if J < 4243588 then
+                        z = 2
+                        K = S
+                        Q = b(20554)
+                        Y = U[Q]
+                        Q = b(20555)
+                        A = Y[Q]
+                        Q = 1
+                        Y = A(Q, z)
+                        A = 1
+                        J = Y == A
+                        J = 5339709
+                    else
+                        A = b(20557)
+                        J = U[A]
+                        Y = 12
+                        A = J(Y)
+                        J = 8054099
+                    end
+                else
+                    if J < 14105300 then
+                        z = 2
+                        Q = b(20554)
+                        Y = U[Q]
+                        Q = b(20555)
+                        A = Y[Q]
+                        Q = 1
+                        Y = A(Q, z)
+                        A = 1
+                        J = Y == A
+                        J = J and 15993865 or 5339709
+                    else
+                        A = {}
+                        J = U[b(20552)]
+                    end
+                end
+            end
+            J = #l
+            return a(A)
+        end, {}, function()
+            z = (1) + z
+            Q[z] = 1
+            return z
+        end, function(U)
+            local b, J = 1, U[1]
+            while J do
+                Q[J], b = Q[J] - (1), b + (1)
+                if Q[J] == 0 then
+                    Q[J], K[J] = nil, nil
+                end
+                J = U[b]
+            end
+        end, function(U)
+            for b = 1, #U, 1 do
+                Q[U[b]] = Q[U[b]] + (1)
+            end
+            if S then
+                local J = S(true)
+                local a = l(J)
+                a[b(20553)], a[b(20558)], a[b(20551)] = U, y, function()
+                    return 843799
+                end
+                return J
+            else
+                return q({}, {
+                    [b(20558)] = y,
+                    [b(20553)] = U,
+                    [b(20551)] = function()
+                        return 843799
+                    end
+                })
+            end
+        end, 0, function(U, b)
+            local a = s(b)
+            local S = function(...)
+                return J(U, {
+                    ...
+                }, b, a)
+            end
+            return S
+        end, {}, function(U)
+            Q[U] = Q[U] - (1)
+            if Q[U] == 0 then
+                Q[U], K[U] = nil, nil
+            end
+        end
+        return (H(1839677, {}))(a(A))
+    end)(getfenv and getfenv() or _ENV, unpack or table[b(20556)], newproxy, setmetatable, getmetatable, select, {
+        ...
+    })
+end)(...)
