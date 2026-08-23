@@ -173,6 +173,41 @@ function isCanonicalNilStop(statement, stateName) {
         isIdentifier(variables[0], stateName) && init[0]?.type === "NilLiteral";
 }
 
+function isDirectNumericStateTransition(statement, stateName) {
+    if (statement?.type !== "AssignmentStatement") return false;
+    const variables = statement.variables || [];
+    const init = statement.init || [];
+    return variables.length === 1 && init.length === 1 &&
+        isIdentifier(variables[0], stateName) && numericValue(init[0]) !== null;
+}
+
+function canonicalizeDirectNumericStateTransition(statements, stateName, overflowName = null) {
+    if (statements.length < 2) return { swaps: 0, moved: 0 };
+
+    let transitionIndex = -1;
+    for (let index = statements.length - 1; index >= 0; index--) {
+        if (!statementWrites(statements[index], overflowName).has(stateName)) continue;
+        transitionIndex = index;
+        break;
+    }
+    if (transitionIndex < 0 || transitionIndex === statements.length - 1) return { swaps: 0, moved: 0 };
+
+    const transition = statements[transitionIndex];
+    if (!isDirectNumericStateTransition(transition, stateName)) return { swaps: 0, moved: 0 };
+
+    const crossed = statements.slice(transitionIndex + 1);
+    if (crossed.some(statement =>
+        statementReads(statement, overflowName).has(stateName) ||
+        statementWrites(statement, overflowName).has(stateName)
+    )) {
+        return { swaps: 0, moved: 0 };
+    }
+
+    statements.splice(transitionIndex, 1);
+    statements.push(transition);
+    return { swaps: crossed.length, moved: 1 };
+}
+
 function isCompilerReturnRegisterRead(node) {
     if (isIdentifier(node)) return true;
     if (node?.type !== "CallExpression" || !isIdentifier(node.base, "unpack")) return false;
@@ -540,6 +575,13 @@ function scheduleStatementList(statements, stateName, overflowName = null, retur
         };
     }
 
+    // Step 3 has already identified the final POS/state write in each normalized
+    // dispatcher leaf. A direct numeric jump is pure control-flow bookkeeping,
+    // so keep it at the physical tail when no later statement reads or rewrites
+    // the state binding. Earlier temporary state writes are never moved.
+    const directStateTransition = canonicalizeDirectNumericStateTransition(scheduled, stateName, overflowName);
+    swaps += directStateTransition.swaps;
+
     // Step 3 guarantees a proven terminal stop is the final state = nil.
     // Canonicalize the compiler return payload immediately before that stop,
     // but only across structurally pure VM bookkeeping such as fixed args[n]
@@ -553,6 +595,7 @@ function scheduleStatementList(statements, stateName, overflowName = null, retur
         producerSinks: sunk.moved,
         producerPulls: pulled.moved,
         unreadSinks: unread.moved,
+        directStateTransitionMoves: directStateTransition.moved,
         safetyRejected: false,
     };
 }
@@ -674,6 +717,7 @@ function scheduleVmRegisterUses(source, ast) {
     let producerSinks = 0;
     let producerPulls = 0;
     let unreadSinks = 0;
+    let directStateTransitionMoves = 0;
 
     for (const body of leaves) {
         const segments = [];
@@ -698,6 +742,7 @@ function scheduleVmRegisterUses(source, ast) {
             producerSinks += scheduled.producerSinks || 0;
             producerPulls += scheduled.producerPulls || 0;
             unreadSinks += scheduled.unreadSinks || 0;
+            directStateTransitionMoves += scheduled.directStateTransitionMoves || 0;
             if (scheduled.swaps === 0) continue;
 
             edits.push({
@@ -711,7 +756,7 @@ function scheduleVmRegisterUses(source, ast) {
     }
 
     if (edits.length === 0) {
-        return { source, found: true, applied: false, blocksChanged: 0, swaps: 0, producerSinks, producerPulls, unreadSinks, safetyRejectedSegments, overflowRegisterBank: overflowName, overflowRegisterSlots: overflow?.indices?.size || 0 };
+        return { source, found: true, applied: false, blocksChanged: 0, swaps: 0, producerSinks, producerPulls, unreadSinks, directStateTransitionMoves, safetyRejectedSegments, overflowRegisterBank: overflowName, overflowRegisterSlots: overflow?.indices?.size || 0 };
     }
 
     return {
@@ -723,6 +768,7 @@ function scheduleVmRegisterUses(source, ast) {
         producerSinks,
         producerPulls,
         unreadSinks,
+        directStateTransitionMoves,
         safetyRejectedSegments,
         overflowRegisterBank: overflowName,
         overflowRegisterSlots: overflow?.indices?.size || 0,

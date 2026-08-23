@@ -110,10 +110,20 @@ function schedule(source, returnName = null) {
         'state = 3',
     ].join("\n");
     const out = schedule(source);
-    assert.strictEqual(out[out.length - 1], 'X = 2', 'unread pure write was not sunk to the state tail');
-    assert.ok(out.indexOf('state = 3') < out.indexOf('X = 2'), 'unread write stopped at the state assignment instead of the state-body tail');
+    assert.strictEqual(out[out.length - 1], 'state = 3', 'direct numeric state transition did not remain at the state tail');
+    assert.ok(out.indexOf('X = 2') < out.indexOf('state = 3'), 'unread write was left below the direct numeric transition');
     assert.ok(out.indexOf('A = 1') < out.indexOf('C = A'), 'active producer moved past its read');
     assert.ok(out.includes('X = 2'), 'unread write was deleted instead of scheduled');
+}
+
+{
+    const source = [
+        'A = 1',
+        'state = 3',
+        'X = state',
+    ].join("\n");
+    const out = schedule(source);
+    assert.ok(out.indexOf('state = 3') < out.indexOf('X = state'), 'numeric transition crossed a later state read');
 }
 
 
