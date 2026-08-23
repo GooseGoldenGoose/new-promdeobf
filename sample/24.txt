@@ -1,0 +1,237 @@
+return (function(...)
+    local c = {
+        "RjnLzv==",
+        "xhVvzhu6",
+        "RjnyZh1=",
+        "7cSQBLa=",
+        "TLumx3ZceexEuM3YeU==",
+        "RjnQBJtqpU=="
+    }
+    for a, Y in ipairs({
+        {
+            1,
+            6
+        },
+        {
+            1,
+            3
+        },
+        {
+            4,
+            6
+        }
+    }) do
+        while Y[1] < Y[2] do
+            c[Y[1]], c[Y[2]], Y[1], Y[2] = c[Y[2]], c[Y[1]], Y[1] + (1), Y[2] - (1)
+        end
+    end
+    local function a(a)
+        return c[a + (52724)]
+    end
+    do
+        local a = string.sub
+        local Y = table.insert
+        local n = type
+        local N = string.char
+        local q = string.len
+        local P = math.floor
+        local v = {
+            E = 52,
+            r = 21,
+            p = 30,
+            t = 17,
+            A = 3,
+            ["2"] = 12,
+            z = 24,
+            ["6"] = 43,
+            Q = 41,
+            x = 29,
+            c = 7,
+            ["/"] = 32,
+            e = 20,
+            G = 62,
+            Z = 25,
+            y = 44,
+            b = 36,
+            w = 33,
+            I = 15,
+            g = 8,
+            ["+"] = 35,
+            ["5"] = 60,
+            d = 31,
+            f = 4,
+            n = 61,
+            J = 38,
+            o = 11,
+            K = 18,
+            ["7"] = 28,
+            O = 55,
+            q = 37,
+            j = 53,
+            T = 19,
+            v = 48,
+            H = 51,
+            Y = 10,
+            D = 42,
+            m = 50,
+            V = 57,
+            S = 9,
+            X = 34,
+            ["9"] = 49,
+            l = 47,
+            ["8"] = 58,
+            ["1"] = 56,
+            ["0"] = 2,
+            F = 59,
+            C = 40,
+            U = 0,
+            ["4"] = 26,
+            B = 27,
+            u = 13,
+            a = 16,
+            s = 14,
+            h = 22,
+            i = 63,
+            W = 1,
+            ["3"] = 5,
+            N = 46,
+            R = 23,
+            P = 54,
+            k = 45,
+            L = 39,
+            M = 6
+        }
+        local A = table.concat
+        local t = c
+        for c = 1, #t, 1 do
+            local b = t[c]
+            if n(b) == "string" then
+                local n = q(b)
+                local s = {}
+                local m = 1
+                local j = 0
+                local l = 0
+                while m <= n do
+                    local c = a(b, m, m)
+                    local q = v[c]
+                    if q then
+                        j = j + q * (64) ^ ((3) - l)
+                        l = l + (1)
+                        if l == 4 then
+                            l = 0
+                            local c = P(j / (65536))
+                            local a = P((j % (65536)) / (256))
+                            local n = j % (256)
+                            Y(s, N(c, a, n))
+                            j = 0
+                        end
+                    elseif c == "=" then
+                        Y(s, N(P(j / (65536))))
+                        if m >= n or a(b, m + (1), m + (1)) ~= "=" then
+                            Y(s, N(P((j % (65536)) / (256))))
+                        end
+                        break
+                    end
+                    m = m + (1)
+                end
+                t[c] = A(s)
+            end
+        end
+    end
+    return (function(c, n, N, q, P, v, A, s, I, t, C, Y, m, j, b, l)
+        I, s, C, l, b, Y, m, j, t = function(c, a)
+            local n = j(a)
+            local N = function(...)
+                return Y(c, {
+                    ...
+                }, a, n)
+            end
+            return N
+        end, function()
+            m = (1) + m
+            b[m] = 1
+            return m
+        end, function(c)
+            b[c] = b[c] - (1)
+            if 0 == b[c] then
+                b[c], t[c] = nil, nil
+            end
+        end, function(c)
+            local a, Y = 1, c[1]
+            while Y do
+                b[Y], a = b[Y] - (1), (1) + a
+                if 0 == b[Y] then
+                    b[Y], t[Y] = nil, nil
+                end
+                Y = c[a]
+            end
+        end, {}, function(Y, N, q, P)
+            local b, s, m, j, l, A, t
+            while Y do
+                if Y < 5187923 then
+                    if Y < 3102392 then
+                        Y = c[a(-52722)]
+                        A = {}
+                    else
+                        Y = 7102849
+                        A = 1
+                        t = N
+                        b = 10
+                        s = b
+                        b = 1
+                        m = b
+                        b = 0
+                        j = m < b
+                        b = A - m
+                    end
+                else
+                    if Y < 6919405 then
+                        l = b
+                        A = a(-52723)
+                        Y = c[A]
+                        A = Y(l)
+                        l = nil
+                        Y = 7102849
+                    else
+                        l = not j
+                        b = b + m
+                        A = b <= s
+                        A = l and A
+                        l = b >= s
+                        l = j and l
+                        A = l or A
+                        l = 5964986
+                        Y = A and l
+                        A = 1217592
+                        Y = Y or A
+                    end
+                end
+            end
+            Y = #P
+            return n(A)
+        end, 0, function(c)
+            for a = 1, #c, 1 do
+                b[c[a]] = (1) + b[c[a]]
+            end
+            if N then
+                local Y = N(true)
+                local n = P(Y)
+                n[a(-52721)], n[a(-52720)], n[a(-52718)] = c, l, function()
+                    return -1577928
+                end
+                return Y
+            else
+                return q({}, {
+                    [a(-52720)] = l,
+                    [a(-52721)] = c,
+                    [a(-52718)] = function()
+                        return -1577928
+                    end
+                })
+            end
+        end, {}
+        return (I(5113365, {}))(n(A))
+    end)(getfenv and getfenv() or _ENV, unpack or table[a(-52719)], newproxy, setmetatable, getmetatable, select, {
+        ...
+    })
+end)(...)
