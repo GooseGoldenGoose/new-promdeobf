@@ -382,4 +382,51 @@ assert.equal(ambiguousIndexedWriteResult.orderedEffectWriteCount, 0);
 assert.equal(ambiguousIndexedWriteResult.skippedAssignments, 1);
 assert(ambiguousIndexedWriteResult.graph.states[0].operations.some(operation => operation.kind === "unsupported"));
 
+const splitLoopSource = `vm = function(state, args, upvalues, gcProxy)
+    local r1, r2, r3, r4, ReturnVal
+    while state do
+        if state == 1 then
+            r1 = 10
+            r2 = r1
+            r1 = 1
+            r3 = r1
+            r1 = 0
+            r4 = r3 < r1
+            ReturnVal = 1
+            r1 = ReturnVal - r3
+            state = 2
+        end
+        if state == 2 then
+            ReturnVal = not r4
+            r1 = r1 + r3
+            r4 = r1 <= r2
+            r2 = 3
+            state = r4 and r2
+            r3 = 4
+            state = state or r3
+        end
+        if state == 3 then
+            ReturnVal = consume(r1)
+            state = 2
+        end
+        if state == 4 then
+            ReturnVal = {}
+            state = nil
+        end
+    end
+    state = #gcProxy
+    return unpack(ReturnVal)
+end
+root = createClosure(1, {})`;
+const splitLoopResult = versionVmBlockRegisters(
+    splitLoopSource,
+    parseLua(splitLoopSource, "<beta-split-loop-test>")
+);
+assert.equal(splitLoopResult.cfgComplete, true);
+assert(splitLoopResult.crossBlockVersionCount >= 4);
+assert.equal(splitLoopResult.prunedPhysicalRegisterDeclarations, 4);
+assert(!/\br[1-4]\b/.test(splitLoopResult.source));
+assert(splitLoopResult.source.includes("state = r_v"));
+parseLua(splitLoopResult.source, "<beta-split-loop-output>");
+
 console.log("beta register versioning tests passed");

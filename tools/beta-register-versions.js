@@ -33,6 +33,7 @@ function main() {
     console.log(`Terminal return placement moves: ${result.terminalReturnPlacementMoves}`);
     console.log(`Cross-state versions: ${result.crossBlockVersionCount}`);
     console.log(`Skipped assignments: ${result.skippedAssignments}`);
+    console.log(`Pruned unused physical register declarations: ${result.prunedPhysicalRegisterDeclarations || 0}`);
     if (result.lifetimeAnalysisStats) {
         const stats = result.lifetimeAnalysisStats;
         console.log(`Register analysis: defs=${stats.definitionCount}, uses=${stats.useCount}, provenance=${stats.provenanceEdgeCount}`);

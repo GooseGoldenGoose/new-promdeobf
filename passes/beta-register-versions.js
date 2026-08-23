@@ -1,4 +1,4 @@
-const { findVmFunction } = require("./vm-state");
+const { findVmFunction, analyzeBlockTerminator } = require("./vm-state");
 const { findVmReturnRegister, findRegisterDeclaration } = require("./vm-register-names");
 const { applyTextEdits } = require("./text-edits");
 const { analyzeBetaRegisterLifetimes } = require("./beta-register-lifetimes");
@@ -258,6 +258,56 @@ function canonicalizeTerminalReturnSource(source, stateName, returnName, movedSt
     return edits.length ? applyTextEdits(source, edits) : source;
 }
 
+function collectPhysicalRegisterUses(node, candidateNames, declarationNodes, counts = new Map(), parent = null, parentKey = null) {
+    if (!isNode(node)) return counts;
+    if (node.type === "Identifier") {
+        if (declarationNodes.has(node)) return counts;
+        const isProperty =
+            (parent?.type === "MemberExpression" && parentKey === "identifier") ||
+            (parent?.type === "TableKeyString" && parentKey === "key");
+        if (!isProperty && candidateNames.has(node.name)) {
+            counts.set(node.name, (counts.get(node.name) || 0) + 1);
+        }
+        return counts;
+    }
+    for (const [key, value] of Object.entries(node)) {
+        if (key === "loc" || key === "range") continue;
+        if (Array.isArray(value)) {
+            for (const child of value) collectPhysicalRegisterUses(child, candidateNames, declarationNodes, counts, node, key);
+        } else if (isNode(value)) {
+            collectPhysicalRegisterUses(value, candidateNames, declarationNodes, counts, node, key);
+        }
+    }
+    return counts;
+}
+
+function pruneUnusedPhysicalRegisterDeclaration(source) {
+    const ast = parseBetaSource(source);
+    const vm = findVmFunction(ast);
+    if (!vm) return { source, pruned: 0 };
+    const returnRegister = findVmReturnRegister(vm.functionNode);
+    if (!returnRegister) return { source, pruned: 0 };
+    const declaration = findRegisterDeclaration(vm.functionNode, returnRegister.name);
+    if (!declaration || !Array.isArray(declaration.statement.range)) return { source, pruned: 0 };
+
+    const candidateNames = new Set(declaration.variables.map(variable => variable.name));
+    const declarationNodes = new Set(declaration.variables);
+    const counts = collectPhysicalRegisterUses(vm.functionNode, candidateNames, declarationNodes);
+    const retained = declaration.variables.filter(variable => (counts.get(variable.name) || 0) > 0);
+    const pruned = declaration.variables.length - retained.length;
+    if (pruned <= 0) return { source, pruned: 0 };
+
+    const replacement = retained.length ? `local ${retained.map(variable => variable.name).join(", ")}` : "";
+    return {
+        source: applyTextEdits(source, [{
+            start: declaration.statement.range[0],
+            end: declaration.statement.range[1],
+            replacement,
+        }]),
+        pruned,
+    };
+}
+
 function collectClosureEntryStates(rootNode) {
     const entries = new Set();
     function walk(node) {
@@ -279,18 +329,10 @@ function collectClosureEntryStates(rootNode) {
     return entries;
 }
 
-function stateTargets(node) {
-    const direct = numericValue(node);
-    if (direct !== null) return [direct];
-    if (isNilLiteral(node)) return [];
-    if (node?.type === "LogicalExpression" && node.operator === "or") {
-        const left = node.left;
-        const onFalse = numericValue(node.right);
-        if (left?.type === "LogicalExpression" && left.operator === "and") {
-            const onTrue = numericValue(left.right);
-            if (onTrue !== null && onFalse !== null) return [onTrue, onFalse];
-        }
-    }
+function successorsFromTerminator(terminator) {
+    if (terminator?.kind === "jump") return [terminator.target];
+    if (terminator?.kind === "branch") return [terminator.onTrue, terminator.onFalse];
+    if (terminator?.kind === "stop") return [];
     return null;
 }
 
@@ -471,7 +513,8 @@ function versionVmBlockRegisters(source, ast) {
             versions.push({ blockState: stateId, originalName, baseId, version, newName });
         }
 
-        const successors = finalStateWrite ? stateTargets(finalStateWrite.value) : null;
+        const terminator = analyzeBlockTerminator(statements, stateName, source);
+        const successors = successorsFromTerminator(terminator);
         blocks.push({
             leaf,
             stateId,
@@ -801,6 +844,8 @@ function versionVmBlockRegisters(source, ast) {
         if (canonical.moved) movedTerminalReturnStates.add(state.id);
     }
     output = canonicalizeTerminalReturnSource(output, stateName, returnName, movedTerminalReturnStates);
+    const physicalRegisterCleanup = pruneUnusedPhysicalRegisterDeclaration(output);
+    output = physicalRegisterCleanup.source;
 
     const registerEpochNames = new Set();
     for (const state of graphStates) {
@@ -860,6 +905,7 @@ function versionVmBlockRegisters(source, ast) {
         cfgComplete,
         crossBlockVersionCount: crossBlockUsedVersions.size,
         terminalReturnPlacementMoves: movedTerminalReturnStates.size,
+        prunedPhysicalRegisterDeclarations: physicalRegisterCleanup.pruned,
         mapping: [...baseIds.entries()].map(([originalName, baseId]) => ({ originalName, baseName: `r_v${baseId}` })),
         versions,
         edits,
