@@ -453,14 +453,12 @@ function analyzeBetaRegisterLifetimes({
     }
 
     // Compiler-backed ownership signal: after a physical register is reserved as a
-    // VAR_REGISTER, later source assignments write it from another register. Starting
-    // from a proven cleanup, walk backward only through adjacent same-register writes
-    // that are linked by value provenance or where both writes are simple identifier
-    // copies. This recovers blind source mutations without absorbing earlier scratch
-    // literals/calls that happened to use the same physical slot before reservation.
-    let anchoredCopyMergeCount = 0;
-    for (const cleanup of cleanupCandidates) {
-        const queue = [...cleanup.priorDefinitionIds];
+    // VAR_REGISTER, later source assignments write it from another register. Use
+    // only proven anchors, then walk backward through same-register writes that are
+    // linked by value provenance or where both writes are simple identifier copies.
+    function mergeBackwardCopyChain(seedIds) {
+        let mergeCount = 0;
+        const queue = [...seedIds];
         const seen = new Set();
         let cursor = 0;
         while (cursor < queue.length) {
@@ -481,11 +479,53 @@ function analyzeBetaRegisterLifetimes({
                 const beforeRoot = unionFind.find(currentId);
                 const priorRoot = unionFind.find(priorId);
                 unionFind.union(currentId, priorId);
-                if (beforeRoot !== priorRoot) anchoredCopyMergeCount++;
+                if (beforeRoot !== priorRoot) mergeCount++;
                 queue.push(priorId);
             }
         }
+        return mergeCount;
     }
+
+    let cleanupAnchoredCopyMergeCount = 0;
+    for (const cleanup of cleanupCandidates) {
+        cleanupAnchoredCopyMergeCount += mergeBackwardCopyChain(cleanup.priorDefinitionIds);
+    }
+
+    // A source variable returned directly is another compiler-backed ownership anchor.
+    // compileStatement(ReturnStatement) places that variable's VAR_REGISTER directly
+    // into the terminal ReturnVal table. If the reaching definition is itself a copy
+    // into that register, walk the same conservative copy chain backward. This handles
+    // functions that return before lexical cleanup is emitted.
+    let terminalReturnAnchorCount = 0;
+    let terminalReturnCopyMergeCount = 0;
+    for (const block of blocks) {
+        if (!Array.isArray(block.successors) || block.successors.length !== 0) continue;
+        for (const statement of block.statements) {
+            const plan = block.plans.get(statement);
+            if (plan?.kind !== "preserved" || plan.originalName !== returnName) continue;
+            const before = reachingBeforeStatement.get(statement) || new Map();
+            const returnedNames = new Set(statementReadNames(statement, ordinaryNames));
+            for (const name of returnedNames) {
+                const ids = new Set(before.get(name) || []);
+                if (!ids.size || [...ids].some(id => unknownDefinitionIds.has(id))) continue;
+                const seeds = [];
+                let valid = true;
+                for (const id of ids) {
+                    const definition = definitionById.get(id);
+                    if (!definition || !ordinaryDefinitionIds.has(id) || definition.name !== name || !isIdentifier(definition.rhs)) {
+                        valid = false;
+                        break;
+                    }
+                    seeds.push(id);
+                }
+                if (!valid || !seeds.length) continue;
+                terminalReturnAnchorCount++;
+                terminalReturnCopyMergeCount += mergeBackwardCopyChain(seeds);
+            }
+        }
+    }
+
+    const anchoredCopyMergeCount = cleanupAnchoredCopyMergeCount + terminalReturnCopyMergeCount;
 
     const componentByRoot = new Map();
     for (const definition of ordinaryDefinitions) {
@@ -590,6 +630,9 @@ function analyzeBetaRegisterLifetimes({
             useCount: uses.length,
             provenanceEdgeCount,
             anchoredCopyMergeCount,
+            cleanupAnchoredCopyMergeCount,
+            terminalReturnAnchorCount,
+            terminalReturnCopyMergeCount,
             provenCleanupCount: cleanupCandidates.length,
             attachedCleanupCount,
             epochCount: epochs.length,

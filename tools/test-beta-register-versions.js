@@ -226,4 +226,38 @@ assert(!effectfulReturnPayloadResult.graph.states[0].operations.some(operation =
 assert(effectfulReturnPayloadResult.source.indexOf('{ mark("table") }') < effectfulReturnPayloadResult.source.indexOf('mark("after")'));
 parseLua(effectfulReturnPayloadResult.source, "<beta-effectful-return-payload-output>");
 
+const returnedLocalSource = `vm = function(state, args, upvalues, gcProxy)
+    local r1, r2, ReturnVal
+    while state do
+        if state == 1 then
+            r1 = 3
+            r2 = r1
+            ReturnVal = "print"
+            state = _env[ReturnVal]
+            ReturnVal = state(r2)
+            r1 = 4
+            r2 = r1
+            ReturnVal = { r2 }
+            state = nil
+        end
+    end
+    state = #gcProxy
+    return unpack(ReturnVal)
+end
+root = createClosure(1, {})`;
+
+const returnedLocalResult = versionVmBlockRegisters(
+    returnedLocalSource,
+    parseLua(returnedLocalSource, "<beta-returned-local-test>")
+);
+const returnedR2Base = returnedLocalResult.mapping.find(item => item.originalName === "r2")?.baseName;
+assert(returnedR2Base);
+assert.equal((returnedLocalResult.source.match(new RegExp("local " + returnedR2Base + "_1\\b", "g")) || []).length, 1);
+assert(returnedLocalResult.source.match(new RegExp("\\n\\s*" + returnedR2Base + "_1 = r_v\\d+_\\d+")));
+assert(returnedLocalResult.source.includes("ReturnVal = { " + returnedR2Base + "_1 }"));
+assert(!returnedLocalResult.source.includes(returnedR2Base + "_2"));
+assert(returnedLocalResult.lifetimeAnalysisStats.terminalReturnAnchorCount >= 1);
+assert(returnedLocalResult.lifetimeAnalysisStats.terminalReturnCopyMergeCount >= 1);
+parseLua(returnedLocalResult.source, "<beta-returned-local-output>");
+
 console.log("beta register versioning tests passed");
