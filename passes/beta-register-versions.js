@@ -77,6 +77,19 @@ function rewriteExpression(source, expression, latestVersions) {
     return applyTextEdits(text, edits, start);
 }
 
+function findLastSingleWrites(statements, names) {
+    const last = new Map();
+    for (let index = 0; index < statements.length; index++) {
+        const statement = statements[index];
+        if (statement?.type !== "AssignmentStatement") continue;
+        const variables = statement.variables || [];
+        const init = statement.init || [];
+        if (variables.length !== 1 || init.length !== 1 || !isIdentifier(variables[0])) continue;
+        if (names.has(variables[0].name)) last.set(variables[0].name, index);
+    }
+    return last;
+}
+
 function versionVmBlockRegisters(source, ast) {
     const vm = findVmFunction(ast);
     if (!vm) {
@@ -99,13 +112,13 @@ function versionVmBlockRegisters(source, ast) {
         return { source, found: true, applied: false, reason: "VM scalar register declaration could not be identified" };
     }
 
-    const candidateNames = new Set(
-        registerDeclaration.variables
-            .map(variable => variable.name)
-            .filter(name => name !== returnRegister.name)
-    );
+    const stateName = stateParameter.name;
+    const returnName = returnRegister.name;
+    const specialFinalNames = new Set([stateName, returnName]);
+    const candidateNames = new Set(registerDeclaration.variables.map(variable => variable.name));
+    candidateNames.add(stateName);
 
-    const leaves = collectStateLeafClauses(vmFunction, stateParameter.name, [])
+    const leaves = collectStateLeafClauses(vmFunction, stateName, [])
         .sort((a, b) => a.range[0] - b.range[0]);
     if (leaves.length === 0) {
         return { source, found: true, applied: false, reason: "No exact normalized VM state leaves were found" };
@@ -117,6 +130,7 @@ function versionVmBlockRegisters(source, ast) {
     const versions = [];
     let nextBaseId = 1;
     let skippedAssignments = 0;
+    let preservedFinalWrites = 0;
 
     function ensureBase(name) {
         if (!baseIds.has(name)) baseIds.set(name, nextBaseId++);
@@ -126,7 +140,10 @@ function versionVmBlockRegisters(source, ast) {
     for (const leaf of leaves) {
         const latestVersions = new Map();
         const statements = (leaf.body || []).filter(statement => statement?.type !== "CommentStatement");
-        for (const statement of statements) {
+        const lastSpecialWrites = findLastSingleWrites(statements, specialFinalNames);
+
+        for (let statementIndex = 0; statementIndex < statements.length; statementIndex++) {
+            const statement = statements[statementIndex];
             if (statement?.type !== "AssignmentStatement") continue;
             const variables = statement.variables || [];
             const init = statement.init || [];
@@ -155,6 +172,24 @@ function versionVmBlockRegisters(source, ast) {
                         replacement: rhs,
                     });
                 }
+                continue;
+            }
+
+            const isPreservedFinalWrite =
+                specialFinalNames.has(originalName) &&
+                lastSpecialWrites.get(originalName) === statementIndex;
+
+            if (isPreservedFinalWrite) {
+                const originalRhs = source.slice(init[0].range[0], init[0].range[1]);
+                if (rhs !== originalRhs) {
+                    edits.push({
+                        start: init[0].range[0],
+                        end: init[0].range[1],
+                        replacement: rhs,
+                    });
+                }
+                latestVersions.delete(originalName);
+                preservedFinalWrites++;
                 continue;
             }
 
@@ -190,6 +225,7 @@ function versionVmBlockRegisters(source, ast) {
         applied: output !== source,
         blockCount: leaves.length,
         versionedAssignmentCount: versions.length,
+        preservedFinalWrites,
         skippedAssignments,
         mapping: [...baseIds.entries()].map(([originalName, baseId]) => ({ originalName, baseName: `r_v${baseId}` })),
         versions,
