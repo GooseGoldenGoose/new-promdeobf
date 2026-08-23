@@ -30,7 +30,7 @@ When continuing this project in a new chat:
 - Preserve stable pipeline behavior when experimenting. A recovery pass must fail closed: if proof is incomplete, preserve the previous safe output rather than guess.
 - End every project-related turn with exactly: `Done for this turn — you can prompt now.`
 
-Latest fixture checkpoint is `4717198 Add beta branch sample 11` on `main`, pushed to `origin/main`; beta behavior checkpoint `57b8dcb Keep VM state registers unversioned in beta` immediately precedes it. All tracked fixtures `sample/1` through `sample/11` have matching `.source.lua` + formatter-normalized `.txt` pairs. Source lexical-scope reconstruction has NOT been implemented yet.
+Latest beta behavior checkpoint is `88a2dc5 Preserve final VM special writes in beta` on `main`, pushed to `origin/main`. Intermediate `state` / `ReturnVal` writes are versioned while only their final write per normalized state leaf remains on the original binding. All tracked fixtures `sample/1` through `sample/11` have matching `.source.lua` + formatter-normalized `.txt` pairs. Source lexical-scope reconstruction has NOT been implemented yet.
 
 # Core Knowledge & Rules
 
@@ -505,10 +505,10 @@ without producing unrelated locals.
 
 - This is a separate analysis/presentation experiment and is NOT part of the normal deobfuscation pipeline. It consumes an already-generated normal output file and writes a sibling beta file.
 - Command: `node tools/beta-register-versions.js <output.lua> [output.beta.lua]`. If the second path is omitted, `output/2.lua` becomes `output/2.beta.lua` generically; no sample number is hardcoded in the transformer.
-- `passes/beta-register-versions.js` finds exact normalized dispatcher leaves (`state == N`) inside the semantic VM and versions only ordinary scalar VM registers. `state` and `ReturnVal` are explicitly excluded from beta renaming/localization.
-- The first write encountered for an ordinary original register gets a stable base such as `r1 -> r_v1`, `r2 -> r_v2`. Every later write to that same original register increments the suffix: `r_v1_1`, `r_v1_2`, etc. Reads within the same dispatcher leaf are rewritten to the latest local version. Assignments to `state` / `ReturnVal` keep their original LHS but their RHS can consume the latest ordinary-register version.
-- Sample 2 now versions 9 ordinary-register assignments across 3 dispatcher leaves with 0 skips. Its first block keeps `ReturnVal = "warn"` and `state = _env[ReturnVal]`, then emits `local r_v1_1 = "gg"; ReturnVal = state(r_v1_1)`, etc.
-- This beta form is intentionally analysis-only: per-leaf latest-value tracking resets at block boundaries and no phi/reaching-definition merge is emitted. Cross-state/branch-join uses remain in their original register form rather than being guessed. Normal `output/N.lua` behavior is unchanged.
+- `passes/beta-register-versions.js` finds exact normalized dispatcher leaves (`state == N`) inside the semantic VM and versions scalar VM writes into `r_vN_N` locals. `state` and `ReturnVal` participate too, except their final write in each leaf is preserved on the original binding.
+- The first versioned write encountered for an original register gets a stable base such as `ReturnVal -> r_v1`, `state -> r_v2`, `r1 -> r_v3`. Later versioned writes increment the suffix. Reads in the same leaf use the latest version. When the final `state` / `ReturnVal` write is preserved, its RHS still consumes the latest versioned values, then the original binding becomes authoritative again.
+- Sample 2 now versions 16 assignments across 3 dispatcher leaves with 0 skips. In state 1, early `ReturnVal`/`state` writes become locals, final `ReturnVal = 1` remains original, and final `state = r_v2_2 and 2 or 3` remains the dispatcher transition.
+- This beta form is intentionally analysis-only: per-leaf latest-value tracking resets at block boundaries and no phi/reaching-definition merge is emitted. Cross-state/branch-join ordinary-register uses remain unresolved rather than guessed. Normal `output/N.lua` behavior is unchanged.
 - Focused regression: `tools/test-beta-register-versions.js`; beta output is reparsed before writing.
 
 
@@ -558,8 +558,9 @@ without producing unrelated locals.
 - Workspace: `C:\Users\reala\Desktop\!workspaces\promdeobf ova\new promdeobf`.
 - Branch: `main`.
 - Remote: `https://github.com/GooseGoldenGoose/new-promdeobf.git`.
-- Latest pushed fixture checkpoint at this snapshot: `4717198 Add beta branch sample 11`.
-- Immediately preceding beta behavior checkpoint: `57b8dcb Keep VM state registers unversioned in beta`.
+- Latest pushed beta behavior checkpoint at this snapshot: `88a2dc5 Preserve final VM special writes in beta`.
+- Previous beta behavior checkpoint: `57b8dcb Keep VM state registers unversioned in beta`; this behavior is superseded by the current final-write-only preservation rule.
+- Latest fixture checkpoint: `4717198 Add beta branch sample 11`.
 - Immediately preceding context checkpoint: `2643ebc Document restored sample coverage`.
 - Before changing anything in a new chat: read this entire `CONTEXT.md`, run `git status --short --branch`, then `git log -8 --oneline --decorate`. Never assume the checkout is still at this exact commit if newer work exists.
 - Every project code/content change, even small, gets a focused commit and `git push origin main`. Stage only files belonging to the current change.
@@ -636,7 +637,7 @@ without producing unrelated locals.
 - Sample 8: ordinary register cleanup/ownership handoff; proves explicit source nil vs compiler cleanup distinction.
 - Sample 9: `local x` / `local y=nil` initialization via special temp + copy; prevents classifying every direct nil as scope cleanup.
 - Sample 10: natural overflow storage boundary and overflow-aware scheduler regression.
-- Sample 11: beta branch/join fixture from `local a = 3123; if _G.wasd then print(a); a = 3 end; print(a)`. Normal source/obfuscated/deobfuscated parity: false path prints `3123`; true path prints `3123`, `3`. Normalized VM has 3 states, 20 definitions, one join group, and 2 cross-block lifetimes. Beta output versions 8 ordinary-register assignments across 3 leaves while leaving the ambiguous cross-state `a` register unresolved at the join.
+- Sample 11: beta branch/join fixture from `local a = 3123; if _G.wasd then print(a); a = 3 end; print(a)`. Normal source/obfuscated/deobfuscated parity: false path prints `3123`; true path prints `3123`, `3`. Normalized VM has 3 states, 20 definitions, one join group, and 2 cross-block lifetimes. Current beta output versions 14 assignments across 3 leaves, including intermediate `state` / `ReturnVal` writes, while preserving their final writes and leaving the ambiguous cross-state `a` register unresolved at the join.
 
 ### Performance history / boundary
 
@@ -657,6 +658,7 @@ without producing unrelated locals.
 `56784a1 Add beta register versioning`
 `57b8dcb Keep VM state registers unversioned in beta`
 `4717198 Add beta branch sample 11`
+`88a2dc5 Preserve final VM special writes in beta`
 
 ### New-chat operating instruction
 
