@@ -11,6 +11,7 @@ const { recoverVmBindings } = require("./passes/vm-bindings");
 const { scheduleVmRegisterUses } = require("./passes/vm-register-scheduler");
 const { renameVmRegisterBindings } = require("./passes/vm-register-names");
 const { renameSemanticBindings } = require("./passes/semantic-names");
+const { applyTextEdits } = require("./passes/text-edits");
 
 const ROOT = __dirname;
 const DEFAULT_INPUT = path.join(ROOT, "sample", "1.txt");
@@ -63,12 +64,50 @@ function runDeobfuscator(inputPath = DEFAULT_INPUT, outputPath = DEFAULT_OUTPUT)
     const environment = renameEnvironmentBinding(stage1Source, stage1Ast, "_env");
     if (environment.collision) throw new Error(environment.reason);
 
-    const environmentAst = parseLua(environment.source, `${inputPath} <after environment rename>`);
-    const createClosure = renameCreateClosureBinding(environment.source, environmentAst, "createClosure");
-    if (createClosure.collision || createClosure.ambiguous) throw new Error(createClosure.reason);
+    // Environment, root createClosure, helper roles, and helper parameters are
+    // independent lexical binding edits. Plan all of them from the same AST and
+    // apply once. Any ambiguous/colliding case falls back to the proven
+    // sequential pipeline below.
+    let createClosure;
+    let vmHelpers;
+    const parallelCreateClosure = renameCreateClosureBinding(stage1Source, stage1Ast, "createClosure");
+    const parallelVmHelpers = renameVmHelperBindings(stage1Source, stage1Ast, parseLua, { deferParse: true });
+    const canBatchWrapperRenames =
+        !parallelCreateClosure.collision &&
+        !parallelCreateClosure.ambiguous &&
+        parallelCreateClosure.found &&
+        parallelVmHelpers.found &&
+        parallelVmHelpers.batched === true &&
+        Array.isArray(environment.edits) &&
+        Array.isArray(parallelCreateClosure.edits) &&
+        Array.isArray(parallelVmHelpers.edits);
 
-    const createClosureAst = parseLua(createClosure.source, `${inputPath} <after createClosure rename>`);
-    const vmHelpers = renameVmHelperBindings(createClosure.source, createClosureAst, parseLua);
+    if (canBatchWrapperRenames) {
+        try {
+            const coreEdits = [...environment.edits, ...parallelCreateClosure.edits];
+            const combinedEdits = [...coreEdits, ...parallelVmHelpers.edits];
+            const createClosureSource = applyTextEdits(stage1Source, coreEdits);
+            const helperSource = applyTextEdits(stage1Source, combinedEdits);
+            const helperAst = parseLua(helperSource, `${inputPath} <after wrapper/helper rename batch>`);
+            createClosure = { ...parallelCreateClosure, source: createClosureSource };
+            vmHelpers = { ...parallelVmHelpers, source: helperSource, ast: helperAst, parseDeferred: false };
+        } catch {
+            createClosure = null;
+            vmHelpers = null;
+        }
+    }
+
+    if (!vmHelpers) {
+        const environmentAst = environment.source === stage1Source
+            ? stage1Ast
+            : parseLua(environment.source, `${inputPath} <after environment rename>`);
+        createClosure = renameCreateClosureBinding(environment.source, environmentAst, "createClosure");
+        if (createClosure.collision || createClosure.ambiguous) throw new Error(createClosure.reason);
+        const createClosureAst = createClosure.source === environment.source
+            ? environmentAst
+            : parseLua(createClosure.source, `${inputPath} <after createClosure rename>`);
+        vmHelpers = renameVmHelperBindings(createClosure.source, createClosureAst, parseLua);
+    }
     const semanticNames = vmHelpers.found
         ? renameSemanticBindings(vmHelpers.source, vmHelpers.ast || parseLua(vmHelpers.source, `${inputPath} <before semantic naming>`), parseLua)
         : { source: vmHelpers.source, found: false, applied: false, mapping: [], skipped: [] };

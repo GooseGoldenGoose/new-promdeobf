@@ -107,7 +107,12 @@ function findRootEntry(ast) {
                 (node.parameters || []).length >= 1 &&
                 isIdentifier(node.parameters[0], "state"));
 
-        if (!nowInsideVm &&
+        // Root createClosure discovery explicitly excludes the VM function and
+        // everything nested beneath it. Once that boundary is reached there is
+        // no useful candidate work left in the subtree, so do not traverse it.
+        if (nowInsideVm) return;
+
+        if (
             node.type === "CallExpression" &&
             node.base?.type === "CallExpression" &&
             isIdentifier(node.base.base, "createClosure")) {
@@ -131,9 +136,9 @@ function findRootEntry(ast) {
         for (const [key, value] of Object.entries(node)) {
             if (key === "loc" || key === "range") continue;
             if (Array.isArray(value)) {
-                for (const child of value) walk(child, node, nowInsideVm);
+                for (const child of value) walk(child, node, false);
             } else if (isNode(value)) {
-                walk(value, node, nowInsideVm);
+                walk(value, node, false);
             }
         }
     }

@@ -67,7 +67,7 @@ function findRegisterOverflowBinding(vmFunction) {
     const candidate = candidates[0];
     const name = candidate.identifier.name;
     const candidateNames = new Set([name]);
-    if (collectShadowingDeclarations(vmFunction, candidateNames, candidate.statement, []).length > 0) return null;
+    if (hasShadowingDeclaration(vmFunction, candidateNames, candidate.statement)) return null;
 
     const indices = new Set();
     let valid = true;
@@ -111,67 +111,82 @@ function findRegisterOverflowBinding(vmFunction) {
     };
 }
 
-function collectShadowingDeclarations(node, candidateNames, candidateDeclaration, out = []) {
-    if (!isNode(node)) return out;
+function hasShadowingDeclaration(node, candidateNames, candidateDeclaration) {
+    if (!isNode(node)) return false;
     if (node !== candidateDeclaration) {
         if (node.type === "LocalStatement") {
             for (const variable of node.variables || []) {
-                if (isIdentifier(variable) && candidateNames.has(variable.name)) {
-                    out.push({ kind: "local", name: variable.name, node: variable });
-                }
+                if (isIdentifier(variable) && candidateNames.has(variable.name)) return true;
             }
         }
         if (node.type === "FunctionDeclaration") {
             for (const parameter of node.parameters || []) {
-                if (isIdentifier(parameter) && candidateNames.has(parameter.name)) {
-                    out.push({ kind: "parameter", name: parameter.name, node: parameter });
-                }
+                if (isIdentifier(parameter) && candidateNames.has(parameter.name)) return true;
             }
-            if (node.isLocal && isIdentifier(node.identifier) && candidateNames.has(node.identifier.name)) {
-                out.push({ kind: "local-function", name: node.identifier.name, node: node.identifier });
-            }
+            if (node.isLocal && isIdentifier(node.identifier) && candidateNames.has(node.identifier.name)) return true;
         }
-        if (node.type === "ForNumericStatement" && isIdentifier(node.variable) && candidateNames.has(node.variable.name)) {
-            out.push({ kind: "for", name: node.variable.name, node: node.variable });
-        }
+        if (node.type === "ForNumericStatement" && isIdentifier(node.variable) && candidateNames.has(node.variable.name)) return true;
         if (node.type === "ForGenericStatement") {
             for (const variable of node.variables || []) {
-                if (isIdentifier(variable) && candidateNames.has(variable.name)) {
-                    out.push({ kind: "for", name: variable.name, node: variable });
-                }
+                if (isIdentifier(variable) && candidateNames.has(variable.name)) return true;
             }
         }
     }
-
     for (const [key, value] of Object.entries(node)) {
         if (key === "loc" || key === "range") continue;
         if (Array.isArray(value)) {
-            for (const child of value) collectShadowingDeclarations(child, candidateNames, candidateDeclaration, out);
-        } else if (isNode(value)) {
-            collectShadowingDeclarations(value, candidateNames, candidateDeclaration, out);
+            for (const child of value) if (hasShadowingDeclaration(child, candidateNames, candidateDeclaration)) return true;
+        } else if (isNode(value) && hasShadowingDeclaration(value, candidateNames, candidateDeclaration)) {
+            return true;
         }
     }
-    return out;
+    return false;
 }
 
-function collectReservedNames(node, candidateNames, out = new Set(), parent = null, parentKey = null) {
-    if (!isNode(node)) return out;
+function analyzeRegisterNamingScope(node, candidateNames, candidateDeclaration, shadows = [], reservedNames = new Set(), parent = null, parentKey = null) {
+    if (!isNode(node)) return { shadows, reservedNames };
+
     if (node.type === "Identifier") {
         const isProperty =
             (parent?.type === "MemberExpression" && parentKey === "identifier") ||
             (parent?.type === "TableKeyString" && parentKey === "key");
-        if (!isProperty && !candidateNames.has(node.name)) out.add(node.name);
-        return out;
+        if (!isProperty && !candidateNames.has(node.name)) reservedNames.add(node.name);
+        return { shadows, reservedNames };
     }
+
+    if (node !== candidateDeclaration) {
+        if (node.type === "LocalStatement") {
+            for (const variable of node.variables || []) {
+                if (isIdentifier(variable) && candidateNames.has(variable.name)) shadows.push({ kind: "local", name: variable.name, node: variable });
+            }
+        }
+        if (node.type === "FunctionDeclaration") {
+            for (const parameter of node.parameters || []) {
+                if (isIdentifier(parameter) && candidateNames.has(parameter.name)) shadows.push({ kind: "parameter", name: parameter.name, node: parameter });
+            }
+            if (node.isLocal && isIdentifier(node.identifier) && candidateNames.has(node.identifier.name)) {
+                shadows.push({ kind: "local-function", name: node.identifier.name, node: node.identifier });
+            }
+        }
+        if (node.type === "ForNumericStatement" && isIdentifier(node.variable) && candidateNames.has(node.variable.name)) {
+            shadows.push({ kind: "for", name: node.variable.name, node: node.variable });
+        }
+        if (node.type === "ForGenericStatement") {
+            for (const variable of node.variables || []) {
+                if (isIdentifier(variable) && candidateNames.has(variable.name)) shadows.push({ kind: "for", name: variable.name, node: variable });
+            }
+        }
+    }
+
     for (const [key, value] of Object.entries(node)) {
         if (key === "loc" || key === "range") continue;
         if (Array.isArray(value)) {
-            for (const child of value) collectReservedNames(child, candidateNames, out, node, key);
+            for (const child of value) analyzeRegisterNamingScope(child, candidateNames, candidateDeclaration, shadows, reservedNames, node, key);
         } else if (isNode(value)) {
-            collectReservedNames(value, candidateNames, out, node, key);
+            analyzeRegisterNamingScope(value, candidateNames, candidateDeclaration, shadows, reservedNames, node, key);
         }
     }
-    return out;
+    return { shadows, reservedNames };
 }
 
 function collectRenameEdits(node, mapping, minOffset, out = [], parent = null, parentKey = null) {
@@ -225,7 +240,8 @@ function renameVmRegisterBindings(source, ast) {
         return { source, found: true, applied: false, reason: "VM register declaration contains duplicate names", mapping: [] };
     }
 
-    const shadows = collectShadowingDeclarations(vmFunction, candidateNames, declaration.statement, []);
+    const namingScope = analyzeRegisterNamingScope(vmFunction, candidateNames, declaration.statement);
+    const shadows = namingScope.shadows;
     if (shadows.length > 0) {
         return {
             source,
@@ -236,7 +252,7 @@ function renameVmRegisterBindings(source, ast) {
         };
     }
 
-    const reservedNames = collectReservedNames(vmFunction, candidateNames);
+    const reservedNames = namingScope.reservedNames;
     if (reservedNames.has("ReturnVal") && returnRegister.name !== "ReturnVal") {
         return { source, found: true, applied: false, reason: "ReturnVal collides with another VM-scope identifier", mapping: [] };
     }

@@ -1,4 +1,3 @@
-const { findVmFunction } = require("./vm-state");
 
 function isNode(value) {
     return value && typeof value === "object" && typeof value.type === "string";
@@ -715,18 +714,6 @@ function recoverVmBindings(source, ast, vmState) {
         return {
             found: false,
             reason: "VM binding analysis requires a closed, normalized VM state graph",
-            functions: [],
-            definitions: [],
-            uses: [],
-            captures: [],
-        };
-    }
-
-    const vm = findVmFunction(ast);
-    if (!vm) {
-        return {
-            found: false,
-            reason: "No semantically named vm function was found",
             functions: [],
             definitions: [],
             uses: [],
