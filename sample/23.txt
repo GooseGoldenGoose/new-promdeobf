@@ -1,382 +1,474 @@
 return (function(...)
     local o = {
-        "ZtXQZ6eGP0d=",
-        "dDUi7lRI",
-        "vTdKvUra7lG34IX2",
-        "ZlmphlRE",
-        "9KXGP04BVb==",
-        "9KXfhp==",
-        "hDeeZCxF7c4FV97y",
-        "V6Z1J1HmvyR031KG",
-        "hDXNhDWI",
-        "Sb==",
-        "9KXi7lO=",
-        "h9RQ79eI",
-        "ZDHD19G44QRJJ1Ks7M==",
-        "7tXsVWBsz1cpdCUY",
-        "V0mehD7p3ImGJD4y",
-        "vImFdf4vPKZwdc42",
-        "d6eGPf3=",
-        "7DUI70UNZM==",
-        "ZtUQZtBN7/rihlmfZlWf7qXivle/h9emFtekdDBydp==",
-        "Fp=="
+        "Et0S2w861n==",
+        "m/4qYA8M8BJoKf+S",
+        "1wJWUE8YJu/jufJl",
+        "IBVr2cUmYW0OPAGNVn==",
+        "UgFkQgJz",
+        "mOJTVg/Du68bgmXh",
+        "VBp6gO8EYmXLcuJggY==",
+        "VWcdVwcCUv==",
+        "PrIFguJYY6USVfUm",
+        "3n==",
+        "IO4S2AY=",
+        "IWc9VgJd",
+        "P/4/mjXY8/482B/kVtv=",
+        "UlcjUl6CVNX9QgFAUg/AV709Pg4NQE4Fsl4pIW6LIk==",
+        "sk==",
+        "QEJjVE4d",
+        "QW0CQW/d",
+        "Jt6K2l06PrJK8E6q7mM=",
+        "Et0AQk==",
+        "MOGjJWvk8f6GYg4O76Q=",
+        "uW8wKuVDPrV8VgSA",
+        "Ul0jUO4S2wI=",
+        "Et09VgD="
     }
-    for m, v in ipairs({
+    local function r(r)
+        return o[r - (48290)]
+    end
+    for r, O in ipairs({
         {
             1,
-            20
+            23
         },
         {
             1,
-            17
+            18
         },
         {
-            18,
-            20
+            19,
+            23
         }
     }) do
-        while v[1] < v[2] do
-            o[v[1]], o[v[2]], v[1], v[2] = o[v[2]], o[v[1]], v[1] + (1), v[2] - (1)
+        while O[1] < O[2] do
+            o[O[1]], o[O[2]], O[1], O[2] = o[O[2]], o[O[1]], O[1] + (1), O[2] - (1)
         end
     end
-    local function m(m)
-        return o[m - (4909)]
-    end
     do
-        local m = o
-        local v = string.sub
-        local V = string.char
-        local H = type
-        local p = {
-            ["2"] = 2,
-            K = 53,
-            ["4"] = 17,
-            ["1"] = 20,
-            S = 11,
-            k = 33,
-            o = 47,
-            N = 46,
-            ["/"] = 50,
-            i = 44,
-            ["0"] = 38,
-            f = 39,
-            h = 24,
-            ["3"] = 16,
-            ["8"] = 31,
-            n = 59,
-            m = 57,
-            W = 5,
-            s = 15,
-            J = 19,
-            Z = 29,
-            w = 45,
-            ["9"] = 23,
-            u = 10,
-            M = 32,
-            e = 9,
-            j = 40,
-            R = 13,
-            ["5"] = 42,
-            c = 36,
-            x = 49,
-            ["+"] = 63,
-            T = 55,
-            r = 1,
-            ["6"] = 7,
-            I = 52,
-            g = 60,
-            q = 18,
-            t = 6,
-            D = 54,
-            ["7"] = 25,
-            Q = 51,
-            O = 56,
-            G = 41,
-            Y = 34,
-            a = 3,
-            C = 4,
-            V = 30,
-            p = 48,
-            A = 62,
-            y = 35,
-            d = 28,
-            v = 26,
-            X = 61,
-            H = 12,
-            L = 58,
-            z = 14,
-            B = 37,
-            E = 43,
-            U = 21,
-            P = 27,
-            l = 22,
-            b = 0,
-            F = 8
+        local r = string.len
+        local O = math.floor
+        local R = table.insert
+        local J = type
+        local g = table.concat
+        local u = string.char
+        local x = string.sub
+        local j = {
+            X = 1,
+            a = 62,
+            N = 50,
+            E = 23,
+            B = 55,
+            h = 40,
+            y = 59,
+            t = 53,
+            S = 41,
+            K = 14,
+            z = 43,
+            D = 56,
+            U = 29,
+            P = 26,
+            Y = 16,
+            H = 34,
+            f = 4,
+            Z = 10,
+            v = 32,
+            ["4"] = 9,
+            q = 47,
+            I = 28,
+            s = 8,
+            ["+"] = 49,
+            j = 51,
+            F = 57,
+            ["6"] = 37,
+            ["9"] = 44,
+            ["/"] = 5,
+            i = 31,
+            r = 3,
+            A = 39,
+            p = 33,
+            e = 58,
+            T = 45,
+            ["5"] = 60,
+            ["3"] = 11,
+            u = 20,
+            R = 15,
+            l = 6,
+            b = 42,
+            w = 38,
+            L = 35,
+            O = 7,
+            ["2"] = 27,
+            ["1"] = 30,
+            c = 21,
+            g = 22,
+            ["0"] = 61,
+            G = 36,
+            Q = 24,
+            ["7"] = 18,
+            M = 12,
+            k = 48,
+            W = 54,
+            d = 52,
+            o = 2,
+            n = 0,
+            C = 46,
+            m = 19,
+            V = 25,
+            x = 63,
+            J = 13,
+            ["8"] = 17
         }
-        local b = table.insert
-        local K = string.len
-        local A = math.floor
-        local F = table.concat
-        for o = 1, #m, 1 do
-            local t = m[o]
-            if H(t) == "string" then
-                local H = K(t)
-                local I = {}
-                local c = 1
-                local S = 0
-                local U = 0
-                while c <= H do
-                    local o = v(t, c, c)
-                    local m = p[o]
-                    if m then
-                        S = S + m * (64) ^ ((3) - U)
-                        U = U + (1)
-                        if U == 4 then
-                            U = 0
-                            local o = A(S / (65536))
-                            local m = A((S % (65536)) / (256))
-                            local v = S % (256)
-                            b(I, V(o, m, v))
-                            S = 0
+        local U = o
+        for o = 1, #U, 1 do
+            local G = U[o]
+            if J(G) == "string" then
+                local J = r(G)
+                local w = {}
+                local C = 1
+                local q = 0
+                local p = 0
+                while C <= J do
+                    local o = x(G, C, C)
+                    local r = j[o]
+                    if r then
+                        q = q + r * (64) ^ ((3) - p)
+                        p = p + (1)
+                        if p == 4 then
+                            p = 0
+                            local o = O(q / (65536))
+                            local r = O((q % (65536)) / (256))
+                            local J = q % (256)
+                            R(w, u(o, r, J))
+                            q = 0
                         end
                     elseif o == "=" then
-                        b(I, V(A(S / (65536))))
-                        if c >= H or v(t, c + (1), c + (1)) ~= "=" then
-                            b(I, V(A((S % (65536)) / (256))))
+                        R(w, u(O(q / (65536))))
+                        if C >= J or x(G, C + (1), C + (1)) ~= "=" then
+                            R(w, u(O((q % (65536)) / (256))))
                         end
                         break
                     end
-                    c = c + (1)
+                    C = C + (1)
                 end
-                m[o] = F(I)
+                U[o] = g(w)
             end
         end
     end
-    return (function(o, V, H, p, b, K, A, v, t, j, T, I, B, U, f, F, S, c)
-        S, F, f, c, T, I, U, t, B, j, v = function(o)
-            for m = 1, #o, 1 do
-                t[o[m]] = (1) + t[o[m]]
+    return (function(o, R, J, g, u, x, j, G, w, B, v, q, P, O, U, C, k, e, a, p, y)
+        C, w, q, p, k, e, B, G, v, U, O, y, P, a = 0, function()
+            C = (1) + C
+            G[C] = 1
+            return C
+        end, function(o)
+            for r = 1, #o, 1 do
+                G[o[r]] = (1) + G[o[r]]
             end
-            if H then
-                local v = H(true)
-                local V = b(v)
-                V[m(4911)], V[m(4912)], V[m(4917)] = o, U, function()
-                    return 2551848
+            if J then
+                local O = J(true)
+                local R = u(O)
+                R[r(48309)], R[r(48304)], R[r(48308)] = o, p, function()
+                    return -3875971
                 end
-                return v
+                return O
             else
-                return p({}, {
-                    [m(4912)] = U,
-                    [m(4911)] = o,
-                    [m(4917)] = function()
-                        return 2551848
+                return g({}, {
+                    [r(48304)] = p,
+                    [r(48309)] = o,
+                    [r(48308)] = function()
+                        return -3875971
                     end
                 })
             end
-        end, {}, function(o, m)
-            local V = S(m)
-            local H = function(H)
-                return v(o, {
-                    H
-                }, m, V)
-            end
-            return H
-        end, 0, function(o, m)
-            local V = S(m)
-            local H = function(...)
-                return v(o, {
-                    ...
-                }, m, V)
-            end
-            return H
-        end, function()
-            c = (1) + c
-            t[c] = 1
-            return c
         end, function(o)
-            local m, v = 1, o[1]
-            while v do
-                t[v], m = t[v] - (1), (1) + m
-                if 0 == t[v] then
-                    t[v], F[v] = nil, nil
+            local r, O = 1, o[1]
+            while O do
+                G[O], r = G[O] - (1), r + (1)
+                if 0 == G[O] then
+                    G[O], U[O] = nil, nil
                 end
-                v = o[m]
+                O = o[r]
             end
-        end, {}, function(o)
-            t[o] = t[o] - (1)
-            if t[o] == 0 then
-                t[o], F[o] = nil, nil
+        end, function(o, r)
+            local R = q(r)
+            local J = function(...)
+                return O(o, {
+                    ...
+                }, r, R)
             end
-        end, function(o, m)
-            local V = S(m)
-            local H = function(H, p, b)
-                return v(o, {
-                    H,
-                    p,
-                    b
-                }, m, V)
+            return J
+        end, function(o)
+            G[o] = G[o] - (1)
+            if 0 == G[o] then
+                G[o], U[o] = nil, nil
             end
-            return H
-        end, function(v, H, p, b)
-            local A, U, S, e, F, c, C, I, t, B
-            while v do
-                if v < 11701342 then
-                    if v < 7511432 then
-                        if v < 5754698 then
-                            if v < 4336646 then
-                                v = 1
-                                F = v
-                                v = F and 8401108 or 5314807
+        end, function(o, r)
+            local R = q(r)
+            local J = function(J, g, u, x, j)
+                return O(o, {
+                    J,
+                    g,
+                    u,
+                    x,
+                    j
+                }, r, R)
+            end
+            return J
+        end, {}, function(o, r)
+            local R = q(r)
+            local J = function(J, g, u)
+                return O(o, {
+                    J,
+                    g,
+                    u
+                }, r, R)
+            end
+            return J
+        end, {}, function(O, J, g, u)
+            local L, i, j, s, A, p, G, V, C, q, d
+            while O do
+                if O < 8252631 then
+                    if O < 4114215 then
+                        if O < 1859578 then
+                            if O < 1289515 then
+                                O = nil
+                                G = O
+                                O = G and 12091914 or 15453322
                             else
-                                A = {
-                                    F
-                                }
-                                v = o[m(4919)]
+                                O = 1
+                                G = O
+                                O = G and 2117838 or 4296990
                             end
                         else
-                            I = m(4927)
-                            A = o[I]
-                            c = m(4916)
-                            I = A(F)
-                            S = m(4915)
-                            U = o[S]
-                            S = U(V(t))
-                            A = c .. S
-                            v = I .. A
-                            A = {
-                                v
-                            }
-                            v = o[m(4929)]
+                            if O < 2916411 then
+                                O = 2
+                                G = O
+                                O = 4296990
+                            else
+                                G = J
+                                C = r(48299)
+                                j = r(48296)
+                                q = w()
+                                O = o[j]
+                                j = O(C)
+                                j = r(48293)
+                                O = o[j]
+                                i = 2
+                                j = O()
+                                O = k(8219732, {})
+                                p = r(48301)
+                                C = j
+                                j = r(48302)
+                                o[j] = O
+                                j = P(11127119, {})
+                                d = 1
+                                U[q] = j
+                                V = 3
+                                j = o[p]
+                                s = U[q]
+                                L = s(d)
+                                s = nil
+                                A = L == s
+                                p = j(A)
+                                p = r(48301)
+                                d = 1
+                                j = o[p]
+                                s = U[q]
+                                L = s(d, i)
+                                d = 1
+                                s = 2
+                                C = nil
+                                i = 2
+                                A = L == s
+                                p = j(A)
+                                p = r(48301)
+                                j = o[p]
+                                s = U[q]
+                                L = s(d, i, V)
+                                s = 2
+                                A = L == s
+                                p = j(A)
+                                s = B(1746877, {})
+                                p = r(48301)
+                                j = o[p]
+                                L = s()
+                                s = 2
+                                A = L == s
+                                O = o[r(48305)]
+                                p = j(A)
+                                s = y(1157503, {})
+                                p = r(48301)
+                                j = o[p]
+                                L = s()
+                                s = nil
+                                A = L == s
+                                p = j(A)
+                                p = r(48301)
+                                j = o[p]
+                                s = v(8362488, {
+                                    q
+                                })
+                                q = e(q)
+                                L = s()
+                                s = 1
+                                A = L == s
+                                p = j(A)
+                                j = {}
+                            end
                         end
                     else
-                        if v < 9391732 then
-                            if v < 8251929 then
-                                v = 2
-                                F = v
-                                v = 12790281
+                        if O < 6238098 then
+                            if O < 4660161 then
+                                j = {
+                                    G
+                                }
+                                O = o[r(48312)]
                             else
-                                v = 2
-                                F = v
-                                v = 5314807
+                                G = nil
+                                j = {}
+                                O = o[r(48310)]
                             end
                         else
-                            A = m(4927)
-                            v = o[A]
-                            A = {
-                                v(F)
-                            }
-                            v = o[m(4921)]
-                            A = {
-                                V(A)
-                            }
+                            if O < 7041085 then
+                                j = r(48307)
+                                O = o[j]
+                                j = {
+                                    O(G)
+                                }
+                                j = {
+                                    R(j)
+                                }
+                                O = o[r(48298)]
+                            else
+                                G = J[1]
+                                q = r(48297)
+                                p = r(48300)
+                                C = {
+                                    x(2, R(J))
+                                }
+                                j = o[q]
+                                q = j(p, R(C))
+                                j = 0
+                                O = q == j
+                                O = O and 6769361 or 8932659
+                            end
                         end
                     end
                 else
-                    if v < 13565004 then
-                        if v < 13222606 then
-                            if v < 12448518 then
-                                v = nil
-                                F = v
-                                v = F and 7912766 or 12790281
-                            else
-                                v = o[m(4922)]
-                                A = {
-                                    F
+                    if O < 11188342 then
+                        if O < 9968480 then
+                            if O < 8545068 then
+                                O = a(10073567, {})
+                                U[g[1]] = O
+                                j = U[g[1]]
+                                G = j()
+                                j = {
+                                    G()
                                 }
+                                O = o[r(48294)]
+                                j = {
+                                    R(j)
+                                }
+                            else
+                                q = r(48307)
+                                s = r(48302)
+                                j = o[q]
+                                q = j(G)
+                                p = r(48295)
+                                A = o[s]
+                                s = A(R(C))
+                                j = p .. s
+                                O = q .. j
+                                j = {
+                                    O
+                                }
+                                O = o[r(48306)]
                             end
                         else
-                            F = H[1]
-                            t = H[2]
-                            v = o[m(4920)]
-                            A = {
-                                t
-                            }
+                            if O < 11056119 then
+                                C = w()
+                                j = 2
+                                O = nil
+                                G = O
+                                O = 1
+                                U[C] = O
+                                O = B(13895660, {
+                                    C
+                                })
+                                G = O
+                                C = e(C)
+                                C = j
+                                j = {
+                                    G
+                                }
+                                O = o[r(48303)]
+                            else
+                                C = J[2]
+                                O = o[r(48291)]
+                                j = {
+                                    C
+                                }
+                                G = J[1]
+                            end
                         end
                     else
-                        if v < 14906787 then
-                            if v < 14010444 then
-                                B = 1
-                                t = m(4925)
-                                A = m(4923)
-                                F = H
-                                v = o[A]
-                                A = v(t)
-                                A = m(4924)
-                                v = o[A]
-                                A = v()
-                                C = 3
-                                t = A
-                                A = m(4915)
-                                v = T(15400369, {})
-                                o[A] = v
-                                e = 2
-                                c = m(4918)
-                                A = j(13373261, {})
-                                I = A
-                                A = o[c]
-                                S = I(B)
-                                B = nil
-                                U = S == B
-                                v = o[m(4913)]
-                                c = A(U)
-                                c = m(4918)
-                                B = 1
-                                A = o[c]
-                                S = I(B, e)
-                                B = 2
-                                U = S == B
-                                c = A(U)
-                                c = m(4918)
-                                e = 2
-                                B = 1
-                                A = o[c]
-                                S = I(B, e, C)
-                                B = 2
-                                t = nil
-                                I = nil
-                                U = S == B
-                                c = A(U)
-                                c = m(4918)
-                                S = f(2830450, {})
-                                A = o[c]
-                                B = S()
-                                S = 2
-                                U = B == S
-                                c = A(U)
-                                c = m(4918)
-                                S = j(12313584, {})
-                                A = o[c]
-                                B = S()
-                                S = nil
-                                U = B == S
-                                c = A(U)
-                                A = {}
+                        if O < 14409010 then
+                            if O < 13889030 then
+                                O = 2
+                                G = O
+                                O = 15453322
                             else
-                                A = {}
-                                v = o[m(4914)]
-                                F = nil
+                                O = U[g[1]]
+                                j = {
+                                    O
+                                }
+                                O = o[r(48311)]
                             end
                         else
-                            F = H[1]
-                            I = m(4928)
-                            A = o[I]
-                            t = {
-                                K(2, V(H))
+                            O = o[r(48292)]
+                            j = {
+                                G
                             }
-                            c = m(4926)
-                            I = A(c, V(t))
-                            A = 0
-                            v = I == A
-                            v = v and 11060736 or 7258266
                         end
                     end
                 end
             end
-            v = #b
-            return V(A)
+            O = #u
+            return R(j)
+        end, function(o, r)
+            local R = q(r)
+            local J = function(J)
+                return O(o, {
+                    J
+                }, r, R)
+            end
+            return J
+        end, function(o, r)
+            local R = q(r)
+            local J = function(J, g, u, x, j, U, G)
+                return O(o, {
+                    J,
+                    g,
+                    u,
+                    x,
+                    j,
+                    U,
+                    G
+                }, r, R)
+            end
+            return J
+        end, function(o, r)
+            local R = q(r)
+            local J = function(J, g)
+                return O(o, {
+                    J,
+                    g
+                }, r, R)
+            end
+            return J
         end
-        return (T(14000378, {}))(V(A))
-    end)(getfenv and getfenv() or _ENV, unpack or table[m(4910)], newproxy, setmetatable, getmetatable, select, {
+        return (k(3305167, {}))(R(j))
+    end)(getfenv and getfenv() or _ENV, unpack or table[r(48313)], newproxy, setmetatable, getmetatable, select, {
         ...
     })
 end)(...)

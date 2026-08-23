@@ -20,16 +20,60 @@ assert(foo(1, 2, 3) == 2)
 
 assert((function()
     local a = 1
-    if a then
-        a = 2
+    foo = function()
+        return a
     end
-    return a
-end)() == 2)
-
+    return foo()
+end)() == 1)
 assert((function()
-    local a
-    if a then
-        a = 2
+    local a = 1
+    foo = function()
+        return function()
+            return a
+        end
     end
-    return a
-end)() == nil)
+    return foo()()
+end)() == 1)
+assert((function()
+    foo = function(a)
+        return function()
+            return a
+        end
+    end
+    return foo(1)()
+end)() == 1)
+assert((function()
+    foo = function()
+        local f
+        do
+            local a = 1
+            f = function()
+                return a
+            end
+        end
+        local b = 2
+        return f
+    end
+    return foo()()
+end)() == 1)
+assert((function()
+    foo = function()
+        local a = 1
+        local function f()
+            return a
+        end
+        a = 2
+        return f
+    end
+    return foo()()
+end)() == 2)
+assert((function()
+    foo = function()
+        local a = 1
+        ;(function()
+            a = 2
+        end)()
+        return a
+    end
+    return foo()
+end)() == 2)
