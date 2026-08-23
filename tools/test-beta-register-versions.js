@@ -49,4 +49,43 @@ assert(result.source.includes("ReturnVal = {}"));
 assert(result.source.includes("state = nil"));
 assert(!result.source.includes("local r_v1_4 = {}"));
 parseLua(result.source, "<beta-register-test-output>");
+
+const crossStateSource = `vm = function(state, args, upvalues, gcProxy)
+    local r1, r2, ReturnVal
+    while state do
+        if state == 1 then
+            r2 = 3123
+            state = flag and 2 or 3
+        end
+        if state == 2 then
+            ReturnVal = consume(r2)
+            r2 = 3
+            state = 3
+        end
+        if state == 3 then
+            ReturnVal = consume2(r2)
+            ReturnVal = {}
+            state = nil
+        end
+    end
+    state = #gcProxy
+    return unpack(ReturnVal)
+end
+root = createClosure(1, {})`;
+
+const crossStateResult = versionVmBlockRegisters(
+    crossStateSource,
+    parseLua(crossStateSource, "<beta-cross-state-test>")
+);
+assert.equal(crossStateResult.found, true);
+assert.equal(crossStateResult.applied, true);
+assert.equal(crossStateResult.cfgComplete, true);
+assert.equal(crossStateResult.crossBlockVersionCount, 1);
+assert(crossStateResult.source.includes("local r_v1_1"));
+assert(crossStateResult.source.includes("r_v1_1 = 3123"));
+assert(crossStateResult.source.includes("consume(r_v1_1)"));
+assert(crossStateResult.source.includes("consume2(r2)"));
+assert(!crossStateResult.source.includes("consume2(r_v1_1)"));
+assert(!crossStateResult.source.includes("consume2(r_v1_2)"));
+parseLua(crossStateResult.source, "<beta-cross-state-test-output>");
 console.log("beta register versioning tests passed");

@@ -68,13 +68,23 @@ function collectIdentifierReadEdits(node, latestVersions, out = [], parent = nul
     return out;
 }
 
-function rewriteExpression(source, expression, latestVersions) {
+function rewriteExpression(source, expression, latestVersions, usedVersions = null) {
     if (!expression || !Array.isArray(expression.range)) return null;
     const start = expression.range[0];
     const end = expression.range[1];
     const text = source.slice(start, end);
     const edits = collectIdentifierReadEdits(expression, latestVersions, []);
+    if (usedVersions) {
+        for (const edit of edits) usedVersions.add(edit.replacement);
+    }
     return applyTextEdits(text, edits, start);
+}
+
+function lineIndentAt(source, offset) {
+    const lineStart = source.lastIndexOf("\n", Math.max(0, offset - 1)) + 1;
+    const prefix = source.slice(lineStart, offset);
+    const match = prefix.match(/^[\t ]*/);
+    return match ? match[0] : "";
 }
 
 function findLastSingleWrites(statements, names) {
@@ -96,6 +106,93 @@ function isNilLiteral(node) {
 
 function isTableConstructor(node) {
     return node?.type === "TableConstructorExpression";
+}
+
+function collectClosureEntryStates(rootNode) {
+    const entries = new Set();
+    function walk(node) {
+        if (!isNode(node)) return;
+        if (node.type === "CallExpression" && isIdentifier(node.base) && /^createClosure(?:\d+)?$/.test(node.base.name)) {
+            const entry = numericValue((node.arguments || [])[0]);
+            if (entry !== null) entries.add(entry);
+        }
+        for (const [key, value] of Object.entries(node)) {
+            if (key === "loc" || key === "range") continue;
+            if (Array.isArray(value)) {
+                for (const child of value) walk(child);
+            } else if (isNode(value)) {
+                walk(value);
+            }
+        }
+    }
+    walk(rootNode);
+    return entries;
+}
+
+function stateTargets(node) {
+    const direct = numericValue(node);
+    if (direct !== null) return [direct];
+    if (isNilLiteral(node)) return [];
+    if (node?.type === "LogicalExpression" && node.operator === "or") {
+        const left = node.left;
+        const onFalse = numericValue(node.right);
+        if (left?.type === "LogicalExpression" && left.operator === "and") {
+            const onTrue = numericValue(left.right);
+            if (onTrue !== null && onFalse !== null) return [onTrue, onFalse];
+        }
+    }
+    return null;
+}
+
+function setEquals(a, b) {
+    if (a === b) return true;
+    if (!a || !b || a.size !== b.size) return false;
+    for (const item of a) if (!b.has(item)) return false;
+    return true;
+}
+
+function mapOfSetsEquals(a, b) {
+    if (a === b) return true;
+    if (a.size !== b.size) return false;
+    for (const [key, value] of a) {
+        if (!setEquals(value, b.get(key))) return false;
+    }
+    return true;
+}
+
+function cloneSetMap(map) {
+    const out = new Map();
+    for (const [key, value] of map) out.set(key, new Set(value));
+    return out;
+}
+
+function mergeDefinitionMaps(maps, entryState, candidateNames) {
+    const merged = new Map();
+    for (const map of maps) {
+        for (const [name, defs] of map) {
+            let target = merged.get(name);
+            if (!target) merged.set(name, target = new Set());
+            for (const def of defs) target.add(def);
+        }
+    }
+    if (entryState !== null) {
+        for (const name of candidateNames) {
+            let target = merged.get(name);
+            if (!target) merged.set(name, target = new Set());
+            target.add(`u:entry:${entryState}:${name}`);
+        }
+    }
+    return merged;
+}
+
+function uniqueVersionMap(definitions) {
+    const result = new Map();
+    for (const [name, defs] of definitions) {
+        if (defs.size !== 1) continue;
+        const only = defs.values().next().value;
+        if (typeof only === "string" && only.startsWith("v:")) result.set(name, only.slice(2));
+    }
+    return result;
 }
 
 function versionVmBlockRegisters(source, ast) {
@@ -134,8 +231,8 @@ function versionVmBlockRegisters(source, ast) {
 
     const baseIds = new Map();
     const versionCounts = new Map();
-    const edits = [];
     const versions = [];
+    const blocks = [];
     let nextBaseId = 1;
     let skippedAssignments = 0;
     let preservedFinalWrites = 0;
@@ -145,8 +242,11 @@ function versionVmBlockRegisters(source, ast) {
         return baseIds.get(name);
     }
 
+    // Phase 1: assign stable version identities to every supported write and build
+    // block transfer metadata. No read is rewritten until CFG reaching definitions
+    // are known.
     for (const leaf of leaves) {
-        const latestVersions = new Map();
+        const stateId = numericValue(leaf.condition.left) ?? numericValue(leaf.condition.right);
         const statements = (leaf.body || []).filter(statement => statement?.type !== "CommentStatement");
         const lastSpecialWrites = findLastSingleWrites(statements, specialFinalNames);
         const finalStateWrite = lastSpecialWrites.get(stateName);
@@ -158,36 +258,29 @@ function versionVmBlockRegisters(source, ast) {
             isNilLiteral(finalStateWrite.value) &&
             finalReturnWrite.index < finalStateWrite.index;
 
+        const plans = new Map();
+        const lastDefinitions = new Map();
+
         for (let statementIndex = 0; statementIndex < statements.length; statementIndex++) {
             const statement = statements[statementIndex];
             if (statement?.type !== "AssignmentStatement") continue;
             const variables = statement.variables || [];
             const init = statement.init || [];
+
             if (variables.length !== 1 || init.length !== 1 || !isIdentifier(variables[0])) {
                 for (const variable of variables) {
-                    if (isIdentifier(variable) && candidateNames.has(variable.name)) latestVersions.delete(variable.name);
+                    if (!isIdentifier(variable) || !candidateNames.has(variable.name)) continue;
+                    const rawDefinition = `u:${stateId}:${statement.range?.[0] ?? statementIndex}:${variable.name}`;
+                    lastDefinitions.set(variable.name, rawDefinition);
                 }
                 skippedAssignments++;
+                plans.set(statement, { kind: "unsupported" });
                 continue;
             }
 
             const originalName = variables[0].name;
-            const rhs = rewriteExpression(source, init[0], latestVersions);
-            if (rhs === null || !Array.isArray(statement.range)) {
-                if (candidateNames.has(originalName)) latestVersions.delete(originalName);
-                skippedAssignments++;
-                continue;
-            }
-
             if (!candidateNames.has(originalName)) {
-                const originalRhs = source.slice(init[0].range[0], init[0].range[1]);
-                if (rhs !== originalRhs) {
-                    edits.push({
-                        start: init[0].range[0],
-                        end: init[0].range[1],
-                        replacement: rhs,
-                    });
-                }
+                plans.set(statement, { kind: "other", originalName });
                 continue;
             }
 
@@ -197,16 +290,18 @@ function versionVmBlockRegisters(source, ast) {
                 (originalName === returnName && preservesReturnValue && lastWrite?.index === statementIndex);
 
             if (isPreservedFinalWrite) {
-                const originalRhs = source.slice(init[0].range[0], init[0].range[1]);
-                if (rhs !== originalRhs) {
-                    edits.push({
-                        start: init[0].range[0],
-                        end: init[0].range[1],
-                        replacement: rhs,
-                    });
-                }
-                latestVersions.delete(originalName);
+                const rawDefinition = `u:${stateId}:${statement.range?.[0] ?? statementIndex}:${originalName}`;
+                plans.set(statement, { kind: "preserved", originalName });
+                lastDefinitions.set(originalName, rawDefinition);
                 preservedFinalWrites++;
+                continue;
+            }
+
+            if (!Array.isArray(statement.range) || !Array.isArray(init[0]?.range)) {
+                const rawDefinition = `u:${stateId}:${statementIndex}:${originalName}`;
+                plans.set(statement, { kind: "unsupported", originalName });
+                lastDefinitions.set(originalName, rawDefinition);
+                skippedAssignments++;
                 continue;
             }
 
@@ -214,21 +309,145 @@ function versionVmBlockRegisters(source, ast) {
             const version = (versionCounts.get(originalName) || 0) + 1;
             versionCounts.set(originalName, version);
             const newName = `r_v${baseId}_${version}`;
-            const replacement = `local ${newName} = ${rhs}`;
-            edits.push({
-                start: statement.range[0],
-                end: statement.range[1],
-                replacement,
-            });
-            latestVersions.set(originalName, newName);
-            versions.push({
-                blockState: numericValue(leaf.condition.left) ?? numericValue(leaf.condition.right),
-                originalName,
-                baseId,
-                version,
-                newName,
-            });
+            plans.set(statement, { kind: "versioned", originalName, newName, baseId, version });
+            lastDefinitions.set(originalName, `v:${newName}`);
+            versions.push({ blockState: stateId, originalName, baseId, version, newName });
         }
+
+        const successors = finalStateWrite ? stateTargets(finalStateWrite.value) : null;
+        blocks.push({
+            leaf,
+            stateId,
+            statements,
+            plans,
+            lastDefinitions,
+            successors,
+        });
+    }
+
+    const blockByState = new Map(blocks.map(block => [block.stateId, block]));
+    let cfgComplete = blocks.every(block =>
+        Array.isArray(block.successors) && block.successors.every(target => blockByState.has(target))
+    );
+    const closureEntries = collectClosureEntryStates(ast);
+    if (closureEntries.size === 0 || [...closureEntries].some(entry => !blockByState.has(entry))) cfgComplete = false;
+
+    const predecessors = new Map(blocks.map(block => [block.stateId, []]));
+    if (cfgComplete) {
+        for (const block of blocks) {
+            for (const target of block.successors) predecessors.get(target).push(block);
+        }
+    }
+
+    const inDefinitions = new Map(blocks.map(block => [block.stateId, new Map()]));
+    const outDefinitions = new Map(blocks.map(block => [block.stateId, new Map()]));
+    const crossBlockUsedVersions = new Set();
+
+    if (cfgComplete) {
+        // Worklist reaching definitions. A version can cross a state boundary only
+        // when every incoming path reaches that state with exactly the same version.
+        const queue = [...blocks];
+        const queued = new Set(queue.map(block => block.stateId));
+        let cursor = 0;
+        while (cursor < queue.length) {
+            const block = queue[cursor++];
+            queued.delete(block.stateId);
+            const predMaps = (predecessors.get(block.stateId) || []).map(pred => outDefinitions.get(pred.stateId));
+            const isEntry = closureEntries.has(block.stateId) || predMaps.length === 0;
+            const nextIn = mergeDefinitionMaps(predMaps, isEntry ? block.stateId : null, candidateNames);
+            const nextOut = cloneSetMap(nextIn);
+            for (const [name, def] of block.lastDefinitions) nextOut.set(name, new Set([def]));
+
+            const inChanged = !mapOfSetsEquals(nextIn, inDefinitions.get(block.stateId));
+            const outChanged = !mapOfSetsEquals(nextOut, outDefinitions.get(block.stateId));
+            if (inChanged) inDefinitions.set(block.stateId, nextIn);
+            if (outChanged) {
+                outDefinitions.set(block.stateId, nextOut);
+                for (const successor of block.successors) {
+                    if (!queued.has(successor)) {
+                        queued.add(successor);
+                        queue.push(blockByState.get(successor));
+                    }
+                }
+            }
+        }
+    }
+
+    // Phase 2: rewrite reads using the proven incoming definition plus writes seen
+    // earlier in the same block.
+    const edits = [];
+    for (const block of blocks) {
+        const latestVersions = cfgComplete
+            ? uniqueVersionMap(inDefinitions.get(block.stateId) || new Map())
+            : new Map();
+        const incomingVersionNames = new Set(latestVersions.values());
+
+        for (const statement of block.statements) {
+            if (statement?.type !== "AssignmentStatement") continue;
+            const plan = block.plans.get(statement);
+            const variables = statement.variables || [];
+            const init = statement.init || [];
+
+            if (!plan || plan.kind === "unsupported") {
+                for (const variable of variables) {
+                    if (isIdentifier(variable) && candidateNames.has(variable.name)) latestVersions.delete(variable.name);
+                }
+                continue;
+            }
+
+            if (variables.length !== 1 || init.length !== 1 || !isIdentifier(variables[0])) continue;
+            const usedVersions = new Set();
+            const rhs = rewriteExpression(source, init[0], latestVersions, usedVersions);
+            for (const versionName of usedVersions) {
+                if (incomingVersionNames.has(versionName)) crossBlockUsedVersions.add(versionName);
+            }
+            if (rhs === null) {
+                if (candidateNames.has(variables[0].name)) latestVersions.delete(variables[0].name);
+                continue;
+            }
+
+            if (plan.kind === "other") {
+                const originalRhs = source.slice(init[0].range[0], init[0].range[1]);
+                if (rhs !== originalRhs) edits.push({ start: init[0].range[0], end: init[0].range[1], replacement: rhs });
+                continue;
+            }
+
+            if (plan.kind === "preserved") {
+                const originalRhs = source.slice(init[0].range[0], init[0].range[1]);
+                if (rhs !== originalRhs) edits.push({ start: init[0].range[0], end: init[0].range[1], replacement: rhs });
+                latestVersions.delete(plan.originalName);
+                continue;
+            }
+
+            if (plan.kind === "versioned") {
+                edits.push({
+                    start: statement.range[0],
+                    end: statement.range[1],
+                    replacement: `local ${plan.newName} = ${rhs}`,
+                    versionName: plan.newName,
+                });
+                latestVersions.set(plan.originalName, plan.newName);
+                continue;
+            }
+        }
+
+    }
+
+    if (crossBlockUsedVersions.size > 0) {
+        for (const edit of edits) {
+            if (edit.versionName && crossBlockUsedVersions.has(edit.versionName)) {
+                edit.replacement = edit.replacement.replace(/^local /, "");
+            }
+        }
+        const versionOrder = new Map(versions.map((item, index) => [item.newName, index]));
+        const hoisted = [...crossBlockUsedVersions].sort((left, right) => versionOrder.get(left) - versionOrder.get(right));
+        const newline = source.includes("\r\n") ? "\r\n" : "\n";
+        const indent = lineIndentAt(source, registerDeclaration.statement.range[0]);
+        edits.push({
+            start: registerDeclaration.statement.range[1],
+            end: registerDeclaration.statement.range[1],
+            replacement: newline + indent + "local " + hoisted.join(", "),
+        });
     }
 
     if (edits.length === 0) {
@@ -244,6 +463,8 @@ function versionVmBlockRegisters(source, ast) {
         versionedAssignmentCount: versions.length,
         preservedFinalWrites,
         skippedAssignments,
+        cfgComplete,
+        crossBlockVersionCount: crossBlockUsedVersions.size,
         mapping: [...baseIds.entries()].map(([originalName, baseId]) => ({ originalName, baseName: `r_v${baseId}` })),
         versions,
         edits,

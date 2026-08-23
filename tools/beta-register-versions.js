@@ -29,6 +29,7 @@ function main() {
     console.log(`VM state blocks: ${result.blockCount}`);
     console.log(`Versioned assignments: ${result.versionedAssignmentCount}`);
     console.log(`Preserved final state/return-table writes: ${result.preservedFinalWrites}`);
+    console.log(`Cross-state versions: ${result.crossBlockVersionCount}`);
     console.log(`Skipped assignments: ${result.skippedAssignments}`);
     for (const item of result.mapping) console.log(`Register version base: ${item.originalName} -> ${item.baseName}`);
     console.log(`Output: ${outputPath}`);
