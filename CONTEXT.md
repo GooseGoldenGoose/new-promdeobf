@@ -30,7 +30,7 @@ When continuing this project in a new chat:
 - Preserve stable pipeline behavior when experimenting. A recovery pass must fail closed: if proof is incomplete, preserve the previous safe output rather than guess.
 - End every project-related turn with exactly: `Done for this turn — you can prompt now.`
 
-Latest implementation checkpoint is `56784a1 Add beta register versioning` on `main`, pushed to `origin/main`. All tracked fixtures `sample/1` through `sample/10` now have matching `.source.lua` + formatter-normalized `.txt` pairs. Samples 2-4 restore the old regression semantics; sample 5 is a new controlled stress fixture intentionally matching the old stress scale at 938 dispatcher states and 116 recovered VM functions. Source lexical-scope reconstruction has NOT been implemented yet.
+Latest fixture checkpoint is `4717198 Add beta branch sample 11` on `main`, pushed to `origin/main`; beta behavior checkpoint `57b8dcb Keep VM state registers unversioned in beta` immediately precedes it. All tracked fixtures `sample/1` through `sample/11` have matching `.source.lua` + formatter-normalized `.txt` pairs. Source lexical-scope reconstruction has NOT been implemented yet.
 
 # Core Knowledge & Rules
 
@@ -188,7 +188,7 @@ Current implementation:
 - `formater/luau-format.exe` is the normalization stage. Its existing runner formats Lua and simplifies arithmetic/constants before AST processing.
 - Controlled obfuscator fixture source exists at `C:\Users\reala\Desktop\!workspaces\promdeobf ova\wearedev obf`; `run.bat` invokes `luajit cli.lua --preset Medium input.txt`, producing `input.txt.obfuscated.lua`.
 - Both the formatted sample and the direct `wearedev obf\input.txt.obfuscated.lua` parse successfully as a `Chunk` with one top-level statement.
-- Every tracked `sample/N.txt` must have a matching tracked `sample/N.source.lua`. Current paired coverage is samples 1-10.
+- Every tracked `sample/N.txt` must have a matching tracked `sample/N.source.lua`. Current paired coverage is samples 1-11.
 - `sample/1.source.lua` is the baseline fixture. It is obfuscated with local WeAreDevs Medium, formatter-normalized into `sample/1.txt`, then deobfuscated to `output/1.lua`. Runtime parity is `baseline 14 4`.
 - Samples 2-4 were reconstructed from the old tracked fixtures/behavior: sample 2 is the `warn("gg")` + random branch regression; sample 3 is the shadowed block plus shared captured `x` regression; sample 4 is the shared `total` if/while/repeat regression with intentionally varied closure arities.
 - Sample 5 is now a controlled static stress source with 115 closure functions plus the root VM function. Its first 44 workers include an additional branch so the local compiler emits exactly 938 reachable dispatcher states, matching the old stress fixture state scale while retaining a source file.
@@ -487,7 +487,7 @@ without producing unrelated locals.
 - Sample 8 exposes the current behavior clearly: `D = "keep1"` stays next to its call, `B = "print"` stays next to `_env[B]`, `z = D + G` stays immediately followed by `D = z` because `D` is read later in that state, while truly unread `j = args` now sinks to the state-body tail with the final cleanup writes. The ownership-handoff pair remains adjacent `D = nil; D = 30`. The scheduler intentionally never removes overwritten or unread stores. Its proven random `_env[...]` stop sentinel is now removed by Step 3 and re-emitted as final `state = nil`, so the stop is structurally at the bottom of the state and unread pure writes stay immediately above it.
 - `tools/test-vm-register-scheduler.js` is a focused scheduler regression covering producer/use compaction, pure producer sinking, identifier-copy pulling, write/write adjacency without deletion, unread-to-tail sinking, RAW/WAR/WAW preservation, and effectful-call-order preservation; it currently passes.
 - Current sample 1 scheduling changes 2 blocks with 43 dependency-safe swaps and 3 unread sinks; runtime parity remains exact.
-- Current paired fixture coverage is samples 1-10. New sample 5 schedules 390 blocks with 221,956 dependency-safe swaps, 217 unread sinks, and a structurally proven 23-slot overflow bank. Sample 10 remains the natural overflow-boundary fixture with 19 slots.
+- Current paired fixture coverage is samples 1-11. New sample 5 schedules 390 blocks with 221,956 dependency-safe swaps, 217 unread sinks, and a structurally proven 23-slot overflow bank. Sample 10 remains the natural overflow-boundary fixture with 19 slots.
 
 
 ## Post-Scheduler VM Register Naming
@@ -505,10 +505,10 @@ without producing unrelated locals.
 
 - This is a separate analysis/presentation experiment and is NOT part of the normal deobfuscation pipeline. It consumes an already-generated normal output file and writes a sibling beta file.
 - Command: `node tools/beta-register-versions.js <output.lua> [output.beta.lua]`. If the second path is omitted, `output/2.lua` becomes `output/2.beta.lua` generically; no sample number is hardcoded in the transformer.
-- `passes/beta-register-versions.js` finds exact normalized dispatcher leaves (`state == N`) inside the semantic VM and versions only the VM scalar-register bindings plus the VM state/POS binding.
-- The first write encountered for an original register gets a stable base such as `ReturnVal -> r_v1`, `state -> r_v2`, `r1 -> r_v3`. Every later write to that same original register increments the suffix: `r_v1_1`, `r_v1_2`, etc. Reads within the same dispatcher leaf are rewritten to the latest local version, and each supported assignment becomes a `local` declaration.
-- Sample 2 currently transforms 3 dispatcher leaves / 22 assignments with 0 skips. Its first block starts exactly as requested: `local r_v1_1 = "warn"; local r_v2_1 = _env[r_v1_1]; local r_v3_1 = "gg"; local r_v1_2 = r_v2_1(r_v3_1)`.
-- This beta form is intentionally analysis-only right now: per-leaf latest-value tracking resets at block boundaries and no phi/reaching-definition merge is emitted. Because dispatcher `state` writes are also localized, the beta file is not claimed runtime-equivalent yet. Normal `output/N.lua` behavior is unchanged.
+- `passes/beta-register-versions.js` finds exact normalized dispatcher leaves (`state == N`) inside the semantic VM and versions only ordinary scalar VM registers. `state` and `ReturnVal` are explicitly excluded from beta renaming/localization.
+- The first write encountered for an ordinary original register gets a stable base such as `r1 -> r_v1`, `r2 -> r_v2`. Every later write to that same original register increments the suffix: `r_v1_1`, `r_v1_2`, etc. Reads within the same dispatcher leaf are rewritten to the latest local version. Assignments to `state` / `ReturnVal` keep their original LHS but their RHS can consume the latest ordinary-register version.
+- Sample 2 now versions 9 ordinary-register assignments across 3 dispatcher leaves with 0 skips. Its first block keeps `ReturnVal = "warn"` and `state = _env[ReturnVal]`, then emits `local r_v1_1 = "gg"; ReturnVal = state(r_v1_1)`, etc.
+- This beta form is intentionally analysis-only: per-leaf latest-value tracking resets at block boundaries and no phi/reaching-definition merge is emitted. Cross-state/branch-join uses remain in their original register form rather than being guessed. Normal `output/N.lua` behavior is unchanged.
 - Focused regression: `tools/test-beta-register-versions.js`; beta output is reparsed before writing.
 
 
@@ -532,7 +532,7 @@ without producing unrelated locals.
 - Proven `createClosure*` helpers rename their `createUpvalueProxy(captures)` local to `gcProxy`, returned nested-function local to `closure`, and fixed-arity nested parameters to `arg1`, `arg2`, ...; the vararg factory keeps `...`.
 - `releaseUpvalues` renames its structural iteration locals to `captureIndex` and `upvalueId`. `createUpvalueProxy` renames its numeric-for index to `captureIndex`, the `newproxy(true)` local to `proxy`, and `getmetatable(proxy)` to `proxyMetatable`.
 - When a VM overflow-register table is proven structurally as the table-backed register bank before the scalar register declaration, it is renamed `RegisterOverflow`. Current tracked samples 5 and 10 exercise this path; other fixtures do not invent it.
-- Focused regression `tools/test-semantic-names.js` covers `InitialArgs`, fixed closure `argN`, `gcProxy`, `closure`, `captureIndex`, `upvalueId`, `proxy`, `proxyMetatable`, and `RegisterOverflow`. Current paired fixtures 1-10 remain parse/runtime-valid where executable.
+- Focused regression `tools/test-semantic-names.js` covers `InitialArgs`, fixed closure `argN`, `gcProxy`, `closure`, `captureIndex`, `upvalueId`, `proxy`, `proxyMetatable`, and `RegisterOverflow`. Current paired fixtures 1-11 remain parse/runtime-valid where executable.
 
 ## Sample 10: Natural Register Overflow Regression (2026-08-23)
 
@@ -558,7 +558,8 @@ without producing unrelated locals.
 - Workspace: `C:\Users\reala\Desktop\!workspaces\promdeobf ova\new promdeobf`.
 - Branch: `main`.
 - Remote: `https://github.com/GooseGoldenGoose/new-promdeobf.git`.
-- Latest pushed implementation checkpoint at this snapshot: `56784a1 Add beta register versioning`.
+- Latest pushed fixture checkpoint at this snapshot: `4717198 Add beta branch sample 11`.
+- Immediately preceding beta behavior checkpoint: `57b8dcb Keep VM state registers unversioned in beta`.
 - Immediately preceding context checkpoint: `2643ebc Document restored sample coverage`.
 - Before changing anything in a new chat: read this entire `CONTEXT.md`, run `git status --short --branch`, then `git log -8 --oneline --decorate`. Never assume the checkout is still at this exact commit if newer work exists.
 - Every project code/content change, even small, gets a focused commit and `git push origin main`. Stage only files belonging to the current change.
@@ -635,6 +636,7 @@ without producing unrelated locals.
 - Sample 8: ordinary register cleanup/ownership handoff; proves explicit source nil vs compiler cleanup distinction.
 - Sample 9: `local x` / `local y=nil` initialization via special temp + copy; prevents classifying every direct nil as scope cleanup.
 - Sample 10: natural overflow storage boundary and overflow-aware scheduler regression.
+- Sample 11: beta branch/join fixture from `local a = 3123; if _G.wasd then print(a); a = 3 end; print(a)`. Normal source/obfuscated/deobfuscated parity: false path prints `3123`; true path prints `3123`, `3`. Normalized VM has 3 states, 20 definitions, one join group, and 2 cross-block lifetimes. Beta output versions 8 ordinary-register assignments across 3 leaves while leaving the ambiguous cross-state `a` register unresolved at the join.
 
 ### Performance history / boundary
 
@@ -653,6 +655,8 @@ without producing unrelated locals.
 `edc805b Restore paired samples 2 through 5`
 `2643ebc Document restored sample coverage`
 `56784a1 Add beta register versioning`
+`57b8dcb Keep VM state registers unversioned in beta`
+`4717198 Add beta branch sample 11`
 
 ### New-chat operating instruction
 
