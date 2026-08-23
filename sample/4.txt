@@ -1,0 +1,410 @@
+return (function(...)
+    local G = {
+        "oWQxdLrAel==",
+        "yS/zdB+BgW/yKS78",
+        "oWQaMNz=",
+        "oWQCu0==",
+        "Jm/xdn==",
+        "uBjOdRKA",
+        "TRrjTCn=",
+        "JN+0uNKc",
+        "rm/IgW7ZTpW2uoAWdn==",
+        "df/K2pMyTiMzdWxFKBb=",
+        "Tm/xdCn=",
+        "TR7xdb==",
+        "2Wrs2CT05Bj52Ijz5yy="
+    }
+    local function X(X)
+        return G[X + (24943)]
+    end
+    for X, o in ipairs({
+        {
+            1,
+            13
+        },
+        {
+            1,
+            5
+        },
+        {
+            6,
+            13
+        }
+    }) do
+        while o[1] < o[2] do
+            G[o[1]], G[o[2]], o[1], o[2] = G[o[2]], G[o[1]], o[1] + (1), o[2] - (1)
+        end
+    end
+    do
+        local X = G
+        local o = string.char
+        local C = string.sub
+        local N = table.concat
+        local P = {
+            a = 44,
+            q = 6,
+            r = 17,
+            k = 58,
+            o = 23,
+            O = 47,
+            L = 38,
+            N = 22,
+            ["3"] = 63,
+            c = 43,
+            z = 56,
+            d = 27,
+            A = 37,
+            P = 15,
+            n = 16,
+            I = 35,
+            ["/"] = 9,
+            D = 3,
+            C = 39,
+            K = 13,
+            ["0"] = 48,
+            l = 0,
+            Y = 2,
+            i = 52,
+            f = 36,
+            R = 55,
+            s = 49,
+            J = 29,
+            u = 24,
+            ["5"] = 19,
+            t = 34,
+            Q = 61,
+            m = 7,
+            ["2"] = 26,
+            B = 54,
+            ["+"] = 57,
+            w = 10,
+            E = 14,
+            W = 53,
+            ["9"] = 8,
+            x = 41,
+            V = 31,
+            Z = 45,
+            ["1"] = 60,
+            ["7"] = 1,
+            ["6"] = 40,
+            h = 59,
+            H = 12,
+            g = 21,
+            y = 20,
+            p = 4,
+            M = 25,
+            T = 28,
+            U = 46,
+            ["8"] = 51,
+            G = 11,
+            S = 5,
+            ["4"] = 62,
+            v = 18,
+            F = 50,
+            X = 42,
+            b = 32,
+            j = 33,
+            e = 30
+        }
+        local J = math.floor
+        local T = type
+        local M = table.insert
+        local Q = string.len
+        for G = 1, #X, 1 do
+            local q = X[G]
+            if T(q) == "string" then
+                local T = Q(q)
+                local i = {}
+                local n = 1
+                local e = 0
+                local E = 0
+                while n <= T do
+                    local G = C(q, n, n)
+                    local X = P[G]
+                    if X then
+                        e = e + X * (64) ^ ((3) - E)
+                        E = E + (1)
+                        if E == 4 then
+                            E = 0
+                            local G = J(e / (65536))
+                            local X = J((e % (65536)) / (256))
+                            local C = e % (256)
+                            M(i, o(G, X, C))
+                            e = 0
+                        end
+                    elseif G == "=" then
+                        M(i, o(J(e / (65536))))
+                        if n >= T or C(q, n + (1), n + (1)) ~= "=" then
+                            M(i, o(J((e % (65536)) / (256))))
+                        end
+                        break
+                    end
+                    n = n + (1)
+                end
+                X[G] = N(i)
+            end
+        end
+    end
+    return (function(G, C, N, P, J, T, M, Q, e, W, o, E, v, n, k, q, s, i, I)
+        n, v, k, q, E, s, W, i, o, Q, I, e = 0, function(G, X)
+            local C = e(X)
+            local N = function(...)
+                return o(G, {
+                    ...
+                }, X, C)
+            end
+            return N
+        end, function(G, X)
+            local C = e(X)
+            local N = function(N, P, J)
+                return o(G, {
+                    N,
+                    P,
+                    J
+                }, X, C)
+            end
+            return N
+        end, {}, function(G)
+            local X, o = 1, G[1]
+            while o do
+                q[o], X = q[o] - (1), (1) + X
+                if 0 == q[o] then
+                    q[o], Q[o] = nil, nil
+                end
+                o = G[X]
+            end
+        end, function(G, X)
+            local C = e(X)
+            local N = function(N, P, J, T, M, Q, q, i, n, e)
+                return o(G, {
+                    N,
+                    P,
+                    J,
+                    T,
+                    M,
+                    Q,
+                    q,
+                    i,
+                    n,
+                    e
+                }, X, C)
+            end
+            return N
+        end, function(G, X)
+            local C = e(X)
+            local N = function(N, P, J, T)
+                return o(G, {
+                    N,
+                    P,
+                    J,
+                    T
+                }, X, C)
+            end
+            return N
+        end, function()
+            n = n + (1)
+            q[n] = 1
+            return n
+        end, function(o, N, P, J)
+            local e, D, v, n, O, q, E, z, M
+            while o do
+                if o < 7605222 then
+                    if o < 4560872 then
+                        if o < 3758681 then
+                            if o < 1463592 then
+                                o = G[X(-24942)]
+                                v = Q[P[1]]
+                                M = {
+                                    v
+                                }
+                            else
+                                z = Q[P[1]]
+                                M = z <= q
+                                o = M and 9356325 or 7703294
+                            end
+                        else
+                            if o < 3914293 then
+                                q = N[1]
+                                M = 3
+                                o = q > M
+                                o = o and 13755579 or 10131129
+                            else
+                                o = e < q
+                                o = o and 11665726 or 1346446
+                            end
+                        end
+                    else
+                        if o < 6982745 then
+                            if o < 5078682 then
+                                M = Q[P[1]]
+                                E = 2
+                                o = M + E
+                                Q[P[1]] = o
+                                o = 5783779
+                            else
+                                o = 4470896
+                                v = 1
+                                E = e + v
+                                e = E
+                            end
+                        else
+                            if o < 7222373 then
+                                n = i()
+                                o = 0
+                                Q[n] = o
+                                o = W(3874673, {
+                                    n
+                                })
+                                q = N
+                                M = X(-24940)
+                                z = X(-24931)
+                                e = o
+                                o = k(8183125, {
+                                    n
+                                })
+                                E = o
+                                o = s(9932502, {
+                                    n
+                                })
+                                v = o
+                                o = G[M]
+                                O = 5
+                                D = Q[n]
+                                M = o(z, D)
+                                M = X(-24940)
+                                o = G[M]
+                                z = X(-24932)
+                                D = {
+                                    e(O)
+                                }
+                                O = 3
+                                M = o(z, C(D))
+                                M = X(-24940)
+                                o = G[M]
+                                z = X(-24939)
+                                D = {
+                                    E(O)
+                                }
+                                M = o(z, C(D))
+                                M = X(-24940)
+                                n = I(n)
+                                e = nil
+                                z = X(-24933)
+                                E = nil
+                                O = 2
+                                o = G[M]
+                                D = {
+                                    v(O)
+                                }
+                                M = o(z, C(D))
+                                M = {}
+                                v = nil
+                                o = G[X(-24936)]
+                            else
+                                o = G[X(-24938)]
+                                n = Q[P[1]]
+                                M = {
+                                    n
+                                }
+                            end
+                        end
+                    end
+                else
+                    if o < 9996314 then
+                        if o < 8692189 then
+                            if o < 7867299 then
+                                M = Q[P[1]]
+                                z = 1
+                                o = M - z
+                                Q[P[1]] = o
+                                o = 3585794
+                            else
+                                q = N[1]
+                                o = 0
+                                n = N[2]
+                                e = o
+                                o = 4470896
+                            end
+                        else
+                            if o < 9904038 then
+                                M = Q[P[1]]
+                                o = G[X(-24941)]
+                                M = {
+                                    M
+                                }
+                            else
+                                e = N[3]
+                                E = N[4]
+                                q = N[1]
+                                v = N[5]
+                                M = Q[P[1]]
+                                n = N[2]
+                                o = M <= q
+                                o = 7703294
+                            end
+                        end
+                    else
+                        if o < 11810793 then
+                            if o < 11625060 then
+                                e = 1
+                                n = Q[P[1]]
+                                M = n + e
+                                o = 7384381
+                                Q[P[1]] = M
+                            else
+                                E = 2
+                                M = e % E
+                                E = 0
+                                o = M == E
+                                o = o and 4739187 or 13318234
+                            end
+                        else
+                            if o < 13614113 then
+                                E = Q[P[1]]
+                                v = 1
+                                o = 5783779
+                                M = E + v
+                                Q[P[1]] = M
+                            else
+                                M = Q[P[1]]
+                                o = M + q
+                                Q[P[1]] = o
+                                o = 7384381
+                            end
+                        end
+                    end
+                end
+            end
+            o = #J
+            return C(M)
+        end, {}, function(G)
+            q[G] = q[G] - (1)
+            if 0 == q[G] then
+                q[G], Q[G] = nil, nil
+            end
+        end, function(G)
+            for X = 1, #G, 1 do
+                q[G[X]] = q[G[X]] + (1)
+            end
+            if N then
+                local o = N(true)
+                local C = J(o)
+                C[X(-24937)], C[X(-24934)], C[X(-24935)] = G, E, function()
+                    return -3421254
+                end
+                return o
+            else
+                return P({}, {
+                    [X(-24934)] = E,
+                    [X(-24937)] = G,
+                    [X(-24935)] = function()
+                        return -3421254
+                    end
+                })
+            end
+        end
+        return (v(7166338, {}))(C(M))
+    end)(getfenv and getfenv() or _ENV, unpack or table[X(-24930)], newproxy, setmetatable, getmetatable, select, {
+        ...
+    })
+end)(...)

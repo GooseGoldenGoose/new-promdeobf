@@ -1,0 +1,290 @@
+return (function(...)
+    local X = {
+        "Ey6DE+W=",
+        "EyaymuFt",
+        "ceTiEK==",
+        "wYL+jex6jiMKs+lsj7==",
+        "M4Fpmid=",
+        "ceTWGJL=",
+        "QJ2KEJCA",
+        "xaawguxPEYFAaYxSEeM=",
+        "EJGYGcr=",
+        "ceTpmyxtZ3==",
+        "M9ejEctemclVxwTya7=="
+    }
+    for G, x in ipairs({
+        {
+            1,
+            11
+        },
+        {
+            1,
+            1
+        },
+        {
+            2,
+            11
+        }
+    }) do
+        while x[1] < x[2] do
+            X[x[1]], X[x[2]], x[1], x[2] = X[x[2]], X[x[1]], x[1] + (1), x[2] - (1)
+        end
+    end
+    local function G(G)
+        return X[G - (62758)]
+    end
+    do
+        local G = {
+            s = 19,
+            Q = 29,
+            B = 62,
+            x = 17,
+            o = 35,
+            A = 43,
+            ["2"] = 57,
+            L = 56,
+            T = 61,
+            E = 24,
+            ["+"] = 54,
+            K = 48,
+            y = 38,
+            R = 45,
+            a = 21,
+            i = 39,
+            Z = 30,
+            w = 20,
+            V = 1,
+            P = 42,
+            v = 34,
+            ["/"] = 60,
+            m = 27,
+            j = 26,
+            C = 13,
+            b = 10,
+            ["1"] = 51,
+            G = 25,
+            N = 46,
+            d = 16,
+            I = 11,
+            f = 15,
+            ["5"] = 5,
+            F = 9,
+            r = 8,
+            l = 33,
+            ["7"] = 32,
+            ["6"] = 49,
+            O = 58,
+            k = 14,
+            ["0"] = 3,
+            Y = 52,
+            W = 44,
+            ["4"] = 7,
+            u = 55,
+            z = 6,
+            c = 23,
+            M = 28,
+            e = 53,
+            p = 41,
+            H = 63,
+            g = 18,
+            S = 50,
+            D = 47,
+            t = 37,
+            U = 2,
+            ["9"] = 4,
+            ["8"] = 31,
+            h = 12,
+            J = 22,
+            X = 40,
+            q = 36,
+            ["3"] = 0,
+            n = 59
+        }
+        local x = table.concat
+        local p = type
+        local f = table.insert
+        local I = string.len
+        local B = string.char
+        local a = math.floor
+        local i = X
+        local r = string.sub
+        for X = 1, #i, 1 do
+            local v = i[X]
+            if p(v) == "string" then
+                local p = I(v)
+                local u = {}
+                local y = 1
+                local U = 0
+                local C = 0
+                while y <= p do
+                    local X = r(v, y, y)
+                    local x = G[X]
+                    if x then
+                        U = U + x * (64) ^ ((3) - C)
+                        C = C + (1)
+                        if C == 4 then
+                            C = 0
+                            local X = a(U / (65536))
+                            local G = a((U % (65536)) / (256))
+                            local x = U % (256)
+                            f(u, B(X, G, x))
+                            U = 0
+                        end
+                    elseif X == "=" then
+                        f(u, B(a(U / (65536))))
+                        if y >= p or r(v, y + (1), y + (1)) ~= "=" then
+                            f(u, B(a((U % (65536)) / (256))))
+                        end
+                        break
+                    end
+                    y = y + (1)
+                end
+                i[X] = x(u)
+            end
+        end
+    end
+    return (function(X, p, f, I, B, a, i, y, k, x, E, O, U, v, z, u, r, C)
+        z, x, C, r, E, u, O, k, y, U, v = function(X, G)
+            local p = U(G)
+            local f = function(f, I, B, a, i, r)
+                return x(X, {
+                    f,
+                    I,
+                    B,
+                    a,
+                    i,
+                    r
+                }, G, p)
+            end
+            return f
+        end, function(x, f, I, B)
+            local C, y, i, c, Q, k, v, U
+            while x do
+                if x < 6895485 then
+                    if x < 4088359 then
+                        v = f[1]
+                        i = r[I[1]]
+                        x = i + v
+                        r[I[1]] = x
+                        x = X[G(62763)]
+                        i = r[I[1]]
+                        i = {
+                            i
+                        }
+                    else
+                        x = r[I[1]]
+                        i = {
+                            x
+                        }
+                        x = X[G(62767)]
+                    end
+                else
+                    x = 1
+                    v = f
+                    y = u()
+                    r[y] = x
+                    x = 10
+                    U = x
+                    x = 2
+                    i = G(62764)
+                    C = x
+                    x = X[i]
+                    k = G(62760)
+                    i = x(k, U, C)
+                    C = nil
+                    U = nil
+                    x = z(3874673, {
+                        y
+                    })
+                    U = x
+                    x = O(5535430, {
+                        y
+                    })
+                    k = G(62761)
+                    C = x
+                    i = G(62764)
+                    x = X[i]
+                    Q = 2
+                    c = {
+                        C()
+                    }
+                    y = E(y)
+                    i = x(k, p(c))
+                    i = G(62764)
+                    k = G(62768)
+                    x = X[i]
+                    c = U(Q)
+                    Q = {
+                        C()
+                    }
+                    C = nil
+                    i = x(k, c, p(Q))
+                    U = nil
+                    i = {}
+                    x = X[G(62759)]
+                end
+            end
+            x = #B
+            return p(i)
+        end, function(X)
+            local G, x = 1, X[1]
+            while x do
+                v[x], G = v[x] - (1), (1) + G
+                if 0 == v[x] then
+                    v[x], r[x] = nil, nil
+                end
+                x = X[G]
+            end
+        end, {}, function(X)
+            v[X] = v[X] - (1)
+            if 0 == v[X] then
+                v[X], r[X] = nil, nil
+            end
+        end, function()
+            y = (1) + y
+            v[y] = 1
+            return y
+        end, function(X, G)
+            local p = U(G)
+            local f = function(f, I, B)
+                return x(X, {
+                    f,
+                    I,
+                    B
+                }, G, p)
+            end
+            return f
+        end, function(X, G)
+            local p = U(G)
+            local f = function(...)
+                return x(X, {
+                    ...
+                }, G, p)
+            end
+            return f
+        end, 0, function(X)
+            for G = 1, #X, 1 do
+                v[X[G]] = (1) + v[X[G]]
+            end
+            if f then
+                local x = f(true)
+                local p = B(x)
+                p[G(62769)], p[G(62762)], p[G(62765)] = X, C, function()
+                    return -3421254
+                end
+                return x
+            else
+                return I({}, {
+                    [G(62762)] = C,
+                    [G(62769)] = X,
+                    [G(62765)] = function()
+                        return -3421254
+                    end
+                })
+            end
+        end, {}
+        return (k(7166338, {}))(p(i))
+    end)(getfenv and getfenv() or _ENV, unpack or table[G(62766)], newproxy, setmetatable, getmetatable, select, {
+        ...
+    })
+end)(...)

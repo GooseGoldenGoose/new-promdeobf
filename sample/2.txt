@@ -1,0 +1,232 @@
+return (function(...)
+    local u = {
+        "Mr7JBDI6",
+        "BfM=",
+        "9GbHdGC3",
+        "Mr7JBc==",
+        "4KItdH==",
+        "sG7Tkl==",
+        "jmB3PR7w9FQ2k7Cw8l==",
+        "4KISsr+hvl==",
+        "9f7Esc==",
+        "4KILBG5=",
+        "MRnSstV="
+    }
+    for Y, r in ipairs({
+        {
+            1,
+            11
+        },
+        {
+            1,
+            10
+        },
+        {
+            11,
+            11
+        }
+    }) do
+        while r[1] < r[2] do
+            u[r[1]], u[r[2]], r[1], r[2] = u[r[2]], u[r[1]], r[1] + (1), r[2] - (1)
+        end
+    end
+    local function Y(Y)
+        return u[Y - (64583)]
+    end
+    do
+        local Y = string.char
+        local r = {
+            F = 51,
+            n = 9,
+            ["9"] = 29,
+            E = 50,
+            A = 2,
+            m = 35,
+            T = 52,
+            R = 7,
+            e = 63,
+            b = 57,
+            u = 47,
+            Q = 1,
+            I = 61,
+            f = 54,
+            C = 13,
+            i = 11,
+            ["3"] = 43,
+            K = 53,
+            q = 33,
+            P = 21,
+            L = 44,
+            ["7"] = 5,
+            r = 38,
+            ["4"] = 23,
+            ["0"] = 8,
+            t = 39,
+            x = 40,
+            k = 26,
+            X = 31,
+            ["2"] = 15,
+            ["5"] = 56,
+            p = 18,
+            g = 20,
+            V = 16,
+            H = 48,
+            M = 28,
+            W = 59,
+            ["6"] = 45,
+            d = 24,
+            v = 30,
+            D = 6,
+            j = 19,
+            c = 32,
+            w = 42,
+            ["/"] = 36,
+            B = 25,
+            y = 55,
+            U = 62,
+            s = 27,
+            ["+"] = 17,
+            a = 58,
+            z = 10,
+            o = 4,
+            Y = 60,
+            O = 12,
+            J = 46,
+            G = 22,
+            ["1"] = 3,
+            S = 41,
+            ["8"] = 14,
+            Z = 49,
+            h = 37,
+            N = 34,
+            l = 0
+        }
+        local H = type
+        local J = table.concat
+        local y = string.len
+        local a = table.insert
+        local G = u
+        local o = math.floor
+        local I = string.sub
+        for u = 1, #G, 1 do
+            local E = G[u]
+            if H(E) == "string" then
+                local H = y(E)
+                local e = {}
+                local P = 1
+                local W = 0
+                local d = 0
+                while P <= H do
+                    local u = I(E, P, P)
+                    local J = r[u]
+                    if J then
+                        W = W + J * (64) ^ ((3) - d)
+                        d = d + (1)
+                        if d == 4 then
+                            d = 0
+                            local u = o(W / (65536))
+                            local r = o((W % (65536)) / (256))
+                            local H = W % (256)
+                            a(e, Y(u, r, H))
+                            W = 0
+                        end
+                    elseif u == "=" then
+                        a(e, Y(o(W / (65536))))
+                        if P >= H or I(E, P + (1), P + (1)) ~= "=" then
+                            a(e, Y(o((W % (65536)) / (256))))
+                        end
+                        break
+                    end
+                    P = P + (1)
+                end
+                G[u] = J(e)
+            end
+        end
+    end
+    return (function(u, H, J, y, a, G, o, I, e, W, E, p, d, r, P, z)
+        e, P, p, r, I, E, z, W, d = function()
+            P = (1) + P
+            E[P] = 1
+            return P
+        end, 0, function(u)
+            E[u] = E[u] - (1)
+            if 0 == E[u] then
+                E[u], I[u] = nil, nil
+            end
+        end, function(r, J, y, a)
+            local E, e, P, I, o
+            while r do
+                if r < 7202503 then
+                    if r < 4192530 then
+                        r = u[Y(64589)]
+                        o = {}
+                    else
+                        E = Y(64584)
+                        I = J
+                        o = Y(64591)
+                        e = Y(64588)
+                        P = 2
+                        r = u[o]
+                        o = r(E)
+                        E = u[e]
+                        e = Y(64594)
+                        o = E[e]
+                        e = 1
+                        E = o(e, P)
+                        o = 1
+                        r = E == o
+                        r = r and 7384381 or 3874673
+                    end
+                else
+                    o = Y(64593)
+                    E = Y(64586)
+                    r = u[o]
+                    o = r(E)
+                    r = 3874673
+                end
+            end
+            r = #a
+            return H(o)
+        end, {}, {}, function(u, Y)
+            local H = W(Y)
+            local J = function(...)
+                return r(u, {
+                    ...
+                }, Y, H)
+            end
+            return J
+        end, function(u)
+            for Y = 1, #u, 1 do
+                E[u[Y]] = E[u[Y]] + (1)
+            end
+            if J then
+                local r = J(true)
+                local H = a(r)
+                H[Y(64590)], H[Y(64587)], H[Y(64592)] = u, d, function()
+                    return -3421254
+                end
+                return r
+            else
+                return y({}, {
+                    [Y(64587)] = d,
+                    [Y(64590)] = u,
+                    [Y(64592)] = function()
+                        return -3421254
+                    end
+                })
+            end
+        end, function(u)
+            local Y, r = 1, u[1]
+            while r do
+                E[r], Y = E[r] - (1), (1) + Y
+                if E[r] == 0 then
+                    E[r], I[r] = nil, nil
+                end
+                r = u[Y]
+            end
+        end
+        return (z(7166338, {}))(H(o))
+    end)(getfenv and getfenv() or _ENV, unpack or table[Y(64585)], newproxy, setmetatable, getmetatable, select, {
+        ...
+    })
+end)(...)
