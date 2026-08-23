@@ -460,6 +460,69 @@ const capturedClosureRejected = solveBetaControlFlow(ast, {
 assert.equal(capturedClosureRejected.applied, false);
 assert(capturedClosureRejected.reason.includes("does not resolve to a proven upvalue cell"));
 
+const indexedEffectPassthrough = solveBetaControlFlow(ast, {
+    applied: true,
+    graph: {
+        cfgComplete: true,
+        entries: [1],
+        states: [{
+            id: 1, predecessors: [], successors: [], operations: [
+                { kind: "version-define", emittedTarget: "r_v1_1", emittedText: 'local r_v1_1 = "concat"', rhs: '"concat"', reads: [] },
+                { kind: "version-define", emittedTarget: "r_v2_1", emittedText: "local r_v2_1 = function() return 1 end", rhs: "function() return 1 end", reads: [] },
+                { kind: "effect-write", emittedText: "_env[r_v1_1] = r_v2_1", originalText: "_env[r1] = state", reads: ["r_v1_1", "r_v2_1"] },
+                { kind: "return-payload", terminalCompilerReturnPayload: true, returnExpressions: [], emittedText: "ReturnVal = {}", rhs: "{}", reads: [] },
+                { kind: "state-transition", emittedTarget: "state", emittedText: "state = nil", rhs: "nil", reads: [] },
+            ],
+        }],
+    },
+});
+assert.equal(indexedEffectPassthrough.applied, true);
+assert(indexedEffectPassthrough.source.includes("_env[r_v1_1] = r_v2_1"));
+assert(!indexedEffectPassthrough.source.includes("state = nil"));
+parseLua(indexedEffectPassthrough.source, "<beta-cf-indexed-effect-output>");
+
+const unsafeUnsupportedWrite = solveBetaControlFlow(ast, {
+    applied: true,
+    graph: {
+        cfgComplete: true,
+        entries: [1],
+        states: [{
+            id: 1, predecessors: [], successors: [], operations: [
+                { kind: "unsupported", emittedText: "r_v1_1 = mystery()", originalText: "r1 = mystery()", reads: [] },
+                { kind: "return-payload", terminalCompilerReturnPayload: true, returnExpressions: [], emittedText: "ReturnVal = {}", rhs: "{}", reads: [] },
+                { kind: "state-transition", emittedTarget: "state", emittedText: "state = nil", rhs: "nil", reads: [] },
+            ],
+        }],
+    },
+});
+assert.equal(unsafeUnsupportedWrite.applied, false);
+assert(unsafeUnsupportedWrite.reason.includes("unsupported beta operations"));
+
+const unloweredNestedClosureRejected = solveBetaControlFlow(ast, {
+    applied: true,
+    graph: {
+        cfgComplete: true,
+        entries: [1, 20],
+        states: [
+            {
+                id: 1, predecessors: [], successors: [], operations: [
+                    { kind: "version-define", emittedTarget: "r_v1_1", emittedText: "local r_v1_1 = createClosure7(20, {})", rhs: "createClosure7(20, {})", reads: [] },
+                    { kind: "return-payload", terminalCompilerReturnPayload: true, returnExpressions: [], emittedText: "ReturnVal = {}", rhs: "{}", reads: [] },
+                    { kind: "state-transition", emittedTarget: "state", emittedText: "state = nil", rhs: "nil", reads: [] },
+                ],
+            },
+            {
+                id: 20, predecessors: [], successors: [], operations: [
+                    { kind: "statement", originalText: "mark()", reads: [] },
+                    { kind: "state-transition", emittedTarget: "state", emittedText: "state = nil", rhs: "nil", reads: [] },
+                ],
+            },
+        ],
+    },
+});
+assert.equal(unloweredNestedClosureRejected.applied, false);
+assert(unloweredNestedClosureRejected.reason.includes("terminal VM return was not fully lowered"));
+
 const cyclic = solveBetaControlFlow(ast, {
     applied: true,
     graph: {

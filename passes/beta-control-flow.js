@@ -74,6 +74,10 @@ function operationText(operation) {
     return operation?.emittedText || operation?.originalText || null;
 }
 
+function hasUnsafeUnsupportedOperation(operations) {
+    return operations.some(operation => operation?.kind === "unsupported");
+}
+
 function canSinkTerminalReturnAcross(payload, operation) {
     const expressions = payload?.returnExpressions;
     if (!Array.isArray(expressions)) return false;
@@ -175,7 +179,7 @@ function solveSingleState(originalAst, graph) {
     if (!Array.isArray(state.successors) || state.successors.length !== 0) {
         return { applied: false, reason: "Beta CF single-state mode requires the entry state to terminate" };
     }
-    if (state.operations.some(operation => operation.kind === "unsupported")) {
+    if (hasUnsafeUnsupportedOperation(state.operations)) {
         return { applied: false, reason: "The single state contains unsupported beta operations" };
     }
 
@@ -577,7 +581,7 @@ function solveAcyclicStructured(originalAst, graph) {
     let terminalReturnPayloadSunkCount = 0;
     let terminalReturnCount = 0;
     for (const state of states) {
-        if (state.operations.some(operation => operation.kind === "unsupported")) {
+        if (hasUnsafeUnsupportedOperation(state.operations)) {
             return { applied: false, reason: `State ${state.id} contains unsupported beta operations` };
         }
         const info = transitionInfo(state);
@@ -1032,6 +1036,12 @@ function solveClosureRegions(originalAst, graph) {
         const solved = solveSingleEntryControlFlow(originalAst, region.graph);
         if (!solved.applied) {
             return { applied: false, reason: `Closure entry ${entry}: ${solved.reason}` };
+        }
+        if (entry !== rootEntry && solved.terminalReturnLowered !== true) {
+            return {
+                applied: false,
+                reason: `Closure entry ${entry}: terminal VM return was not fully lowered; refusing to embed a nested function that could change return semantics`,
+            };
         }
         const bodyText = presentedBody(solved.source);
         if (bodyText === null) {

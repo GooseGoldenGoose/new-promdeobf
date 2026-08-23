@@ -324,6 +324,7 @@ const indexedAssignmentReadSource = `vm = function(state, args, upvalues, gcProx
             r1 = allocUpvalue()
             state = 123
             upvalueValues[r1] = state
+            r1.value = state
             ReturnVal = {}
             state = nil
         end
@@ -340,16 +341,22 @@ const indexedAssignmentReadResult = versionVmBlockRegisters(
 const indexedR1Base = indexedAssignmentReadResult.mapping.find(item => item.originalName === "r1")?.baseName;
 const indexedStateBase = indexedAssignmentReadResult.mapping.find(item => item.originalName === "state")?.baseName;
 assert(indexedR1Base && indexedStateBase);
-assert.equal(indexedAssignmentReadResult.skippedAssignments, 1);
+assert.equal(indexedAssignmentReadResult.skippedAssignments, 0);
+assert.equal(indexedAssignmentReadResult.orderedEffectWriteCount, 2);
 assert(indexedAssignmentReadResult.source.includes(`upvalueValues[${indexedR1Base}_1] = ${indexedStateBase}_1`));
 assert(!indexedAssignmentReadResult.source.includes("upvalueValues[r1] = state"));
-const indexedUnsupported = indexedAssignmentReadResult.graph.states[0].operations.find(operation =>
-    operation.kind === "unsupported" && String(operation.originalText || "").includes("upvalueValues[")
+const indexedEffect = indexedAssignmentReadResult.graph.states[0].operations.find(operation =>
+    operation.kind === "effect-write" && String(operation.originalText || "").includes("upvalueValues[")
 );
-assert(indexedUnsupported);
-assert(indexedUnsupported.reads.includes(`${indexedR1Base}_1`));
-assert(indexedUnsupported.reads.includes(`${indexedStateBase}_1`));
-assert(indexedUnsupported.emittedText.includes(`upvalueValues[${indexedR1Base}_1] = ${indexedStateBase}_1`));
+assert(indexedEffect);
+assert(indexedEffect.reads.includes(`${indexedR1Base}_1`));
+assert(indexedEffect.reads.includes(`${indexedStateBase}_1`));
+assert(indexedEffect.emittedText.includes(`upvalueValues[${indexedR1Base}_1] = ${indexedStateBase}_1`));
+const memberEffect = indexedAssignmentReadResult.graph.states[0].operations.find(operation =>
+    operation.kind === "effect-write" && String(operation.originalText || "").includes(".value")
+);
+assert(memberEffect);
+assert(memberEffect.emittedText.includes(`${indexedR1Base}_1.value = ${indexedStateBase}_1`));
 parseLua(indexedAssignmentReadResult.source, "<beta-indexed-assignment-read-output>");
 
 console.log("beta register versioning tests passed");

@@ -12,6 +12,18 @@ function isIdentifier(node, name = null) {
     return node?.type === "Identifier" && (name === null || node.name === name);
 }
 
+function isIndexedWriteTarget(node) {
+    return node?.type === "IndexExpression" || node?.type === "MemberExpression";
+}
+
+function isOrderedEffectAssignment(statement) {
+    if (statement?.type !== "AssignmentStatement" || !Array.isArray(statement.range)) return false;
+    const variables = statement.variables || [];
+    const init = statement.init || [];
+    return variables.length === 1 && init.length === 1 && isIndexedWriteTarget(variables[0]) &&
+        Array.isArray(variables[0]?.range) && Array.isArray(init[0]?.range);
+}
+
 function numericValue(node) {
     if (node?.type !== "NumericLiteral") return null;
     const value = typeof node.value === "number" ? node.value : Number(node.raw);
@@ -374,6 +386,7 @@ function versionVmBlockRegisters(source, ast) {
     let nextBaseId = 1;
     let skippedAssignments = 0;
     let preservedFinalWrites = 0;
+    let orderedEffectWriteCount = 0;
 
     function ensureBase(name) {
         if (!baseIds.has(name)) baseIds.set(name, nextBaseId++);
@@ -404,6 +417,12 @@ function versionVmBlockRegisters(source, ast) {
             if (statement?.type !== "AssignmentStatement") continue;
             const variables = statement.variables || [];
             const init = statement.init || [];
+
+            if (isOrderedEffectAssignment(statement)) {
+                plans.set(statement, { kind: "effect-write" });
+                orderedEffectWriteCount++;
+                continue;
+            }
 
             if (variables.length !== 1 || init.length !== 1 || !isIdentifier(variables[0])) {
                 for (const variable of variables) {
@@ -625,6 +644,33 @@ function versionVmBlockRegisters(source, ast) {
             const variables = statement.variables || [];
             const init = statement.init || [];
 
+            if (plan?.kind === "effect-write") {
+                const usedVersions = new Set();
+                const rewritten = rewriteUnsupportedAssignmentReads(source, statement, latestVersions, usedVersions);
+                if (!rewritten) {
+                    graphOperations.push({
+                        index: graphOperations.length + 1,
+                        kind: "unsupported",
+                        originalText: source.slice(statement.range[0], statement.range[1]).trim(),
+                        emittedText: source.slice(statement.range[0], statement.range[1]).trim(),
+                        reads: [],
+                    });
+                    continue;
+                }
+                for (const edit of rewritten.edits) edits.push(edit);
+                for (const versionName of usedVersions) {
+                    if (incomingVersionNames.has(versionName)) crossBlockUsedVersions.add(versionName);
+                }
+                graphOperations.push({
+                    index: graphOperations.length + 1,
+                    kind: "effect-write",
+                    originalText: source.slice(statement.range[0], statement.range[1]).trim(),
+                    emittedText: rewritten.text.trim(),
+                    reads: [...usedVersions],
+                });
+                continue;
+            }
+
             if (!plan || plan.kind === "unsupported") {
                 const usedVersions = new Set();
                 const rewritten = rewriteUnsupportedAssignmentReads(source, statement, latestVersions, usedVersions);
@@ -809,6 +855,7 @@ function versionVmBlockRegisters(source, ast) {
         blockCount: leaves.length,
         versionedAssignmentCount: versions.length,
         preservedFinalWrites,
+        orderedEffectWriteCount,
         skippedAssignments,
         cfgComplete,
         crossBlockVersionCount: crossBlockUsedVersions.size,
