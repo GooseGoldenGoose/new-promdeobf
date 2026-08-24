@@ -11,7 +11,7 @@ Repository:
 Authoritative branch: `main`.
 
 Current best verified solver checkpoint:
-`2a55d22 Optimize beta control-flow hot paths`
+`7c3678a Checkpoint optimized beta-CF workspace`
 
 `main` and `origin/main` are aligned at that commit. Prior beta checkpoint:
 `485130e Checkpoint beta solver working tree`.
@@ -193,6 +193,25 @@ Current beta-CF supports proven:
 Generic-for currently proves the local compiler's two-variable shape including `pairs`, `next, table`, custom iterator triples, branches, break/continue, and captured variables. Unproven arities/shapes fail closed.
 
 Repeat recovery is intended to remove the local compiler's discarded first repeat-condition evaluation and restore readable-source semantics.
+
+## Experimental Overflow beta-CF Fork
+
+An isolated experimental fork now exists for trying new RegisterOverflow strategies without changing the verified production solver:
+
+```text
+passes/beta-control-flow-overflow-experimental.js
+tools/beta-control-flow-overflow-experimental.js
+```
+
+The fork starts as a behavior-identical copy of production beta-CF, but its overflow normalizer is named `normalizeRegisterOverflowGraphExperimental`. The experimental CLI defaults to `*.beta.overflow-exp.cf.lua`, so it cannot overwrite normal production `*.beta.cf.lua` output by accident.
+
+Baseline validation: experimental fork generated beta-CF successfully for numeric samples 1-63 and all 63 outputs were byte-for-byte identical to the production beta-CF outputs. Future overflow experiments should be developed in this fork first; production `passes/beta-control-flow.js` stays unchanged until the new method is proven.
+
+Example:
+
+```text
+node tools\beta-control-flow-overflow-experimental.js output\5.lua output\5.beta.overflow-exp.cf.lua
+```
 
 ## RegisterOverflow
 
