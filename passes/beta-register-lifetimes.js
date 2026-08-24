@@ -531,14 +531,13 @@ function analyzeBetaRegisterLifetimes({
         for (let index = 1; index < concrete.length; index++) unionFind.union(concrete[0], concrete[index]);
     }
 
-    // Transitive mutation evidence. A true compiler write back into an already
-    // reserved VAR_REGISTER ends as an identifier copy from the expression
-    // temporary. Only those copy definitions may merge backward through value
-    // provenance. Direct calls/literals into a reused scratch register can depend
-    // on older values without representing mutation of the same source binding.
+    // Value dependence alone does not prove source-binding ownership: a scratch
+    // register can help compute a value that is later copied back into that same
+    // physical register. Build the transitive dependency closure here, but merge
+    // same-register definitions only from the compiler-backed cleanup/return
+    // ownership anchors below (or independent join evidence above).
     const dependencyClosureByDefinitionId = new Map();
     for (const definition of ordinaryDefinitions) {
-        const canMergeAsMutation = isIdentifier(definition.rhs);
         const queue = [...(dependenciesByDefinitionId.get(definition.id) || [])];
         const seen = new Set();
         let cursor = 0;
@@ -548,9 +547,6 @@ function analyzeBetaRegisterLifetimes({
             seen.add(dependencyId);
             const dependency = definitionById.get(dependencyId);
             if (!dependency?.supported) continue;
-            if (canMergeAsMutation && dependency.name === definition.name && ordinaryDefinitionIds.has(dependency.id)) {
-                unionFind.union(definition.id, dependency.id);
-            }
             for (const parentId of dependenciesByDefinitionId.get(dependencyId) || []) {
                 if (!seen.has(parentId)) queue.push(parentId);
             }

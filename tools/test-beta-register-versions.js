@@ -210,6 +210,33 @@ assert(scratchFanInResult.source.includes(`${scratchFanInBase}_3 = nil`));
 assert(!scratchFanInResult.source.includes(`${scratchFanInBase}_1 = allocB()`));
 parseLua(scratchFanInResult.source, "<beta-scratch-fanin-test-output>");
 
+const transitiveScratchReuseSource = `vm = function(state, args, upvalues, gcProxy)
+    local r1, r2, ReturnVal
+    while state do
+        if state == 1 then
+            r1 = seed
+            r2 = transform(r1)
+            r1 = r2
+            consume(r1)
+            ReturnVal = {}
+            state = nil
+        end
+    end
+    state = #gcProxy
+    return unpack(ReturnVal)
+end
+root = createClosure(1, {})`;
+const transitiveScratchReuseResult = versionVmBlockRegisters(
+    transitiveScratchReuseSource,
+    parseLua(transitiveScratchReuseSource, "<beta-transitive-scratch-reuse-test>")
+);
+const transitiveScratchBase = transitiveScratchReuseResult.mapping.find(item => item.originalName === "r1")?.baseName;
+assert(transitiveScratchBase);
+assert(transitiveScratchReuseResult.source.includes(`local ${transitiveScratchBase}_1 = seed`));
+assert(transitiveScratchReuseResult.source.match(new RegExp(`local ${transitiveScratchBase}_2 = r_v\\d+_\\d+`)));
+assert(!transitiveScratchReuseResult.source.includes(`${transitiveScratchBase}_1 = r_v`));
+parseLua(transitiveScratchReuseResult.source, "<beta-transitive-scratch-reuse-output>");
+
 const compilerReturnPayloadSource = `vm = function(state, args, upvalues, gcProxy)
     local r1, r2, ReturnVal
     while state do
