@@ -1,0 +1,281 @@
+return (function(...)
+    local R = {
+        "E/YvQDV0Si==",
+        "zITvQqB=",
+        "E/Yqex==",
+        "QaVZ",
+        "msWxesXK",
+        "m2XR1Dv41kTXhfTl",
+        "E/Ynys4=",
+        "yEy0Q9==",
+        "rE7+rET3",
+        "esyNyEp8eqT0esn="
+    }
+    for f, s in ipairs({
+        {
+            1,
+            10
+        },
+        {
+            1,
+            8
+        },
+        {
+            9,
+            10
+        }
+    }) do
+        while s[1] < s[2] do
+            R[s[1]], R[s[2]], s[1], s[2] = R[s[2]], R[s[1]], s[1] + (1), s[2] - (1)
+        end
+    end
+    local function f(f)
+        return R[f - (24817)]
+    end
+    do
+        local f = table.insert
+        local s = type
+        local z = string.len
+        local h = table.concat
+        local k = string.char
+        local e = R
+        local n = math.floor
+        local M = {
+            T = 9,
+            U = 50,
+            u = 42,
+            B = 16,
+            S = 30,
+            a = 54,
+            ["1"] = 20,
+            Y = 61,
+            X = 13,
+            t = 55,
+            ["4"] = 56,
+            q = 39,
+            ["9"] = 32,
+            A = 2,
+            G = 11,
+            w = 31,
+            W = 57,
+            I = 7,
+            d = 46,
+            g = 49,
+            D = 38,
+            L = 10,
+            j = 12,
+            F = 3,
+            ["8"] = 45,
+            R = 15,
+            ["/"] = 53,
+            E = 23,
+            s = 22,
+            f = 6,
+            o = 63,
+            k = 35,
+            e = 24,
+            ["+"] = 33,
+            m = 29,
+            b = 47,
+            y = 25,
+            ["0"] = 37,
+            v = 41,
+            V = 17,
+            N = 52,
+            ["3"] = 51,
+            Q = 27,
+            ["7"] = 1,
+            h = 14,
+            r = 26,
+            Z = 36,
+            ["2"] = 19,
+            J = 40,
+            C = 34,
+            ["6"] = 21,
+            c = 60,
+            i = 0,
+            P = 5,
+            O = 58,
+            z = 28,
+            p = 8,
+            M = 4,
+            ["5"] = 62,
+            x = 48,
+            K = 43,
+            l = 18,
+            H = 59,
+            n = 44
+        }
+        local t = string.sub
+        for R = 1, #e, 1 do
+            local V = e[R]
+            if s(V) == "string" then
+                local s = z(V)
+                local w = {}
+                local U = 1
+                local j = 0
+                local C = 0
+                while U <= s do
+                    local R = t(V, U, U)
+                    local z = M[R]
+                    if z then
+                        j = j + z * (64) ^ ((3) - C)
+                        C = C + (1)
+                        if C == 4 then
+                            C = 0
+                            local R = n(j / (65536))
+                            local s = n((j % (65536)) / (256))
+                            local z = j % (256)
+                            f(w, k(R, s, z))
+                            j = 0
+                        end
+                    elseif R == "=" then
+                        f(w, k(n(j / (65536))))
+                        if U >= s or t(V, U + (1), U + (1)) ~= "=" then
+                            f(w, k(n((j % (65536)) / (256))))
+                        end
+                        break
+                    end
+                    U = U + (1)
+                end
+                e[R] = h(w)
+            end
+        end
+    end
+    return (function(R, z, h, k, e, n, M, C, F, j, V, s, w, U, t, Z)
+        s, Z, j, t, U, V, w, C, F = function(s, h, k, e)
+            local F, w, C, U, j, M, t, Z, V
+            while s do
+                if s < 5657262 then
+                    if s < 2748436 then
+                        if s < 2411335 then
+                            if s < 1473698 then
+                                j = f(24823)
+                                U = f(24827)
+                                s = R[U]
+                                U = s(j, V, w)
+                                s = 5578347
+                            else
+                                U = f(24827)
+                                j = f(24819)
+                                s = R[U]
+                                U = s(j, V, w)
+                                s = 5578347
+                            end
+                        else
+                            F, w = C(Z, F)
+                            s = F and 15754369 or 13801855
+                        end
+                    else
+                        if s < 5523172 then
+                            M = f(24824)
+                            U = 3
+                            j = 4
+                            s = R[M]
+                            V = 1
+                            t = h
+                            w = 2
+                            C = {
+                                V,
+                                w,
+                                U,
+                                j
+                            }
+                            V = {
+                                s(C)
+                            }
+                            M = V[1]
+                            C = M
+                            F = V[3]
+                            Z = V[2]
+                            s = 2638127
+                        else
+                            U = 3
+                            s = V == U
+                            s = s and 7062240 or 9086615
+                        end
+                    end
+                else
+                    if s < 11859925 then
+                        if s < 9001202 then
+                            w = nil
+                            s = 13801855
+                            V = nil
+                        else
+                            w = nil
+                            V = nil
+                            s = 2638127
+                        end
+                    else
+                        if s < 15080806 then
+                            Z = f(24827)
+                            s = R[Z]
+                            F = f(24825)
+                            Z = s(F)
+                            M = {}
+                            s = R[f(24821)]
+                        else
+                            j = 2
+                            V = F
+                            U = V % j
+                            j = 0
+                            s = U == j
+                            s = s and 977502 or 1590456
+                        end
+                    end
+                end
+            end
+            s = #e
+            return z(M)
+        end, function(R)
+            V[R] = V[R] - (1)
+            if V[R] == 0 then
+                V[R], t[R] = nil, nil
+            end
+        end, function(R)
+            for f = 1, #R, 1 do
+                V[R[f]] = (1) + V[R[f]]
+            end
+            if h then
+                local s = h(true)
+                local z = e(s)
+                z[f(24826)], z[f(24818)], z[f(24822)] = R, C, function()
+                    return -3225309
+                end
+                return s
+            else
+                return k({}, {
+                    [f(24818)] = C,
+                    [f(24826)] = R,
+                    [f(24822)] = function()
+                        return -3225309
+                    end
+                })
+            end
+        end, {}, 0, {}, function()
+            U = (1) + U
+            V[U] = 1
+            return U
+        end, function(R)
+            local f, s = 1, R[1]
+            while s do
+                V[s], f = V[s] - (1), (1) + f
+                if V[s] == 0 then
+                    V[s], t[s] = nil, nil
+                end
+                s = R[f]
+            end
+        end, function(R, f)
+            local z = j(f)
+            local h = function(...)
+                return s(R, {
+                    ...
+                }, f, z)
+            end
+            return h
+        end
+        return (F(5121747, {}))(z(M))
+    end)(getfenv and getfenv() or _ENV, unpack or table[f(24820)], newproxy, setmetatable, getmetatable, select, {
+        ...
+    })
+end)(...)

@@ -1,0 +1,302 @@
+return (function(...)
+    local r = {
+        "WDNvl+Z=",
+        "WDNvl+Q=",
+        "XjobFw5e1C==",
+        "Xjog8+m=",
+        "6hJbFV0=",
+        "SXaKSXJ9",
+        "8D8cW2Ud0eeB6yzS",
+        "z+UvW+PI",
+        "62e5Sny9BjJH1NZd",
+        "XjoVWv=="
+    }
+    local function s(s)
+        return r[s + (48424)]
+    end
+    for s, a in ipairs({
+        {
+            1,
+            10
+        },
+        {
+            1,
+            4
+        },
+        {
+            5,
+            10
+        }
+    }) do
+        while a[1] < a[2] do
+            r[a[1]], r[a[2]], a[1], a[2] = r[a[2]], r[a[1]], a[1] + (1), a[2] - (1)
+        end
+    end
+    do
+        local s = {
+            M = 3,
+            f = 35,
+            g = 44,
+            Q = 4,
+            z = 29,
+            Y = 32,
+            n = 55,
+            ["8"] = 25,
+            l = 11,
+            u = 40,
+            i = 10,
+            N = 5,
+            h = 7,
+            ["6"] = 28,
+            D = 54,
+            K = 33,
+            k = 45,
+            o = 61,
+            ["2"] = 36,
+            m = 56,
+            d = 50,
+            T = 46,
+            L = 21,
+            s = 59,
+            c = 47,
+            Z = 8,
+            J = 9,
+            p = 18,
+            ["5"] = 17,
+            P = 13,
+            F = 27,
+            b = 41,
+            ["4"] = 15,
+            S = 26,
+            ["7"] = 2,
+            t = 12,
+            A = 6,
+            ["/"] = 60,
+            O = 63,
+            R = 31,
+            x = 14,
+            V = 39,
+            W = 24,
+            j = 53,
+            G = 49,
+            e = 37,
+            a = 1,
+            X = 23,
+            q = 62,
+            U = 57,
+            w = 38,
+            ["3"] = 52,
+            v = 48,
+            I = 43,
+            ["9"] = 51,
+            B = 19,
+            C = 0,
+            ["1"] = 30,
+            H = 42,
+            ["0"] = 16,
+            E = 58,
+            y = 20,
+            ["+"] = 22,
+            r = 34
+        }
+        local a = math.floor
+        local O = string.sub
+        local y = string.len
+        local B = table.concat
+        local e = type
+        local f = string.char
+        local V = table.insert
+        local p = r
+        for r = 1, #p, 1 do
+            local R = p[r]
+            if e(R) == "string" then
+                local e = y(R)
+                local q = {}
+                local J = 1
+                local l = 0
+                local M = 0
+                while J <= e do
+                    local r = O(R, J, J)
+                    local y = s[r]
+                    if y then
+                        l = l + y * (64) ^ ((3) - M)
+                        M = M + (1)
+                        if M == 4 then
+                            M = 0
+                            local r = a(l / (65536))
+                            local s = a((l % (65536)) / (256))
+                            local O = l % (256)
+                            V(q, f(r, s, O))
+                            l = 0
+                        end
+                    elseif r == "=" then
+                        V(q, f(a(l / (65536))))
+                        if J >= e or O(R, J + (1), J + (1)) ~= "=" then
+                            V(q, f(a((l % (65536)) / (256))))
+                        end
+                        break
+                    end
+                    J = J + (1)
+                end
+                p[r] = B(q)
+            end
+        end
+    end
+    return (function(r, O, y, B, e, f, V, a, U, c, J, F, l, q, R, M, p)
+        M, J, l, R, U, p, c, a, F, q = function(r)
+            local s, a = 1, r[1]
+            while a do
+                R[a], s = R[a] - (1), s + (1)
+                if R[a] == 0 then
+                    R[a], p[a] = nil, nil
+                end
+                a = r[s]
+            end
+        end, 0, function(r)
+            for s = 1, #r, 1 do
+                R[r[s]] = (1) + R[r[s]]
+            end
+            if y then
+                local a = y(true)
+                local O = e(a)
+                O[s(-48417)], O[s(-48420)], O[s(-48416)] = r, M, function()
+                    return -3225309
+                end
+                return a
+            else
+                return B({}, {
+                    [s(-48420)] = M,
+                    [s(-48417)] = r,
+                    [s(-48416)] = function()
+                        return -3225309
+                    end
+                })
+            end
+        end, {}, function(r)
+            R[r] = R[r] - (1)
+            if R[r] == 0 then
+                R[r], p[r] = nil, nil
+            end
+        end, {}, function(r, s)
+            local O = l(s)
+            local y = function(...)
+                return a(r, {
+                    ...
+                }, s, O)
+            end
+            return y
+        end, function(a, y, B, e)
+            local c, V, x, I, R, w, Y, A, J, M, l
+            while a do
+                if a < 6484458 then
+                    if a < 5297709 then
+                        if a < 4283831 then
+                            I, l = c(x, I)
+                            a = I and 15754369 or 13801855
+                        else
+                            V = s(-48414)
+                            a = r[V]
+                            l = 4
+                            R = y
+                            M = 6
+                            J = 2
+                            c = {
+                                J,
+                                l,
+                                M
+                            }
+                            J = {
+                                a(c)
+                            }
+                            I = J[3]
+                            V = J[1]
+                            a = 2638127
+                            x = J[2]
+                            c = V
+                        end
+                    else
+                        if a < 6220290 then
+                            V = p[B[1]]
+                            R = p[B[2]]
+                            a = V + R
+                            V = {
+                                a
+                            }
+                            a = r[s(-48421)]
+                        else
+                            Y = s(-48419)
+                            A = s(-48415)
+                            a = r[A]
+                            w = {
+                                M()
+                            }
+                            A = a(Y, O(w))
+                            a = 16151496
+                        end
+                    end
+                else
+                    if a < 14079217 then
+                        if a < 13298393 then
+                            Y = s(-48418)
+                            A = s(-48415)
+                            a = r[A]
+                            w = {
+                                M()
+                            }
+                            A = a(Y, O(w))
+                            a = 16151496
+                        else
+                            a = r[s(-48423)]
+                            V = {}
+                        end
+                    else
+                        if a < 16037859 then
+                            J = I
+                            a = q()
+                            p[a] = J
+                            J = a
+                            a = q()
+                            p[a] = l
+                            l = a
+                            a = F(5578347, {
+                                J,
+                                l
+                            })
+                            Y = 2
+                            A = p[J]
+                            M = a
+                            a = A == Y
+                            a = a and 8045464 or 6475450
+                        else
+                            a = 2638127
+                            J = U(J)
+                            M = nil
+                            l = U(l)
+                        end
+                    end
+                end
+            end
+            a = #e
+            return O(V)
+        end, function(r, s)
+            local O = l(s)
+            local y = function(y, B, e, f, V)
+                return a(r, {
+                    y,
+                    B,
+                    e,
+                    f,
+                    V
+                }, s, O)
+            end
+            return y
+        end, function()
+            J = J + (1)
+            R[J] = 1
+            return J
+        end
+        return (c(5121747, {}))(O(V))
+    end)(getfenv and getfenv() or _ENV, unpack or table[s(-48422)], newproxy, setmetatable, getmetatable, select, {
+        ...
+    })
+end)(...)

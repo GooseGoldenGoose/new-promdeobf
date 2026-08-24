@@ -1,0 +1,239 @@
+return (function(...)
+    local j = {
+        "y1Ii+1Ju",
+        "7622g1eUajQKVfnK",
+        "6UQLvBc47z==",
+        "6UQhM10=",
+        "vB50yz==",
+        "6UQf+i==",
+        "pX2LvfY="
+    }
+    local function u(u)
+        return j[u - (49527)]
+    end
+    for u, O in ipairs({
+        {
+            1,
+            7
+        },
+        {
+            1,
+            4
+        },
+        {
+            5,
+            7
+        }
+    }) do
+        while O[1] < O[2] do
+            j[O[1]], j[O[2]], O[1], O[2] = j[O[2]], j[O[1]], O[1] + (1), O[2] - (1)
+        end
+    end
+    do
+        local u = string.len
+        local O = j
+        local S = {
+            G = 3,
+            ["5"] = 21,
+            K = 18,
+            e = 45,
+            ["2"] = 9,
+            V = 26,
+            f = 39,
+            l = 51,
+            ["9"] = 4,
+            L = 41,
+            b = 47,
+            r = 58,
+            Q = 61,
+            n = 33,
+            q = 19,
+            k = 63,
+            h = 44,
+            ["0"] = 56,
+            O = 31,
+            x = 14,
+            v = 27,
+            N = 32,
+            C = 60,
+            ["8"] = 55,
+            I = 57,
+            E = 6,
+            o = 42,
+            i = 48,
+            z = 0,
+            ["7"] = 30,
+            M = 25,
+            D = 59,
+            F = 36,
+            d = 35,
+            s = 8,
+            J = 13,
+            R = 2,
+            W = 34,
+            ["+"] = 24,
+            ["3"] = 11,
+            S = 62,
+            ["1"] = 22,
+            j = 52,
+            ["4"] = 37,
+            m = 1,
+            g = 20,
+            U = 53,
+            t = 49,
+            H = 50,
+            Z = 10,
+            u = 43,
+            p = 28,
+            ["/"] = 46,
+            B = 38,
+            X = 7,
+            c = 17,
+            A = 54,
+            a = 12,
+            ["6"] = 23,
+            P = 5,
+            y = 29,
+            T = 15,
+            w = 40,
+            Y = 16
+        }
+        local W = table.concat
+        local Z = math.floor
+        local h = table.insert
+        local E = string.char
+        local o = string.sub
+        local J = type
+        for j = 1, #O, 1 do
+            local r = O[j]
+            if J(r) == "string" then
+                local J = u(r)
+                local m = {}
+                local p = 1
+                local g = 0
+                local i = 0
+                while p <= J do
+                    local j = o(r, p, p)
+                    local u = S[j]
+                    if u then
+                        g = g + u * (64) ^ ((3) - i)
+                        i = i + (1)
+                        if i == 4 then
+                            i = 0
+                            local j = Z(g / (65536))
+                            local u = Z((g % (65536)) / (256))
+                            local O = g % (256)
+                            h(m, E(j, u, O))
+                            g = 0
+                        end
+                    elseif j == "=" then
+                        h(m, E(Z(g / (65536))))
+                        if p >= J or o(r, p + (1), p + (1)) ~= "=" then
+                            h(m, E(Z((g % (65536)) / (256))))
+                        end
+                        break
+                    end
+                    p = p + (1)
+                end
+                O[j] = W(m)
+            end
+        end
+    end
+    return (function(j, S, W, Z, h, E, o, i, P, r, J, g, m, p, X, O)
+        O, P, i, p, m, X, r, J, g = function(O, W, Z, h)
+            local H, m, g, B, i, o, r, p, X, P, J
+            while O do
+                if O < 7329949 then
+                    if O < 3611782 then
+                        g, i = m(p, g)
+                        O = g and 15754369 or 13801855
+                    else
+                        J = W
+                        r = 20
+                        m = 30
+                        o = 10
+                        O = {
+                            o,
+                            r,
+                            m
+                        }
+                        r = O
+                        o = u(49529)
+                        p = r
+                        O = j[o]
+                        o = nil
+                        g = o
+                        m = O
+                        O = 2638127
+                    end
+                else
+                    if O < 15667795 then
+                        O = j[u(49533)]
+                        r = nil
+                        o = {}
+                    else
+                        P = u(49531)
+                        H = u(49529)
+                        B = j[P]
+                        X = g
+                        P = B(H, X, i)
+                        X = nil
+                        i = nil
+                        O = 2638127
+                    end
+                end
+            end
+            O = #h
+            return S(o)
+        end, function(j, u)
+            local S = g(u)
+            local W = function(...)
+                return O(j, {
+                    ...
+                }, u, S)
+            end
+            return W
+        end, function(j)
+            local u, O = 1, j[1]
+            while O do
+                r[O], u = r[O] - (1), (1) + u
+                if r[O] == 0 then
+                    r[O], J[O] = nil, nil
+                end
+                O = j[u]
+            end
+        end, 0, function()
+            p = (1) + p
+            r[p] = 1
+            return p
+        end, function(j)
+            r[j] = r[j] - (1)
+            if 0 == r[j] then
+                r[j], J[j] = nil, nil
+            end
+        end, {}, {}, function(j)
+            for u = 1, #j, 1 do
+                r[j[u]] = (1) + r[j[u]]
+            end
+            if W then
+                local O = W(true)
+                local S = h(O)
+                S[u(49534)], S[u(49530)], S[u(49528)] = j, i, function()
+                    return -3225309
+                end
+                return O
+            else
+                return Z({}, {
+                    [u(49530)] = i,
+                    [u(49534)] = j,
+                    [u(49528)] = function()
+                        return -3225309
+                    end
+                })
+            end
+        end
+        return (P(5121747, {}))(S(o))
+    end)(getfenv and getfenv() or _ENV, unpack or table[u(49532)], newproxy, setmetatable, getmetatable, select, {
+        ...
+    })
+end)(...)
