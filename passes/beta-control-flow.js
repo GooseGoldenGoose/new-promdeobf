@@ -3542,12 +3542,18 @@ function solveAcyclicStructured(originalAst, graph) {
             }
 
             let join = immediatePostdominator(current, postdominators);
+            // A nested guard arm may have its own terminal shared join that cannot
+            // reach the surrounding partial continuation. Keep that proven local join.
+            const joinIsTerminalReturn = join !== null &&
+                join !== exitNode &&
+                prepared.get(join)?.info?.kind === "return";
             if (
                 join === exitNode ||
                 (join !== null &&
                     stopState !== exitNode &&
                     join !== stopState &&
-                    !reachesState(join, stopState, reachableSets))
+                    !reachesState(join, stopState, reachableSets) &&
+                    !joinIsTerminalReturn)
             ) {
                 join = null;
             }

@@ -1333,6 +1333,54 @@ const dynamicOverflowRejected = solveBetaControlFlow(ast, {
 assert.equal(dynamicOverflowRejected.applied, false);
 assert(dynamicOverflowRejected.reason.includes("non-static"));
 
+// Regression: a nested branch may have a local shared join that is itself a
+// proven terminal return, even when that join cannot reach the surrounding
+// partial continuation. Keep that terminal join local so it is emitted once.
+const terminalLocalJoinGraph = {
+    applied: true,
+    graph: {
+        cfgComplete: true,
+        stateName: "state",
+        entries: [1],
+        states: [
+            { id: 1, predecessors: [], successors: [2, 8], operations: [
+                { kind: "state-transition", emittedTarget: "state", rhs: "condOuter and 2 or 8", emittedText: "state = condOuter and 2 or 8", reads: ["condOuter"] },
+            ] },
+            { id: 2, predecessors: [1], successors: [3, 6], operations: [
+                { kind: "state-transition", emittedTarget: "state", rhs: "condMiddle and 3 or 6", emittedText: "state = condMiddle and 3 or 6", reads: ["condMiddle"] },
+            ] },
+            { id: 3, predecessors: [2], successors: [4, 5], operations: [
+                { kind: "state-transition", emittedTarget: "state", rhs: "condInner and 4 or 5", emittedText: "state = condInner and 4 or 5", reads: ["condInner"] },
+            ] },
+            { id: 4, predecessors: [3], successors: [5], operations: [
+                { kind: "statement", emittedText: "mark()", reads: [] },
+                { kind: "state-transition", emittedTarget: "state", rhs: "5", emittedText: "state = 5", reads: [] },
+            ] },
+            { id: 5, predecessors: [3, 4], successors: [], operations: [
+                { kind: "return-payload", terminalCompilerReturnPayload: true, returnExpressions: ["1"], emittedTarget: "ReturnVal", emittedText: "ReturnVal = { 1 }", rhs: "{ 1 }", reads: [] },
+                { kind: "state-transition", emittedTarget: "state", rhs: "nil", emittedText: "state = nil", reads: [] },
+            ] },
+            { id: 6, predecessors: [2], successors: [9], operations: [
+                { kind: "state-transition", emittedTarget: "state", rhs: "9", emittedText: "state = 9", reads: [] },
+            ] },
+            { id: 8, predecessors: [1], successors: [9], operations: [
+                { kind: "state-transition", emittedTarget: "state", rhs: "9", emittedText: "state = 9", reads: [] },
+            ] },
+            { id: 9, predecessors: [6, 8], successors: [], operations: [
+                { kind: "return-payload", terminalCompilerReturnPayload: true, returnExpressions: ["2"], emittedTarget: "ReturnVal", emittedText: "ReturnVal = { 2 }", rhs: "{ 2 }", reads: [] },
+                { kind: "state-transition", emittedTarget: "state", rhs: "nil", emittedText: "state = nil", reads: [] },
+            ] },
+        ],
+    },
+};
+const terminalLocalJoinProduction = solveBetaControlFlow(ast, terminalLocalJoinGraph);
+assert.equal(terminalLocalJoinProduction.applied, true);
+assert(terminalLocalJoinProduction.source.includes("mark()"));
+assert.equal((terminalLocalJoinProduction.source.match(/return 1/g) || []).length, 1);
+const terminalLocalJoinExperimental = solveExperimentalBetaControlFlow(ast, terminalLocalJoinGraph);
+assert.equal(terminalLocalJoinExperimental.applied, true);
+assert.equal((terminalLocalJoinExperimental.source.match(/return 1/g) || []).length, 1);
+parseLua(terminalLocalJoinProduction.source, "<beta-cf-terminal-local-join>");
 // Regression: Prometheus may compile a repeat condition once before the body and
 // again as the real post-test. A short-circuit condition can create nested suffix
 // matches inside the full duplicated region; recover only the unique maximal copy.

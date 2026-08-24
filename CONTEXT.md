@@ -319,7 +319,9 @@ Large untracked probe. Normal deobf succeeds. The first beta-CF blocker was a re
 
 `beta-upvalues` now removes this residual release only after every other VM upvalue operation has already been recovered, the release argument is a side-effect-free value/literal, and the release assignment result is dead. Live results or any other unresolved upvalue machinery still fail closed. This removes the old state-3635 `releaseUpvalue` blocker without hardcoding state/register/id values.
 
-After that first fix, spacial6 proceeds to a separate control-flow blocker at closure entry 2514: shared join state 2531 is reachable directly from 2528 and through 2530, and the acyclic structurer currently tries to emit the shared join twice. Do not conflate this with upvalue recovery.
+After that first fix, spacial6 exposed a separate nested shared-join case: a branch had a unique immediate post-dominator that was itself a proven terminal return, but the acyclic solver discarded that local join only because it could not reach the surrounding partial continuation. Production and experimental beta-CF now preserve such a join only when `prepared[join].info.kind === "return"`; ordinary out-of-region joins are still rejected. A focused synthetic regression covers the exact outer-partial-continuation + inner-terminal-join shape in both solvers.
+
+With that fix, the old closure-entry-2514 / state-2531 duplicate-emission error is gone. Current spacial6 results: experimental overflow beta-CF fully succeeds (3799 states, 554 closure regions, 0 `RegisterOverflow[...]`, 0 residual VM/upvalue scaffold). Production beta-CF gets past the 2514 issue and now stops at a separate root closure loop/backedge case: `Closure entry 1: Beta CF acyclic stage detected a loop/backedge; loop structuring is not implemented yet`.
 
 ## Performance
 
