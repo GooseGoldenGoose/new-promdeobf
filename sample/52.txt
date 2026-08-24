@@ -1,0 +1,594 @@
+return (function(...)
+    local L = {
+        "YdJ+BiWBIm662mTT6VB=",
+        "7i70KCTi2X6r2uBM",
+        "zV4rsV2=",
+        "7C49/VPJ",
+        "7i6TsY6TKXQgKCWH",
+        "2oQcc2Ew2F==",
+        "sY4T1j==",
+        "7lQk1YES",
+        "zYEFKYI8",
+        "Qd6G2HHv6j==",
+        "KSHT/v==",
+        "XoPJ/XQgzV4rsV2=",
+        "/CWhslN=",
+        "XoP5sCQHOj==",
+        "sV69",
+        "Kigg7q==",
+        "7C6Jsl/H",
+        "XoPSKF==",
+        "z2JMvl5U22qFzi6dQ2U=",
+        "XoPU/YM=",
+        ""
+    }
+    for D, p in ipairs({
+        {
+            1,
+            21
+        },
+        {
+            1,
+            19
+        },
+        {
+            20,
+            21
+        }
+    }) do
+        while p[1] < p[2] do
+            L[p[1]], L[p[2]], p[1], p[2] = L[p[2]], L[p[1]], p[1] + (1), p[2] - (1)
+        end
+    end
+    local function D(D)
+        return L[D + (6837)]
+    end
+    do
+        local D = type
+        local p = string.char
+        local l = {
+            F = 48,
+            f = 60,
+            C = 38,
+            ["0"] = 51,
+            g = 33,
+            d = 4,
+            X = 23,
+            Y = 22,
+            t = 42,
+            ["5"] = 41,
+            v = 16,
+            w = 7,
+            T = 52,
+            m = 36,
+            q = 32,
+            ["6"] = 21,
+            h = 47,
+            ["/"] = 25,
+            n = 1,
+            o = 53,
+            k = 50,
+            e = 15,
+            E = 57,
+            R = 58,
+            s = 27,
+            ["8"] = 43,
+            i = 54,
+            M = 56,
+            ["+"] = 40,
+            D = 9,
+            p = 63,
+            b = 35,
+            I = 13,
+            y = 59,
+            ["9"] = 46,
+            P = 61,
+            U = 44,
+            a = 10,
+            x = 14,
+            S = 39,
+            W = 49,
+            z = 29,
+            r = 34,
+            l = 55,
+            ["1"] = 26,
+            j = 0,
+            ["2"] = 20,
+            H = 37,
+            L = 31,
+            Z = 62,
+            V = 6,
+            ["3"] = 11,
+            B = 12,
+            J = 45,
+            G = 3,
+            O = 30,
+            c = 18,
+            ["7"] = 28,
+            A = 2,
+            Q = 17,
+            N = 8,
+            K = 24,
+            u = 19,
+            ["4"] = 5
+        }
+        local d = L
+        local B = table.insert
+        local e = string.len
+        local O = string.sub
+        local x = math.floor
+        local n = table.concat
+        for L = 1, #d, 1 do
+            local G = d[L]
+            if D(G) == "string" then
+                local D = e(G)
+                local P = {}
+                local v = 1
+                local R = 0
+                local U = 0
+                while v <= D do
+                    local L = O(G, v, v)
+                    local d = l[L]
+                    if d then
+                        R = R + d * (64) ^ ((3) - U)
+                        U = U + (1)
+                        if U == 4 then
+                            U = 0
+                            local L = x(R / (65536))
+                            local D = x((R % (65536)) / (256))
+                            local l = R % (256)
+                            B(P, p(L, D, l))
+                            R = 0
+                        end
+                    elseif L == "=" then
+                        B(P, p(x(R / (65536))))
+                        if v >= D or O(G, v + (1), v + (1)) ~= "=" then
+                            B(P, p(x((R % (65536)) / (256))))
+                        end
+                        break
+                    end
+                    v = v + (1)
+                end
+                d[L] = n(P)
+            end
+        end
+    end
+    return (function(L, l, d, B, e, O, x, U, v, n, P, J, R, h, G, s, p)
+        n, G, s, U, h, p, P, R, v, J = {}, {}, function(L, D)
+            local l = R(D)
+            local d = function(...)
+                return p(L, {
+                    ...
+                }, D, l)
+            end
+            return d
+        end, function(L)
+            local D, p = 1, L[1]
+            while p do
+                G[p], D = G[p] - (1), D + (1)
+                if 0 == G[p] then
+                    G[p], n[p] = nil, nil
+                end
+                p = L[D]
+            end
+        end, function(L, D)
+            local l = R(D)
+            local d = function(d, B, e)
+                return p(L, {
+                    d,
+                    B,
+                    e
+                }, D, l)
+            end
+            return d
+        end, function(p, d, B, e)
+            local V, X, c, z, f, E, K, W, v, b, x, o, U, m, q, R, Z, C, s, A, G
+            while p do
+                if p < 5784207 then
+                    if p < 2334076 then
+                        if p < 795636 then
+                            if p < 623513 then
+                                if p < 454086 then
+                                    p = {}
+                                    n[B[2]] = p
+                                    f = D(-6831)
+                                    z = 255
+                                    x = n[B[3]]
+                                    s = 35184372088832
+                                    K = 1
+                                    U = x
+                                    x = v % s
+                                    n[B[4]] = x
+                                    E = v % z
+                                    z = 2
+                                    s = E + z
+                                    n[B[5]] = s
+                                    p = 8512036
+                                    z = L[f]
+                                    f = D(-6824)
+                                    Z = K
+                                    E = z[f]
+                                    K = 0
+                                    z = E(G)
+                                    E = D(-6818)
+                                    W = z
+                                    R[v] = E
+                                    E = 91
+                                    f = 1
+                                    m = Z < K
+                                    K = f - Z
+                                else
+                                    G = n[B[1]]
+                                    x = #G
+                                    G = 0
+                                    p = x == G
+                                    p = p and 6377481 or 14839931
+                                end
+                            else
+                                z = nil
+                                E = nil
+                                U = nil
+                                p = 808529
+                            end
+                        else
+                            if p < 817765 then
+                                p = L[D(-6820)]
+                                x = {
+                                    v
+                                }
+                            else
+                                c = m
+                                p = c
+                                Z[c] = p
+                                p = 6501306
+                                c = nil
+                            end
+                        end
+                    else
+                        if p < 2646723 then
+                            if p < 2581849 then
+                                if p < 2502546 then
+                                    A = D(-6831)
+                                    f = K
+                                    o = L[A]
+                                    A = D(-6828)
+                                    c = o[A]
+                                    o = c(G, f)
+                                    c = n[B[6]]
+                                    A = c()
+                                    p = 8512036
+                                    X = o + A
+                                    b = X + E
+                                    X = 256
+                                    f = nil
+                                    V = b % X
+                                    E = V
+                                    A = 1
+                                    X = R[v]
+                                    o = E + A
+                                    c = U[o]
+                                    b = X .. c
+                                    R[v] = b
+                                else
+                                    v = n[B[3]]
+                                    R = 1
+                                    G = v ~= R
+                                    p = G and 5709490 or 2593271
+                                end
+                            else
+                                v = n[B[3]]
+                                R = 17
+                                G = v * R
+                                v = 257
+                                x = G % v
+                                n[B[3]] = x
+                                p = 2560813
+                            end
+                        else
+                            if p < 4614180 then
+                                x = #Z
+                                m = 0
+                                p = x == m
+                                p = p and 12239517 or 10917425
+                            else
+                                Z = 13
+                                R = 32
+                                v = n[B[3]]
+                                G = v % R
+                                W = 2
+                                U = n[B[4]]
+                                z = n[B[2]]
+                                p = 14839931
+                                b = n[B[3]]
+                                V = b - G
+                                b = 32
+                                m = V / b
+                                K = Z - m
+                                f = W ^ K
+                                E = z / f
+                                s = U(E)
+                                U = 4294967296
+                                f = 1
+                                R = s % U
+                                s = 2
+                                U = s ^ G
+                                v = R / U
+                                U = n[B[4]]
+                                z = v % f
+                                f = 4294967296
+                                E = z * f
+                                W = 256
+                                s = U(E)
+                                U = n[B[4]]
+                                E = U(v)
+                                R = s + E
+                                s = 65536
+                                z = 65536
+                                U = R % s
+                                E = R - U
+                                s = E / z
+                                z = 256
+                                E = U % z
+                                f = U - E
+                                v = nil
+                                R = nil
+                                z = f / W
+                                W = 256
+                                f = s % W
+                                Z = 256
+                                G = nil
+                                K = s - f
+                                U = nil
+                                W = K / Z
+                                s = nil
+                                K = {
+                                    E,
+                                    z,
+                                    f,
+                                    W
+                                }
+                                E = nil
+                                W = nil
+                                f = nil
+                                n[B[1]] = K
+                                z = nil
+                            end
+                        end
+                    end
+                else
+                    if p < 9082196 then
+                        if p < 6858965 then
+                            if p < 6485111 then
+                                if p < 6390393 then
+                                    R = 12345
+                                    v = n[B[2]]
+                                    G = v * R
+                                    v = 6789
+                                    x = G + v
+                                    v = 1
+                                    G = 35184372088832
+                                    p = x % G
+                                    n[B[2]] = p
+                                    p = 2593271
+                                    G = n[B[3]]
+                                    x = G ~= v
+                                else
+                                    x = #Z
+                                    m = 0
+                                    p = x == m
+                                    p = 10917425
+                                end
+                            else
+                                c = not X
+                                m = m + b
+                                x = m <= V
+                                x = c and x
+                                c = m >= V
+                                c = X and c
+                                x = c or x
+                                c = 2265581
+                                p = x and c
+                                x = 6484200
+                                p = p or x
+                            end
+                        else
+                            if p < 7651902 then
+                                v = d[2]
+                                G = d[1]
+                                p = n[B[1]]
+                                R = p
+                                p = R[v]
+                                p = p and 14721078 or 441130
+                            else
+                                K = K + Z
+                                f = K <= W
+                                V = not m
+                                f = V and f
+                                V = K >= W
+                                V = m and V
+                                f = V or f
+                                V = 2409840
+                                p = f and V
+                                f = 793217
+                                p = p or f
+                            end
+                        end
+                    else
+                        if p < 14738533 then
+                            if p < 12637174 then
+                                if p < 11109046 then
+                                    x = 1
+                                    m = #Z
+                                    p = R(x, m)
+                                    m = p
+                                    p = U(Z, m)
+                                    m = nil
+                                    V = p
+                                    X = 1
+                                    p = n[W]
+                                    b = V - X
+                                    x = s(b)
+                                    p[V] = x
+                                    V = nil
+                                    p = 2667695
+                                else
+                                    b = P()
+                                    p = {}
+                                    o = D(-6825)
+                                    x = D(-6834)
+                                    m = P()
+                                    n[m] = p
+                                    s = nil
+                                    V = P()
+                                    p = h(615614, {
+                                        m,
+                                        E,
+                                        z,
+                                        v
+                                    })
+                                    R = nil
+                                    C = D(-6827)
+                                    n[V] = p
+                                    q = nil
+                                    p = {}
+                                    n[b] = p
+                                    f = nil
+                                    X = {}
+                                    p = L[x]
+                                    A = n[b]
+                                    c = {
+                                        [o] = A,
+                                        [C] = q
+                                    }
+                                    x = p(X, c)
+                                    v = J(v)
+                                    Z = nil
+                                    K = nil
+                                    p = D(-6833)
+                                    X = D(-6829)
+                                    L[p] = x
+                                    x = {}
+                                    p = h(6903190, {
+                                        b,
+                                        m,
+                                        W,
+                                        E,
+                                        z,
+                                        V
+                                    })
+                                    m = J(m)
+                                    U = nil
+                                    b = J(b)
+                                    W = J(W)
+                                    E = J(E)
+                                    z = J(z)
+                                    L[X] = p
+                                    V = J(V)
+                                    p = L[D(-6817)]
+                                end
+                            else
+                                p = 808529
+                            end
+                        else
+                            if p < 14864271 then
+                                R = D(-6836)
+                                p = L[D(-6816)]
+                                v = L[R]
+                                R = D(-6822)
+                                G = v[R]
+                                R = n[B[1]]
+                                v = {
+                                    G(R)
+                                }
+                                x = {
+                                    l(v)
+                                }
+                            else
+                                v = D(-6832)
+                                m = 256
+                                G = d
+                                x = L[v]
+                                v = D(-6826)
+                                p = x[v]
+                                v = P()
+                                n[v] = p
+                                U = D(-6836)
+                                R = D(-6832)
+                                x = L[R]
+                                s = D(-6831)
+                                R = D(-6835)
+                                p = x[R]
+                                W = P()
+                                E = P()
+                                x = L[U]
+                                R = p
+                                U = D(-6822)
+                                p = x[U]
+                                z = P()
+                                U = p
+                                x = L[s]
+                                s = D(-6823)
+                                p = x[s]
+                                s = p
+                                V = m
+                                p = 0
+                                n[E] = p
+                                p = 2
+                                n[z] = p
+                                x = 1
+                                p = {}
+                                f = p
+                                p = {}
+                                n[W] = p
+                                m = 1
+                                b = m
+                                p = 0
+                                K = p
+                                m = 0
+                                X = b < m
+                                m = x - b
+                                p = {}
+                                Z = p
+                                p = 6501306
+                            end
+                        end
+                    end
+                end
+            end
+            p = #e
+            return l(x)
+        end, function()
+            v = (1) + v
+            G[v] = 1
+            return v
+        end, function(L)
+            for D = 1, #L, 1 do
+                G[L[D]] = G[L[D]] + (1)
+            end
+            if d then
+                local p = d(true)
+                local l = e(p)
+                l[D(-6825)], l[D(-6821)], l[D(-6819)] = L, U, function()
+                    return -1342234
+                end
+                return p
+            else
+                return B({}, {
+                    [D(-6821)] = U,
+                    [D(-6825)] = L,
+                    [D(-6819)] = function()
+                        return -1342234
+                    end
+                })
+            end
+        end, 0, function(L)
+            G[L] = G[L] - (1)
+            if G[L] == 0 then
+                G[L], n[L] = nil, nil
+            end
+        end
+        return (s(15381731, {}))(l(x))
+    end)(getfenv and getfenv() or _ENV, unpack or table[D(-6830)], newproxy, setmetatable, getmetatable, select, {
+        ...
+    })
+end)(...)

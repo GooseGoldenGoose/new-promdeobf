@@ -877,3 +877,12 @@ Done for this turn — you can prompt now.
 - Normal deobfuscation succeeds: 45/53 dispatcher leaves, 8 dead pruned, 7 VM functions. Beta succeeds: 308 versioned assignments, 0 skips. Beta-CF succeeds: 45 states, 7 closure regions, 2 numeric-for loops, 1 while, 13 branches, 12 joins, 14 recovered cells.
 - Standalone beta runtime still fails with the known cross-state beta-local presentation issue (`attempt to call local r_v1_8 (a nil value)`).
 
+
+## Latest Sample 52 PRNG/Decrypt Fixture (2026-08-24)
+
+- `sample/52.source.lua` materializes the user-provided generator placeholders as concrete numeric literals only so the fixture is standalone; no transform depends on those values.
+- Current local Medium run for sample 52 did not execute Anti Tamper; it went directly through Vmify -> Constant Array -> Numbers To Expressions -> Wrap in Function.
+- Normal deobfuscation succeeds with 20/20 states across 3 VM functions, 10 capture slots, 7 local cells, and 30/30 upvalue accesses resolved.
+- Beta succeeds with 245 versioned assignments, 19 ordered effect writes, 21 cross-state versions, and 0 skips.
+- Beta-CF succeeds with 20 states, 3 closure regions, 2 numeric-for loops, 2 repeat loops, 2 branches/2 joins, 7 recovered cells, 10 recovered capture slots, and 3 lowered terminal returns.
+- Runtime/source parity: readable source, raw obfuscated, formatter-normalized, normal deobfuscated, and beta-CF all exit 0 with no output.
