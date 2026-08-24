@@ -132,7 +132,8 @@ function printLiteral(literal) {
 function walk(node, visit) {
     if (!isNode(node)) return;
     visit(node);
-    for (const [key, value] of Object.entries(node)) {
+    for (const key of Object.keys(node)) {
+        const value = node[key];
         if (["loc", "range"].includes(key)) continue;
         if (Array.isArray(value)) {
             for (const child of value) walk(child, visit);
@@ -480,7 +481,8 @@ function collectReplacements(statements, targetName, offset, constants) {
             return;
         }
 
-        for (const [key, value] of Object.entries(node)) {
+        for (const key of Object.keys(node)) {
+            const value = node[key];
             if (["loc", "range", "type", "name", "raw", "value", "isLocal"].includes(key)) continue;
             if (Array.isArray(value)) for (const child of value) expression(child, env);
             else expression(value, env);
@@ -581,7 +583,8 @@ function containsUnshadowedArray(statements, arrayName) {
             block(node.body || [], child);
             return;
         }
-        for (const [key, value] of Object.entries(node)) {
+        for (const key of Object.keys(node)) {
+            const value = node[key];
             if (["loc", "range", "type", "name", "raw", "value", "isLocal"].includes(key)) continue;
             if (Array.isArray(value)) for (const child of value) expr(child, env);
             else expr(value, env);

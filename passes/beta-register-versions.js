@@ -2,6 +2,8 @@ const { findVmFunction, analyzeBlockTerminator } = require("./vm-state");
 const { findVmReturnRegister, findRegisterDeclaration } = require("./vm-register-names");
 const { applyTextEdits } = require("./text-edits");
 const { analyzeBetaRegisterLifetimes } = require("./beta-register-lifetimes");
+
+const NUMERIC_NAME_COLLATOR = new Intl.Collator(undefined, { numeric: true });
 const luaparse = require("../parser/luaparse");
 
 function isNode(value) {
@@ -63,7 +65,8 @@ function collectStateLeafClauses(node, stateName, out = []) {
             if (isExactStateLeafClause(clause, stateName)) out.push(clause);
         }
     }
-    for (const [key, value] of Object.entries(node)) {
+    for (const key of Object.keys(node)) {
+        const value = node[key];
         if (key === "loc" || key === "range") continue;
         if (Array.isArray(value)) {
             for (const child of value) collectStateLeafClauses(child, stateName, out);
@@ -87,7 +90,8 @@ function collectIdentifierReadEdits(node, latestVersions, out = [], parent = nul
         return out;
     }
 
-    for (const [key, value] of Object.entries(node)) {
+    for (const key of Object.keys(node)) {
+        const value = node[key];
         if (key === "loc" || key === "range") continue;
         if (Array.isArray(value)) {
             for (const child of value) collectIdentifierReadEdits(child, latestVersions, out, node, key);
@@ -295,7 +299,8 @@ function collectPhysicalRegisterUses(node, candidateNames, declarationNodes, cou
         }
         return counts;
     }
-    for (const [key, value] of Object.entries(node)) {
+    for (const key of Object.keys(node)) {
+        const value = node[key];
         if (key === "loc" || key === "range") continue;
         if (Array.isArray(value)) {
             for (const child of value) collectPhysicalRegisterUses(child, candidateNames, declarationNodes, counts, node, key);
@@ -341,7 +346,8 @@ function collectClosureEntryStates(rootNode) {
             const entry = numericValue((node.arguments || [])[0]);
             if (entry !== null) entries.add(entry);
         }
-        for (const [key, value] of Object.entries(node)) {
+        for (const key of Object.keys(node)) {
+            const value = node[key];
             if (key === "loc" || key === "range") continue;
             if (Array.isArray(value)) {
                 for (const child of value) walk(child);
@@ -1021,7 +1027,7 @@ function versionVmBlockRegisters(source, ast) {
         entries: [...closureEntries].sort((left, right) => left - right),
         states: graphStates.sort((left, right) => left.id - right.id),
         analysis: lifetimeAnalysis?.stats || null,
-        epochs: [...epochByName.values()].sort((left, right) => left.name.localeCompare(right.name, undefined, { numeric: true })),
+        epochs: [...epochByName.values()].sort((left, right) => NUMERIC_NAME_COLLATOR.compare(left.name, right.name)),
     };
 
     return {

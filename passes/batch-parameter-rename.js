@@ -178,7 +178,8 @@ function renameFunctionParameterBindingsBatch(source, requests, traversalRoot = 
                 walkFunction(node, state);
                 return;
             default:
-                for (const [key, value] of Object.entries(node)) {
+                for (const key of Object.keys(node)) {
+                    const value = node[key];
                     if (key === "loc" || key === "range" || key === "identifier" || key === "variables" || key === "parameters" || key === "key") continue;
                     if (Array.isArray(value)) {
                         for (const child of value) walkExpression(child, state);

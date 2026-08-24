@@ -32,7 +32,7 @@ function walk(node, visit) {
     return true;
 }
 
-const PARSE_CACHE_LIMIT = 4096;
+const PARSE_CACHE_LIMIT = 32768;
 const expressionParseCache = new Map();
 const statementParseCache = new Map();
 
@@ -397,7 +397,8 @@ function rewriteExpressionUpvalues(text, position, resolveCellIndex, bindingByCe
             bindingReads.add(bindingName);
             return;
         }
-        for (const [key, value] of Object.entries(node)) {
+        for (const key of Object.keys(node)) {
+            const value = node[key];
             if (key === "loc" || key === "range") continue;
             if (Array.isArray(value)) {
                 for (const child of value) visit(child);
@@ -437,7 +438,8 @@ function rewriteStatementUpvalueReads(text, position, resolveCellIndex, bindingB
             bindingReads.add(bindingName);
             return;
         }
-        for (const [key, value] of Object.entries(node)) {
+        for (const key of Object.keys(node)) {
+            const value = node[key];
             if (key === "loc" || key === "range") continue;
             if (Array.isArray(value)) {
                 for (const child of value) visit(child);
@@ -485,7 +487,8 @@ function countStorageKeyUsesAtPosition(position, storageKey, overflowAnalysis) {
             if (storageReadKey(node, position, overflowAnalysis) === storageKey) count++;
             return;
         }
-        for (const [key, value] of Object.entries(node)) {
+        for (const key of Object.keys(node)) {
+            const value = node[key];
             if (key === "loc" || key === "range") continue;
             if (Array.isArray(value)) {
                 for (const child of value) visit(child);

@@ -1,0 +1,85 @@
+flowchart LR
+  ENTRY([ENTRY])
+  STOP([STOP])
+  S1["State 1 [entry]<br/>#1 epoch-start: local r_v1_1 = allocUpvalue()<br/>#2 version-define: local r_v2_1 = 0<br/>#3 effect-write: upvalueValues[r_v1_1] = r_v2_1<br/>#4 version-define: local r_v2_2 = createClosure1(10, { r_v1_1 })<br/>#5 epoch-start: local r_v3_1 = r_v2_2<br/>#6 epoch-start: local r_v4_1 = false<br/>#7 epoch-start: local r_v5_1 = r_v3_1(r_v4_1)<br/>#8 state-transition: state = r_v5_1 and 2 or 3<br/>#9 version-define: local r_v6_1 = r_v5_1<br/>#10 epoch-start: local r_v7_1 = args"]
+  S2["State 2<br/>#1 epoch-mutate: r_v5_1 = ReturnVal<br/>#2 epoch-start: local r_v8_1 = true<br/>#3 epoch-start: local r_v4_2 = r_v3_1(r_v8_1)<br/>#4 state-transition: state = r_v4_2 and 4 or 5<br/>#5 version-define: local r_v6_2 = r_v4_2"]
+  S3["State 3<br/>#1 epoch-start: local r_v4_3 = true<br/>#2 epoch-mutate: r_v5_1 = r_v3_1(r_v4_3)<br/>#3 version-define: local r_v6_3 = r_v5_1<br/>#4 state-transition: state = 2"]
+  S4["State 4<br/>#1 epoch-start: local r_v8_2 = false<br/>#2 epoch-mutate: r_v4_2 = r_v3_1(r_v8_2)<br/>#3 version-define: local r_v6_4 = r_v4_2<br/>#4 state-transition: state = 5"]
+  S5["State 5<br/>#1 epoch-start: local r_v9_1 = false<br/>#2 epoch-start: local r_v8_3 = r_v3_1(r_v9_1)<br/>#3 state-transition: state = r_v8_3 and 6 or 7<br/>#4 epoch-mutate: r_v4_2 = ReturnVal<br/>#5 version-define: local r_v6_5 = r_v8_3"]
+  S6["State 6<br/>#1 state-transition: state = ReturnVal and 8 or 9"]
+  S7["State 7<br/>#1 epoch-start: local r_v9_2 = upvalueValues[r_v1_1]<br/>#2 epoch-start: local r_v10_1 = 5<br/>#3 epoch-start: local r_v8_4 = r_v9_2 == r_v10_1<br/>#4 version-define: local r_v6_6 = r_v8_4<br/>#5 state-transition: state = 6"]
+  S8["State 8<br/>#1 version-define: local r_v6_7 = 'print'<br/>#2 version-define: local r_v2_3 = _env[r_v6_7]<br/>#3 epoch-start: local r_v9_3 = upvalueValues[r_v1_1]<br/>#4 epoch-start: local r_v8_5 = 'if-or'<br/>#5 version-define: local r_v6_8 = r_v2_3(r_v8_5, r_v5_1, r_v4_2, r_v9_3)<br/>#6 state-transition: state = 9"]
+  S9["State 9<br/>#1 version-define: local r_v6_9 = 'print'<br/>#2 version-define: local r_v2_4 = _env[r_v6_9]<br/>#3 epoch-start: local r_v9_4 = upvalueValues[r_v1_1]<br/>#4 epoch-start: local r_v8_6 = 'done'<br/>#5 version-define: local r_v6_10 = r_v2_4(r_v8_6, r_v5_1, r_v4_2, r_v9_4)<br/>#6 epoch-mutate: r_v1_1 = releaseUpvalue(r_v1_1)<br/>#7 epoch-kill: r_v3_1 = nil<br/>#8 epoch-kill: r_v4_2 = nil<br/>#9 epoch-kill: r_v5_1 = nil<br/>#10 return-payload: ReturnVal = {}<br/>#11 state-transition: state = nil"]
+  S10["State 10 [entry]<br/>#1 version-define: local r_v6_11 = upvalueValues[upvalues[1]]<br/>#2 epoch-start: local r_v7_2 = args[1]<br/>#3 epoch-start: local r_v1_2 = 1<br/>#4 version-define: local r_v2_5 = r_v6_11 + r_v1_2<br/>#5 effect-write: upvalueValues[upvalues[1]] = r_v2_5<br/>#6 return-payload: ReturnVal = { r_v7_2 }<br/>#7 state-transition: state = nil"]
+  ENTRY --> S1
+  ENTRY --> S10
+  S1 -->|true| S2
+  S1 -->|false| S3
+  S2 -->|true| S4
+  S2 -->|false| S5
+  S3 --> S2
+  S4 --> S5
+  S5 -->|true| S6
+  S5 -->|false| S7
+  S6 -->|true| S8
+  S6 -->|false| S9
+  S7 --> S6
+  S8 --> S9
+  S9 --> STOP
+  S10 --> STOP
+  L0(["r3 = r_v1_1"])
+  L0 -. start/read/read .-> S1
+  L0 -. read .-> S7
+  L0 -. read .-> S8
+  L0 -. read/read/mutate .-> S9
+  L1(["r3 = r_v1_2"])
+  L1 -. start/read .-> S10
+  L2(["r1 = r_v3_1"])
+  L2 -. start/read .-> S1
+  L2 -. read .-> S2
+  L2 -. read .-> S3
+  L2 -. read .-> S4
+  L2 -. read .-> S5
+  L2 -. kill .-> S9
+  L3(["r8 = r_v4_1"])
+  L3 -. start/read .-> S1
+  L4(["r8 = r_v4_2"])
+  L4 -. start/read/read .-> S2
+  L4 -. mutate/read .-> S4
+  L4 -. mutate .-> S5
+  L4 -. read .-> S8
+  L4 -. read/kill .-> S9
+  L5(["r8 = r_v4_3"])
+  L5 -. start/read .-> S3
+  L6(["r7 = r_v5_1"])
+  L6 -. start/read/read .-> S1
+  L6 -. mutate .-> S2
+  L6 -. mutate/read .-> S3
+  L6 -. read .-> S8
+  L6 -. read/kill .-> S9
+  L7(["r2 = r_v7_1"])
+  L7 -. start .-> S1
+  L8(["r2 = r_v7_2"])
+  L8 -. start/read .-> S10
+  L9(["r6 = r_v8_1"])
+  L9 -. start/read .-> S2
+  L10(["r6 = r_v8_2"])
+  L10 -. start/read .-> S4
+  L11(["r6 = r_v8_3"])
+  L11 -. start/read/read .-> S5
+  L12(["r6 = r_v8_4"])
+  L12 -. start/read .-> S7
+  L13(["r6 = r_v8_5"])
+  L13 -. start/read .-> S8
+  L14(["r6 = r_v8_6"])
+  L14 -. start/read .-> S9
+  L15(["r5 = r_v9_1"])
+  L15 -. start/read .-> S5
+  L16(["r5 = r_v9_2"])
+  L16 -. start/read .-> S7
+  L17(["r5 = r_v9_3"])
+  L17 -. start/read .-> S8
+  L18(["r5 = r_v9_4"])
+  L18 -. start/read .-> S9
+  L19(["r4 = r_v10_1"])
+  L19 -. start/read .-> S7

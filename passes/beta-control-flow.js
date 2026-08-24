@@ -130,7 +130,8 @@ function collectRegisterOverflowSlots(node, slots, edits = null, slotNames = nul
             error = "RegisterOverflow appears outside a proven static numeric slot access";
             return;
         }
-        for (const [key, value] of Object.entries(current)) {
+        for (const key of Object.keys(current)) {
+            const value = current[key];
             if (key === "loc" || key === "range") continue;
             if (Array.isArray(value)) {
                 for (const child of value) visit(child);

@@ -88,7 +88,8 @@ function findRegisterOverflowBinding(vmFunction) {
             indices.add(index);
             return;
         }
-        for (const [key, value] of Object.entries(node)) {
+        for (const key of Object.keys(node)) {
+            const value = node[key];
             if (key === "loc" || key === "range") continue;
             if (Array.isArray(value)) {
                 for (const child of value) walk(child, node, key);
@@ -132,7 +133,8 @@ function hasShadowingDeclaration(node, candidateNames, candidateDeclaration) {
             }
         }
     }
-    for (const [key, value] of Object.entries(node)) {
+    for (const key of Object.keys(node)) {
+        const value = node[key];
         if (key === "loc" || key === "range") continue;
         if (Array.isArray(value)) {
             for (const child of value) if (hasShadowingDeclaration(child, candidateNames, candidateDeclaration)) return true;
@@ -178,7 +180,8 @@ function analyzeRegisterNamingScope(node, candidateNames, candidateDeclaration, 
         }
     }
 
-    for (const [key, value] of Object.entries(node)) {
+    for (const key of Object.keys(node)) {
+        const value = node[key];
         if (key === "loc" || key === "range") continue;
         if (Array.isArray(value)) {
             for (const child of value) analyzeRegisterNamingScope(child, candidateNames, candidateDeclaration, shadows, reservedNames, node, key);
@@ -207,7 +210,8 @@ function collectRenameEdits(node, mapping, minOffset, out = [], parent = null, p
         return out;
     }
 
-    for (const [key, value] of Object.entries(node)) {
+    for (const key of Object.keys(node)) {
+        const value = node[key];
         if (key === "loc" || key === "range") continue;
         if (Array.isArray(value)) {
             for (const child of value) collectRenameEdits(child, mapping, minOffset, out, node, key);

@@ -189,7 +189,8 @@ function walkExpression(node, visit) {
     if (!isNode(node)) return;
     if (node.type === "FunctionDeclaration") return;
     visit(node);
-    for (const [key, value] of Object.entries(node)) {
+    for (const key of Object.keys(node)) {
+        const value = node[key];
         if (key === "loc" || key === "range") continue;
         if (Array.isArray(value)) {
             for (const child of value) walkExpression(child, visit);
@@ -369,7 +370,8 @@ function collectUpvalueValueReads(node, out) {
         collectUpvalueValueReads(node.index, out);
         return;
     }
-    for (const [key, value] of Object.entries(node)) {
+    for (const key of Object.keys(node)) {
+        const value = node[key];
         if (key === "loc" || key === "range") continue;
         if (Array.isArray(value)) {
             for (const child of value) collectUpvalueValueReads(child, out);
@@ -686,6 +688,7 @@ function buildOrdinaryRegisterEpochs(functionAnalysis, excludedNames = new Set()
 
     const epochByDefinitionId = new Map();
     const epochs = [];
+    const epochLifetimeByDefinitionId = new Map((functionAnalysis.definitionLifetimes || []).map(item => [item.definitionId, item]));
     for (const [name, groups] of byRegister) {
         groups.sort((left, right) => {
             for (let i = 0; i < left.first.length; i++) {
@@ -697,7 +700,7 @@ function buildOrdinaryRegisterEpochs(functionAnalysis, excludedNames = new Set()
             const items = groups[index].items;
             const definitionIds = items.map(item => item.id);
             const lifetimeItems = definitionIds
-                .map(id => functionAnalysis.definitionLifetimes.find(item => item.definitionId === id))
+                .map(id => epochLifetimeByDefinitionId.get(id))
                 .filter(Boolean);
             const epoch = {
                 id: `f${functionAnalysis.id}:${name}:epoch${index + 1}`,

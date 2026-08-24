@@ -1,0 +1,299 @@
+return (function(...)
+    local H = {
+        "WnrtmGgEiGy3WQbtBz==",
+        "W7TAM7k0",
+        "eu8rCKyS52==",
+        "4JbrCOz=",
+        "/Ji+9GnpyKZ7g3i+",
+        "B7MYCUx=",
+        "mL8Nmz==",
+        "eu8hm7F=",
+        "eu8OMA=="
+    }
+    local function E(E)
+        return H[E + (59575)]
+    end
+    for E, v in ipairs({
+        {
+            1,
+            9
+        },
+        {
+            1,
+            7
+        },
+        {
+            8,
+            9
+        }
+    }) do
+        while v[1] < v[2] do
+            H[v[1]], H[v[2]], v[1], v[2] = H[v[2]], H[v[1]], v[1] + (1), v[2] - (1)
+        end
+    end
+    do
+        local E = H
+        local v = type
+        local R = table.concat
+        local b = {
+            ["9"] = 14,
+            h = 44,
+            ["3"] = 52,
+            f = 62,
+            ["/"] = 18,
+            m = 25,
+            q = 5,
+            T = 57,
+            s = 51,
+            A = 48,
+            Q = 3,
+            K = 38,
+            b = 9,
+            ["2"] = 0,
+            F = 56,
+            e = 23,
+            u = 53,
+            ["0"] = 43,
+            Z = 33,
+            O = 39,
+            ["6"] = 1,
+            n = 36,
+            V = 11,
+            c = 10,
+            E = 42,
+            i = 12,
+            Y = 45,
+            J = 7,
+            r = 41,
+            k = 13,
+            y = 17,
+            ["1"] = 2,
+            o = 59,
+            t = 40,
+            P = 20,
+            g = 21,
+            B = 26,
+            I = 60,
+            R = 47,
+            W = 29,
+            N = 46,
+            v = 15,
+            S = 37,
+            j = 58,
+            X = 31,
+            z = 16,
+            ["5"] = 30,
+            U = 55,
+            C = 27,
+            ["4"] = 28,
+            l = 19,
+            ["8"] = 61,
+            w = 32,
+            ["7"] = 22,
+            d = 49,
+            a = 34,
+            ["+"] = 50,
+            M = 24,
+            H = 63,
+            x = 8,
+            L = 6,
+            D = 35,
+            p = 54,
+            G = 4
+        }
+        local Z = string.char
+        local i = math.floor
+        local A = string.sub
+        local d = table.insert
+        local h = string.len
+        for H = 1, #E, 1 do
+            local l = E[H]
+            if v(l) == "string" then
+                local v = h(l)
+                local L = {}
+                local n = 1
+                local D = 0
+                local s = 0
+                while n <= v do
+                    local H = A(l, n, n)
+                    local E = b[H]
+                    if E then
+                        D = D + E * (64) ^ ((3) - s)
+                        s = s + (1)
+                        if s == 4 then
+                            s = 0
+                            local H = i(D / (65536))
+                            local E = i((D % (65536)) / (256))
+                            local v = D % (256)
+                            d(L, Z(H, E, v))
+                            D = 0
+                        end
+                    elseif H == "=" then
+                        d(L, Z(i(D / (65536))))
+                        if n >= v or A(l, n + (1), n + (1)) ~= "=" then
+                            d(L, Z(i((D % (65536)) / (256))))
+                        end
+                        break
+                    end
+                    n = n + (1)
+                end
+                E[H] = R(L)
+            end
+        end
+    end
+    return (function(H, R, b, Z, i, A, d, u, L, D, h, z, s, v, n, l, g)
+        n, u, v, D, l, s, g, L, h, z = 0, function(H, E)
+            local R = D(E)
+            local b = function(b)
+                return v(H, {
+                    b
+                }, E, R)
+            end
+            return b
+        end, function(v, b, Z, i)
+            local D, l, n, d, G, S, t, z, s
+            while v do
+                if v < 5824166 then
+                    if v < 4782478 then
+                        if v < 4193879 then
+                            if v < 841381 then
+                                t = false
+                                v = 15532998
+                                s = D(t)
+                                d = s
+                            else
+                                D = nil
+                                t = E(-59570)
+                                d = E(-59573)
+                                v = H[d]
+                                S = h[n]
+                                d = v(t, z, s, S)
+                                d = {}
+                                n = g(n)
+                                s = nil
+                                v = H[E(-59572)]
+                                z = nil
+                            end
+                        else
+                            n = L()
+                            v = 0
+                            h[n] = v
+                            v = u(4988788, {
+                                n
+                            })
+                            l = b
+                            s = false
+                            D = v
+                            z = D(s)
+                            v = z and 9300368 or 5807822
+                            d = z
+                        end
+                    else
+                        if v < 5659561 then
+                            d = h[Z[1]]
+                            l = b[1]
+                            n = 1
+                            v = d + n
+                            h[Z[1]] = v
+                            v = H[E(-59567)]
+                            d = {
+                                l
+                            }
+                        else
+                            s = true
+                            z = D(s)
+                            v = 9300368
+                            d = z
+                        end
+                    end
+                else
+                    if v < 14822846 then
+                        if v < 9374895 then
+                            if v < 8158276 then
+                                v = d and 9386566 or 2797542
+                            else
+                                z = d
+                                t = true
+                                s = D(t)
+                                d = s
+                                v = s and 30204 or 15532998
+                            end
+                        else
+                            d = E(-59573)
+                            t = E(-59571)
+                            v = H[d]
+                            S = h[n]
+                            d = v(t, z, s, S)
+                            v = 2797542
+                        end
+                    else
+                        if v < 15341142 then
+                            G = 5
+                            S = h[n]
+                            t = S == G
+                            v = 7057717
+                            d = t
+                        else
+                            S = false
+                            t = D(S)
+                            v = t and 7057717 or 15255425
+                            s = d
+                            d = t
+                        end
+                    end
+                end
+            end
+            v = #i
+            return R(d)
+        end, function(H)
+            for E = 1, #H, 1 do
+                l[H[E]] = l[H[E]] + (1)
+            end
+            if b then
+                local v = b(true)
+                local R = i(v)
+                R[E(-59574)], R[E(-59568)], R[E(-59569)] = H, s, function()
+                    return -3863437
+                end
+                return v
+            else
+                return Z({}, {
+                    [E(-59568)] = s,
+                    [E(-59574)] = H,
+                    [E(-59569)] = function()
+                        return -3863437
+                    end
+                })
+            end
+        end, {}, function(H)
+            local E, v = 1, H[1]
+            while v do
+                l[v], E = l[v] - (1), E + (1)
+                if l[v] == 0 then
+                    l[v], h[v] = nil, nil
+                end
+                v = H[E]
+            end
+        end, function(H)
+            l[H] = l[H] - (1)
+            if l[H] == 0 then
+                l[H], h[H] = nil, nil
+            end
+        end, function()
+            n = (1) + n
+            l[n] = 1
+            return n
+        end, {}, function(H, E)
+            local R = D(E)
+            local b = function(...)
+                return v(H, {
+                    ...
+                }, E, R)
+            end
+            return b
+        end
+        return (z(4195707, {}))(R(d))
+    end)(getfenv and getfenv() or _ENV, unpack or table[E(-59566)], newproxy, setmetatable, getmetatable, select, {
+        ...
+    })
+end)(...)

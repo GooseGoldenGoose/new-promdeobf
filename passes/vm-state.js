@@ -77,7 +77,8 @@ function findVmFunction(ast) {
             }
         }
 
-        for (const [key, value] of Object.entries(node)) {
+        for (const key of Object.keys(node)) {
+            const value = node[key];
             if (key === "loc" || key === "range") continue;
             if (Array.isArray(value)) {
                 for (const child of value) walk(child);
@@ -133,7 +134,8 @@ function findRootEntry(ast) {
             }
         }
 
-        for (const [key, value] of Object.entries(node)) {
+        for (const key of Object.keys(node)) {
+            const value = node[key];
             if (key === "loc" || key === "range") continue;
             if (Array.isArray(value)) {
                 for (const child of value) walk(child, node, false);
@@ -161,7 +163,8 @@ function findStateWhile(vmFunction, stateName) {
             return;
         }
 
-        for (const [key, value] of Object.entries(node)) {
+        for (const key of Object.keys(node)) {
+            const value = node[key];
             if (key === "loc" || key === "range") continue;
             if (Array.isArray(value)) {
                 for (const child of value) walk(child);
@@ -275,7 +278,8 @@ function collectClosureEntryInfo(root) {
             if (entryId !== null) entries.push({ entryId, factory: node.base.name, call: node });
             else unsupported.push({ factory: node.base.name, call: node, entryNode: args[0] || null });
         }
-        for (const [key, value] of Object.entries(node)) {
+        for (const key of Object.keys(node)) {
+            const value = node[key];
             if (key === "loc" || key === "range") continue;
             if (Array.isArray(value)) for (const child of value) walk(child);
             else if (isNode(value)) walk(value);
@@ -571,7 +575,8 @@ function collectClosureEntryEdits(node, stateMap, out = []) {
             out.push({ start: entryNode.range[0], end: entryNode.range[1], text: String(newId) });
         }
     }
-    for (const [key, value] of Object.entries(node)) {
+    for (const key of Object.keys(node)) {
+        const value = node[key];
         if (key === "loc" || key === "range") continue;
         if (Array.isArray(value)) {
             for (const child of value) collectClosureEntryEdits(child, stateMap, out);

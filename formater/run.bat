@@ -1,0 +1,1 @@
+luau-format.exe input.txt --luraph --output=out.txt

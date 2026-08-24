@@ -51,6 +51,7 @@ assert((function()
     end
     return foo()()
 end)() == 1)
+print('o')
 assert((function()
     foo = function()
         local a = 1
@@ -62,6 +63,7 @@ assert((function()
     end
     return foo()()
 end)() == 2)
+print('l')
 assert((function()
     foo = function()
         local a = 1
@@ -72,6 +74,7 @@ assert((function()
     end
     return foo()
 end)() == 2)
+print('d')
 assert((function()
     local t = {
         f = 5
@@ -83,6 +86,7 @@ assert((function()
     end
     return t:get()
 end)() == 5)
+print('f')
 assert((function()
     foo = function()
         local t = {

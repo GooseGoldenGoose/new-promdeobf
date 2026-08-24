@@ -284,29 +284,34 @@ Known separate presentation issue: latest sixzens final CF still had two live `l
 
 ## Performance
 
-Commit:
-`2a55d22 Optimize beta control-flow hot paths`
+Current optimized pipeline keeps proof/fail-closed behavior unchanged. Main speedups:
 
-Main improvements:
+- early-terminating AST queries and cheaper `Object.keys` traversal in hot walkers
+- cached beta lifetime statement read/write analysis and sparse reaching snapshots
+- indexed VM lifetime lookup instead of repeated linear scans
+- one reusable numeric collator for beta epoch ordering
+- large beta-upvalue parse cache to avoid cache thrash on 6k+ operation files
+- structural parser mode for beta/beta-CF (`ranges` only; no comments/scope/locations)
+- one-pass captured storage-use indexing
+- optional fast normal->beta-CF handoff that skips diagnostic-only VM binding analysis and avoids rereading/reparsing the normal output
 
-- early-terminating AST walkers for queries whose answer is already proven
-- one-pass captured storage-use indexing in beta-upvalues instead of rescanning every operation for every captured cell/alias
-- fail-closed proof logic unchanged
-
-Sample 63 benchmark on the same working tree:
+Sample 63 measured on the same machine after this pass:
 
 ```text
-before: 2605.8 ms average
-after:   945.1 ms average
+normal:  ~688 ms -> ~558 ms
+beta:    ~607 ms -> ~361-378 ms
+beta-CF: ~917 ms -> ~603-626 ms
 ```
 
-About 63.7% faster.
+The earlier unoptimized beta-CF baseline was ~2606 ms, so cumulative improvement is substantially larger.
 
 Safety validation:
 
-- 12/12 focused suites pass
-- 1-63 beta-CF regeneration passes
-- 63/63 final CF outputs byte-for-byte identical to pre-optimization output
+- all 12 focused regression suites pass
+- all 63 numeric fixtures pass normal + beta + beta-CF generation
+- 189/189 normal/beta/CF outputs were byte-for-byte identical to the frozen pre-optimization baseline
+- combined `tools/deobfuscate-beta-control-flow.js` path passes all 63 numeric fixtures; both generated normal and beta-CF outputs match that frozen baseline byte-for-byte
+- sample 36 known repeat-source semantic regression is unchanged and remains a separate correctness issue
 
 ## Important Recent Commits
 

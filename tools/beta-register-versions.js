@@ -1,6 +1,6 @@
 const fs = require("fs");
 const path = require("path");
-const { parseLua } = require("../main");
+const { parseLuaStructural } = require("../main");
 const { versionVmBlockRegisters } = require("../passes/beta-register-versions");
 
 function defaultOutputPath(inputPath) {
@@ -15,13 +15,13 @@ function main() {
     const inputPath = path.resolve(inputArg);
     const outputPath = path.resolve(process.argv[3] || defaultOutputPath(inputPath));
     const source = fs.readFileSync(inputPath, "utf8");
-    const ast = parseLua(source, inputPath);
+    const ast = parseLuaStructural(source, inputPath);
     const result = versionVmBlockRegisters(source, ast);
     if (!result.found || !result.applied) {
         throw new Error(result.reason || "Beta register versioning did not apply");
     }
 
-    parseLua(result.source, `${outputPath} <beta register versions>`);
+    parseLuaStructural(result.source, `${outputPath} <beta register versions>`);
     fs.mkdirSync(path.dirname(outputPath), { recursive: true });
     fs.writeFileSync(outputPath, result.source, "utf8");
 

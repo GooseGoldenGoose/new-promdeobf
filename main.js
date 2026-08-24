@@ -33,6 +33,21 @@ function parseLua(source, filename = "<input>") {
     }
 }
 
+function parseLuaStructural(source, filename = "<input>") {
+    try {
+        return luaparse.parse(source, {
+            luaVersion: "luau",
+            comments: false,
+            scope: false,
+            locations: false,
+            ranges: true,
+        });
+    } catch (error) {
+        error.message = `Failed to parse ${filename}: ${error.message}`;
+        throw error;
+    }
+}
+
 function loadAst(inputPath = DEFAULT_INPUT) {
     const absoluteInput = path.resolve(inputPath);
     const source = fs.readFileSync(absoluteInput, "utf8");
@@ -54,7 +69,7 @@ function writeSource(source, outputPath = DEFAULT_OUTPUT) {
     return absoluteOutput;
 }
 
-function runDeobfuscator(inputPath = DEFAULT_INPUT, outputPath = DEFAULT_OUTPUT) {
+function runDeobfuscator(inputPath = DEFAULT_INPUT, outputPath = DEFAULT_OUTPUT, options = {}) {
     const loaded = loadAst(inputPath);
 
     const constantArray = inlinePrometheusConstantArray(loaded.source, loaded.ast);
@@ -120,7 +135,10 @@ function runDeobfuscator(inputPath = DEFAULT_INPUT, outputPath = DEFAULT_OUTPUT)
 
     const vmStateAst = splitAssignments.ast || parseLua(splitAssignments.source, `${inputPath} <before VM state recovery>`);
     const vmState = recoverVmStateGraph(splitAssignments.source, vmStateAst);
-    const vmBindings = recoverVmBindings(splitAssignments.source, vmStateAst, vmState);
+    const analyzeBindings = options.analyzeBindings !== false;
+    const vmBindings = analyzeBindings
+        ? recoverVmBindings(splitAssignments.source, vmStateAst, vmState)
+        : { found: false, skipped: true, reason: "VM binding diagnostics disabled for fast pipeline handoff" };
     const vmStateApplied = vmState.found && vmState.normalized;
     const normalizedSource = vmStateApplied ? vmState.source : splitAssignments.source;
     const normalizedAst = parseLua(normalizedSource, `${inputPath} <before VM register scheduling>`);
@@ -277,6 +295,7 @@ if (require.main === module) main();
 
 module.exports = {
     parseLua,
+    parseLuaStructural,
     loadAst,
     writeAst,
     writeSource,

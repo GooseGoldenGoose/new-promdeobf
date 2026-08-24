@@ -1,6 +1,6 @@
 const fs = require("fs");
 const path = require("path");
-const { parseLua } = require("../main");
+const { parseLuaStructural } = require("../main");
 const { versionVmBlockRegisters } = require("../passes/beta-register-versions");
 const { solveBetaControlFlow } = require("../passes/beta-control-flow");
 
@@ -9,11 +9,8 @@ function defaultOutputPath(inputPath) {
     return path.join(parsed.dir, `${parsed.name}.beta.cf${parsed.ext || ".lua"}`);
 }
 
-function generateBetaControlFlow(inputPath, outputPath = null) {
-    const resolvedInput = path.resolve(inputPath);
-    const resolvedOutput = path.resolve(outputPath || defaultOutputPath(resolvedInput));
-    const source = fs.readFileSync(resolvedInput, "utf8");
-    const ast = parseLua(source, resolvedInput);
+function generateBetaControlFlowFromSource(source, ast, outputPath) {
+    const resolvedOutput = path.resolve(outputPath);
     const beta = versionVmBlockRegisters(source, ast);
     if (!beta.found || !beta.applied) {
         throw new Error(beta.reason || "Beta register analysis did not apply");
@@ -22,10 +19,18 @@ function generateBetaControlFlow(inputPath, outputPath = null) {
     const controlFlow = solveBetaControlFlow(ast, beta);
     if (!controlFlow.applied) throw new Error(controlFlow.reason || "Beta control-flow solving did not apply");
 
-    parseLua(controlFlow.source, `${resolvedOutput} <beta control flow>`);
+    parseLuaStructural(controlFlow.source, `${resolvedOutput} <beta control flow>`);
     fs.mkdirSync(path.dirname(resolvedOutput), { recursive: true });
     fs.writeFileSync(resolvedOutput, controlFlow.source, "utf8");
     return { beta, controlFlow, outputPath: resolvedOutput };
+}
+
+function generateBetaControlFlow(inputPath, outputPath = null) {
+    const resolvedInput = path.resolve(inputPath);
+    const resolvedOutput = path.resolve(outputPath || defaultOutputPath(resolvedInput));
+    const source = fs.readFileSync(resolvedInput, "utf8");
+    const ast = parseLuaStructural(source, resolvedInput);
+    return generateBetaControlFlowFromSource(source, ast, resolvedOutput);
 }
 
 function main() {
@@ -64,5 +69,6 @@ if (require.main === module) main();
 
 module.exports = {
     defaultOutputPath,
+    generateBetaControlFlowFromSource,
     generateBetaControlFlow,
 };

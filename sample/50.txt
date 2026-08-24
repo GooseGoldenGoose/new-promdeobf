@@ -1,0 +1,229 @@
+return (function(...)
+    local E = {
+        "V1OHcX4FvU==",
+        "V1ODlK+=",
+        "dK/Y8VIxBpi3BVt2",
+        "N9iHc6B=",
+        "sKS32Kbj",
+        "lK13s9kTNXp3lKE7",
+        "sXEDRKB=",
+        "V1O623=="
+    }
+    for B, V in ipairs({
+        {
+            1,
+            8
+        },
+        {
+            1,
+            6
+        },
+        {
+            7,
+            8
+        }
+    }) do
+        while V[1] < V[2] do
+            E[V[1]], E[V[2]], V[1], V[2] = E[V[2]], E[V[1]], V[1] + (1), V[2] - (1)
+        end
+    end
+    local function B(B)
+        return E[B - (38805)]
+    end
+    do
+        local B = type
+        local V = math.floor
+        local J = E
+        local Y = string.len
+        local G = {
+            v = 30,
+            w = 58,
+            i = 9,
+            H = 41,
+            X = 38,
+            O = 61,
+            u = 10,
+            G = 32,
+            m = 49,
+            M = 63,
+            a = 35,
+            T = 45,
+            ["0"] = 8,
+            j = 43,
+            ["/"] = 33,
+            z = 62,
+            ["3"] = 48,
+            y = 42,
+            R = 26,
+            x = 51,
+            B = 16,
+            g = 2,
+            r = 4,
+            K = 22,
+            N = 28,
+            Q = 20,
+            ["2"] = 24,
+            ["7"] = 52,
+            C = 46,
+            e = 11,
+            b = 13,
+            ["5"] = 59,
+            V = 23,
+            k = 36,
+            J = 40,
+            n = 60,
+            Z = 55,
+            L = 34,
+            f = 31,
+            A = 15,
+            ["6"] = 39,
+            ["4"] = 17,
+            ["+"] = 56,
+            t = 1,
+            D = 44,
+            U = 0,
+            I = 12,
+            S = 57,
+            o = 3,
+            F = 37,
+            ["8"] = 14,
+            d = 18,
+            E = 5,
+            P = 19,
+            h = 47,
+            p = 21,
+            ["1"] = 53,
+            s = 29,
+            c = 27,
+            W = 6,
+            q = 54,
+            Y = 50,
+            l = 25,
+            ["9"] = 7
+        }
+        local y = table.insert
+        local A = string.char
+        local q = string.sub
+        local X = table.concat
+        for E = 1, #J, 1 do
+            local f = J[E]
+            if B(f) == "string" then
+                local B = Y(f)
+                local l = {}
+                local d = 1
+                local C = 0
+                local o = 0
+                while d <= B do
+                    local E = q(f, d, d)
+                    local J = G[E]
+                    if J then
+                        C = C + J * (64) ^ ((3) - o)
+                        o = o + (1)
+                        if o == 4 then
+                            o = 0
+                            local E = V(C / (65536))
+                            local B = V((C % (65536)) / (256))
+                            local J = C % (256)
+                            y(l, A(E, B, J))
+                            C = 0
+                        end
+                    elseif E == "=" then
+                        y(l, A(V(C / (65536))))
+                        if d >= B or q(f, d + (1), d + (1)) ~= "=" then
+                            y(l, A(V((C % (65536)) / (256))))
+                        end
+                        break
+                    end
+                    d = d + (1)
+                end
+                J[E] = X(l)
+            end
+        end
+    end
+    return (function(E, J, Y, G, y, A, q, N, o, d, C, X, f, r, l, V)
+        d, X, V, r, f, N, o, l, C = 0, {}, function(V, Y, G, y)
+            local C, f, q, d, X, l
+            while V do
+                if V < 8466379 then
+                    if V < 6183743 then
+                        d = B(38810)
+                        f = B(38807)
+                        l = B(38809)
+                        q = E[f]
+                        C = E[d]
+                        f = q(l, C)
+                        q = {}
+                        V = E[B(38806)]
+                    else
+                        V = 13817001
+                    end
+                else
+                    if V < 10225081 then
+                        q = B(38810)
+                        X = Y
+                        f = B(38810)
+                        V = true
+                        E[q] = V
+                        V = 7992287
+                        q = E[f]
+                    else
+                        f = B(38810)
+                        q = E[f]
+                        V = q and 5848613 or 7992287
+                    end
+                end
+            end
+            V = #y
+            return J(q)
+        end, function(E, B)
+            local J = C(B)
+            local Y = function(...)
+                return V(E, {
+                    ...
+                }, B, J)
+            end
+            return Y
+        end, {}, function(E)
+            f[E] = f[E] - (1)
+            if 0 == f[E] then
+                f[E], X[E] = nil, nil
+            end
+        end, function(E)
+            local B, V = 1, E[1]
+            while V do
+                f[V], B = f[V] - (1), (1) + B
+                if 0 == f[V] then
+                    f[V], X[V] = nil, nil
+                end
+                V = E[B]
+            end
+        end, function()
+            d = (1) + d
+            f[d] = 1
+            return d
+        end, function(E)
+            for B = 1, #E, 1 do
+                f[E[B]] = f[E[B]] + (1)
+            end
+            if Y then
+                local V = Y(true)
+                local J = y(V)
+                J[B(38812)], J[B(38811)], J[B(38813)] = E, o, function()
+                    return 3940922
+                end
+                return V
+            else
+                return G({}, {
+                    [B(38811)] = o,
+                    [B(38812)] = E,
+                    [B(38813)] = function()
+                        return 3940922
+                    end
+                })
+            end
+        end
+        return (r(9789898, {}))(J(q))
+    end)(getfenv and getfenv() or _ENV, unpack or table[B(38808)], newproxy, setmetatable, getmetatable, select, {
+        ...
+    })
+end)(...)

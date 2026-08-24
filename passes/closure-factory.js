@@ -107,7 +107,8 @@ function findCreateClosureBinding(ast) {
     function walkNode(node) {
         if (!isNode(node)) return;
         if (node.type === "FunctionDeclaration") { walkFunction(node); return; }
-        for (const [key, value] of Object.entries(node)) {
+        for (const key of Object.keys(node)) {
+            const value = node[key];
             if (key === "loc" || key === "range") continue;
             if (Array.isArray(value)) for (const child of value) walkNode(child);
             else if (isNode(value)) walkNode(value);

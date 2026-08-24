@@ -1,7 +1,5 @@
 print("testing language/library basics")
-
 local _G = getfenv()
-
 concat = function(head, ...)
     if select("#", ...) == 0 then
         return tostring(head)
@@ -9,15 +7,12 @@ concat = function(head, ...)
         return tostring(head) .. "," .. concat(...)
     end
 end
-
 local function foo(a, b)
     return b
 end
-
 assert(foo(1) == nil)
 assert(foo(1, 2) == 2)
 assert(foo(1, 2, 3) == 2)
-
 assert((function()
     local a = 1
     foo = function()
@@ -56,6 +51,7 @@ assert((function()
     end
     return foo()()
 end)() == 1)
+print('o')
 assert((function()
     foo = function()
         local a = 1
@@ -67,6 +63,7 @@ assert((function()
     end
     return foo()()
 end)() == 2)
+print('l')
 assert((function()
     foo = function()
         local a = 1
@@ -77,3 +74,30 @@ assert((function()
     end
     return foo()
 end)() == 2)
+print('d')
+assert((function()
+    local t = {
+        f = 5
+    }
+    function t:get()
+        return (function()
+            return self.f
+        end)()
+    end
+    return t:get()
+end)() == 5)
+print('f')
+assert((function()
+    foo = function()
+        local t = {
+            f = 5
+        }
+        function t:get()
+            return function()
+                return self.f
+            end
+        end
+        return t:get()
+    end
+    return foo()()
+end)() == 5)

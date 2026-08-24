@@ -6,7 +6,19 @@ function isNode(value) { return value && typeof value === "object" && typeof val
 function isIdentifier(node, name = null) { return node?.type === "Identifier" && (name === null || node.name === name); }
 function numericValue(node) { if (node?.type !== "NumericLiteral") return null; if (typeof node.value === "number") return node.value; const value = Number(String(node.raw ?? "").replace(/[()]/g, "")); return Number.isFinite(value) ? value : null; }
 function stringValue(node) { if (node?.type !== "StringLiteral") return null; const raw = String(node.raw ?? ""); if (raw.length < 2) return null; const quote = raw[0]; if ((quote !== '"' && quote !== "'") || raw[raw.length - 1] !== quote) return null; try { if (quote === '"') return JSON.parse(raw); } catch {} return raw.slice(1, -1).replace(/\\(['"\\])/g, "$1").replace(/\\n/g, "\n").replace(/\\r/g, "\r").replace(/\\t/g, "\t"); }
-function walk(node, visitor) { if (!isNode(node)) return; visitor(node); for (const [key, value] of Object.entries(node)) { if (key === "loc" || key === "range") continue; if (Array.isArray(value)) for (const child of value) walk(child, visitor); else if (isNode(value)) walk(value, visitor); } }
+function walk(node, visitor) {
+    if (!isNode(node)) return;
+    visitor(node);
+    for (const key of Object.keys(node)) {
+        if (key === "loc" || key === "range") continue;
+        const value = node[key];
+        if (Array.isArray(value)) {
+            for (const child of value) walk(child, visitor);
+        } else if (isNode(value)) {
+            walk(value, visitor);
+        }
+    }
+}
 function collectIdentifierNames(node) { const names = new Set(); walk(node, child => { if (isIdentifier(child)) names.add(child.name); }); return names; }
 function indexBaseName(node) { return node?.type === "IndexExpression" && isIdentifier(node.base) ? node.base.name : null; }
 function indexStringKey(node) { return node?.type === "IndexExpression" ? stringValue(node.index) : null; }

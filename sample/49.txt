@@ -1,0 +1,289 @@
+return (function(...)
+    local L = {
+        "84+v5x==",
+        "jrB=",
+        "S3==",
+        "Lf1ojv3=",
+        "5rIIShu=",
+        "Ohbx5hH/",
+        "84+Behu=",
+        "84+ojFwpUa==",
+        "wVp0eMESdE1SEVE8EML="
+    }
+    local function U(U)
+        return L[U - (13506)]
+    end
+    for U, Q in ipairs({
+        {
+            1,
+            9
+        },
+        {
+            1,
+            3
+        },
+        {
+            4,
+            9
+        }
+    }) do
+        while Q[1] < Q[2] do
+            L[Q[1]], L[Q[2]], Q[1], Q[2] = L[Q[2]], L[Q[1]], Q[1] + (1), Q[2] - (1)
+        end
+    end
+    do
+        local U = {
+            D = 4,
+            i = 46,
+            f = 7,
+            Y = 32,
+            F = 38,
+            y = 15,
+            S = 26,
+            ["6"] = 62,
+            u = 56,
+            ["4"] = 53,
+            t = 63,
+            n = 1,
+            l = 55,
+            G = 35,
+            A = 11,
+            x = 48,
+            P = 42,
+            o = 41,
+            ["5"] = 24,
+            h = 22,
+            g = 52,
+            R = 18,
+            M = 36,
+            q = 59,
+            p = 37,
+            I = 33,
+            H = 13,
+            m = 49,
+            E = 21,
+            ["+"] = 61,
+            ["2"] = 40,
+            ["0"] = 8,
+            O = 29,
+            X = 60,
+            C = 51,
+            d = 19,
+            k = 10,
+            z = 2,
+            w = 17,
+            J = 5,
+            s = 31,
+            W = 3,
+            Q = 45,
+            ["8"] = 23,
+            ["7"] = 34,
+            ["9"] = 12,
+            c = 58,
+            ["/"] = 43,
+            b = 57,
+            N = 47,
+            U = 30,
+            ["1"] = 9,
+            v = 39,
+            r = 54,
+            L = 28,
+            a = 0,
+            e = 25,
+            T = 50,
+            V = 20,
+            ["3"] = 16,
+            B = 44,
+            K = 6,
+            Z = 14,
+            j = 27
+        }
+        local Q = table.insert
+        local W = string.len
+        local p = math.floor
+        local q = L
+        local K = string.char
+        local O = table.concat
+        local V = type
+        local m = string.sub
+        for L = 1, #q, 1 do
+            local N = q[L]
+            if V(N) == "string" then
+                local V = W(N)
+                local P = {}
+                local v = 1
+                local s = 0
+                local G = 0
+                while v <= V do
+                    local L = m(N, v, v)
+                    local W = U[L]
+                    if W then
+                        s = s + W * (64) ^ ((3) - G)
+                        G = G + (1)
+                        if G == 4 then
+                            G = 0
+                            local L = p(s / (65536))
+                            local U = p((s % (65536)) / (256))
+                            local W = s % (256)
+                            Q(P, K(L, U, W))
+                            s = 0
+                        end
+                    elseif L == "=" then
+                        Q(P, K(p(s / (65536))))
+                        if v >= V or m(N, v + (1), v + (1)) ~= "=" then
+                            Q(P, K(p((s % (65536)) / (256))))
+                        end
+                        break
+                    end
+                    v = v + (1)
+                end
+                q[L] = O(P)
+            end
+        end
+    end
+    return (function(L, W, p, q, K, O, V, X, m, G, N, P, Q, v, J, s)
+        m, N, X, v, Q, s, G, P, J = {}, {}, function(L)
+            N[L] = N[L] - (1)
+            if 0 == N[L] then
+                N[L], m[L] = nil, nil
+            end
+        end, 0, function(Q, p, q, K)
+            local o, s, N, k, X, g, J, r, G, V, v, u, m, e, P
+            while Q do
+                if Q < 11419430 then
+                    if Q < 3274683 then
+                        if Q < 1564147 then
+                            k = 2
+                            r = P[k]
+                            Q = 11860649
+                            u = r == v
+                            o = u
+                        else
+                            s = U(13513)
+                            V = {}
+                            Q = L[s]
+                            G = U(13514)
+                            v = nil
+                            s = Q(G, N)
+                            P = nil
+                            Q = L[U(13509)]
+                            N = nil
+                        end
+                    else
+                        if Q < 10461042 then
+                            V = false
+                            s = 2
+                            Q = true
+                            P = U(13511)
+                            N = Q
+                            Q = {
+                                V,
+                                P
+                            }
+                            P = Q
+                            Q = U(13511)
+                            G = s
+                            V = 1
+                            v = Q
+                            s = 1
+                            X = s
+                            s = 0
+                            Q = 13854188
+                            J = X < s
+                            m = p
+                            s = V - X
+                        else
+                            N = V
+                            o = U(13513)
+                            e = U(13512)
+                            Q = L[o]
+                            o = Q(e, g)
+                            Q = 13854188
+                            g = nil
+                        end
+                    end
+                else
+                    if Q < 12258312 then
+                        if Q < 12027330 then
+                            Q = e
+                            Q = 11050205
+                            V = o
+                        else
+                            k = 1
+                            r = P[k]
+                            e = Q
+                            k = false
+                            u = r == k
+                            o = u
+                            Q = u and 797638 or 11860649
+                        end
+                    else
+                        if Q < 14572710 then
+                            g = not J
+                            s = s + X
+                            V = s <= G
+                            V = g and V
+                            g = s >= G
+                            g = J and g
+                            V = g or V
+                            g = 14960167
+                            Q = V and g
+                            V = 2011173
+                            Q = Q or V
+                        else
+                            Q = N and 12049174 or 11050205
+                            V = N
+                            g = s
+                        end
+                    end
+                end
+            end
+            Q = #K
+            return W(V)
+        end, function(L)
+            for U = 1, #L, 1 do
+                N[L[U]] = N[L[U]] + (1)
+            end
+            if p then
+                local Q = p(true)
+                local W = K(Q)
+                W[U(13508)], W[U(13510)], W[U(13507)] = L, G, function()
+                    return -1533436
+                end
+                return Q
+            else
+                return q({}, {
+                    [U(13510)] = G,
+                    [U(13508)] = L,
+                    [U(13507)] = function()
+                        return -1533436
+                    end
+                })
+            end
+        end, function(L)
+            local U, Q = 1, L[1]
+            while Q do
+                N[Q], U = N[Q] - (1), U + (1)
+                if 0 == N[Q] then
+                    N[Q], m[Q] = nil, nil
+                end
+                Q = L[U]
+            end
+        end, function()
+            v = (1) + v
+            N[v] = 1
+            return v
+        end, function(L, U)
+            local W = s(U)
+            local p = function(...)
+                return Q(L, {
+                    ...
+                }, U, W)
+            end
+            return p
+        end
+        return (J(7284605, {}))(W(V))
+    end)(getfenv and getfenv() or _ENV, unpack or table[U(13515)], newproxy, setmetatable, getmetatable, select, {
+        ...
+    })
+end)(...)

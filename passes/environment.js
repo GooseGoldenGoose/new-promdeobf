@@ -87,7 +87,8 @@ function findEnvironmentBinding(ast) {
             }
         }
 
-        for (const [key, value] of Object.entries(node)) {
+        for (const key of Object.keys(node)) {
+            const value = node[key];
             if (["loc", "range"].includes(key)) continue;
             if (Array.isArray(value)) {
                 for (const child of value) walk(child);
@@ -214,7 +215,8 @@ function renameFunctionParameterBinding(source, candidate, replacementName = "_e
                 walkFunction(node, state, false);
                 return;
             default:
-                for (const [key, value] of Object.entries(node)) {
+                for (const key of Object.keys(node)) {
+                    const value = node[key];
                     if (["loc", "range", "identifier", "variables", "parameters", "key"].includes(key)) continue;
                     if (Array.isArray(value)) {
                         for (const child of value) walkExpression(child, state);

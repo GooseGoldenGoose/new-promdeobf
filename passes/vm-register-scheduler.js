@@ -82,7 +82,8 @@ function collectExpressionReads(node, out, overflowName) {
         collectExpressionReads(node.value, out, overflowName);
         return;
     }
-    for (const [key, value] of Object.entries(node)) {
+    for (const key of Object.keys(node)) {
+        const value = node[key];
         if (key === "loc" || key === "range") continue;
         if (Array.isArray(value)) {
             for (const child of value) collectExpressionReads(child, out, overflowName);
@@ -609,7 +610,8 @@ function findStateWhile(vmFunction, stateName) {
             found = node;
             return;
         }
-        for (const [key, value] of Object.entries(node)) {
+        for (const key of Object.keys(node)) {
+            const value = node[key];
             if (key === "loc" || key === "range") continue;
             if (Array.isArray(value)) {
                 for (const child of value) walk(child);

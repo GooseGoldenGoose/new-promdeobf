@@ -97,7 +97,8 @@ function collectReadNames(node, candidateNames, out = [], parent = null, parentK
         if (!isProperty && candidateNames.has(node.name)) out.push(node.name);
         return out;
     }
-    for (const [key, value] of Object.entries(node)) {
+    for (const key of Object.keys(node)) {
+        const value = node[key];
         if (key === "loc" || key === "range") continue;
         if (Array.isArray(value)) {
             for (const child of value) collectReadNames(child, candidateNames, out, node, key);
@@ -172,6 +173,20 @@ function analyzeBetaRegisterLifetimes({
 }) {
     const valueNames = new Set(candidateNames);
     const ordinaryNames = new Set([...candidateNames].filter(name => name !== stateName && name !== returnName));
+    const statementReadCache = new Map([[valueNames, new WeakMap()], [ordinaryNames, new WeakMap()]]);
+    const statementWriteCache = new Map([[valueNames, new WeakMap()], [ordinaryNames, new WeakMap()]]);
+    function cachedStatementReadNames(statement, names) {
+        const cache = statementReadCache.get(names);
+        if (!cache) return statementReadNames(statement, names);
+        if (!cache.has(statement)) cache.set(statement, statementReadNames(statement, names));
+        return cache.get(statement);
+    }
+    function cachedStatementWrittenNames(statement, names) {
+        const cache = statementWriteCache.get(names);
+        if (!cache) return statementWrittenNames(statement, names);
+        if (!cache.has(statement)) cache.set(statement, statementWrittenNames(statement, names));
+        return cache.get(statement);
+    }
     const blockByState = new Map(blocks.map(block => [block.stateId, block]));
     const predecessors = new Map(blocks.map(block => [block.stateId, []]));
     const cfgComplete = blocks.every(block =>
@@ -199,7 +214,7 @@ function analyzeBetaRegisterLifetimes({
         for (let statementIndex = 0; statementIndex < block.statements.length; statementIndex++) {
             const statement = block.statements[statementIndex];
             const plan = block.plans.get(statement);
-            const writes = statementWrittenNames(statement, valueNames);
+            const writes = cachedStatementWrittenNames(statement, valueNames);
             if (!writes.length) continue;
 
             for (const name of writes) {
@@ -252,7 +267,7 @@ function analyzeBetaRegisterLifetimes({
     function transfer(block, incoming) {
         const current = cloneSetMap(incoming);
         for (const statement of block.statements) {
-            for (const name of statementWrittenNames(statement, valueNames)) {
+            for (const name of cachedStatementWrittenNames(statement, valueNames)) {
                 const definition = definitionByStatementAndName.get(definitionKey(statement, name));
                 if (definition) current.set(name, new Set([definition.id]));
             }
@@ -306,9 +321,15 @@ function analyzeBetaRegisterLifetimes({
         const current = cloneSetMap(inDefinitions.get(block.stateId) || new Map());
         for (let statementIndex = 0; statementIndex < block.statements.length; statementIndex++) {
             const statement = block.statements[statementIndex];
-            const before = cloneSetMap(current);
+            const reads = cachedStatementReadNames(statement, valueNames);
+            const writes = cachedStatementWrittenNames(statement, valueNames);
+            const before = new Map();
+            for (const name of new Set([...reads, ...writes])) {
+                const definitions = current.get(name);
+                if (definitions) before.set(name, new Set(definitions));
+            }
             reachingBeforeStatement.set(statement, before);
-            for (const name of statementReadNames(statement, valueNames)) {
+            for (const name of reads) {
                 const reaching = new Set(before.get(name) || []);
                 const use = { blockState: block.stateId, statementIndex, statement, name, reachingDefinitionIds: reaching };
                 uses.push(use);
@@ -317,7 +338,7 @@ function analyzeBetaRegisterLifetimes({
                     if (definition) definition.useCount++;
                 }
             }
-            for (const name of statementWrittenNames(statement, valueNames)) {
+            for (const name of writes) {
                 const definition = definitionByStatementAndName.get(definitionKey(statement, name));
                 if (definition) current.set(name, new Set([definition.id]));
             }
@@ -392,10 +413,10 @@ function analyzeBetaRegisterLifetimes({
         const usedBeforeDef = new Set();
         const defined = new Set();
         for (const statement of block.statements) {
-            for (const name of statementReadNames(statement, ordinaryNames)) {
+            for (const name of cachedStatementReadNames(statement, ordinaryNames)) {
                 if (!defined.has(name)) usedBeforeDef.add(name);
             }
-            for (const name of statementWrittenNames(statement, ordinaryNames)) defined.add(name);
+            for (const name of cachedStatementWrittenNames(statement, ordinaryNames)) defined.add(name);
         }
         blockUse.set(block.stateId, usedBeforeDef);
         blockDef.set(block.stateId, defined);
@@ -483,7 +504,7 @@ function analyzeBetaRegisterLifetimes({
         if (!definition.supported) continue;
         const deps = new Set();
         const before = reachingBeforeStatement.get(definition.statement) || new Map();
-        for (const readName of statementReadNames(definition.statement, valueNames)) {
+        for (const readName of cachedStatementReadNames(definition.statement, valueNames)) {
             const reaching = new Set(before.get(readName) || []);
             if (!reaching.size) continue;
             if ([...reaching].some(id => unknownDefinitionIds.has(id))) continue;
@@ -618,7 +639,7 @@ function analyzeBetaRegisterLifetimes({
             const plan = block.plans.get(statement);
             if (plan?.kind !== "preserved" || plan.originalName !== returnName) continue;
             const before = reachingBeforeStatement.get(statement) || new Map();
-            const returnedNames = new Set(statementReadNames(statement, ordinaryNames));
+            const returnedNames = new Set(cachedStatementReadNames(statement, ordinaryNames));
             for (const name of returnedNames) {
                 const ids = new Set(before.get(name) || []);
                 if (!ids.size || [...ids].some(id => unknownDefinitionIds.has(id))) continue;

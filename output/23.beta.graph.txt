@@ -1,0 +1,329 @@
+BETA REGISTER FLOW GRAPH
+entries: 1, 2, 5, 6, 9
+states: 11
+epochs: 42
+analysis: defs=100, uses=76, provenance=66
+analysis: merged=10, cleanups=1/1
+
+CFG
+  ENTRY -> S1
+  ENTRY -> S2
+  ENTRY -> S5
+  ENTRY -> S6
+  ENTRY -> S9
+  S1 -> STOP
+  S2 -> S3 [true]
+  S2 -> S4 [false]
+  S3 -> STOP
+  S4 -> STOP
+  S5 -> STOP
+  S6 -> S7 [true]
+  S6 -> S8 [false]
+  S7 -> S8
+  S8 -> STOP
+  S9 -> S10 [true]
+  S9 -> S11 [false]
+  S10 -> S11
+  S11 -> STOP
+
+REGISTER EPOCHS
+  r8 => r_v3_1
+    START S1#3: local r_v3_1 = "testing language/library basics"
+    READ S1#4: local r_v1_2 = r_v2_1(r_v3_1)
+  r8 => r_v3_2
+    START S1#8: local r_v3_2 = r_v1_4
+  r8 => r_v3_4
+    START S2#4: local r_v3_4 = { select(2, unpack(args)) }
+    READ S2#6: r_v4_2 = r_v1_12(r_v5_6, unpack(r_v3_4))
+    READ S4#6: r_v7_8 = r_v8_6(unpack(r_v3_4))
+  r8 => r_v3_5
+    START S5#2: local r_v3_5 = args[2]
+    READ S5#3: ReturnVal = { r_v3_5 }
+  r7 => r_v4_1
+    START S1#13: local r_v4_1 = r_v1_6
+    READ S1#17: local r_v7_1 = r_v4_1(r_v6_1)
+    READ S1#25: local r_v7_2 = r_v4_1(r_v6_3, r_v9_1)
+    READ S1#34: local r_v7_3 = r_v4_1(r_v6_5, r_v9_2, r_v10_1)
+    KILL S1#54: r_v4_1 = nil
+  r7 => r_v4_2
+    START S2#2: local r_v4_2 = "select"
+    READ S2#3: local r_v1_12 = _env[r_v4_2]
+    MUTATE S2#6: r_v4_2 = r_v1_12(r_v5_6, unpack(r_v3_4))
+    READ S2#8: local r_v2_4 = r_v4_2 == r_v1_13
+  r7 => r_v4_3
+    START S4#1: local r_v4_3 = "tostring"
+    READ S4#2: local r_v1_16 = _env[r_v4_3]
+    MUTATE S4#3: r_v4_3 = r_v1_16(r_v11_2)
+    READ S4#9: local r_v2_6 = r_v4_3 .. r_v1_17
+  r5 => r_v5_1
+    START S1#14: local r_v5_1 = "assert"
+    READ S1#15: local r_v1_7 = _env[r_v5_1]
+    MUTATE S1#20: r_v5_1 = r_v1_7(r_v8_1)
+  r5 => r_v5_2
+    START S1#21: local r_v5_2 = "assert"
+    READ S1#22: local r_v1_8 = _env[r_v5_2]
+    MUTATE S1#28: r_v5_2 = r_v1_8(r_v8_2)
+  r5 => r_v5_3
+    START S1#29: local r_v5_3 = "assert"
+    READ S1#30: local r_v1_9 = _env[r_v5_3]
+    MUTATE S1#37: r_v5_3 = r_v1_9(r_v8_3)
+  r5 => r_v5_4
+    START S1#39: local r_v5_4 = "assert"
+    READ S1#40: local r_v1_10 = _env[r_v5_4]
+    MUTATE S1#44: r_v5_4 = r_v1_10(r_v8_4)
+  r5 => r_v5_5
+    START S1#46: local r_v5_5 = "assert"
+    READ S1#47: local r_v1_11 = _env[r_v5_5]
+    MUTATE S1#51: r_v5_5 = r_v1_11(r_v8_5)
+  r5 => r_v5_6
+    START S2#5: local r_v5_6 = "#"
+    READ S2#6: r_v4_2 = r_v1_12(r_v5_6, unpack(r_v3_4))
+  r5 => r_v5_7
+    START S4#7: local r_v5_7 = ","
+    READ S4#8: local r_v1_17 = r_v5_7 .. r_v7_8
+  r9 => r_v6_1
+    START S1#16: local r_v6_1 = 1
+    READ S1#17: local r_v7_1 = r_v4_1(r_v6_1)
+  r9 => r_v6_3
+    START S1#24: local r_v6_3 = 1
+    READ S1#25: local r_v7_2 = r_v4_1(r_v6_3, r_v9_1)
+  r9 => r_v6_4
+    START S1#26: local r_v6_4 = 2
+    READ S1#27: local r_v8_2 = r_v7_2 == r_v6_4
+  r9 => r_v6_5
+    START S1#33: local r_v6_5 = 1
+    READ S1#34: local r_v7_3 = r_v4_1(r_v6_5, r_v9_2, r_v10_1)
+  r9 => r_v6_6
+    START S1#35: local r_v6_6 = 2
+    READ S1#36: local r_v8_3 = r_v7_3 == r_v6_6
+  r9 => r_v6_7
+    START S1#41: local r_v6_7 = r_v7_4()
+    READ S1#43: local r_v8_4 = r_v6_7 == r_v7_5
+  r9 => r_v6_8
+    START S1#48: local r_v6_8 = r_v7_6()
+    READ S1#50: local r_v8_5 = r_v6_8 == r_v7_7
+  r2 => r_v7_1
+    START S1#17: local r_v7_1 = r_v4_1(r_v6_1)
+    READ S1#19: local r_v8_1 = r_v7_1 == r_v6_2
+  r2 => r_v7_2
+    START S1#25: local r_v7_2 = r_v4_1(r_v6_3, r_v9_1)
+    READ S1#27: local r_v8_2 = r_v7_2 == r_v6_4
+  r2 => r_v7_3
+    START S1#34: local r_v7_3 = r_v4_1(r_v6_5, r_v9_2, r_v10_1)
+    READ S1#36: local r_v8_3 = r_v7_3 == r_v6_6
+  r2 => r_v7_4
+    START S1#38: local r_v7_4 = createClosure1(6, {})
+    READ S1#41: local r_v6_7 = r_v7_4()
+  r2 => r_v7_5
+    START S1#42: local r_v7_5 = 2
+    READ S1#43: local r_v8_4 = r_v6_7 == r_v7_5
+  r2 => r_v7_6
+    START S1#45: local r_v7_6 = createClosure3(9, {})
+    READ S1#48: local r_v6_8 = r_v7_6()
+  r2 => r_v7_8
+    START S4#4: local r_v7_8 = "concat"
+    READ S4#5: local r_v8_6 = _env[r_v7_8]
+    MUTATE S4#6: r_v7_8 = r_v8_6(unpack(r_v3_4))
+    READ S4#8: local r_v1_17 = r_v5_7 .. r_v7_8
+  r1 => r_v8_1
+    START S1#19: local r_v8_1 = r_v7_1 == r_v6_2
+    READ S1#20: r_v5_1 = r_v1_7(r_v8_1)
+  r1 => r_v8_2
+    START S1#27: local r_v8_2 = r_v7_2 == r_v6_4
+    READ S1#28: r_v5_2 = r_v1_8(r_v8_2)
+  r1 => r_v8_3
+    START S1#36: local r_v8_3 = r_v7_3 == r_v6_6
+    READ S1#37: r_v5_3 = r_v1_9(r_v8_3)
+  r1 => r_v8_4
+    START S1#43: local r_v8_4 = r_v6_7 == r_v7_5
+    READ S1#44: r_v5_4 = r_v1_10(r_v8_4)
+  r1 => r_v8_5
+    START S1#50: local r_v8_5 = r_v6_8 == r_v7_7
+    READ S1#51: r_v5_5 = r_v1_11(r_v8_5)
+  r1 => r_v8_6
+    START S4#5: local r_v8_6 = _env[r_v7_8]
+    READ S4#6: r_v7_8 = r_v8_6(unpack(r_v3_4))
+  r3 => r_v9_1
+    START S1#23: local r_v9_1 = 2
+    READ S1#25: local r_v7_2 = r_v4_1(r_v6_3, r_v9_1)
+  r3 => r_v9_2
+    START S1#32: local r_v9_2 = 2
+    READ S1#34: local r_v7_3 = r_v4_1(r_v6_5, r_v9_2, r_v10_1)
+  r6 => r_v10_1
+    START S1#31: local r_v10_1 = 3
+    READ S1#34: local r_v7_3 = r_v4_1(r_v6_5, r_v9_2, r_v10_1)
+  r4 => r_v11_1
+    START S1#52: local r_v11_1 = args
+  r4 => r_v11_2
+    START S2#1: local r_v11_2 = args[1]
+    READ S3#3: local r_v1_15 = { r_v2_5(r_v11_2) }
+    READ S4#3: r_v4_3 = r_v1_16(r_v11_2)
+  r4 => r_v11_3
+    START S5#1: local r_v11_3 = args[1]
+  r4 => r_v11_4
+    START S6#2: local r_v11_4 = r_v2_7
+    READ S6#3: state = r_v11_4 and 7 or 8
+    MUTATE S7#2: r_v11_4 = r_v2_8
+    READ S8#1: ReturnVal = { r_v11_4 }
+  r4 => r_v11_5
+    START S9#2: local r_v11_5 = r_v2_9
+    READ S9#3: state = r_v11_5 and 10 or 11
+    MUTATE S10#2: r_v11_5 = r_v2_10
+    READ S11#1: ReturnVal = { r_v11_5 }
+
+STATES
+  STATE 1 [ENTRY, STOP]
+    predecessors: none
+    successors: STOP
+    transition: nil
+    #1 version-define: local r_v1_1 = "print"
+    #2 version-define reads=[r_v1_1]: local r_v2_1 = _env[r_v1_1]
+    #3 epoch-start: local r_v3_1 = "testing language/library basics"
+    #4 version-define reads=[r_v2_1, r_v3_1]: local r_v1_2 = r_v2_1(r_v3_1)
+    #5 version-define: local r_v1_3 = "getfenv"
+    #6 version-define reads=[r_v1_3]: local r_v2_2 = _env[r_v1_3]
+    #7 version-define reads=[r_v2_2]: local r_v1_4 = r_v2_2()
+    #8 epoch-start reads=[r_v1_4]: local r_v3_2 = r_v1_4
+    #9 version-define: local r_v2_3 = createClosure(2, {})
+    #10 version-define: local r_v1_5 = "concat"
+    #11 effect-write reads=[r_v1_5, r_v2_3]: _env[r_v1_5] = r_v2_3
+    #12 version-define: local r_v1_6 = createClosure3(5, {})
+    #13 epoch-start reads=[r_v1_6]: local r_v4_1 = r_v1_6
+    #14 epoch-start: local r_v5_1 = "assert"
+    #15 version-define reads=[r_v5_1]: local r_v1_7 = _env[r_v5_1]
+    #16 epoch-start: local r_v6_1 = 1
+    #17 epoch-start reads=[r_v4_1, r_v6_1]: local r_v7_1 = r_v4_1(r_v6_1)
+    #18 version-define: local r_v6_2 = nil
+    #19 epoch-start reads=[r_v7_1, r_v6_2]: local r_v8_1 = r_v7_1 == r_v6_2
+    #20 epoch-mutate reads=[r_v1_7, r_v8_1]: r_v5_1 = r_v1_7(r_v8_1)
+    #21 epoch-start: local r_v5_2 = "assert"
+    #22 version-define reads=[r_v5_2]: local r_v1_8 = _env[r_v5_2]
+    #23 epoch-start: local r_v9_1 = 2
+    #24 epoch-start: local r_v6_3 = 1
+    #25 epoch-start reads=[r_v4_1, r_v6_3, r_v9_1]: local r_v7_2 = r_v4_1(r_v6_3, r_v9_1)
+    #26 epoch-start: local r_v6_4 = 2
+    #27 epoch-start reads=[r_v7_2, r_v6_4]: local r_v8_2 = r_v7_2 == r_v6_4
+    #28 epoch-mutate reads=[r_v1_8, r_v8_2]: r_v5_2 = r_v1_8(r_v8_2)
+    #29 epoch-start: local r_v5_3 = "assert"
+    #30 version-define reads=[r_v5_3]: local r_v1_9 = _env[r_v5_3]
+    #31 epoch-start: local r_v10_1 = 3
+    #32 epoch-start: local r_v9_2 = 2
+    #33 epoch-start: local r_v6_5 = 1
+    #34 epoch-start reads=[r_v4_1, r_v6_5, r_v9_2, r_v10_1]: local r_v7_3 = r_v4_1(r_v6_5, r_v9_2, r_v10_1)
+    #35 epoch-start: local r_v6_6 = 2
+    #36 epoch-start reads=[r_v7_3, r_v6_6]: local r_v8_3 = r_v7_3 == r_v6_6
+    #37 epoch-mutate reads=[r_v1_9, r_v8_3]: r_v5_3 = r_v1_9(r_v8_3)
+    #38 epoch-start: local r_v7_4 = createClosure1(6, {})
+    #39 epoch-start: local r_v5_4 = "assert"
+    #40 version-define reads=[r_v5_4]: local r_v1_10 = _env[r_v5_4]
+    #41 epoch-start reads=[r_v7_4]: local r_v6_7 = r_v7_4()
+    #42 epoch-start: local r_v7_5 = 2
+    #43 epoch-start reads=[r_v6_7, r_v7_5]: local r_v8_4 = r_v6_7 == r_v7_5
+    #44 epoch-mutate reads=[r_v1_10, r_v8_4]: r_v5_4 = r_v1_10(r_v8_4)
+    #45 epoch-start: local r_v7_6 = createClosure3(9, {})
+    #46 epoch-start: local r_v5_5 = "assert"
+    #47 version-define reads=[r_v5_5]: local r_v1_11 = _env[r_v5_5]
+    #48 epoch-start reads=[r_v7_6]: local r_v6_8 = r_v7_6()
+    #49 version-define: local r_v7_7 = nil
+    #50 epoch-start reads=[r_v6_8, r_v7_7]: local r_v8_5 = r_v6_8 == r_v7_7
+    #51 epoch-mutate reads=[r_v1_11, r_v8_5]: r_v5_5 = r_v1_11(r_v8_5)
+    #52 epoch-start: local r_v11_1 = args
+    #53 version-define: local r_v3_3 = nil
+    #54 epoch-kill: r_v4_1 = nil
+    #55 return-payload: ReturnVal = {}
+    #56 state-transition: state = nil
+
+  STATE 2 [ENTRY]
+    predecessors: none
+    successors: S3, S4
+    transition: r_v2_4 and 3 or 4
+    #1 epoch-start: local r_v11_2 = args[1]
+    #2 epoch-start: local r_v4_2 = "select"
+    #3 version-define reads=[r_v4_2]: local r_v1_12 = _env[r_v4_2]
+    #4 epoch-start: local r_v3_4 = { select(2, unpack(args)) }
+    #5 epoch-start: local r_v5_6 = "#"
+    #6 epoch-mutate reads=[r_v1_12, r_v5_6, r_v3_4]: r_v4_2 = r_v1_12(r_v5_6, unpack(r_v3_4))
+    #7 version-define: local r_v1_13 = 0
+    #8 version-define reads=[r_v4_2, r_v1_13]: local r_v2_4 = r_v4_2 == r_v1_13
+    #9 state-transition reads=[r_v2_4]: state = r_v2_4 and 3 or 4
+
+  STATE 3 [STOP]
+    predecessors: S2
+    successors: STOP
+    transition: nil
+    #1 version-define: local r_v1_14 = "tostring"
+    #2 version-define reads=[r_v1_14]: local r_v2_5 = _env[r_v1_14]
+    #3 version-define reads=[r_v2_5, r_v11_2]: local r_v1_15 = { r_v2_5(r_v11_2) }
+    #4 return-payload reads=[r_v1_15]: ReturnVal = { unpack(r_v1_15) }
+    #5 state-transition: state = nil
+
+  STATE 4 [STOP]
+    predecessors: S2
+    successors: STOP
+    transition: nil
+    #1 epoch-start: local r_v4_3 = "tostring"
+    #2 version-define reads=[r_v4_3]: local r_v1_16 = _env[r_v4_3]
+    #3 epoch-mutate reads=[r_v1_16, r_v11_2]: r_v4_3 = r_v1_16(r_v11_2)
+    #4 epoch-start: local r_v7_8 = "concat"
+    #5 epoch-start reads=[r_v7_8]: local r_v8_6 = _env[r_v7_8]
+    #6 epoch-mutate reads=[r_v8_6, r_v3_4]: r_v7_8 = r_v8_6(unpack(r_v3_4))
+    #7 epoch-start: local r_v5_7 = ","
+    #8 version-define reads=[r_v5_7, r_v7_8]: local r_v1_17 = r_v5_7 .. r_v7_8
+    #9 version-define reads=[r_v4_3, r_v1_17]: local r_v2_6 = r_v4_3 .. r_v1_17
+    #10 return-payload reads=[r_v2_6]: ReturnVal = { r_v2_6 }
+    #11 state-transition: state = nil
+
+  STATE 5 [ENTRY, STOP]
+    predecessors: none
+    successors: STOP
+    transition: nil
+    #1 epoch-start: local r_v11_3 = args[1]
+    #2 epoch-start: local r_v3_5 = args[2]
+    #3 return-payload reads=[r_v3_5]: ReturnVal = { r_v3_5 }
+    #4 state-transition: state = nil
+
+  STATE 6 [ENTRY]
+    predecessors: none
+    successors: S7, S8
+    transition: r_v11_4 and 7 or 8
+    #1 version-define: local r_v2_7 = 1
+    #2 epoch-start reads=[r_v2_7]: local r_v11_4 = r_v2_7
+    #3 state-transition reads=[r_v11_4]: state = r_v11_4 and 7 or 8
+
+  STATE 7
+    predecessors: S6
+    successors: S8
+    transition: 8
+    #1 version-define: local r_v2_8 = 2
+    #2 epoch-mutate reads=[r_v2_8]: r_v11_4 = r_v2_8
+    #3 state-transition: state = 8
+
+  STATE 8 [STOP]
+    predecessors: S6, S7
+    successors: STOP
+    transition: nil
+    #1 return-payload reads=[r_v11_4]: ReturnVal = { r_v11_4 }
+    #2 state-transition: state = nil
+
+  STATE 9 [ENTRY]
+    predecessors: none
+    successors: S10, S11
+    transition: r_v11_5 and 10 or 11
+    #1 version-define: local r_v2_9 = nil
+    #2 epoch-start reads=[r_v2_9]: local r_v11_5 = r_v2_9
+    #3 state-transition reads=[r_v11_5]: state = r_v11_5 and 10 or 11
+
+  STATE 10
+    predecessors: S9
+    successors: S11
+    transition: 11
+    #1 version-define: local r_v2_10 = 2
+    #2 epoch-mutate reads=[r_v2_10]: r_v11_5 = r_v2_10
+    #3 state-transition: state = 11
+
+  STATE 11 [STOP]
+    predecessors: S9, S10
+    successors: STOP
+    transition: nil
+    #1 return-payload reads=[r_v11_5]: ReturnVal = { r_v11_5 }
+    #2 state-transition: state = nil

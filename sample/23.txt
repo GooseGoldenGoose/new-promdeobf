@@ -1,474 +1,807 @@
 return (function(...)
-    local o = {
-        "Et0S2w861n==",
-        "m/4qYA8M8BJoKf+S",
-        "1wJWUE8YJu/jufJl",
-        "IBVr2cUmYW0OPAGNVn==",
-        "UgFkQgJz",
-        "mOJTVg/Du68bgmXh",
-        "VBp6gO8EYmXLcuJggY==",
-        "VWcdVwcCUv==",
-        "PrIFguJYY6USVfUm",
-        "3n==",
-        "IO4S2AY=",
-        "IWc9VgJd",
-        "P/4/mjXY8/482B/kVtv=",
-        "UlcjUl6CVNX9QgFAUg/AV709Pg4NQE4Fsl4pIW6LIk==",
-        "sk==",
-        "QEJjVE4d",
-        "QW0CQW/d",
-        "Jt6K2l06PrJK8E6q7mM=",
-        "Et0AQk==",
-        "MOGjJWvk8f6GYg4O76Q=",
-        "uW8wKuVDPrV8VgSA",
-        "Ul0jUO4S2wI=",
-        "Et09VgD="
+    local P = {
+        "3Rqwg2U8kHoX/8GL/dB=",
+        "UKGXUMGriB==",
+        "4e/g4XGGUHqlc2/uZdH=",
+        "1sm9+M/dtC==",
+        "/c9GUbIbGsUQPGU22X6=",
+        "i5fYcRoRadFkDMqo/Ha=",
+        "1sm7Dz==",
+        "419947FxGRIbZ2ia",
+        "kKYxtQezUMO3aVQO",
+        "UC==",
+        "47Z7UafH4QZZGXGQkC==",
+        "35GDaXsYUX9x4bP5ig==",
+        "GRU0g24O2cOrgcfkiHn=",
+        "UKGX",
+        "D2/KUdFaZQZ9+QdcGHn=",
+        "geGOcHmpPXdz2eO8",
+        "cefW/l/RD1FokeQH",
+        "taG8kd/y/bZTwHqb",
+        "PQiYc2ZLP8dZiMdkZ84=",
+        "wGZ1kH45/ddMi5dN",
+        "Zeig/lU6DKoA3Mdq",
+        "acIIt1ZogXZKtH9U3z==",
+        "iRGbiRdrUAF6DcO7icQ7Ukm63cfAD1fOYRfIPKd8Pz==",
+        "icOzDcZu",
+        "cMsgaRIqDe9Oi2GHDMg=",
+        "PRZKUQUFkeQQgdZp/z==",
+        "DKmrDKQX",
+        "+C==",
+        "kVZRUG/y2cdFa1Z7Z54=",
+        "UdFXG5U33XGo/sGZag==",
+        "ZKmWU5QW4ses2R/u",
+        "UeIYkViIkRPXUeqEkg==",
+        "0C==",
+        "D1ZbU1fX",
+        "4GFeUHUs+HqqkXQOwc4=",
+        "1sm6Ucx=",
+        "Yz==",
+        "UB==",
+        "+z==",
+        "2a6o2Vdl3RUJksFf",
+        "+Kex3cGyPKIwk7BA",
+        "PKfLteZr+cYK3aIN3C==",
+        "2e/M4bZ4waGT4H9b3Ma=",
+        "iRmbilf9+MP=",
+        "PKG6UcZX",
+        "a7GV+XsQGlQG42IF",
+        "Plf9+7g="
     }
-    local function r(r)
-        return o[r - (48290)]
-    end
-    for r, O in ipairs({
+    for D, Y in ipairs({
         {
             1,
-            23
+            47
         },
         {
             1,
-            18
+            7
         },
         {
-            19,
-            23
+            8,
+            47
         }
     }) do
-        while O[1] < O[2] do
-            o[O[1]], o[O[2]], O[1], O[2] = o[O[2]], o[O[1]], O[1] + (1), O[2] - (1)
+        while Y[1] < Y[2] do
+            P[Y[1]], P[Y[2]], Y[1], Y[2] = P[Y[2]], P[Y[1]], Y[1] + (1), Y[2] - (1)
         end
     end
+    local function D(D)
+        return P[D - (38245)]
+    end
     do
-        local r = string.len
-        local O = math.floor
-        local R = table.insert
-        local J = type
-        local g = table.concat
-        local u = string.char
-        local x = string.sub
-        local j = {
-            X = 1,
-            a = 62,
-            N = 50,
-            E = 23,
-            B = 55,
-            h = 40,
-            y = 59,
-            t = 53,
-            S = 41,
-            K = 14,
-            z = 43,
-            D = 56,
-            U = 29,
-            P = 26,
-            Y = 16,
-            H = 34,
-            f = 4,
-            Z = 10,
-            v = 32,
-            ["4"] = 9,
-            q = 47,
-            I = 28,
-            s = 8,
-            ["+"] = 49,
-            j = 51,
-            F = 57,
-            ["6"] = 37,
-            ["9"] = 44,
-            ["/"] = 5,
-            i = 31,
-            r = 3,
-            A = 39,
-            p = 33,
-            e = 58,
-            T = 45,
-            ["5"] = 60,
-            ["3"] = 11,
-            u = 20,
-            R = 15,
-            l = 6,
-            b = 42,
-            w = 38,
-            L = 35,
-            O = 7,
-            ["2"] = 27,
-            ["1"] = 30,
-            c = 21,
-            g = 22,
-            ["0"] = 61,
-            G = 36,
-            Q = 24,
-            ["7"] = 18,
-            M = 12,
-            k = 48,
-            W = 54,
-            d = 52,
-            o = 2,
-            n = 0,
-            C = 46,
-            m = 19,
-            V = 25,
-            x = 63,
-            J = 13,
-            ["8"] = 17
+        local D = type
+        local Y = table.insert
+        local i = {
+            T = 47,
+            y = 58,
+            N = 34,
+            n = 60,
+            Z = 13,
+            c = 22,
+            U = 25,
+            D = 24,
+            G = 21,
+            ["0"] = 11,
+            E = 10,
+            q = 45,
+            W = 42,
+            A = 50,
+            O = 57,
+            s = 53,
+            ["1"] = 23,
+            H = 4,
+            ["/"] = 17,
+            ["6"] = 44,
+            M = 38,
+            w = 14,
+            X = 52,
+            i = 29,
+            b = 51,
+            ["8"] = 35,
+            B = 32,
+            g = 16,
+            d = 37,
+            ["+"] = 27,
+            ["9"] = 41,
+            J = 40,
+            ["4"] = 12,
+            v = 31,
+            a = 20,
+            Y = 8,
+            V = 3,
+            P = 28,
+            o = 49,
+            m = 61,
+            h = 63,
+            t = 30,
+            K = 54,
+            p = 15,
+            j = 62,
+            z = 48,
+            R = 6,
+            S = 59,
+            ["3"] = 26,
+            f = 9,
+            r = 46,
+            ["2"] = 19,
+            I = 33,
+            ["7"] = 39,
+            x = 56,
+            ["5"] = 55,
+            l = 7,
+            k = 18,
+            L = 2,
+            F = 1,
+            e = 36,
+            u = 43,
+            Q = 5,
+            C = 0
         }
-        local U = o
-        for o = 1, #U, 1 do
-            local G = U[o]
-            if J(G) == "string" then
-                local J = r(G)
-                local w = {}
-                local C = 1
+        local W = P
+        local n = string.len
+        local Q = table.concat
+        local s = string.sub
+        local k = math.floor
+        local p = string.char
+        for P = 1, #W, 1 do
+            local l = W[P]
+            if D(l) == "string" then
+                local D = n(l)
+                local M = {}
+                local g = 1
+                local U = 0
                 local q = 0
-                local p = 0
-                while C <= J do
-                    local o = x(G, C, C)
-                    local r = j[o]
-                    if r then
-                        q = q + r * (64) ^ ((3) - p)
-                        p = p + (1)
-                        if p == 4 then
-                            p = 0
-                            local o = O(q / (65536))
-                            local r = O((q % (65536)) / (256))
-                            local J = q % (256)
-                            R(w, u(o, r, J))
+                while g <= D do
+                    local P = s(l, g, g)
+                    local W = i[P]
+                    if W then
+                        U = U + W * (64) ^ ((3) - q)
+                        q = q + (1)
+                        if q == 4 then
                             q = 0
+                            local P = k(U / (65536))
+                            local D = k((U % (65536)) / (256))
+                            local i = U % (256)
+                            Y(M, p(P, D, i))
+                            U = 0
                         end
-                    elseif o == "=" then
-                        R(w, u(O(q / (65536))))
-                        if C >= J or x(G, C + (1), C + (1)) ~= "=" then
-                            R(w, u(O((q % (65536)) / (256))))
+                    elseif P == "=" then
+                        Y(M, p(k(U / (65536))))
+                        if g >= D or s(l, g + (1), g + (1)) ~= "=" then
+                            Y(M, p(k((U % (65536)) / (256))))
                         end
                         break
                     end
-                    C = C + (1)
+                    g = g + (1)
                 end
-                U[o] = g(w)
+                W[P] = Q(M)
             end
         end
     end
-    return (function(o, R, J, g, u, x, j, G, w, B, v, q, P, O, U, C, k, e, a, p, y)
-        C, w, q, p, k, e, B, G, v, U, O, y, P, a = 0, function()
-            C = (1) + C
-            G[C] = 1
-            return C
-        end, function(o)
-            for r = 1, #o, 1 do
-                G[o[r]] = (1) + G[o[r]]
+    return (function(P, i, W, n, Q, s, k, Z, x, g, q, p, I, Y, l, a, U, R, M, F, K, j)
+        a, K, g, U, l, F, q, j, I, R, M, Y, Z, p, x = function(P, D)
+            local i = U(D)
+            local W = function(W, n, Q, s)
+                return Y(P, {
+                    W,
+                    n,
+                    Q,
+                    s
+                }, D, i)
             end
-            if J then
-                local O = J(true)
-                local R = u(O)
-                R[r(48309)], R[r(48304)], R[r(48308)] = o, p, function()
-                    return -3875971
+            return W
+        end, function(P, D)
+            local i = U(D)
+            local W = function(...)
+                return Y(P, {
+                    ...
+                }, D, i)
+            end
+            return W
+        end, 0, function(P)
+            for D = 1, #P, 1 do
+                l[P[D]] = (1) + l[P[D]]
+            end
+            if W then
+                local Y = W(true)
+                local i = Q(Y)
+                i[D(38256)], i[D(38259)], i[D(38288)] = P, q, function()
+                    return -2789372
                 end
-                return O
+                return Y
             else
-                return g({}, {
-                    [r(48304)] = p,
-                    [r(48309)] = o,
-                    [r(48308)] = function()
-                        return -3875971
+                return n({}, {
+                    [D(38259)] = q,
+                    [D(38256)] = P,
+                    [D(38288)] = function()
+                        return -2789372
                     end
                 })
             end
-        end, function(o)
-            local r, O = 1, o[1]
-            while O do
-                G[O], r = G[O] - (1), r + (1)
-                if 0 == G[O] then
-                    G[O], U[O] = nil, nil
+        end, {}, function(P, D)
+            local i = U(D)
+            local W = function(W, n, Q, s, k, p)
+                return Y(P, {
+                    W,
+                    n,
+                    Q,
+                    s,
+                    k,
+                    p
+                }, D, i)
+            end
+            return W
+        end, function(P)
+            local D, Y = 1, P[1]
+            while Y do
+                l[Y], D = l[Y] - (1), D + (1)
+                if l[Y] == 0 then
+                    l[Y], p[Y] = nil, nil
                 end
-                O = o[r]
+                Y = P[D]
             end
-        end, function(o, r)
-            local R = q(r)
-            local J = function(...)
-                return O(o, {
-                    ...
-                }, r, R)
+        end, function(P, D)
+            local i = U(D)
+            local W = function(W, n, Q)
+                return Y(P, {
+                    W,
+                    n,
+                    Q
+                }, D, i)
             end
-            return J
-        end, function(o)
-            G[o] = G[o] - (1)
-            if 0 == G[o] then
-                G[o], U[o] = nil, nil
+            return W
+        end, function(P, D)
+            local i = U(D)
+            local W = function(W)
+                return Y(P, {
+                    W
+                }, D, i)
             end
-        end, function(o, r)
-            local R = q(r)
-            local J = function(J, g, u, x, j)
-                return O(o, {
-                    J,
-                    g,
-                    u,
-                    x,
-                    j
-                }, r, R)
+            return W
+        end, function(P, D)
+            local i = U(D)
+            local W = function(W, n, Q, s, k)
+                return Y(P, {
+                    W,
+                    n,
+                    Q,
+                    s,
+                    k
+                }, D, i)
             end
-            return J
-        end, {}, function(o, r)
-            local R = q(r)
-            local J = function(J, g, u)
-                return O(o, {
-                    J,
-                    g,
-                    u
-                }, r, R)
-            end
-            return J
-        end, {}, function(O, J, g, u)
-            local L, i, j, s, A, p, G, V, C, q, d
-            while O do
-                if O < 8252631 then
-                    if O < 4114215 then
-                        if O < 1859578 then
-                            if O < 1289515 then
-                                O = nil
-                                G = O
-                                O = G and 12091914 or 15453322
+            return W
+        end, function()
+            g = g + (1)
+            l[g] = 1
+            return g
+        end, function(Y, W, n, Q)
+            local g, U, l, A, h, b, L, q, X, k, S
+            while Y do
+                if Y < 6746436 then
+                    if Y < 4045786 then
+                        if Y < 1701078 then
+                            if Y < 1096263 then
+                                if Y < 931868 then
+                                    Y = p[n[1]]
+                                    k = {
+                                        Y
+                                    }
+                                    Y = P[D(38284)]
+                                else
+                                    Y = Z(4132831, {})
+                                    p[n[1]] = Y
+                                    k = p[n[1]]
+                                    Y = P[D(38248)]
+                                    l = k()
+                                    k = {
+                                        l()
+                                    }
+                                    k = {
+                                        i(k)
+                                    }
+                                end
                             else
-                                O = 1
-                                G = O
-                                O = G and 2117838 or 4296990
+                                if Y < 1536530 then
+                                    Y = p[n[1]]
+                                    k = {
+                                        Y
+                                    }
+                                    Y = P[D(38277)]
+                                else
+                                    Y = p[n[1]]
+                                    k = {
+                                        Y
+                                    }
+                                    Y = P[D(38287)]
+                                end
                             end
                         else
-                            if O < 2916411 then
-                                O = 2
-                                G = O
-                                O = 4296990
+                            if Y < 3350647 then
+                                if Y < 2746751 then
+                                    Y = I(16062002, {})
+                                    p[n[1]] = Y
+                                    Y = P[D(38269)]
+                                    k = p[n[1]]
+                                    l = {
+                                        k()
+                                    }
+                                    k = {
+                                        i(l)
+                                    }
+                                else
+                                    Y = a(6742620, {})
+                                    p[n[1]] = Y
+                                    k = p[n[1]]
+                                    l = k()
+                                    Y = P[D(38272)]
+                                    k = {
+                                        l()
+                                    }
+                                    k = {
+                                        i(k)
+                                    }
+                                end
                             else
-                                G = J
-                                C = r(48299)
-                                j = r(48296)
-                                q = w()
-                                O = o[j]
-                                j = O(C)
-                                j = r(48293)
-                                O = o[j]
-                                i = 2
-                                j = O()
-                                O = k(8219732, {})
-                                p = r(48301)
-                                C = j
-                                j = r(48302)
-                                o[j] = O
-                                j = P(11127119, {})
-                                d = 1
-                                U[q] = j
-                                V = 3
-                                j = o[p]
-                                s = U[q]
-                                L = s(d)
-                                s = nil
-                                A = L == s
-                                p = j(A)
-                                p = r(48301)
-                                d = 1
-                                j = o[p]
-                                s = U[q]
-                                L = s(d, i)
-                                d = 1
-                                s = 2
-                                C = nil
-                                i = 2
-                                A = L == s
-                                p = j(A)
-                                p = r(48301)
-                                j = o[p]
-                                s = U[q]
-                                L = s(d, i, V)
-                                s = 2
-                                A = L == s
-                                p = j(A)
-                                s = B(1746877, {})
-                                p = r(48301)
-                                j = o[p]
-                                L = s()
-                                s = 2
-                                A = L == s
-                                O = o[r(48305)]
-                                p = j(A)
-                                s = y(1157503, {})
-                                p = r(48301)
-                                j = o[p]
-                                L = s()
-                                s = nil
-                                A = L == s
-                                p = j(A)
-                                p = r(48301)
-                                j = o[p]
-                                s = v(8362488, {
-                                    q
-                                })
-                                q = e(q)
-                                L = s()
-                                s = 1
-                                A = L == s
-                                p = j(A)
-                                j = {}
+                                if Y < 3815801 then
+                                    S = D(38279)
+                                    U = D(38249)
+                                    k = P[U]
+                                    q = D(38285)
+                                    U = k(l)
+                                    b = P[S]
+                                    S = b(i(g))
+                                    k = q .. S
+                                    Y = U .. k
+                                    k = {
+                                        Y
+                                    }
+                                    Y = P[D(38271)]
+                                else
+                                    l = M()
+                                    Y = 1
+                                    p[l] = Y
+                                    Y = j(1625654, {
+                                        l
+                                    })
+                                    p[n[1]] = Y
+                                    k = p[n[1]]
+                                    Y = P[D(38283)]
+                                    g = {
+                                        k()
+                                    }
+                                    k = {
+                                        i(g)
+                                    }
+                                end
                             end
                         end
                     else
-                        if O < 6238098 then
-                            if O < 4660161 then
-                                j = {
-                                    G
-                                }
-                                O = o[r(48312)]
+                        if Y < 6207145 then
+                            if Y < 4552341 then
+                                if Y < 4287523 then
+                                    l = M()
+                                    Y = 1
+                                    p[l] = Y
+                                    Y = j(1379026, {
+                                        l
+                                    })
+                                    g = Y
+                                    Y = 2
+                                    p[l] = Y
+                                    Y = P[D(38281)]
+                                    k = {
+                                        g
+                                    }
+                                else
+                                    k = D(38249)
+                                    Y = P[k]
+                                    k = {
+                                        Y(l)
+                                    }
+                                    k = {
+                                        i(k)
+                                    }
+                                    Y = P[D(38278)]
+                                end
                             else
-                                G = nil
-                                j = {}
-                                O = o[r(48310)]
+                                if Y < 4948230 then
+                                    Y = Z(15830573, {})
+                                    p[n[1]] = Y
+                                    Y = P[D(38264)]
+                                    k = p[n[1]]
+                                    l = k()
+                                    k = {
+                                        l()
+                                    }
+                                    k = {
+                                        i(k)
+                                    }
+                                else
+                                    Y = F(9063562, {})
+                                    p[n[1]] = Y
+                                    g = 1
+                                    k = p[n[1]]
+                                    Y = P[D(38257)]
+                                    l = k(g)
+                                    k = {
+                                        l()
+                                    }
+                                    k = {
+                                        i(k)
+                                    }
+                                end
                             end
                         else
-                            if O < 7041085 then
-                                j = r(48307)
-                                O = o[j]
-                                j = {
-                                    O(G)
-                                }
-                                j = {
-                                    R(j)
-                                }
-                                O = o[r(48298)]
+                            if Y < 6658244 then
+                                if Y < 6208885 then
+                                    l = M()
+                                    Y = I(6227904, {
+                                        l
+                                    })
+                                    p[l] = W[1]
+                                    k = {
+                                        Y
+                                    }
+                                    Y = P[D(38267)]
+                                else
+                                    k = p[n[1]]
+                                    l = D(38290)
+                                    Y = k[l]
+                                    k = {
+                                        Y
+                                    }
+                                    Y = P[D(38253)]
+                                end
                             else
-                                G = J[1]
-                                q = r(48297)
-                                p = r(48300)
-                                C = {
-                                    x(2, R(J))
+                                Y = nil
+                                l = Y
+                                g = M()
+                                Y = 1
+                                p[g] = Y
+                                Y = j(13470630, {
+                                    g
+                                })
+                                k = 2
+                                g = x(g)
+                                l = Y
+                                g = k
+                                Y = P[D(38273)]
+                                k = {
+                                    l
                                 }
-                                j = o[q]
-                                q = j(p, R(C))
-                                j = 0
-                                O = q == j
-                                O = O and 6769361 or 8932659
                             end
                         end
                     end
                 else
-                    if O < 11188342 then
-                        if O < 9968480 then
-                            if O < 8545068 then
-                                O = a(10073567, {})
-                                U[g[1]] = O
-                                j = U[g[1]]
-                                G = j()
-                                j = {
-                                    G()
-                                }
-                                O = o[r(48294)]
-                                j = {
-                                    R(j)
-                                }
+                    if Y < 13871362 then
+                        if Y < 10964746 then
+                            if Y < 10048491 then
+                                if Y < 9770779 then
+                                    l = M()
+                                    Y = a(770559, {
+                                        l
+                                    })
+                                    k = {
+                                        Y
+                                    }
+                                    p[l] = W[1]
+                                    Y = P[D(38265)]
+                                else
+                                    h = 1
+                                    g = D(38275)
+                                    l = W
+                                    k = D(38252)
+                                    Y = P[k]
+                                    k = Y(g)
+                                    q = D(38286)
+                                    k = D(38254)
+                                    Y = P[k]
+                                    k = Y()
+                                    g = k
+                                    Y = K(10740807, {})
+                                    k = D(38279)
+                                    U = M()
+                                    P[k] = Y
+                                    k = F(10998511, {})
+                                    p[U] = k
+                                    k = P[q]
+                                    S = p[U]
+                                    L = 3
+                                    X = S(h)
+                                    S = nil
+                                    b = X == S
+                                    A = 2
+                                    q = k(b)
+                                    q = D(38286)
+                                    k = P[q]
+                                    S = p[U]
+                                    h = 1
+                                    X = S(h, A)
+                                    A = 2
+                                    S = 2
+                                    b = X == S
+                                    q = k(b)
+                                    q = D(38286)
+                                    k = P[q]
+                                    h = 1
+                                    S = p[U]
+                                    X = S(h, A, L)
+                                    S = 2
+                                    b = X == S
+                                    q = k(b)
+                                    q = D(38286)
+                                    S = I(3857696, {
+                                        U
+                                    })
+                                    k = P[q]
+                                    X = S()
+                                    S = 1
+                                    b = X == S
+                                    q = k(b)
+                                    S = I(15380518, {
+                                        U
+                                    })
+                                    q = D(38286)
+                                    k = P[q]
+                                    X = S()
+                                    S = 1
+                                    b = X == S
+                                    q = k(b)
+                                    q = D(38286)
+                                    k = P[q]
+                                    S = a(5540621, {
+                                        U
+                                    })
+                                    X = S()
+                                    S = 1
+                                    b = X == S
+                                    q = k(b)
+                                    q = D(38286)
+                                    k = P[q]
+                                    S = j(2810134, {
+                                        U
+                                    })
+                                    X = S()
+                                    S = 1
+                                    b = X == S
+                                    q = k(b)
+                                    q = D(38252)
+                                    b = D(38291)
+                                    k = P[q]
+                                    q = k(b)
+                                    S = j(934360, {
+                                        U
+                                    })
+                                    q = D(38286)
+                                    k = P[q]
+                                    X = S()
+                                    S = 2
+                                    b = X == S
+                                    S = Z(2472985, {
+                                        U
+                                    })
+                                    q = k(b)
+                                    q = D(38252)
+                                    g = nil
+                                    k = P[q]
+                                    b = D(38280)
+                                    q = k(b)
+                                    q = D(38286)
+                                    k = P[q]
+                                    X = S()
+                                    S = 2
+                                    Y = P[D(38255)]
+                                    b = X == S
+                                    q = k(b)
+                                    q = D(38252)
+                                    k = P[q]
+                                    b = D(38262)
+                                    q = k(b)
+                                    q = D(38286)
+                                    S = Z(16138170, {})
+                                    k = P[q]
+                                    X = S()
+                                    S = 5
+                                    b = X == S
+                                    S = Z(4694466, {
+                                        U
+                                    })
+                                    U = x(U)
+                                    q = k(b)
+                                    b = D(38290)
+                                    q = D(38252)
+                                    k = P[q]
+                                    q = k(b)
+                                    q = D(38286)
+                                    k = P[q]
+                                    X = S()
+                                    S = 5
+                                    b = X == S
+                                    q = k(b)
+                                    k = {}
+                                end
                             else
-                                q = r(48307)
-                                s = r(48302)
-                                j = o[q]
-                                q = j(G)
-                                p = r(48295)
-                                A = o[s]
-                                s = A(R(C))
-                                j = p .. s
-                                O = q .. j
-                                j = {
-                                    O
-                                }
-                                O = o[r(48306)]
+                                if Y < 10902334 then
+                                    g = {
+                                        s(2, i(W))
+                                    }
+                                    U = D(38250)
+                                    q = D(38289)
+                                    l = W[1]
+                                    k = P[U]
+                                    U = k(q, i(g))
+                                    k = 0
+                                    Y = U == k
+                                    Y = Y and 4549271 or 3495230
+                                else
+                                    Y = P[D(38247)]
+                                    k = {}
+                                    l = nil
+                                end
                             end
                         else
-                            if O < 11056119 then
-                                C = w()
-                                j = 2
-                                O = nil
-                                G = O
-                                O = 1
-                                U[C] = O
-                                O = B(13895660, {
-                                    C
-                                })
-                                G = O
-                                C = e(C)
-                                C = j
-                                j = {
-                                    G
-                                }
-                                O = o[r(48303)]
+                            if Y < 11884254 then
+                                if Y < 11162998 then
+                                    Y = P[D(38263)]
+                                    g = W[2]
+                                    k = {
+                                        g
+                                    }
+                                    l = W[1]
+                                else
+                                    k = p[n[1]]
+                                    l = D(38290)
+                                    Y = k[l]
+                                    k = {
+                                        Y
+                                    }
+                                    Y = P[D(38258)]
+                                end
                             else
-                                C = J[2]
-                                O = o[r(48291)]
-                                j = {
-                                    C
-                                }
-                                G = J[1]
+                                if Y < 13304149 then
+                                    Y = Z(14799313, {
+                                        n[1]
+                                    })
+                                    k = {
+                                        Y
+                                    }
+                                    Y = P[D(38246)]
+                                else
+                                    Y = p[n[1]]
+                                    k = {
+                                        Y
+                                    }
+                                    Y = P[D(38260)]
+                                end
                             end
                         end
                     else
-                        if O < 14409010 then
-                            if O < 13889030 then
-                                O = 2
-                                G = O
-                                O = 15453322
+                        if Y < 15717795 then
+                            if Y < 14930018 then
+                                if Y < 14221774 then
+                                    l = M()
+                                    p[l] = W[1]
+                                    Y = R(11829902, {
+                                        l
+                                    })
+                                    k = {
+                                        Y()
+                                    }
+                                    Y = P[D(38282)]
+                                    k = {
+                                        i(k)
+                                    }
+                                else
+                                    Y = p[n[1]]
+                                    k = {
+                                        Y
+                                    }
+                                    Y = P[D(38274)]
+                                end
                             else
-                                O = U[g[1]]
-                                j = {
-                                    O
-                                }
-                                O = o[r(48311)]
+                                if Y < 15239384 then
+                                    Y = 2
+                                    p[n[1]] = Y
+                                    k = {}
+                                    Y = P[D(38292)]
+                                else
+                                    l = M()
+                                    Y = 1
+                                    p[l] = Y
+                                    Y = I(13053189, {
+                                        l
+                                    })
+                                    p[n[1]] = Y
+                                    k = p[n[1]]
+                                    Y = P[D(38261)]
+                                    g = k()
+                                    k = {
+                                        g()
+                                    }
+                                    k = {
+                                        i(k)
+                                    }
+                                end
                             end
                         else
-                            O = o[r(48292)]
-                            j = {
-                                G
-                            }
+                            if Y < 16106719 then
+                                if Y < 15956691 then
+                                    l = 5
+                                    k = D(38290)
+                                    Y = {
+                                        [k] = l
+                                    }
+                                    k = D(38266)
+                                    l = Y
+                                    Y = a(6207511, {})
+                                    l[k] = Y
+                                    k = D(38266)
+                                    k = l[k]
+                                    Y = {
+                                        k(l)
+                                    }
+                                    k = {
+                                        i(Y)
+                                    }
+                                    Y = P[D(38268)]
+                                else
+                                    Y = 1
+                                    l = M()
+                                    p[l] = Y
+                                    Y = I(15208600, {
+                                        l
+                                    })
+                                    k = Y()
+                                    Y = p[l]
+                                    k = {
+                                        Y
+                                    }
+                                    Y = P[D(38251)]
+                                end
+                            else
+                                l = 5
+                                k = D(38290)
+                                Y = {
+                                    [k] = l
+                                }
+                                l = Y
+                                Y = F(14192012, {})
+                                k = D(38266)
+                                l[k] = Y
+                                k = D(38266)
+                                k = l[k]
+                                Y = {
+                                    k(l)
+                                }
+                                k = {
+                                    i(Y)
+                                }
+                                Y = P[D(38270)]
+                            end
                         end
                     end
                 end
             end
-            O = #u
-            return R(j)
-        end, function(o, r)
-            local R = q(r)
-            local J = function(J)
-                return O(o, {
-                    J
-                }, r, R)
+            Y = #Q
+            return i(k)
+        end, function(P, D)
+            local i = U(D)
+            local W = function(W, n)
+                return Y(P, {
+                    W,
+                    n
+                }, D, i)
             end
-            return J
-        end, function(o, r)
-            local R = q(r)
-            local J = function(J, g, u, x, j, U, G)
-                return O(o, {
-                    J,
-                    g,
-                    u,
-                    x,
-                    j,
-                    U,
-                    G
-                }, r, R)
+            return W
+        end, {}, function(P)
+            l[P] = l[P] - (1)
+            if l[P] == 0 then
+                l[P], p[P] = nil, nil
             end
-            return J
-        end, function(o, r)
-            local R = q(r)
-            local J = function(J, g)
-                return O(o, {
-                    J,
-                    g
-                }, r, R)
-            end
-            return J
         end
-        return (k(3305167, {}))(R(j))
-    end)(getfenv and getfenv() or _ENV, unpack or table[r(48313)], newproxy, setmetatable, getmetatable, select, {
+        return (K(9778580, {}))(i(k))
+    end)(getfenv and getfenv() or _ENV, unpack or table[D(38276)], newproxy, setmetatable, getmetatable, select, {
         ...
     })
 end)(...)
