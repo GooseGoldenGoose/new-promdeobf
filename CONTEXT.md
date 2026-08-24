@@ -215,11 +215,20 @@ node tools\beta-control-flow-overflow-experimental.js output\5.lua output\5.beta
 
 ## RegisterOverflow
 
-Final CF normalizes proven static slots per recovered function:
+Production final CF normalizes proven static slots per recovered function:
 
 `RegisterOverflow[n] -> RegisterOverflow.vN`
 
 Each function gets its own `local RegisterOverflow = {}` only when it directly uses overflow storage. Dynamic/bare/invalid accesses fail closed.
+
+Experimental fork:
+- `passes/beta-overflow-register-experimental.js` scalarizes every proven static overflow slot before beta versioning.
+- Sorted observed slots get dense synthetic physical registers; e.g. slots 23/24 become overflow bases 1/2.
+- Those synthetic physical registers are inserted into the normal VM scalar-register declaration and then go through the exact existing beta register lifetime/version solver. There is no overflow-specific nil/reset/lifetime rule after scalarization.
+- Only presentation is remapped afterward: the normal beta version for overflow base N becomes `o_vN_K`, preserving the normal solver's K exactly.
+- Experimental CLI: `tools/beta-control-flow-overflow-experimental.js`; output is isolated from production beta-CF.
+- Numeric sweep: 63/63 experimental CF passes; 61/63 are byte-identical to production and only overflow fixtures 5/10 differ.
+- Forced WeAreDevs test compiler fork: `C:\Users\reala\Desktop\!workspaces\promdeobf ova\wearedev obf overflow-test`, currently `MAX_REGS = 20`. Lower tested thresholds (<=16) break normal state recovery; 20 preserves 20/20 state leaves while forcing overflow on a tiny fixture.
 
 Samples 5 and 10 are overflow stress fixtures. Their final CF can exceed LuaJIT's 200-local main-function limit; that is not a beta-CF generation failure.
 
