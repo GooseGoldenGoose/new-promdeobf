@@ -342,4 +342,31 @@ assert(compoundCapturedRoot.some(op => op.rhs === "createClosure2(2, {})"));
 assert(!compoundCapturedRoot.some(op => String(op.emittedText || "").includes("releaseUpvalue")));
 assert(compoundCapturedChild.some(op => op.emittedTarget === "captured" && op.rhs === "cell"));
 
+const effectWriteCapturedRead = recoverBetaUpvalues({
+    applied: true,
+    graph: {
+        cfgComplete: true,
+        entries: [1, 2],
+        states: [
+            { id: 1, predecessors: [], successors: [], operations: [
+                { kind: "epoch-start", emittedTarget: "cell", emittedText: "local cell = allocUpvalue()", rhs: "allocUpvalue()", reads: [] },
+                { kind: "version-define", emittedTarget: "value", emittedText: "local value = 42", rhs: "42", reads: [] },
+                { kind: "effect-write", emittedText: "upvalueValues[cell] = value", reads: ["cell", "value"] },
+                { kind: "version-define", emittedTarget: "closure", emittedText: "local closure = createClosure2(2, { cell })", rhs: "createClosure2(2, { cell })", reads: ["cell"] },
+                { kind: "effect-write", emittedText: "RegisterOverflow[3] = upvalueValues[cell]", reads: ["cell"] },
+                { kind: "epoch-mutate", emittedTarget: "cell", emittedText: "cell = releaseUpvalue(cell)", rhs: "releaseUpvalue(cell)", reads: ["cell"] },
+                ...terminalOps(),
+            ] },
+            { id: 2, predecessors: [], successors: [], operations: [
+                { kind: "version-define", emittedTarget: "captured", emittedText: "local captured = upvalueValues[upvalues[1]]", rhs: "upvalueValues[upvalues[1]]", reads: [] },
+                ...terminalOps(),
+            ] },
+        ],
+    },
+});
+assert.equal(effectWriteCapturedRead.safe, true);
+assert.equal(effectWriteCapturedRead.applied, true);
+const effectWriteCapturedRoot = effectWriteCapturedRead.graph.states.find(state => state.id === 1).operations;
+assert(effectWriteCapturedRoot.some(op => op.emittedText === "RegisterOverflow[3] = value" && op.reads.includes("value")));
+assert(!effectWriteCapturedRoot.some(op => String(op.emittedText || "").includes("upvalueValues[")));
 console.log("beta upvalue recovery tests passed");

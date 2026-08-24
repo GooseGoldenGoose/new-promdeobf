@@ -262,6 +262,45 @@ function rewriteExpressionUpvalues(text, ownerEntry, resolveCellIndex, bindingBy
     return { text: rewritten, bindingReads };
 }
 
+function rewriteStatementUpvalueReads(text, ownerEntry, resolveCellIndex, bindingByCell) {
+    const parsed = parseStatement(text);
+    if (!parsed) return { error: "Statement could not be reparsed during beta upvalue recovery" };
+    const edits = [];
+    const bindingReads = new Set();
+    let unresolved = null;
+
+    function visit(node) {
+        if (!isNode(node) || unresolved) return;
+        if (isUpvalueValuesIndex(node)) {
+            const cellId = resolveCellIndex(ownerEntry, node.index);
+            if (!cellId) {
+                unresolved = "An upvalueValues read has no uniquely resolved cell";
+                return;
+            }
+            const bindingName = bindingByCell.get(cellId);
+            if (!bindingName) {
+                unresolved = `Resolved cell ${cellId} has no recovered lexical binding`;
+                return;
+            }
+            edits.push({ start: node.range[0], end: node.range[1], replacement: bindingName });
+            bindingReads.add(bindingName);
+            return;
+        }
+        for (const [key, value] of Object.entries(node)) {
+            if (key === "loc" || key === "range") continue;
+            if (Array.isArray(value)) {
+                for (const child of value) visit(child);
+            } else if (isNode(value)) {
+                visit(value);
+            }
+        }
+    }
+
+    visit(parsed.statement);
+    if (unresolved) return { error: unresolved };
+    const rewritten = edits.length ? applyTextEdits(parsed.source, edits) : String(text || "");
+    return { text: rewritten, bindingReads };
+}
 function countIdentifier(node, name) {
     let count = 0;
     walk(node, current => {
@@ -750,6 +789,20 @@ function recoverBetaUpvalues(betaResult) {
             }
         }
 
+        if (operation.kind === "effect-write" && String(operation.emittedText || "").includes("upvalueValues")) {
+            const rewritten = rewriteStatementUpvalueReads(operation.emittedText, position.ownerEntry, resolveCellIndex, bindingByCell);
+            if (rewritten.error) return { applied: false, safe: false, reason: rewritten.error };
+            if (rewritten.text !== operation.emittedText) {
+                replacements.set(operation, {
+                    ...operation,
+                    reads: [...new Set([...(operation.reads || []).filter(name => !localCellNames.has(name)), ...rewritten.bindingReads])],
+                    emittedText: rewritten.text,
+                    returnSinkSafe: false,
+                });
+                readRewriteCount++;
+                continue;
+            }
+        }
         if (operation.rhs && String(operation.rhs).includes("upvalueValues")) {
             const rewritten = rewriteExpressionUpvalues(operation.rhs, position.ownerEntry, resolveCellIndex, bindingByCell);
             if (rewritten.error) return { applied: false, safe: false, reason: rewritten.error };
