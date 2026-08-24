@@ -17,16 +17,20 @@ function numericValue(node) {
 }
 
 function walk(node, visit) {
-    if (!isNode(node)) return;
-    visit(node);
-    for (const [key, value] of Object.entries(node)) {
+    if (!isNode(node)) return true;
+    if (visit(node) === false) return false;
+    for (const key of Object.keys(node)) {
         if (key === "loc" || key === "range") continue;
+        const value = node[key];
         if (Array.isArray(value)) {
-            for (const child of value) walk(child, visit);
-        } else if (isNode(value)) {
-            walk(value, visit);
+            for (const child of value) {
+                if (walk(child, visit) === false) return false;
+            }
+        } else if (isNode(value) && walk(value, visit) === false) {
+            return false;
         }
     }
+    return true;
 }
 
 function findEnvironmentArgument(ast, environmentName = "_env") {
@@ -39,7 +43,10 @@ function findEnvironmentArgument(ast, environmentName = "_env") {
         const index = parameters.findIndex(parameter => isIdentifier(parameter, environmentName));
         if (index < 0) return;
         const argument = (node.arguments || [])[index];
-        if (argument) found = argument;
+        if (argument) {
+            found = argument;
+            return false;
+        }
     });
     return found;
 }
@@ -47,8 +54,11 @@ function findEnvironmentArgument(ast, environmentName = "_env") {
 function expressionContainsCall(node, name) {
     let found = false;
     walk(node, current => {
-        if (found || current.type !== "CallExpression") return;
-        if (isIdentifier(current.base, name)) found = true;
+        if (current.type !== "CallExpression") return;
+        if (isIdentifier(current.base, name)) {
+            found = true;
+            return false;
+        }
     });
     return found;
 }
@@ -56,8 +66,10 @@ function expressionContainsCall(node, name) {
 function expressionContainsIdentifier(node, name) {
     let found = false;
     walk(node, current => {
-        if (found) return;
-        if (isIdentifier(current, name)) found = true;
+        if (isIdentifier(current, name)) {
+            found = true;
+            return false;
+        }
     });
     return found;
 }

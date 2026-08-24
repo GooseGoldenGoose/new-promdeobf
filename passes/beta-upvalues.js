@@ -16,16 +16,20 @@ function numericValue(node) {
 }
 
 function walk(node, visit) {
-    if (!isNode(node)) return;
-    visit(node);
-    for (const [key, value] of Object.entries(node)) {
+    if (!isNode(node)) return true;
+    if (visit(node) === false) return false;
+    for (const key of Object.keys(node)) {
         if (key === "loc" || key === "range") continue;
+        const value = node[key];
         if (Array.isArray(value)) {
-            for (const child of value) walk(child, visit);
-        } else if (isNode(value)) {
-            walk(value, visit);
+            for (const child of value) {
+                if (walk(child, visit) === false) return false;
+            }
+        } else if (isNode(value) && walk(value, visit) === false) {
+            return false;
         }
     }
+    return true;
 }
 
 const PARSE_CACHE_LIMIT = 4096;
@@ -495,19 +499,82 @@ function countStorageKeyUsesAtPosition(position, storageKey, overflowAnalysis) {
     return count;
 }
 
+function buildStorageUseIndex(positions, storageKeys, overflowAnalysis) {
+    const identifierKeys = new Set();
+    const overflowKeys = new Set();
+    const usesByStorageKey = new Map();
+    for (const key of storageKeys) {
+        usesByStorageKey.set(key, []);
+        if (String(key).startsWith("overflow-def:")) overflowKeys.add(key);
+        else identifierKeys.add(key);
+    }
+
+    function increment(counts, key) {
+        counts.set(key, (counts.get(key) || 0) + 1);
+    }
+
+    for (const position of positions) {
+        const parsed = parseStatement(position.operation?.emittedText);
+        if (!parsed) return { error: "Captured-cell validation encountered an unparseable beta operation" };
+
+        const counts = new Map();
+        const statement = parsed.statement;
+        let skipOverflowTarget = null;
+        if (statement?.type === "AssignmentStatement") {
+            const variables = statement.variables || [];
+            const init = statement.init || [];
+            if (variables.length === 1 && init.length === 1 && registerOverflowSlot(variables[0]) !== null) {
+                skipOverflowTarget = variables[0];
+            }
+        }
+
+        const currentWrite = overflowAnalysis.currentWriteDefinition(position);
+        if (overflowKeys.has(currentWrite)) increment(counts, currentWrite);
+
+        function visit(node) {
+            if (!isNode(node) || node === skipOverflowTarget) return;
+            if (isIdentifier(node) && identifierKeys.has(node.name)) increment(counts, node.name);
+
+            const slot = registerOverflowSlot(node);
+            if (slot !== null) {
+                const key = storageReadKey(node, position, overflowAnalysis);
+                if (overflowKeys.has(key)) increment(counts, key);
+                return;
+            }
+
+            for (const key of Object.keys(node)) {
+                if (key === "loc" || key === "range") continue;
+                const value = node[key];
+                if (Array.isArray(value)) {
+                    for (const child of value) visit(child);
+                } else if (isNode(value)) {
+                    visit(value);
+                }
+            }
+        }
+
+        visit(statement);
+        for (const [key, totalUses] of counts) {
+            usesByStorageKey.get(key)?.push({ position, totalUses });
+        }
+    }
+
+    return { usesByStorageKey };
+}
+
 function containsVmUpvalueMachinery(text) {
     const parsed = parseStatement(text);
     if (!parsed) return true;
     let found = false;
     walk(parsed.statement, node => {
-        if (found) return;
         if (isUpvalueValuesIndex(node) || upvalueSlot(node) !== null) {
             found = true;
-            return;
+            return false;
         }
         if (node?.type === "CallExpression" && isIdentifier(node.base) &&
             (node.base.name === "allocUpvalue" || node.base.name === "releaseUpvalue")) {
             found = true;
+            return false;
         }
     });
     return found;
@@ -831,20 +898,25 @@ function recoverBetaUpvalues(betaResult) {
     }
 
     // Validate every direct allocation storage identity and every proven compiler alias
-    // before deleting the VM cell representation. Scalar beta locals and static
-    // RegisterOverflow slots use the same storage-identity proof here; overflow
-    // identities are distinguished by their unique reaching definition rather than
-    // by the raw physical slot number.
+    // before deleting the VM cell representation. Build the use index once so this
+    // proof stays O(operations + relevant uses), rather than rescanning every
+    // operation for every captured-cell alias.
+    const capturedStorageKeys = new Set();
+    for (const cellId of capturedCellIds) {
+        const cell = cells.get(cellId);
+        capturedStorageKeys.add(cell.registerName);
+        for (const alias of cell.aliases) capturedStorageKeys.add(alias);
+    }
+    const storageUseIndex = buildStorageUseIndex(positions, capturedStorageKeys, overflowAnalysis);
+    if (storageUseIndex.error) {
+        return { applied: false, safe: false, reason: storageUseIndex.error };
+    }
+
     for (const cellId of capturedCellIds) {
         const cell = cells.get(cellId);
         for (const registerName of [cell.registerName, ...cell.aliases]) {
-            for (const position of positions) {
-                const totalUses = countStorageKeyUsesAtPosition(position, registerName, overflowAnalysis);
-                if (totalUses === null) {
-                    return { applied: false, safe: false, reason: "Cell " + cellId + " alias " + registerName + " appears in an unparseable beta operation" };
-                }
-                if (totalUses === 0) continue;
-
+            const uses = storageUseIndex.usesByStorageKey.get(registerName) || [];
+            for (const { position, totalUses } of uses) {
                 let understood = 0;
                 const allocation = allocationFromOperation(position, overflowAnalysis);
                 if (allocation?.cellName === registerName) understood += 1;
