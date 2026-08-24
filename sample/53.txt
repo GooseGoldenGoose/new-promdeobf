@@ -1,0 +1,239 @@
+return (function(...)
+    local F = {
+        "FRo+h7==",
+        "ncx0d+P=",
+        "FRo0dlBHTI==",
+        "nqf0n+k=",
+        "FRoebmi=",
+        "TDwlbcZa8qRAP+Hh",
+        "Zmw7hmgt"
+    }
+    for e, b in ipairs({
+        {
+            1,
+            7
+        },
+        {
+            1,
+            4
+        },
+        {
+            5,
+            7
+        }
+    }) do
+        while b[1] < b[2] do
+            F[b[1]], F[b[2]], b[1], b[2] = F[b[2]], F[b[1]], b[1] + (1), b[2] - (1)
+        end
+    end
+    local function e(e)
+        return F[e + (47838)]
+    end
+    do
+        local e = string.sub
+        local b = string.len
+        local X = string.char
+        local q = table.concat
+        local B = {
+            ["4"] = 35,
+            n = 28,
+            N = 55,
+            ["/"] = 18,
+            T = 30,
+            S = 54,
+            R = 53,
+            j = 60,
+            ["0"] = 41,
+            y = 40,
+            p = 2,
+            W = 11,
+            ["3"] = 3,
+            Z = 29,
+            V = 42,
+            h = 24,
+            ["1"] = 46,
+            ["5"] = 62,
+            C = 15,
+            v = 1,
+            f = 5,
+            D = 4,
+            s = 50,
+            k = 12,
+            K = 51,
+            I = 0,
+            H = 37,
+            d = 27,
+            ["2"] = 49,
+            o = 61,
+            ["8"] = 19,
+            J = 36,
+            l = 38,
+            Y = 34,
+            g = 13,
+            z = 58,
+            w = 57,
+            x = 9,
+            ["6"] = 45,
+            r = 32,
+            t = 43,
+            ["7"] = 48,
+            ["9"] = 47,
+            P = 16,
+            B = 17,
+            b = 25,
+            u = 20,
+            F = 23,
+            L = 59,
+            U = 26,
+            q = 6,
+            M = 33,
+            A = 14,
+            G = 21,
+            E = 52,
+            Q = 31,
+            X = 10,
+            ["+"] = 39,
+            O = 63,
+            i = 56,
+            m = 22,
+            c = 7,
+            a = 8,
+            e = 44
+        }
+        local g = math.floor
+        local k = type
+        local i = table.insert
+        local x = F
+        for F = 1, #x, 1 do
+            local p = x[F]
+            if k(p) == "string" then
+                local k = b(p)
+                local f = {}
+                local K = 1
+                local s = 0
+                local r = 0
+                while K <= k do
+                    local F = e(p, K, K)
+                    local b = B[F]
+                    if b then
+                        s = s + b * (64) ^ ((3) - r)
+                        r = r + (1)
+                        if r == 4 then
+                            r = 0
+                            local F = g(s / (65536))
+                            local e = g((s % (65536)) / (256))
+                            local b = s % (256)
+                            i(f, X(F, e, b))
+                            s = 0
+                        end
+                    elseif F == "=" then
+                        i(f, X(g(s / (65536))))
+                        if K >= k or e(p, K + (1), K + (1)) ~= "=" then
+                            i(f, X(g((s % (65536)) / (256))))
+                        end
+                        break
+                    end
+                    K = K + (1)
+                end
+                x[F] = q(f)
+            end
+        end
+    end
+    return (function(F, X, q, B, g, k, i, s, K, f, p, E, U, x, r, b)
+        x, s, E, f, U, K, r, b, p = {}, function(F)
+            for e = 1, #F, 1 do
+                p[F[e]] = (1) + p[F[e]]
+            end
+            if q then
+                local b = q(true)
+                local X = g(b)
+                X[e(-47831)], X[e(-47833)], X[e(-47836)] = F, r, function()
+                    return 1678265
+                end
+                return b
+            else
+                return B({}, {
+                    [e(-47833)] = r,
+                    [e(-47831)] = F,
+                    [e(-47836)] = function()
+                        return 1678265
+                    end
+                })
+            end
+        end, function(F)
+            p[F] = p[F] - (1)
+            if p[F] == 0 then
+                p[F], x[F] = nil, nil
+            end
+        end, function()
+            K = (1) + K
+            p[K] = 1
+            return K
+        end, function(F, e)
+            local X = s(e)
+            local q = function(...)
+                return b(F, {
+                    ...
+                }, e, X)
+            end
+            return q
+        end, 0, function(F)
+            local e, b = 1, F[1]
+            while b do
+                p[b], e = p[b] - (1), (1) + e
+                if 0 == p[b] then
+                    p[b], x[b] = nil, nil
+                end
+                b = F[e]
+            end
+        end, function(b, q, B, g)
+            local r, E, p, f, K, x, i, s
+            while b do
+                if b < 11918181 then
+                    if b < 7229991 then
+                        x = q
+                        i = e(-47837)
+                        p = 1
+                        f = 2
+                        K = 3
+                        b = F[i]
+                        s = {
+                            p,
+                            f,
+                            K
+                        }
+                        p = {
+                            b(s)
+                        }
+                        E = p[3]
+                        i = p[1]
+                        s = i
+                        b = 15990762
+                        r = p[2]
+                    else
+                        b = F[e(-47835)]
+                        i = {}
+                    end
+                else
+                    if b < 16726791 then
+                        E, f = s(r, E)
+                        b = E and 16756027 or 8055098
+                    else
+                        K = e(-47832)
+                        p = E
+                        b = F[K]
+                        K = b(p, f)
+                        b = 15990762
+                        p = nil
+                        f = nil
+                    end
+                end
+            end
+            b = #g
+            return X(i)
+        end, {}
+        return (U(5592151, {}))(X(i))
+    end)(getfenv and getfenv() or _ENV, unpack or table[e(-47834)], newproxy, setmetatable, getmetatable, select, {
+        ...
+    })
+end)(...)

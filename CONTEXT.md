@@ -571,7 +571,7 @@ without producing unrelated locals.
    - Tracked `sample/47.source.lua` / `sample/47.txt` is the anti-tamper/control-flow stress fixture. The generator-template fragments were materialized into concrete literals only to make the fixture standalone; no transform depends on them. Normal resolves 49/57 leaves (8 dead pruned) across 8 VM functions; beta versions 327 assignments with 0 skips. The former shared short-circuit/`ReturnVal` blocker is now solved structurally: nonterminal `ReturnVal` definitions may share one beta epoch only when one reaching definition dominates every alternate definition and the join use, including loop backedges; terminal `ReturnVal = {...}; state=nil` remains preserved. Numeric-for recognition now accepts logical state transitions followed by tail writes only when the existing transition-tail safety proof allows canonicalization. Repeat-condition canonicalization now preserves string-literal identity so unrelated `_env["..."]` lookups cannot become false duplicate matches. Current sample 47 beta-CF succeeds: 49 states, 8 closure regions, 13 branches/12 joins, 2 numeric-for loops, 1 while, 1 repeat, 14 recovered cells/slots, and 9 lowered terminal returns. All 12 focused regression suites pass after these changes.
 
 4. Relate captured-cell candidates to source initialization/mutation patterns only after dominance/order proof is available; do not infer “initial write” from textual or block order across CFG joins.
-5. The former loop-matrix blockers are now solved: sample 35 proves captured cells across numeric-for/while/repeat with per-cell allocation dominance, and sample 37 proves source mutation of the visible numeric-for variable while hidden induction state remains independent. Samples 45-46 are the minimal regressions for those rules. Generic iterator `for ... in` remains intentionally untested per user request; keep any unproven dominance/induction-interference shape fail-closed.
+5. The former loop-matrix blockers are now solved: sample 35 proves captured cells across numeric-for/while/repeat with per-cell allocation dominance, and sample 37 proves source mutation of the visible numeric-for variable while hidden induction state remains independent. Samples 45-46 are the minimal regressions for those rules. Generic iterator `for ... in` is now explicitly covered by sample 53. Normal recovery/runtime succeeds, but beta currently skips the compiler's multi-target iterator-step assignment and beta-CF fails closed because generic-for loop structuring is not implemented yet.
 6. Keep POS-register temporary reuse distinct from true block terminators; extend Prometheus-specific recognition only from evidence in the local WeAreDevs compiler unless the user explicitly requests the public/canonical implementation.
 7. Keep every pass structural/generalized, reparse transformed Lua, runtime-check executable fixtures, and update/commit/push `CONTEXT.md` after meaningful work.
 8. If the current parser becomes a correctness blocker, evaluate Rust Moonlight instead of parser-specific hacks.
@@ -855,7 +855,7 @@ CURRENT REGRESSION STATE AT THIS HANDOFF:
 - Minimal sample 46 proves mutated visible numeric-for variable recovery.
 - Sample 47 is the tracked anti-tamper/shared-short-circuit regression and now passes normal + beta + beta-CF. The same former shared-arm blocker in untracked `sample/spacial.txt` is also solved; keep both as evidence for dominance-proven ReturnVal join recovery and safe CF tail canonicalization.
 - Sample 6 is also unblocked by the new multi-state captured-cell dominance logic and has exact runtime parity.
-- Generic iterator for ... in remains intentionally untested because I previously asked not to test it.
+- Generic iterator `for ... in` is now tested by sample 53; normal recovery succeeds, while beta/CF remain intentionally fail-closed at the unsupported iterator-step/generic-loop shape.
 
 COMMUNICATION STYLE FOR PROJECT WORK:
 - Caveman mode.
@@ -877,6 +877,14 @@ Done for this turn — you can prompt now.
 - Normal deobfuscation succeeds: 45/53 dispatcher leaves, 8 dead pruned, 7 VM functions. Beta succeeds: 308 versioned assignments, 0 skips. Beta-CF succeeds: 45 states, 7 closure regions, 2 numeric-for loops, 1 while, 13 branches, 12 joins, 14 recovered cells.
 - Standalone beta runtime still fails with the known cross-state beta-local presentation issue (`attempt to call local r_v1_8 (a nil value)`).
 
+
+## Latest Sample 53 Generic For-In Fixture (2026-08-24)
+
+- `sample/53.source.lua` is `for i,v in pairs({1,2,3}) do print(i,v) end`, generated through the required local Medium -> formatter pipeline. Source, raw obfuscated, formatted, and normal deobfuscated output all execute exactly as `1 1`, `2 2`, `3 3`.
+- Normal deobfuscation succeeds with 4/4 states in one VM function. Step-4 reports 25 definitions, one join, 5 cross-block lifetimes, and one loop-carried lifetime.
+- Local compiler `ForInStatement` lowering (compiler.lua 1665-1754) evaluates/pins iterator/state/control registers, then its check block emits a multi-target iterator call equivalent to `control, secondVar = iterator(state, control)` followed by `state = control and body or final`; body copies the control value into the first source loop variable and jumps back to the check.
+- Beta currently reports 18 versioned assignments, 2 cross-state versions, **1 skipped assignment**: the multi-target iterator step (`r2, r4 = r7(r1, r2)` in this randomized fixture). Standalone beta is not executable because those skipped/cross-state values are not reconstructed as lexical bindings.
+- Beta-CF fails closed with `Beta CF acyclic stage detected a loop/backedge; loop structuring is not implemented yet`. This is now the focused regression for future generic `for ... in` support; do not force it through numeric-for/while/repeat matchers or split the multi-return iterator assignment unsafely.
 
 ## deobf.bat Helper (2026-08-24)
 
