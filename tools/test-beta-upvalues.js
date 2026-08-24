@@ -282,7 +282,7 @@ const forInCellAlias = recoverBetaUpvalues({
                 { kind: "epoch-start", emittedTarget: "loopCell", emittedText: "local loopCell = cellTemp", rhs: "cellTemp", reads: ["cellTemp"] },
                 { kind: "version-define", emittedTarget: "closure", emittedText: "local closure = createClosure2(205, { loopCell })", rhs: "createClosure2(205, { loopCell })", reads: ["loopCell"] },
                 { kind: "version-define", emittedTarget: "seen", emittedText: "local seen = upvalueValues[loopCell]", rhs: "upvalueValues[loopCell]", reads: ["loopCell"] },
-                { kind: "epoch-mutate", emittedTarget: "loopCell", emittedText: "loopCell = releaseUpvalue(loopCell)", rhs: "releaseUpvalue(loopCell)", reads: ["loopCell"] },
+                { kind: "epoch-start", emittedTarget: "deadRelease", emittedText: "local deadRelease = releaseUpvalue(loopCell)", rhs: "releaseUpvalue(loopCell)", reads: ["loopCell"] },
                 ...terminalOps(),
             ] },
             { id: 205, predecessors: [], successors: [], operations: [
@@ -302,6 +302,7 @@ const forInAliasRoot = forInCellAlias.graph.states.find(state => state.id === 10
 const forInAliasChild = forInCellAlias.graph.states.find(state => state.id === 205).operations;
 assert(!forInAliasRoot.some(op => op.emittedTarget === "loopCell"));
 assert(!forInAliasRoot.some(op => String(op.emittedText || "").includes("releaseUpvalue")));
+assert(!forInAliasRoot.some(op => op.emittedTarget === "deadRelease"));
 assert(forInAliasRoot.some(op => op.rhs === "createClosure2(205, {})"));
 assert(forInAliasRoot.some(op => op.emittedTarget === "seen" && op.rhs === "loopValue"));
 assert(forInAliasChild.some(op => op.emittedTarget === "captured" && op.rhs === "loopValue"));

@@ -531,12 +531,14 @@ function analyzeBetaRegisterLifetimes({
         for (let index = 1; index < concrete.length; index++) unionFind.union(concrete[0], concrete[index]);
     }
 
-    // Transitive mutation evidence. Walk value provenance backward from each ordinary
-    // definition; if it depends on an earlier definition of the same physical register,
-    // coalesce them. This handles compiler temporaries without merging unrelated scratch
-    // values merely because they happen to share a later cleanup.
+    // Transitive mutation evidence. A true compiler write back into an already
+    // reserved VAR_REGISTER ends as an identifier copy from the expression
+    // temporary. Only those copy definitions may merge backward through value
+    // provenance. Direct calls/literals into a reused scratch register can depend
+    // on older values without representing mutation of the same source binding.
     const dependencyClosureByDefinitionId = new Map();
     for (const definition of ordinaryDefinitions) {
+        const canMergeAsMutation = isIdentifier(definition.rhs);
         const queue = [...(dependenciesByDefinitionId.get(definition.id) || [])];
         const seen = new Set();
         let cursor = 0;
@@ -546,7 +548,7 @@ function analyzeBetaRegisterLifetimes({
             seen.add(dependencyId);
             const dependency = definitionById.get(dependencyId);
             if (!dependency?.supported) continue;
-            if (dependency.name === definition.name && ordinaryDefinitionIds.has(dependency.id)) {
+            if (canMergeAsMutation && dependency.name === definition.name && ordinaryDefinitionIds.has(dependency.id)) {
                 unionFind.union(definition.id, dependency.id);
             }
             for (const parentId of dependenciesByDefinitionId.get(dependencyId) || []) {
@@ -571,6 +573,12 @@ function analyzeBetaRegisterLifetimes({
             seen.add(currentId);
             const current = definitionById.get(currentId);
             if (!current || !ordinaryDefinitionIds.has(currentId)) continue;
+            // Cleanup/return ownership anchors may start at a direct source-local
+            // initializer (call/literal). That initializer owns the current epoch
+            // but must not absorb older scratch values merely because its RHS
+            // transitively depends on them. Only compiler write-back copies can
+            // prove continuity with an earlier same-register definition.
+            if (!isIdentifier(current.rhs)) continue;
             const priorIds = new Set(reachingBeforeStatement.get(current.statement)?.get(current.name) || []);
             if (!priorIds.size || [...priorIds].some(id => unknownDefinitionIds.has(id))) continue;
             for (const priorId of priorIds) {

@@ -566,9 +566,9 @@ const numericForStructured = solveBetaControlFlow(ast, {
                 { kind: "state-transition", emittedTarget: "state", rhs: "stateTmp or exitId", emittedText: "state = stateTmp or exitId", reads: ["stateTmp", "exitId"] },
             ] },
             { id: 3, predecessors: [2], successors: [2], operations: [
-                { kind: "epoch-start", emittedTarget: "loopVar", rhs: "current", emittedText: "local loopVar = current", reads: ["current"], registerEpoch: "loop:1" },
+                { kind: "epoch-start", originalTarget: "loopPhysical", emittedTarget: "loopVar", rhs: "current", emittedText: "local loopVar = current", reads: ["current"], registerEpoch: "loop:1" },
                 { kind: "version-define", emittedTarget: "sink", rhs: "consume(loopVar)", emittedText: "local sink = consume(loopVar)", reads: ["loopVar"] },
-                { kind: "epoch-kill", emittedTarget: "loopVar", rhs: "nil", emittedText: "loopVar = nil", reads: [], registerEpoch: "loop:1" },
+                { kind: "epoch-kill", originalTarget: "loopPhysical", emittedTarget: "deadLoopCleanup", rhs: "nil", emittedText: "local deadLoopCleanup = nil", reads: [], registerEpoch: "loop:1" },
                 { kind: "state-transition", emittedTarget: "state", rhs: "2", emittedText: "state = 2", reads: [] },
             ] },
             { id: 4, predecessors: [2], successors: [], operations: [
@@ -996,5 +996,26 @@ assert(!capturedGenericForStructured.source.includes("local capturedValue = valu
 assert(!capturedGenericForStructured.source.includes("controlReg, valueReg ="));
 assert(!capturedGenericForStructured.source.includes("state ="));
 parseLua(capturedGenericForStructured.source, "<beta-cf-captured-generic-for-output>");
+
+const siblingLoopVariableReuse = solveBetaControlFlow(ast, {
+    applied: true,
+    graph: {
+        cfgComplete: true,
+        stateName: "state",
+        entries: [1],
+        states: [{
+            id: 1, predecessors: [], successors: [], operations: [
+                { kind: "structured-generic-for", structuredNode: { type: "generic-for", variables: ["a", "sharedLoopValue"], expressions: ["iterA", "stateA", "controlA"], body: [], reads: ["iterA", "stateA", "controlA"] }, emittedText: "for a, sharedLoopValue in iterA, stateA, controlA do end", reads: ["iterA", "stateA", "controlA"] },
+                { kind: "structured-generic-for", structuredNode: { type: "generic-for", variables: ["b", "sharedLoopValue"], expressions: ["iterB", "stateB", "controlB"], body: [], reads: ["iterB", "stateB", "controlB"] }, emittedText: "for b, sharedLoopValue in iterB, stateB, controlB do end", reads: ["iterB", "stateB", "controlB"] },
+                { kind: "return-payload", terminalCompilerReturnPayload: true, returnExpressions: [], emittedText: "ReturnVal = {}", rhs: "{}", reads: [] },
+                { kind: "state-transition", emittedTarget: "state", emittedText: "state = nil", rhs: "nil", reads: [] },
+            ],
+        }],
+    },
+});
+assert.equal(siblingLoopVariableReuse.applied, true);
+assert(siblingLoopVariableReuse.source.includes("for a, sharedLoopValue in iterA, stateA, controlA do"));
+assert(siblingLoopVariableReuse.source.includes("for b, sharedLoopValue in iterB, stateB, controlB do"));
+parseLua(siblingLoopVariableReuse.source, "<beta-cf-sibling-loop-variable-output>");
 
 console.log("beta control-flow tests passed");

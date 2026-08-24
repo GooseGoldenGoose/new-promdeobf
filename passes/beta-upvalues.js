@@ -169,8 +169,8 @@ function releaseCellFromOperation(operation) {
     const expression = parsed?.expression;
     if (!isCall(expression, "releaseUpvalue", 1)) return null;
     const argument = expression.arguments[0];
-    if (!isIdentifier(argument) || operation?.emittedTarget !== argument.name) return null;
-    return { cellName: argument.name };
+    if (!isIdentifier(argument)) return null;
+    return { cellName: argument.name, resultName: operation?.emittedTarget || null };
 }
 
 function allocationFromOperation(operation) {
@@ -705,6 +705,14 @@ function recoverBetaUpvalues(betaResult) {
         const release = releaseCellFromOperation(operation);
         const releaseCellId = release ? cellIdByRegister.get(release.cellName) : null;
         if (releaseCellId && capturedCellIds.has(releaseCellId)) {
+            if (release.resultName && release.resultName !== release.cellName) {
+                const resultIsRead = positions.some(item =>
+                    item.operation !== operation && (item.operation?.reads || []).includes(release.resultName)
+                );
+                if (resultIsRead) {
+                    return { applied: false, safe: false, reason: "releaseUpvalue result " + release.resultName + " is still live after captured-cell recovery" };
+                }
+            }
             removals.add(operation);
             releaseRemovalCount++;
             continue;

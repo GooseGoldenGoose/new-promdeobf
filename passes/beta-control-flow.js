@@ -637,10 +637,13 @@ function validateStructuredLocalScopes(nodes) {
             return "Beta name " + name + " has multiple local declarations in one structured scope";
         }
         if (list.length) {
-            // Lua evaluates numeric-for bounds in the parent scope, then declares
-            // the loop variable in the loop-body scope. `local x = 1; for x = x, ...`
-            // is valid when beta coalesces the start scratch and loop variable.
-            if (list.some(declaration => !isAncestor(declaration.scopeId, parentScopeId))) {
+            // Lua evaluates for expressions in the parent scope, then declares loop
+            // variables in the loop-body scope. Ancestor declarations may be
+            // shadowed, and separate sibling for-loops may legally reuse the same
+            // emitted beta name. Keep unrelated raw locals rejected; the read-scope
+            // validation below still proves every beta read sees an ancestor declaration.
+            const unrelated = list.filter(declaration => !isAncestor(declaration.scopeId, parentScopeId));
+            if (unrelated.some(declaration => declaration.kind !== "numeric-for")) {
                 return "Beta name " + name + " has unrelated local declarations after structuring";
             }
         }
@@ -1378,6 +1381,7 @@ function matchCompilerNumericFor(graph, checkStateId) {
     if (loopVariableDefinitions.length !== 1 || loopVariableDefinitions[0].stateId !== bodyId) return null;
     const loopVariableDefinition = loopVariableDefinitions[0].operation;
     const loopVariable = loopVariableDefinition.emittedTarget;
+    const loopVariableOriginal = originalOperationTarget(loopVariableDefinition);
 
     const cleanupCandidates = [];
     const loopVariableWrites = [];
@@ -1385,7 +1389,8 @@ function matchCompilerNumericFor(graph, checkStateId) {
     for (const stateId of region.ids) {
         const state = stateById.get(stateId);
         for (const operation of state.operations || []) {
-            if (operation?.emittedTarget !== loopVariable) continue;
+            const operationOriginalTarget = originalOperationTarget(operation);
+            if (operation?.emittedTarget !== loopVariable && (!loopVariableOriginal || operationOriginalTarget !== loopVariableOriginal)) continue;
             loopVariableWrites.push(operation);
             if (operation.kind === 'upvalue-binding-declaration') {
                 capturedLoopDeclarations.push({ stateId, operation });

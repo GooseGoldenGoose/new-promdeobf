@@ -177,6 +177,39 @@ assert(!scratchBoundaryResult.source.includes(`${scratchR2Base}_1 = nil`));
 assert(scratchBoundaryResult.lifetimeAnalysisStats.provenCleanupCount >= 1);
 parseLua(scratchBoundaryResult.source, "<beta-scratch-boundary-test-output>");
 
+const scratchFanInSource = `vm = function(state, args, upvalues, gcProxy)
+    local r1, r2, r3, ReturnVal
+    while state do
+        if state == 1 then
+            r1 = allocA()
+            r2 = r1
+            r1 = allocB()
+            r3 = r1
+            r1 = build(r2, r3)
+            ReturnVal = consume(r1)
+            r1 = nil
+            ReturnVal = {}
+            state = nil
+        end
+    end
+    state = #gcProxy
+    return unpack(ReturnVal)
+end
+root = createClosure(1, {})`;
+
+const scratchFanInResult = versionVmBlockRegisters(
+    scratchFanInSource,
+    parseLua(scratchFanInSource, "<beta-scratch-fanin-test>")
+);
+const scratchFanInBase = scratchFanInResult.mapping.find(item => item.originalName === "r1")?.baseName;
+assert(scratchFanInBase);
+assert(scratchFanInResult.source.includes(`local ${scratchFanInBase}_1 = allocA()`));
+assert(scratchFanInResult.source.includes(`local ${scratchFanInBase}_2 = allocB()`));
+assert(scratchFanInResult.source.includes(`local ${scratchFanInBase}_3 = build(`));
+assert(scratchFanInResult.source.includes(`${scratchFanInBase}_3 = nil`));
+assert(!scratchFanInResult.source.includes(`${scratchFanInBase}_1 = allocB()`));
+parseLua(scratchFanInResult.source, "<beta-scratch-fanin-test-output>");
+
 const compilerReturnPayloadSource = `vm = function(state, args, upvalues, gcProxy)
     local r1, r2, ReturnVal
     while state do
