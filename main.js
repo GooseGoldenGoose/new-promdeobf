@@ -261,6 +261,7 @@ function main() {
     if (vmBindings.found) {
         console.log(`VM functions analyzed: ${vmBindings.functionCount}`);
         console.log(`VM reaching definitions: ${vmBindings.definitions.length} defs, ${vmBindings.uniqueUseCount}/${vmBindings.uses.length} unique uses`);
+        console.log(`VM value provenance: env=${vmBindings.environmentReferenceDefinitions.length}, register=${vmBindings.registerValueDefinitions.length}, external=${vmBindings.externalReferenceDefinitions.length}, unknown=${vmBindings.unknownValueDefinitions.length}`);
         console.log(`VM definition lifetimes: ${vmBindings.definitionLifetimes.length}, joins: ${vmBindings.definitionJoinGroups.length}, cross-block: ${vmBindings.crossBlockLifetimeCount}, loop-carried: ${vmBindings.loopCarriedLifetimeCount}`);
         console.log(`VM binding-end candidates: ${vmBindings.bindingEndCandidates.length}, ownership handoffs: ${vmBindings.ownershipHandoffCandidates.length}`);
         console.log(`VM capture slots: ${vmBindings.captures.length}, local cells: ${vmBindings.localCells.length}, shared cells: ${vmBindings.sharedLocalCells.length}`);

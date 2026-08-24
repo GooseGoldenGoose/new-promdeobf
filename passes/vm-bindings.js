@@ -69,6 +69,93 @@ function isClosureFactoryCall(node) {
         /^createClosure(?:\d+)?$/.test(node.base.name);
 }
 
+function isEnvironmentReferenceExpression(node) {
+    if (isIdentifier(node, "_env")) return true;
+    if (node?.type !== "IndexExpression" && node?.type !== "MemberExpression") return false;
+    return isEnvironmentReferenceExpression(node.base);
+}
+
+function initialDefinitionValueProvenance(definition) {
+    if (!definition.exactRhs || !definition.rhs) {
+        return { kind: "unknown", reason: "inexact-rhs", sourceDefinitionIds: [] };
+    }
+    if (isEnvironmentReferenceExpression(definition.rhs)) {
+        return { kind: "environment-reference", reason: "direct-environment-reference", sourceDefinitionIds: [] };
+    }
+    if (!isIdentifier(definition.rhs)) {
+        return { kind: "register-value", reason: "computed-or-literal", sourceDefinitionIds: [] };
+    }
+    const sourceDefinitionIds = [...(definition.rhsReachingDefIds || [])];
+    if (!sourceDefinitionIds.length) {
+        return {
+            kind: "external-reference",
+            reason: "identifier-outside-vm-register-flow",
+            sourceDefinitionIds,
+            sourceName: definition.rhs.name,
+        };
+    }
+    return {
+        kind: "unknown",
+        reason: "pending-register-copy",
+        sourceDefinitionIds,
+        sourceName: definition.rhs.name,
+    };
+}
+
+function annotateDefinitionValueProvenance(definitions, definitionsById, uses) {
+    for (const definition of definitions) {
+        definition.valueProvenance = initialDefinitionValueProvenance(definition);
+    }
+
+    let changed = true;
+    let iterations = 0;
+    const iterationLimit = Math.max(1, definitions.length + 1);
+    while (changed && iterations < iterationLimit) {
+        changed = false;
+        iterations++;
+        for (const definition of definitions) {
+            const current = definition.valueProvenance;
+            if (current.reason !== "pending-register-copy") continue;
+            const sourceKinds = current.sourceDefinitionIds
+                .map(id => definitionsById.get(id)?.valueProvenance?.kind || "unknown");
+            if (!sourceKinds.length || sourceKinds.includes("unknown")) continue;
+            const firstKind = sourceKinds[0];
+            const sameKind = sourceKinds.every(kind => kind === firstKind);
+            const next = sameKind
+                ? { ...current, kind: firstKind, reason: "register-copy" }
+                : { ...current, kind: "unknown", reason: "mixed-register-copy" };
+            if (next.kind !== current.kind || next.reason !== current.reason) {
+                definition.valueProvenance = next;
+                changed = true;
+            }
+        }
+    }
+
+    for (const definition of definitions) {
+        if (definition.valueProvenance?.reason === "pending-register-copy") {
+            definition.valueProvenance = {
+                ...definition.valueProvenance,
+                reason: "unresolved-register-copy",
+            };
+        }
+    }
+
+    for (const use of uses) {
+        const kinds = use.reachingDefIds
+            .map(id => definitionsById.get(id)?.valueProvenance?.kind || "unknown");
+        let kind = "unknown";
+        if (kinds.length && !kinds.includes("unknown") && kinds.every(item => item === kinds[0])) {
+            kind = kinds[0];
+        }
+        use.valueProvenance = {
+            kind,
+            sourceDefinitionIds: [...use.reachingDefIds],
+        };
+    }
+
+    return { converged: !changed, iterations };
+}
+
 function walkExpression(node, visit) {
     if (!isNode(node)) return;
     if (node.type === "FunctionDeclaration") return;
@@ -522,6 +609,7 @@ function buildFunctionAnalysis(root, functionId) {
                     exactRhs: item.exactRhs,
                     statement,
                     previousReachingDefIds: [],
+                    rhsReachingDefIds: [],
                     kind: item.exactRhs &&
                         item.rhs?.type === "CallExpression" &&
                         isIdentifier(item.rhs.base, "allocUpvalue") &&
@@ -629,10 +717,15 @@ function buildFunctionAnalysis(root, functionId) {
             for (const def of definitionsByBlock.get(blockId) || []) {
                 if (def.statementIndex !== statementIndex) continue;
                 def.previousReachingDefIds = [...(reaching.get(def.name) || [])];
+                if (def.exactRhs && isIdentifier(def.rhs)) {
+                    def.rhsReachingDefIds = [...(reaching.get(def.rhs.name) || [])];
+                }
                 reaching.set(def.name, new Set([def.id]));
             }
         }
     }
+
+    const valueProvenance = annotateDefinitionValueProvenance(definitions, definitionsById, uses);
 
     const definitionLiveness = buildDefinitionLiveness(
         blockIds,
@@ -694,6 +787,7 @@ function buildFunctionAnalysis(root, functionId) {
         definitionLifetimes: definitionLiveness.lifetimes,
         definitionJoinGroups: definitionLiveness.joinGroups,
         bindingEndCandidates,
+        valueProvenance,
         liveness: {
             converged: definitionLiveness.converged,
             iterations: definitionLiveness.iterations,
@@ -782,6 +876,10 @@ function recoverVmBindings(source, ast, vmState) {
     const ambiguousUseCount = uses.filter(use => use.reachingDefIds.length > 1).length;
     const undefinedUseCount = uses.filter(use => use.reachingDefIds.length === 0).length;
     const localCells = definitions.filter(def => def.kind === "alloc-upvalue");
+    const environmentReferenceDefinitions = definitions.filter(def => def.valueProvenance?.kind === "environment-reference");
+    const registerValueDefinitions = definitions.filter(def => def.valueProvenance?.kind === "register-value");
+    const externalReferenceDefinitions = definitions.filter(def => def.valueProvenance?.kind === "external-reference");
+    const unknownValueDefinitions = definitions.filter(def => def.valueProvenance?.kind === "unknown");
 
     const resolvedCellAccessCount = cellAccesses.filter(access => access.resolvedCellId !== null).length;
     const unresolvedCellAccessCount = cellAccesses.length - resolvedCellAccessCount;
@@ -856,6 +954,11 @@ function recoverVmBindings(source, ast, vmState) {
         resolvedCellAccessCount,
         unresolvedCellAccessCount,
         localCells,
+        environmentReferenceDefinitions,
+        registerValueDefinitions,
+        externalReferenceDefinitions,
+        unknownValueDefinitions,
+        valueProvenanceComplete: unknownValueDefinitions.length === 0 && functions.every(fn => fn.valueProvenance.converged),
         sharedLocalCells,
         capturedBindingCandidates,
         cellGraphComplete,
