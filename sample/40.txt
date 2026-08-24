@@ -1,0 +1,270 @@
+return (function(...)
+    local w = {
+        "E/MAIDxRths8",
+        "E3kcVHM=",
+        "a9gH0A==",
+        "tDfA0D7z",
+        "a9gmrDZ=",
+        "LOtz0GOZM2ks0sxoqRn=",
+        "E/MAIDsirF==",
+        "E/MAIDJX",
+        "a9gcVRJO1F==",
+        "E/MAIa7p0akp"
+    }
+    for x, F in ipairs({
+        {
+            1,
+            10
+        },
+        {
+            1,
+            7
+        },
+        {
+            8,
+            10
+        }
+    }) do
+        while F[1] < F[2] do
+            w[F[1]], w[F[2]], F[1], F[2] = w[F[2]], w[F[1]], F[1] + (1), F[2] - (1)
+        end
+    end
+    local function x(x)
+        return w[x - (31405)]
+    end
+    do
+        local x = string.char
+        local F = table.insert
+        local p = {
+            f = 57,
+            d = 54,
+            W = 14,
+            m = 44,
+            b = 60,
+            ["5"] = 45,
+            ["1"] = 30,
+            H = 39,
+            a = 23,
+            t = 29,
+            z = 43,
+            J = 17,
+            ["7"] = 13,
+            ["4"] = 58,
+            Z = 56,
+            S = 10,
+            s = 21,
+            ["6"] = 34,
+            P = 32,
+            ["/"] = 51,
+            p = 52,
+            ["0"] = 24,
+            D = 22,
+            F = 0,
+            M = 16,
+            n = 40,
+            K = 31,
+            Q = 15,
+            h = 6,
+            k = 9,
+            Y = 59,
+            C = 26,
+            ["3"] = 7,
+            U = 35,
+            u = 4,
+            w = 3,
+            B = 8,
+            q = 20,
+            ["9"] = 53,
+            N = 2,
+            c = 41,
+            ["2"] = 36,
+            y = 49,
+            R = 38,
+            V = 27,
+            e = 63,
+            j = 62,
+            O = 37,
+            l = 42,
+            E = 28,
+            A = 48,
+            g = 61,
+            L = 18,
+            x = 5,
+            i = 46,
+            ["8"] = 50,
+            I = 11,
+            o = 1,
+            r = 25,
+            T = 55,
+            ["+"] = 12,
+            v = 33,
+            G = 19,
+            X = 47
+        }
+        local o = type
+        local G = table.concat
+        local C = w
+        local q = math.floor
+        local B = string.len
+        local f = string.sub
+        for w = 1, #C, 1 do
+            local l = C[w]
+            if o(l) == "string" then
+                local o = B(l)
+                local T = {}
+                local L = 1
+                local I = 0
+                local a = 0
+                while L <= o do
+                    local w = f(l, L, L)
+                    local G = p[w]
+                    if G then
+                        I = I + G * (64) ^ ((3) - a)
+                        a = a + (1)
+                        if a == 4 then
+                            a = 0
+                            local w = q(I / (65536))
+                            local p = q((I % (65536)) / (256))
+                            local o = I % (256)
+                            F(T, x(w, p, o))
+                            I = 0
+                        end
+                    elseif w == "=" then
+                        F(T, x(q(I / (65536))))
+                        if L >= o or f(l, L + (1), L + (1)) ~= "=" then
+                            F(T, x(q((I % (65536)) / (256))))
+                        end
+                        break
+                    end
+                    L = L + (1)
+                end
+                C[w] = G(T)
+            end
+        end
+    end
+    return (function(w, p, o, G, C, q, B, f, a, R, I, Q, L, T, F, l)
+        L, I, F, R, l, a, Q, f, T = 0, function(w)
+            for x = 1, #w, 1 do
+                l[w[x]] = l[w[x]] + (1)
+            end
+            if o then
+                local F = o(true)
+                local p = C(F)
+                p[x(31411)], p[x(31415)], p[x(31407)] = w, a, function()
+                    return 2107488
+                end
+                return F
+            else
+                return G({}, {
+                    [x(31415)] = a,
+                    [x(31411)] = w,
+                    [x(31407)] = function()
+                        return 2107488
+                    end
+                })
+            end
+        end, function(F, o, G, C)
+            local l, R, T, a, f, Q, B, L, I
+            while F do
+                if F < 12009416 then
+                    if F < 8978561 then
+                        if F < 4534007 then
+                            R = x(31410)
+                            B = x(31414)
+                            F = w[B]
+                            B = F(R, a, Q)
+                            Q = nil
+                            Q = x(31413)
+                            B = x(31414)
+                            F = w[B]
+                            B = F(Q, a)
+                            a = nil
+                            F = 11491822
+                        else
+                            B = 10
+                            a = l
+                            F = a * B
+                            B = 2
+                            Q = F
+                            F = a == B
+                            F = F and 16597033 or 3176999
+                        end
+                    else
+                        a = not I
+                        l = l + L
+                        B = l <= T
+                        B = a and B
+                        a = l >= T
+                        a = I and a
+                        B = a or B
+                        a = 4678777
+                        F = B and a
+                        B = 12132510
+                        F = F or B
+                    end
+                else
+                    if F < 16121752 then
+                        if F < 13266663 then
+                            l = x(31409)
+                            B = x(31414)
+                            F = w[B]
+                            B = F(l)
+                            F = w[x(31408)]
+                            B = {}
+                        else
+                            B = x(31414)
+                            f = o
+                            l = x(31412)
+                            F = w[B]
+                            B = F(l)
+                            l = 3
+                            T = l
+                            l = 1
+                            B = 1
+                            L = l
+                            F = 11491822
+                            l = 0
+                            I = L < l
+                            l = B - L
+                        end
+                    else
+                        Q = nil
+                        F = 11491822
+                        a = nil
+                    end
+                end
+            end
+            F = #C
+            return p(B)
+        end, function(w, x)
+            local p = I(x)
+            local o = function(...)
+                return F(w, {
+                    ...
+                }, x, p)
+            end
+            return o
+        end, {}, function(w)
+            local x, F = 1, w[1]
+            while F do
+                l[F], x = l[F] - (1), x + (1)
+                if l[F] == 0 then
+                    l[F], f[F] = nil, nil
+                end
+                F = w[x]
+            end
+        end, function(w)
+            l[w] = l[w] - (1)
+            if 0 == l[w] then
+                l[w], f[w] = nil, nil
+            end
+        end, {}, function()
+            L = (1) + L
+            l[L] = 1
+            return L
+        end
+        return (R(15698122, {}))(p(B))
+    end)(getfenv and getfenv() or _ENV, unpack or table[x(31406)], newproxy, setmetatable, getmetatable, select, {
+        ...
+    })
+end)(...)

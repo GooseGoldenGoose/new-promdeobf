@@ -1,0 +1,318 @@
+return (function(...)
+    local d = {
+        "3WZI5DItiP3IXXelRQ0=",
+        "gyiNCOJxs7Q=",
+        "g7JjUdi=",
+        "gyiNCOm=",
+        "iDQWfOIInX9ssOeOSa==",
+        "suHbsi==",
+        "gyiNCOr=",
+        "D9HjUTEPnv==",
+        "D9Hd6a==",
+        "UePuSVfaE+Jj3O9tl+0=",
+        "gT3N",
+        "SOpa6Of/",
+        "D9HosOF="
+    }
+    for o, U in ipairs({
+        {
+            1,
+            13
+        },
+        {
+            1,
+            5
+        },
+        {
+            6,
+            13
+        }
+    }) do
+        while U[1] < U[2] do
+            d[U[1]], d[U[2]], U[1], U[2] = d[U[2]], d[U[1]], U[1] + (1), U[2] - (1)
+        end
+    end
+    local function o(o)
+        return d[o - (43554)]
+    end
+    do
+        local o = string.len
+        local U = d
+        local A = {
+            z = 63,
+            C = 11,
+            L = 19,
+            f = 13,
+            a = 48,
+            ["9"] = 53,
+            n = 30,
+            H = 61,
+            M = 12,
+            V = 3,
+            x = 47,
+            D = 23,
+            u = 6,
+            R = 26,
+            X = 20,
+            v = 0,
+            ["6"] = 24,
+            c = 50,
+            d = 39,
+            i = 16,
+            E = 17,
+            r = 8,
+            k = 42,
+            W = 54,
+            P = 37,
+            ["4"] = 10,
+            ["/"] = 43,
+            G = 40,
+            g = 28,
+            Y = 59,
+            ["0"] = 32,
+            l = 18,
+            ["5"] = 14,
+            N = 52,
+            U = 27,
+            I = 33,
+            Q = 36,
+            s = 25,
+            j = 41,
+            T = 38,
+            ["7"] = 7,
+            ["1"] = 62,
+            J = 9,
+            b = 46,
+            A = 55,
+            ["8"] = 1,
+            Z = 45,
+            q = 49,
+            S = 29,
+            O = 22,
+            o = 44,
+            h = 15,
+            ["+"] = 35,
+            y = 51,
+            F = 56,
+            ["3"] = 21,
+            p = 57,
+            e = 5,
+            m = 4,
+            w = 60,
+            K = 58,
+            B = 34,
+            t = 2,
+            ["2"] = 31
+        }
+        local E = string.char
+        local r = math.floor
+        local F = table.concat
+        local P = string.sub
+        local L = table.insert
+        local c = type
+        for d = 1, #U, 1 do
+            local i = U[d]
+            if c(i) == "string" then
+                local c = o(i)
+                local C = {}
+                local f = 1
+                local s = 0
+                local X = 0
+                while f <= c do
+                    local d = P(i, f, f)
+                    local o = A[d]
+                    if o then
+                        s = s + o * (64) ^ ((3) - X)
+                        X = X + (1)
+                        if X == 4 then
+                            X = 0
+                            local d = r(s / (65536))
+                            local o = r((s % (65536)) / (256))
+                            local U = s % (256)
+                            L(C, E(d, o, U))
+                            s = 0
+                        end
+                    elseif d == "=" then
+                        L(C, E(r(s / (65536))))
+                        if f >= c or P(i, f + (1), f + (1)) ~= "=" then
+                            L(C, E(r((s % (65536)) / (256))))
+                        end
+                        break
+                    end
+                    f = f + (1)
+                end
+                U[d] = F(C)
+            end
+        end
+    end
+    return (function(d, A, E, r, F, P, L, c, q, U, Z, g, s, X, C, f, i)
+        i, f, c, Z, X, q, C, U, s, g = {}, 0, {}, function(d)
+            i[d] = i[d] - (1)
+            if 0 == i[d] then
+                i[d], c[d] = nil, nil
+            end
+        end, function(d)
+            local o, U = 1, d[1]
+            while U do
+                i[U], o = i[U] - (1), (1) + o
+                if 0 == i[U] then
+                    i[U], c[U] = nil, nil
+                end
+                U = d[o]
+            end
+        end, function(d, o)
+            local A = s(o)
+            local E = function(E)
+                return U(d, {
+                    E
+                }, o, A)
+            end
+            return E
+        end, function()
+            f = f + (1)
+            i[f] = 1
+            return f
+        end, function(U, E, r, F)
+            local L, s, f, C, X, i, c, Z
+            while U do
+                if U < 8326059 then
+                    if U < 3053598 then
+                        if U < 2226693 then
+                            if U < 2211555 then
+                                L = o(43562)
+                                Z = o(43561)
+                                U = d[L]
+                                L = U(Z, c, X)
+                                X = nil
+                                U = 4678777
+                            else
+                                X = nil
+                                U = 4678777
+                            end
+                        else
+                            L = 4
+                            U = X == L
+                            U = U and 4178909 or 2209040
+                        end
+                    else
+                        if U < 4541899 then
+                            if U < 3856804 then
+                                U = o(43565)
+                                L = {
+                                    U,
+                                    c
+                                }
+                                U = d[o(43556)]
+                            else
+                                X = nil
+                                U = 3176999
+                            end
+                        else
+                            i = i + f
+                            L = i <= C
+                            X = not s
+                            L = X and L
+                            X = i >= C
+                            X = s and X
+                            L = X or L
+                            X = 12132510
+                            U = L and X
+                            L = 3176999
+                            U = U or L
+                        end
+                    end
+                else
+                    if U < 15451469 then
+                        if U < 13360730 then
+                            if U < 12045590 then
+                                L = 1
+                                i = 5
+                                c = E[1]
+                                C = i
+                                i = 1
+                                f = i
+                                U = 4678777
+                                i = 0
+                                s = f < i
+                                i = L - f
+                            else
+                                X = i
+                                U = X == c
+                                U = U and 13925794 or 16597033
+                            end
+                        else
+                            U = o(43557)
+                            L = {
+                                U,
+                                X
+                            }
+                            U = d[o(43560)]
+                        end
+                    else
+                        if U < 16305898 then
+                            c = E
+                            U = q(11491822, {})
+                            s = 3
+                            L = o(43562)
+                            C = o(43563)
+                            i = U
+                            U = d[L]
+                            f = {
+                                i(s)
+                            }
+                            L = U(C, A(f))
+                            L = o(43562)
+                            s = 9
+                            U = d[L]
+                            f = {
+                                i(s)
+                            }
+                            i = nil
+                            C = o(43566)
+                            L = U(C, A(f))
+                            U = d[o(43564)]
+                            L = {}
+                        else
+                            L = 2
+                            U = X == L
+                            U = U and 2214191 or 2905053
+                        end
+                    end
+                end
+            end
+            U = #F
+            return A(L)
+        end, function(d)
+            for o = 1, #d, 1 do
+                i[d[o]] = (1) + i[d[o]]
+            end
+            if E then
+                local U = E(true)
+                local A = F(U)
+                A[o(43567)], A[o(43555)], A[o(43559)] = d, X, function()
+                    return 2107488
+                end
+                return U
+            else
+                return r({}, {
+                    [o(43555)] = X,
+                    [o(43567)] = d,
+                    [o(43559)] = function()
+                        return 2107488
+                    end
+                })
+            end
+        end, function(d, o)
+            local A = s(o)
+            local E = function(...)
+                return U(d, {
+                    ...
+                }, o, A)
+            end
+            return E
+        end
+        return (g(15698122, {}))(A(L))
+    end)(getfenv and getfenv() or _ENV, unpack or table[o(43558)], newproxy, setmetatable, getmetatable, select, {
+        ...
+    })
+end)(...)

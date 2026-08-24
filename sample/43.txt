@@ -1,0 +1,295 @@
+return (function(...)
+    local h = {
+        "AZ8XC2==",
+        "g161/AjRCAyR",
+        "AZ8dLUP5af==",
+        "g161/+57LUY0",
+        "D+u2C+jH",
+        "a9yGY+VP6Yy4ikVFLmn=",
+        "AZ8ES+h=",
+        "g161/+Y7Sf==",
+        "g161/+8ZDkY0",
+        "gwydLX6="
+    }
+    for t, y in ipairs({
+        {
+            1,
+            10
+        },
+        {
+            1,
+            1
+        },
+        {
+            2,
+            10
+        }
+    }) do
+        while y[1] < y[2] do
+            h[y[1]], h[y[2]], y[1], y[2] = h[y[2]], h[y[1]], y[1] + (1), y[2] - (1)
+        end
+    end
+    local function t(t)
+        return h[t + (5394)]
+    end
+    do
+        local t = string.len
+        local y = type
+        local u = math.floor
+        local b = table.concat
+        local D = table.insert
+        local g = string.sub
+        local M = h
+        local v = {
+            U = 38,
+            ["7"] = 46,
+            F = 47,
+            H = 43,
+            Y = 21,
+            e = 1,
+            g = 28,
+            ["0"] = 50,
+            w = 7,
+            a = 30,
+            y = 9,
+            q = 62,
+            S = 25,
+            X = 39,
+            M = 60,
+            u = 57,
+            O = 15,
+            ["/"] = 11,
+            J = 45,
+            G = 2,
+            ["8"] = 61,
+            N = 40,
+            b = 59,
+            B = 8,
+            m = 54,
+            v = 20,
+            n = 32,
+            ["+"] = 22,
+            W = 58,
+            c = 3,
+            Z = 53,
+            s = 26,
+            r = 35,
+            ["3"] = 63,
+            x = 14,
+            h = 56,
+            o = 55,
+            t = 33,
+            I = 49,
+            R = 52,
+            C = 24,
+            V = 5,
+            d = 41,
+            ["2"] = 48,
+            i = 18,
+            ["5"] = 37,
+            Q = 10,
+            l = 12,
+            T = 19,
+            P = 17,
+            j = 13,
+            ["4"] = 42,
+            k = 6,
+            z = 31,
+            D = 29,
+            E = 44,
+            p = 36,
+            f = 0,
+            ["1"] = 51,
+            A = 23,
+            K = 34,
+            ["6"] = 16,
+            ["9"] = 4,
+            L = 27
+        }
+        local I = string.char
+        for h = 1, #M, 1 do
+            local z = M[h]
+            if y(z) == "string" then
+                local y = t(z)
+                local F = {}
+                local E = 1
+                local o = 0
+                local B = 0
+                while E <= y do
+                    local h = g(z, E, E)
+                    local t = v[h]
+                    if t then
+                        o = o + t * (64) ^ ((3) - B)
+                        B = B + (1)
+                        if B == 4 then
+                            B = 0
+                            local h = u(o / (65536))
+                            local t = u((o % (65536)) / (256))
+                            local y = o % (256)
+                            D(F, I(h, t, y))
+                            o = 0
+                        end
+                    elseif h == "=" then
+                        D(F, I(u(o / (65536))))
+                        if E >= y or g(z, E + (1), E + (1)) ~= "=" then
+                            D(F, I(u((o % (65536)) / (256))))
+                        end
+                        break
+                    end
+                    E = E + (1)
+                end
+                M[h] = b(F)
+            end
+        end
+    end
+    return (function(h, u, b, D, g, M, v, o, V, B, E, z, I, y, s, F)
+        y, V, o, B, E, I, z, F, s = function(y, b, D, g)
+            local z, s, I, B, H, o, E, v, F, V
+            while y do
+                if y < 11550179 then
+                    if y < 4751734 then
+                        if y < 3488098 then
+                            if y < 3001038 then
+                                y = 11491822
+                                s = nil
+                                B = nil
+                            else
+                                v = 1
+                                V = 2
+                                y = s + v
+                                s = y
+                                v = s == V
+                                y = v and 7335085 or 11574963
+                            end
+                        else
+                            y = 0
+                            B = z
+                            s = y
+                            y = 13925794
+                        end
+                    else
+                        if y < 8682133 then
+                            if y < 6515441 then
+                                V = t(-5393)
+                                v = h[V]
+                                H = t(-5384)
+                                y = 11491822
+                                V = v(H, B, s)
+                                B = nil
+                                s = nil
+                            else
+                                y = 16597033
+                            end
+                        else
+                            B = not o
+                            z = z + E
+                            v = z <= F
+                            v = B and v
+                            B = z >= F
+                            B = o and B
+                            v = B or v
+                            B = 4678777
+                            y = v and B
+                            v = 12132510
+                            y = y or v
+                        end
+                    end
+                else
+                    if y < 14777943 then
+                        if y < 13401318 then
+                            if y < 11726417 then
+                                H = t(-5389)
+                                y = 13925794
+                                V = t(-5393)
+                                v = h[V]
+                                V = v(H, B, s)
+                            else
+                                v = t(-5393)
+                                y = h[v]
+                                z = t(-5385)
+                                v = y(z)
+                                v = {}
+                                y = h[t(-5387)]
+                            end
+                        else
+                            y = true
+                            y = y and 3176999 or 16597033
+                        end
+                    else
+                        if y < 15979997 then
+                            v = t(-5393)
+                            y = h[v]
+                            I = b
+                            z = t(-5391)
+                            v = y(z)
+                            z = 3
+                            y = 11491822
+                            v = 1
+                            F = z
+                            z = 1
+                            E = z
+                            z = 0
+                            o = E < z
+                            z = v - E
+                        else
+                            V = 2
+                            v = B == V
+                            y = v and 2844611 or 4804877
+                        end
+                    end
+                end
+            end
+            y = #g
+            return u(v)
+        end, function(h, t)
+            local u = o(t)
+            local b = function(...)
+                return y(h, {
+                    ...
+                }, t, u)
+            end
+            return b
+        end, function(h)
+            for t = 1, #h, 1 do
+                z[h[t]] = z[h[t]] + (1)
+            end
+            if b then
+                local y = b(true)
+                local u = g(y)
+                u[t(-5390)], u[t(-5392)], u[t(-5386)] = h, B, function()
+                    return 2107488
+                end
+                return y
+            else
+                return D({}, {
+                    [t(-5392)] = B,
+                    [t(-5390)] = h,
+                    [t(-5386)] = function()
+                        return 2107488
+                    end
+                })
+            end
+        end, function(h)
+            local t, y = 1, h[1]
+            while y do
+                z[y], t = z[y] - (1), t + (1)
+                if 0 == z[y] then
+                    z[y], I[y] = nil, nil
+                end
+                y = h[t]
+            end
+        end, 0, {}, {}, function()
+            E = (1) + E
+            z[E] = 1
+            return E
+        end, function(h)
+            z[h] = z[h] - (1)
+            if 0 == z[h] then
+                z[h], I[h] = nil, nil
+            end
+        end
+        return (V(15698122, {}))(u(v))
+    end)(getfenv and getfenv() or _ENV, unpack or table[t(-5388)], newproxy, setmetatable, getmetatable, select, {
+        ...
+    })
+end)(...)
