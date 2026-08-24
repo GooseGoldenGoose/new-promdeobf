@@ -44,6 +44,7 @@ function main() {
     if (generated.controlFlow.whileLoopCount !== undefined) console.log(`While loops: ${generated.controlFlow.whileLoopCount}`);
     if (generated.controlFlow.repeatLoopCount !== undefined) console.log(`Repeat loops: ${generated.controlFlow.repeatLoopCount}`);
     if (generated.controlFlow.removedRepeatCompilerConditionOperationCount) console.log(`Repeat compiler-junk condition operations removed: ${generated.controlFlow.removedRepeatCompilerConditionOperationCount}`);
+    if (generated.controlFlow.posPreservationRemoval?.removed) console.log(`POS preservation operations removed: ${generated.controlFlow.posPreservationRemoval.removed}`);
     if (generated.controlFlow.terminalReturnCount !== undefined) console.log(`Terminal returns: ${generated.controlFlow.terminalReturnCount}`);
     if (generated.controlFlow.closureRegionCount !== undefined) console.log(`Closure regions: ${generated.controlFlow.closureRegionCount}`);
     if (generated.controlFlow.inlinedClosureFactoryCount !== undefined) console.log(`Inlined closure factories: ${generated.controlFlow.inlinedClosureFactoryCount}`);

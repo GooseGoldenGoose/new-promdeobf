@@ -603,6 +603,76 @@ function countStructuredStatements(nodes) {
     return count;
 }
 
+function removeCompilerPosPreservationOperations(graph) {
+    const stateName = graph?.stateName;
+    if (!stateName || !Array.isArray(graph?.states)) return { removed: 0, saveCount: 0, restoreCount: 0, orphanSaveCount: 0 };
+
+    const positions = [];
+    for (const state of graph.states) {
+        for (const operation of state.operations || []) positions.push({ state, operation });
+    }
+
+    const readCounts = new Map();
+    for (const { operation } of positions) {
+        for (const name of operation.reads || []) readCounts.set(name, (readCounts.get(name) || 0) + 1);
+    }
+
+    const saveByTarget = new Map();
+    for (const item of positions) {
+        const operation = item.operation;
+        if (!operation?.emittedTarget || operation.originalTarget === stateName) continue;
+        if (String(operation.rhs || '').trim() !== stateName) continue;
+        saveByTarget.set(operation.emittedTarget, item);
+    }
+
+    const restoresBySavedTarget = new Map();
+    for (const item of positions) {
+        const operation = item.operation;
+        if (operation?.originalTarget !== stateName || operation.kind === 'state-transition' || !operation.emittedTarget) continue;
+        const savedTarget = String(operation.rhs || '').trim();
+        if (!saveByTarget.has(savedTarget)) continue;
+        if ((readCounts.get(operation.emittedTarget) || 0) !== 0) continue;
+        let list = restoresBySavedTarget.get(savedTarget);
+        if (!list) restoresBySavedTarget.set(savedTarget, list = []);
+        list.push(item);
+    }
+
+    const removals = new Set();
+    let saveCount = 0;
+    let restoreCount = 0;
+    let orphanSaveCount = 0;
+    for (const [savedTarget, save] of saveByTarget) {
+        const restores = restoresBySavedTarget.get(savedTarget) || [];
+        const totalReads = readCounts.get(savedTarget) || 0;
+        const restoreReads = restores.reduce((sum, item) =>
+            sum + ((item.operation.reads || []).filter(name => name === savedTarget).length), 0);
+
+        if (restores.length && totalReads === restoreReads) {
+            removals.add(save.operation);
+            saveCount++;
+            for (const restore of restores) {
+                removals.add(restore.operation);
+                restoreCount++;
+            }
+            continue;
+        }
+
+        if (totalReads === 0) {
+            removals.add(save.operation);
+            saveCount++;
+            orphanSaveCount++;
+        }
+    }
+
+    if (removals.size) {
+        for (const state of graph.states) {
+            state.operations = (state.operations || []).filter(operation => !removals.has(operation));
+        }
+    }
+
+    return { removed: removals.size, saveCount, restoreCount, orphanSaveCount };
+}
+
 function validateStructuredLocalScopes(nodes) {
     let nextScopeId = 1;
     let sequence = 0;
@@ -3389,6 +3459,7 @@ function solveBetaControlFlow(originalAst, betaResult) {
         return { applied: false, reason: upvalues.reason || "Beta upvalue recovery failed closed" };
     }
     const graph = upvalues.graph;
+    const posPreservation = removeCompilerPosPreservationOperations(graph);
     if (!graph.cfgComplete) {
         return { applied: false, reason: "Beta CFG is incomplete" };
     }
@@ -3398,6 +3469,7 @@ function solveBetaControlFlow(originalAst, betaResult) {
     if (!solved.applied) return solved;
     return {
         ...solved,
+        posPreservationRemoval: posPreservation,
         upvalueRecoveryApplied: upvalues.applied,
         recoveredUpvalueCellCount: upvalues.stats?.recoveredCellCount || 0,
         recoveredCaptureCount: upvalues.stats?.captureCount || 0,
@@ -3420,5 +3492,6 @@ module.exports = {
     removeDuplicatedRepeatConditionRegions,
     collapseCompilerStructuredLoops,
     forwardControlOnlyJoinBranches,
+    removeCompilerPosPreservationOperations,
     solveBetaControlFlow,
 };

@@ -1,6 +1,6 @@
 const assert = require("assert");
 const { parseLua } = require("../main");
-const { solveBetaControlFlow } = require("../passes/beta-control-flow");
+const { solveBetaControlFlow, removeCompilerPosPreservationOperations } = require("../passes/beta-control-flow");
 
 const wrapperSource = `return (function(_env)
     return 1
@@ -1055,5 +1055,44 @@ assert.equal(siblingLoopVariableReuse.applied, true);
 assert(siblingLoopVariableReuse.source.includes("for a, sharedLoopValue in iterA, stateA, controlA do"));
 assert(siblingLoopVariableReuse.source.includes("for b, sharedLoopValue in iterB, stateB, controlB do"));
 parseLua(siblingLoopVariableReuse.source, "<beta-cf-sibling-loop-variable-output>");
+
+const posPreservationGraph = {
+    stateName: "state",
+    states: [
+        { id: 1, operations: [
+            { kind: "epoch-start", originalTarget: "tmpReg", emittedTarget: "savedPos", rhs: "state", emittedText: "local savedPos = state", reads: [] },
+            { kind: "state-transition", originalTarget: "state", emittedTarget: "state", rhs: "2", emittedText: "state = 2", reads: [] },
+        ] },
+        { id: 2, operations: [
+            { kind: "version-define", originalTarget: "state", emittedTarget: "deadRestoredPos", rhs: "savedPos", emittedText: "local deadRestoredPos = savedPos", reads: ["savedPos"] },
+            { kind: "state-transition", originalTarget: "state", emittedTarget: "state", rhs: "3", emittedText: "state = 3", reads: [] },
+        ] },
+        { id: 3, operations: [
+            { kind: "epoch-start", originalTarget: "orphanTmp", emittedTarget: "orphanSavedPos", rhs: "state", emittedText: "local orphanSavedPos = state", reads: [] },
+            { kind: "state-transition", originalTarget: "state", emittedTarget: "state", rhs: "nil", emittedText: "state = nil", reads: [] },
+        ] },
+    ],
+};
+const posPreservationRemoved = removeCompilerPosPreservationOperations(posPreservationGraph);
+assert.deepEqual(posPreservationRemoved, { removed: 3, saveCount: 2, restoreCount: 1, orphanSaveCount: 1 });
+assert(!posPreservationGraph.states.some(state => state.operations.some(operation => String(operation.emittedText || "").includes("savedPos"))));
+
+const usedPosPreservationGraph = {
+    stateName: "state",
+    states: [
+        { id: 1, operations: [
+            { kind: "epoch-start", originalTarget: "tmpReg", emittedTarget: "savedPos", rhs: "state", emittedText: "local savedPos = state", reads: [] },
+            { kind: "state-transition", originalTarget: "state", emittedTarget: "state", rhs: "2", emittedText: "state = 2", reads: [] },
+        ] },
+        { id: 2, operations: [
+            { kind: "version-define", originalTarget: "state", emittedTarget: "deadRestoredPos", rhs: "savedPos", emittedText: "local deadRestoredPos = savedPos", reads: ["savedPos"] },
+            { kind: "statement", emittedText: "consume(savedPos)", reads: ["savedPos"] },
+            { kind: "state-transition", originalTarget: "state", emittedTarget: "state", rhs: "nil", emittedText: "state = nil", reads: [] },
+        ] },
+    ],
+};
+const usedPosPreservationKept = removeCompilerPosPreservationOperations(usedPosPreservationGraph);
+assert.deepEqual(usedPosPreservationKept, { removed: 0, saveCount: 0, restoreCount: 0, orphanSaveCount: 0 });
+assert(usedPosPreservationGraph.states[0].operations.some(operation => operation.emittedTarget === "savedPos"));
 
 console.log("beta control-flow tests passed");
