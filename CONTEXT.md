@@ -313,6 +313,14 @@ Untracked large probe. Latest observed beta-CF succeeded and proved split branch
 
 Known separate presentation issue: latest sixzens final CF still had two live `local ... = state` POS-data reads. A broad materialization attempt was unsafe and reverted. Only proven dead POS save/restore scaffolding should be auto-removed.
 
+### spacial6.txt
+
+Large untracked probe. Normal deobf succeeds. The first beta-CF blocker was a residual compiler cleanup shape where an upvalue id is materialized as an ordinary beta value before `releaseUpvalue(id)`, so it no longer traces directly to the original `allocUpvalue()` register.
+
+`beta-upvalues` now removes this residual release only after every other VM upvalue operation has already been recovered, the release argument is a side-effect-free value/literal, and the release assignment result is dead. Live results or any other unresolved upvalue machinery still fail closed. This removes the old state-3635 `releaseUpvalue` blocker without hardcoding state/register/id values.
+
+After that first fix, spacial6 proceeds to a separate control-flow blocker at closure entry 2514: shared join state 2531 is reachable directly from 2528 and through 2530, and the acyclic structurer currently tries to emit the shared join twice. Do not conflate this with upvalue recovery.
+
 ## Performance
 
 Current optimized pipeline keeps proof/fail-closed behavior unchanged. Main speedups:

@@ -415,4 +415,62 @@ assert(overflowReuseChildA.some(op => op.emittedTarget === "capturedA" && op.rhs
 assert(overflowReuseChildB.some(op => op.emittedTarget === "capturedB" && op.rhs === "other"));
 assert(!overflowReuseRoot.some(op => /allocUpvalue|releaseUpvalue|upvalueValues\[/.test(String(op.emittedText || ""))));
 
+
+const residualPrivateRelease = recoverBetaUpvalues({
+    applied: true,
+    graph: {
+        cfgComplete: true,
+        entries: [1, 2],
+        states: [
+            { id: 1, predecessors: [], successors: [], operations: [
+                { kind: "epoch-start", emittedTarget: "cell", emittedText: "local cell = allocUpvalue()", rhs: "allocUpvalue()", reads: [] },
+                { kind: "version-define", emittedTarget: "value", emittedText: "local value = 5", rhs: "5", reads: [] },
+                { kind: "effect-write", emittedText: "upvalueValues[cell] = value", reads: ["cell", "value"] },
+                { kind: "version-define", emittedTarget: "closure", emittedText: "local closure = createClosure2(2, { cell })", rhs: "createClosure2(2, { cell })", reads: ["cell"] },
+                { kind: "epoch-mutate", emittedTarget: "cellReleased", emittedText: "local cellReleased = releaseUpvalue(cell)", rhs: "releaseUpvalue(cell)", reads: ["cell"] },
+                { kind: "epoch-start", emittedTarget: "privateId", emittedText: "local privateId = 6", rhs: "6", reads: [] },
+                { kind: "epoch-start", emittedTarget: "privateRelease", emittedText: "local privateRelease = releaseUpvalue(privateId)", rhs: "releaseUpvalue(privateId)", reads: ["privateId"] },
+                ...terminalOps(),
+            ] },
+            { id: 2, predecessors: [], successors: [], operations: [
+                { kind: "version-define", emittedTarget: "captured", emittedText: "local captured = upvalueValues[upvalues[1]]", rhs: "upvalueValues[upvalues[1]]", reads: [] },
+                ...terminalOps(),
+            ] },
+        ],
+    },
+});
+assert.equal(residualPrivateRelease.safe, true);
+assert.equal(residualPrivateRelease.applied, true);
+assert.equal(residualPrivateRelease.stats.releaseRemovalCount, 2);
+assert(!residualPrivateRelease.graph.states.some(state =>
+    state.operations.some(op => String(op.emittedText || "").includes("releaseUpvalue("))
+));
+
+const liveResidualPrivateRelease = recoverBetaUpvalues({
+    applied: true,
+    graph: {
+        cfgComplete: true,
+        entries: [1, 2],
+        states: [
+            { id: 1, predecessors: [], successors: [], operations: [
+                { kind: "epoch-start", emittedTarget: "cell", emittedText: "local cell = allocUpvalue()", rhs: "allocUpvalue()", reads: [] },
+                { kind: "version-define", emittedTarget: "value", emittedText: "local value = 5", rhs: "5", reads: [] },
+                { kind: "effect-write", emittedText: "upvalueValues[cell] = value", reads: ["cell", "value"] },
+                { kind: "version-define", emittedTarget: "closure", emittedText: "local closure = createClosure2(2, { cell })", rhs: "createClosure2(2, { cell })", reads: ["cell"] },
+                { kind: "epoch-mutate", emittedTarget: "cellReleased", emittedText: "local cellReleased = releaseUpvalue(cell)", rhs: "releaseUpvalue(cell)", reads: ["cell"] },
+                { kind: "epoch-start", emittedTarget: "privateId", emittedText: "local privateId = 6", rhs: "6", reads: [] },
+                { kind: "epoch-start", emittedTarget: "privateRelease", emittedText: "local privateRelease = releaseUpvalue(privateId)", rhs: "releaseUpvalue(privateId)", reads: ["privateId"] },
+                { kind: "statement", emittedText: "consume(privateRelease)", reads: ["privateRelease"] },
+                ...terminalOps(),
+            ] },
+            { id: 2, predecessors: [], successors: [], operations: [
+                { kind: "version-define", emittedTarget: "captured", emittedText: "local captured = upvalueValues[upvalues[1]]", rhs: "upvalueValues[upvalues[1]]", reads: [] },
+                ...terminalOps(),
+            ] },
+        ],
+    },
+});
+assert.equal(liveResidualPrivateRelease.applied, false);
+assert(liveResidualPrivateRelease.reason.includes("retains unresolved VM upvalue machinery"));
+
 console.log("beta upvalue recovery tests passed");

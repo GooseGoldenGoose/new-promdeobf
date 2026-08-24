@@ -583,6 +583,20 @@ function containsVmUpvalueMachinery(text) {
     return found;
 }
 
+function deadPrivateReleaseCandidate(operation) {
+    const parsed = parseExpression(operationRhsText(operation));
+    const expression = parsed?.expression;
+    if (!isCall(expression, "releaseUpvalue", 1)) return null;
+    const argument = expression.arguments[0];
+    const pureArgument = isIdentifier(argument) ||
+        argument?.type === "NilLiteral" ||
+        argument?.type === "BooleanLiteral" ||
+        argument?.type === "NumericLiteral" ||
+        argument?.type === "StringLiteral";
+    if (!pureArgument || !operation?.emittedTarget) return null;
+    return { resultName: operation.emittedTarget };
+}
+
 function recoverBetaUpvalues(betaResult) {
     const originalGraph = betaResult?.graph || betaResult;
     if (!originalGraph?.cfgComplete || !Array.isArray(originalGraph.states) || !Array.isArray(originalGraph.entries)) {
@@ -1124,6 +1138,41 @@ function recoverBetaUpvalues(betaResult) {
         }
         state.operations = next;
         for (let index = 0; index < next.length; index++) next[index].index = index + 1;
+    }
+
+    // Some compiler cleanup paths materialize an upvalue id as an ordinary beta
+    // value before calling releaseUpvalue(id), so the release can no longer be
+    // linked to the original allocUpvalue register. Only erase that residual VM
+    // bookkeeping after every other upvalue operation has already been recovered,
+    // the release argument is side-effect-free, and its assignment result is dead.
+    const residualMachinery = [];
+    let residualMachineryIsReleaseOnly = true;
+    for (const state of graph.states) {
+        for (const operation of state.operations || []) {
+            if (!containsVmUpvalueMachinery(String(operation.emittedText || ""))) continue;
+            const candidate = deadPrivateReleaseCandidate(operation);
+            if (!candidate) {
+                residualMachineryIsReleaseOnly = false;
+                break;
+            }
+            residualMachinery.push({ state, operation, ...candidate });
+        }
+        if (!residualMachineryIsReleaseOnly) break;
+    }
+    if (residualMachineryIsReleaseOnly && residualMachinery.length) {
+        const allReleaseResultsDead = residualMachinery.every(candidate =>
+            graph.states.every(state => (state.operations || []).every(operation =>
+                operation === candidate.operation || !(operation.reads || []).includes(candidate.resultName)
+            ))
+        );
+        if (allReleaseResultsDead) {
+            const deadReleaseOperations = new Set(residualMachinery.map(candidate => candidate.operation));
+            for (const state of graph.states) {
+                state.operations = (state.operations || []).filter(operation => !deadReleaseOperations.has(operation));
+                for (let index = 0; index < state.operations.length; index++) state.operations[index].index = index + 1;
+            }
+            releaseRemovalCount += residualMachinery.length;
+        }
     }
 
     // No recovered closure region may retain VM upvalue table accesses after the
