@@ -757,3 +757,110 @@ without producing unrelated locals.
 ### New-chat operating instruction
 
 When the user pastes the resume prompt from this snapshot, do NOT merely summarize it. First read `CONTEXT.md`, inspect Git status/log, and then continue the user’s new requested task by actually editing/testing/committing/pushing as needed. Never ask them to repeat information already in this file.
+
+## Reusable New-Chat Prompt
+
+Use this prompt when starting a new ChatGPT chat for this project:
+
+```text
+Continue my Prometheus Lua/Luau deobfuscator project.
+
+Workspace:
+C:\Users\reala\Desktop\!workspaces\promdeobf ova\new promdeobf
+
+Repository:
+https://github.com/GooseGoldenGoose/new-promdeobf.git
+Branch: main
+
+BEFORE DOING ANYTHING:
+1. Read CONTEXT.md completely. Treat it as the authoritative live handoff.
+2. Do not ask me to repeat decisions already written in CONTEXT.md.
+3. Run git status --short --branch.
+4. Run git log --oneline --decorate -8.
+5. Continue from the newest state recorded in CONTEXT.md and Git; do not assume this prompt's commit list is newer than the repository.
+
+MANDATORY WORKFLOW:
+- Use the connected native Windows shell for actual project work.
+- Keep CONTEXT.md continuously updated after meaningful implementation, testing, analysis, or design decisions.
+- Compact/remove stale or superseded context instead of accumulating contradictory notes.
+- Every tracked project code/content change, even tiny, gets a focused Git commit and git push origin main.
+- Keep conceptually separate changes in separate commits when practical.
+- Stage ONLY files related to the current change.
+- Never stage or modify unrelated user working-copy files.
+- sample/20.source.lua, sample/23.source.lua, and sample/23.txt may contain unrelated user edits; inspect status and leave them untouched unless I explicitly ask otherwise.
+- formater/, output/, raw sample/*.source.obfuscated.lua, deobf.bat, and sample/spacial.txt may be intentionally untracked; never stage them unless I explicitly ask.
+- Every tracked sample/N.txt must have a matching tracked sample/N.source.lua.
+- Generated raw Prometheus sample/N.source.obfuscated.lua files stay untracked unless I explicitly ask otherwise.
+- Reparse transformed Lua and run focused/full regressions after changes.
+- Runtime-test source/raw/formatted/normal/beta-CF wherever executable. For Luau native continue that LuaJIT cannot execute, use the established local Prometheus re-obfuscation validation path when appropriate.
+- Fail closed whenever structural proof is incomplete. Never make a fixture-specific guess.
+
+DEOBFUSCATOR RULES:
+- Everything must be structural/generalized/dynamic.
+- NEVER hardcode sample IDs, normalized/original state IDs, random register names, random strings/constants, closure suffixes/arities, offsets, or fixture-specific values.
+- Fix root causes in AST/CFG/data-flow/scope/upvalue analysis, not emitted-text cleanup hacks.
+- Preserve evaluation order, call count, effects, multi-return, loops, branches, lexical ownership, globals, object/table identity, closure captures, mutable upvalues, and source-visible behavior.
+- Physical VM register != source binding. Dispatcher nesting != lexical scope.
+- Globals stay globals unless lexical provenance proves otherwise.
+- Namecall ':' semantics must be preserved.
+- Local compiler authority for Prometheus behavior is:
+  C:\Users\reala\Desktop\!workspaces\promdeobf ova\wearedev obf
+  Compiler source: src\prometheus\compiler\compiler.lua
+- Do not substitute public/canonical Prometheus unless I explicitly ask.
+
+FIXTURE PIPELINE:
+Readable sample/N.source.lua
+-> local WeAreDevs Prometheus Medium
+-> formater\luau-format.exe input.txt --luraph --output=out.txt
+-> tracked sample/N.txt
+-> node main.js sample/N.txt output/N.lua
+-> node tools/beta-register-versions.js output/N.lua output/N.beta.lua
+-> node tools/beta-control-flow.js output/N.lua output/N.beta.cf.lua
+
+CURRENT BETA-CF CAPABILITIES (read CONTEXT.md for newest details):
+- acyclic if/else/shared joins/early return
+- multiple closure regions and proven captured-upvalue recovery
+- numeric for
+- while
+- repeat-until, including removal of the local compiler's discarded first repeat-condition evaluation to restore source semantics
+- nested/sequential mixtures of for/while/repeat
+- break
+- proven continue
+- early return inside loops
+- multi-state short-circuit loop conditions without control-only _beta_phi helpers
+- captured cells in multi-state owners when CFG allocation dominance proves lexical placement
+- captured numeric-for loop variables
+- source mutation of visible numeric-for variables while hidden induction machinery remains independent
+
+IMPORTANT CURRENT CHECKPOINTS:
+- 0237d60 Recover captured loops and mutated for variables
+- 244bd0f Document captured loop recovery
+- 4cdc9c3 Add minimal loop blocker samples 45-46
+- 46f3973 Recover structured loop control edges
+- 66cfa59 Add loop control stress samples 39-44
+- 11a5629 Optimize deobfuscation pipeline passes
+Read git log because there may be newer commits.
+
+CURRENT REGRESSION STATE AT THIS HANDOFF:
+- All 10 focused regression suites pass.
+- Loop/CF fixtures 24-46 all generate structured beta-CF successfully.
+- Sample 35 now recovers 4 captured cells / 4 capture slots and structures numeric-for + while + repeat with exact runtime parity.
+- Sample 37 now preserves source mutation of the numeric-for variable with exact runtime parity.
+- Minimal sample 45 proves captured numeric-for loop-variable recovery.
+- Minimal sample 46 proves mutated visible numeric-for variable recovery.
+- Sample 6 is also unblocked by the new multi-state captured-cell dominance logic and has exact runtime parity.
+- Generic iterator for ... in remains intentionally untested because I previously asked not to test it.
+
+COMMUNICATION STYLE FOR PROJECT WORK:
+- Caveman mode.
+- Talk as little as possible.
+- Direct and technical.
+- Do the work instead of narrating plans.
+- Very short updates such as Found:, Fixed:, Tested:, Commit:.
+- No filler and no unnecessary questions if enough information exists.
+- If I ask why/explain, then explain normally.
+
+Do actual implementation/testing/commits/pushes, not just suggestions.
+At the end of EVERY project-related turn, the final line must be EXACTLY:
+Done for this turn — you can prompt now.
+```
