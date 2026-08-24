@@ -1,0 +1,257 @@
+return (function(...)
+    local w = {
+        "R+Mlm+CPbBXKdLMf",
+        "R+Mlm+CPbBox68YsdLXfdj==",
+        "dB2rmBev",
+        "qBW9R7w7eEevdsX8",
+        "R+Mlm+CPbBWPoKHfoq==",
+        "+YHnoBI=",
+        "+YH4mr==",
+        "R+Mlm+CPbBox68YPRKq=",
+        "+YHpRKCP3j==",
+        "6SWpR4q="
+    }
+    local function z(z)
+        return w[z - (20352)]
+    end
+    for z, C in ipairs({
+        {
+            1,
+            10
+        },
+        {
+            1,
+            9
+        },
+        {
+            10,
+            10
+        }
+    }) do
+        while C[1] < C[2] do
+            w[C[1]], w[C[2]], C[1], C[2] = w[C[2]], w[C[1]], C[1] + (1), C[2] - (1)
+        end
+    end
+    do
+        local z = table.insert
+        local C = w
+        local a = string.len
+        local n = {
+            ["9"] = 54,
+            n = 44,
+            T = 31,
+            G = 32,
+            p = 41,
+            F = 59,
+            L = 6,
+            ["7"] = 4,
+            U = 19,
+            s = 51,
+            e = 13,
+            l = 52,
+            M = 21,
+            b = 11,
+            i = 10,
+            K = 38,
+            ["5"] = 40,
+            X = 5,
+            y = 63,
+            C = 17,
+            V = 2,
+            ["6"] = 28,
+            t = 8,
+            Q = 20,
+            v = 43,
+            ["/"] = 62,
+            x = 47,
+            Z = 58,
+            f = 50,
+            O = 1,
+            z = 26,
+            Y = 53,
+            D = 42,
+            J = 35,
+            R = 27,
+            H = 61,
+            a = 12,
+            h = 60,
+            S = 7,
+            N = 46,
+            g = 18,
+            ["8"] = 34,
+            ["+"] = 23,
+            ["3"] = 30,
+            E = 55,
+            d = 29,
+            B = 22,
+            u = 45,
+            m = 24,
+            A = 15,
+            q = 16,
+            c = 3,
+            j = 0,
+            ["0"] = 14,
+            ["2"] = 57,
+            I = 56,
+            k = 36,
+            ["4"] = 39,
+            P = 37,
+            w = 33,
+            r = 48,
+            ["1"] = 49,
+            W = 9,
+            o = 25
+        }
+        local s = type
+        local m = string.sub
+        local B = string.char
+        local r = table.concat
+        local M = math.floor
+        for w = 1, #C, 1 do
+            local V = C[w]
+            if s(V) == "string" then
+                local s = a(V)
+                local c = {}
+                local F = 1
+                local q = 0
+                local A = 0
+                while F <= s do
+                    local w = m(V, F, F)
+                    local C = n[w]
+                    if C then
+                        q = q + C * (64) ^ ((3) - A)
+                        A = A + (1)
+                        if A == 4 then
+                            A = 0
+                            local w = M(q / (65536))
+                            local C = M((q % (65536)) / (256))
+                            local a = q % (256)
+                            z(c, B(w, C, a))
+                            q = 0
+                        end
+                    elseif w == "=" then
+                        z(c, B(M(q / (65536))))
+                        if F >= s or m(V, F + (1), F + (1)) ~= "=" then
+                            z(c, B(M((q % (65536)) / (256))))
+                        end
+                        break
+                    end
+                    F = F + (1)
+                end
+                C[w] = r(c)
+            end
+        end
+    end
+    return (function(w, a, n, s, m, B, r, V, c, b, A, C, F, q, M, h)
+        M, b, q, A, C, V, c, h, F = {}, function(w, z)
+            local a = q(z)
+            local n = function(...)
+                return C(w, {
+                    ...
+                }, z, a)
+            end
+            return n
+        end, function(w)
+            for z = 1, #w, 1 do
+                V[w[z]] = (1) + V[w[z]]
+            end
+            if n then
+                local C = n(true)
+                local a = m(C)
+                a[z(20360)], a[z(20358)], a[z(20357)] = w, A, function()
+                    return 84540
+                end
+                return C
+            else
+                return s({}, {
+                    [z(20358)] = A,
+                    [z(20360)] = w,
+                    [z(20357)] = function()
+                        return 84540
+                    end
+                })
+            end
+        end, function(w)
+            local z, C = 1, w[1]
+            while C do
+                V[C], z = V[C] - (1), (1) + z
+                if V[C] == 0 then
+                    V[C], M[C] = nil, nil
+                end
+                C = w[z]
+            end
+        end, function(C, n, s, m)
+            local c, V, r, M, b, q, A, h, F
+            while C do
+                if C < 9764381 then
+                    if C < 9070868 then
+                        M = n
+                        r = z(20361)
+                        V = z(20353)
+                        C = w[r]
+                        r = C(V)
+                        r = 1
+                        V = 3
+                        c = V
+                        V = 1
+                        F = V
+                        C = 9372094
+                        V = 0
+                        q = F < V
+                        V = r - F
+                    else
+                        A = not q
+                        V = V + F
+                        r = V <= c
+                        r = A and r
+                        A = V >= c
+                        A = q and A
+                        r = A or r
+                        A = 9920682
+                        C = r and A
+                        r = 13370090
+                        C = C or r
+                    end
+                else
+                    if C < 11976301 then
+                        r = z(20361)
+                        C = w[r]
+                        A = V
+                        h = z(20356)
+                        r = C(h, A)
+                        r = 10
+                        b = z(20362)
+                        C = A + r
+                        A = C
+                        C = 9372094
+                        h = z(20361)
+                        r = w[h]
+                        h = r(b, A)
+                        A = nil
+                    else
+                        r = z(20361)
+                        V = z(20359)
+                        C = w[r]
+                        r = C(V)
+                        r = {}
+                        C = w[z(20355)]
+                    end
+                end
+            end
+            C = #m
+            return a(r)
+        end, {}, function()
+            F = F + (1)
+            V[F] = 1
+            return F
+        end, function(w)
+            V[w] = V[w] - (1)
+            if 0 == V[w] then
+                V[w], M[w] = nil, nil
+            end
+        end, 0
+        return (b(6306426, {}))(a(r))
+    end)(getfenv and getfenv() or _ENV, unpack or table[z(20354)], newproxy, setmetatable, getmetatable, select, {
+        ...
+    })
+end)(...)

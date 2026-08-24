@@ -1,0 +1,400 @@
+return (function(...)
+    local B = {
+        "hoJBmLvil6==",
+        "/VUxCufAXgowsQiSXT==",
+        "/VUxCufAXgoSmVJxEhyZ/hcZ",
+        "/KXSgkTwYV5wj0cg09==",
+        "/VUxCufAXgoLmwH=",
+        "YoypgiHNjnRKTfCL89==",
+        "hoJK/x==",
+        "hoJSX0F=",
+        "YucBmKT=",
+        "/ffUYrvx8nHFnVzv/o/=",
+        "C0zx/0y4",
+        "/VUxCufAXgoAXh1i/hT=",
+        "/VUxCufAXgoSmVJxE0fIX6==",
+        "gZxZTnawO8nzlQRv86=="
+    }
+    for o, j in ipairs({
+        {
+            1,
+            14
+        },
+        {
+            1,
+            1
+        },
+        {
+            2,
+            14
+        }
+    }) do
+        while j[1] < j[2] do
+            B[j[1]], B[j[2]], j[1], j[2] = B[j[2]], B[j[1]], j[1] + (1), j[2] - (1)
+        end
+    end
+    local function o(o)
+        return B[o - (6592)]
+    end
+    do
+        local o = table.concat
+        local j = {
+            g = 18,
+            E = 11,
+            s = 26,
+            U = 5,
+            h = 23,
+            b = 2,
+            R = 33,
+            v = 17,
+            d = 60,
+            B = 41,
+            L = 38,
+            M = 58,
+            O = 14,
+            W = 42,
+            l = 30,
+            D = 15,
+            q = 59,
+            V = 54,
+            m = 27,
+            ["+"] = 62,
+            S = 44,
+            k = 4,
+            X = 25,
+            a = 36,
+            K = 39,
+            ["8"] = 19,
+            ["/"] = 24,
+            Y = 28,
+            o = 53,
+            i = 37,
+            ["9"] = 32,
+            ["6"] = 0,
+            ["2"] = 3,
+            ["3"] = 49,
+            w = 55,
+            H = 8,
+            t = 47,
+            P = 63,
+            Q = 6,
+            J = 61,
+            p = 34,
+            F = 56,
+            c = 9,
+            N = 51,
+            T = 16,
+            G = 31,
+            ["5"] = 45,
+            I = 46,
+            f = 21,
+            Z = 52,
+            ["4"] = 43,
+            ["7"] = 40,
+            z = 57,
+            y = 13,
+            A = 50,
+            r = 35,
+            ["0"] = 22,
+            x = 48,
+            n = 20,
+            u = 7,
+            ["1"] = 1,
+            e = 10,
+            C = 29,
+            j = 12
+        }
+        local Y = table.insert
+        local r = string.char
+        local M = math.floor
+        local O = B
+        local u = string.sub
+        local x = type
+        local w = string.len
+        for B = 1, #O, 1 do
+            local J = O[B]
+            if x(J) == "string" then
+                local x = w(J)
+                local U = {}
+                local F = 1
+                local b = 0
+                local y = 0
+                while F <= x do
+                    local B = u(J, F, F)
+                    local o = j[B]
+                    if o then
+                        b = b + o * (64) ^ ((3) - y)
+                        y = y + (1)
+                        if y == 4 then
+                            y = 0
+                            local B = M(b / (65536))
+                            local o = M((b % (65536)) / (256))
+                            local j = b % (256)
+                            Y(U, r(B, o, j))
+                            b = 0
+                        end
+                    elseif B == "=" then
+                        Y(U, r(M(b / (65536))))
+                        if F >= x or u(J, F + (1), F + (1)) ~= "=" then
+                            Y(U, r(M((b % (65536)) / (256))))
+                        end
+                        break
+                    end
+                    F = F + (1)
+                end
+                O[B] = o(U)
+            end
+        end
+    end
+    return (function(B, Y, r, M, O, u, x, j, v, y, P, J, H, k, b, F, U, w, T)
+        j, y, F, J, w, k, U, T, P, v, H, b = function(j, r, M, O)
+            local S, Q, T, y, A, C, F, J, x, b
+            while j do
+                if j < 10074382 then
+                    if j < 6248875 then
+                        if j < 939704 then
+                            if j < 99039 then
+                                j = w[M[1]]
+                                x = {
+                                    j
+                                }
+                                j = B[o(6597)]
+                            else
+                                T = 1
+                                y = w[b]
+                                x = y + T
+                                Q = o(6602)
+                                w[b] = x
+                                C = o(6605)
+                                y = v(12543095, {
+                                    b
+                                })
+                                T = B[Q]
+                                A = {
+                                    y()
+                                }
+                                y = nil
+                                Q = T(C, Y(A))
+                                j = 10880528
+                            end
+                        else
+                            if j < 4198580 then
+                                x = w[F]
+                                b = 3
+                                j = x < b
+                                j = j and 11474196 or 10338473
+                            else
+                                j = w[M[1]]
+                                x = w[M[2]]
+                                x = {
+                                    j,
+                                    x
+                                }
+                                j = B[o(6603)]
+                            end
+                        end
+                    else
+                        if j < 9648990 then
+                            if j < 7311435 then
+                                F = o(6596)
+                                x = o(6602)
+                                J = r
+                                j = B[x]
+                                x = j(F)
+                                x = 1
+                                F = 3
+                                b = F
+                                F = 1
+                                y = F
+                                F = 0
+                                j = 9372094
+                                T = y < F
+                                F = x - y
+                            else
+                                Q = not T
+                                F = F + y
+                                x = F <= b
+                                x = Q and x
+                                Q = F >= b
+                                Q = T and Q
+                                x = Q or x
+                                Q = 9920682
+                                j = x and Q
+                                x = 13370090
+                                j = j or x
+                            end
+                        else
+                            x = o(6602)
+                            Q = U()
+                            w[Q] = F
+                            A = o(6598)
+                            j = k(70402, {
+                                Q
+                            })
+                            C = j
+                            j = B[x]
+                            S = {
+                                C()
+                            }
+                            Q = P(Q)
+                            C = nil
+                            x = j(A, Y(S))
+                            j = 9372094
+                        end
+                    end
+                else
+                    if j < 12141320 then
+                        if j < 11169688 then
+                            if j < 10725633 then
+                                x = 0
+                                b = U()
+                                w[b] = x
+                                y = w[b]
+                                T = 2
+                                x = y >= T
+                                j = 375957
+                            else
+                                Q = 2
+                                T = w[b]
+                                y = T >= Q
+                                j = y and 16332880 or 375957
+                            end
+                        else
+                            x = w[F]
+                            b = 1
+                            y = 10
+                            j = x + b
+                            w[F] = j
+                            b = w[F]
+                            x = b * y
+                            b = U()
+                            w[b] = x
+                            Q = o(6595)
+                            x = H(6241773, {
+                                F,
+                                b
+                            })
+                            b = P(b)
+                            j = 1962594
+                            y = x
+                            T = o(6602)
+                            x = B[T]
+                            C = {
+                                y()
+                            }
+                            T = x(Q, Y(C))
+                            y = nil
+                        end
+                    else
+                        if j < 15063877 then
+                            if j < 13033539 then
+                                j = w[M[1]]
+                                x = {
+                                    j
+                                }
+                                j = B[o(6599)]
+                            else
+                                j = 0
+                                F = U()
+                                w[F] = j
+                                j = 1962594
+                            end
+                        else
+                            F = P(F)
+                            b = P(b)
+                            Q = o(6606)
+                            x = {}
+                            T = o(6602)
+                            y = B[T]
+                            j = B[o(6593)]
+                            T = y(Q)
+                        end
+                    end
+                end
+            end
+            j = #O
+            return Y(x)
+        end, function(B)
+            local o, j = 1, B[1]
+            while j do
+                J[j], o = J[j] - (1), o + (1)
+                if 0 == J[j] then
+                    J[j], w[j] = nil, nil
+                end
+                j = B[o]
+            end
+        end, 0, {}, {}, function(B, o)
+            local Y = b(o)
+            local r = function(r, M)
+                return j(B, {
+                    r,
+                    M
+                }, o, Y)
+            end
+            return r
+        end, function()
+            F = F + (1)
+            J[F] = 1
+            return F
+        end, function(B, o)
+            local Y = b(o)
+            local r = function(...)
+                return j(B, {
+                    ...
+                }, o, Y)
+            end
+            return r
+        end, function(B)
+            J[B] = J[B] - (1)
+            if J[B] == 0 then
+                J[B], w[B] = nil, nil
+            end
+        end, function(B, o)
+            local Y = b(o)
+            local r = function(r, M, O, u)
+                return j(B, {
+                    r,
+                    M,
+                    O,
+                    u
+                }, o, Y)
+            end
+            return r
+        end, function(B, o)
+            local Y = b(o)
+            local r = function(r, M, O, u, x)
+                return j(B, {
+                    r,
+                    M,
+                    O,
+                    u,
+                    x
+                }, o, Y)
+            end
+            return r
+        end, function(B)
+            for o = 1, #B, 1 do
+                J[B[o]] = J[B[o]] + (1)
+            end
+            if r then
+                local j = r(true)
+                local Y = O(j)
+                Y[o(6594)], Y[o(6600)], Y[o(6601)] = B, y, function()
+                    return 84540
+                end
+                return j
+            else
+                return M({}, {
+                    [o(6600)] = y,
+                    [o(6594)] = B,
+                    [o(6601)] = function()
+                        return 84540
+                    end
+                })
+            end
+        end
+        return (T(6306426, {}))(Y(x))
+    end)(getfenv and getfenv() or _ENV, unpack or table[o(6604)], newproxy, setmetatable, getmetatable, select, {
+        ...
+    })
+end)(...)

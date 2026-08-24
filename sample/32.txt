@@ -1,0 +1,339 @@
+return (function(...)
+    local X = {
+        "bkmEpo6EpVc3xYzwxsj=",
+        "lem54Xz6rM==",
+        "c653LDz5bDSwtctUJM==",
+        "bkmEpo6EpVc3pkw54oc=",
+        "lemsbF==",
+        "bkmEpo6EpVc3hVyD",
+        "xvG54sj=",
+        "bkmEpo6EpVc3hXmU",
+        "pVyFbVJO",
+        "bkmEpo6EpVc3xXtFhVTK",
+        "lemWhV9="
+    }
+    local function T(T)
+        return X[T - (58576)]
+    end
+    for T, I in ipairs({
+        {
+            1,
+            11
+        },
+        {
+            1,
+            9
+        },
+        {
+            10,
+            11
+        }
+    }) do
+        while I[1] < I[2] do
+            X[I[1]], X[I[2]], I[1], I[2] = X[I[2]], X[I[1]], I[1] + (1), I[2] - (1)
+        end
+    end
+    do
+        local T = {
+            h = 25,
+            A = 1,
+            m = 61,
+            P = 26,
+            n = 15,
+            e = 53,
+            K = 52,
+            ["8"] = 14,
+            M = 0,
+            X = 38,
+            I = 63,
+            t = 21,
+            ["/"] = 35,
+            q = 4,
+            L = 18,
+            E = 46,
+            p = 29,
+            W = 44,
+            D = 36,
+            ["4"] = 27,
+            ["9"] = 56,
+            x = 28,
+            U = 50,
+            Z = 59,
+            ["3"] = 45,
+            c = 20,
+            F = 48,
+            G = 9,
+            k = 54,
+            N = 58,
+            ["0"] = 34,
+            R = 47,
+            ["7"] = 10,
+            j = 16,
+            C = 32,
+            u = 62,
+            J = 13,
+            y = 57,
+            O = 43,
+            f = 2,
+            H = 8,
+            g = 11,
+            o = 6,
+            S = 49,
+            z = 17,
+            Q = 3,
+            b = 24,
+            r = 30,
+            B = 12,
+            a = 42,
+            Y = 55,
+            l = 23,
+            ["+"] = 31,
+            ["5"] = 41,
+            v = 7,
+            i = 60,
+            ["6"] = 37,
+            V = 22,
+            ["2"] = 19,
+            d = 40,
+            s = 39,
+            T = 5,
+            ["1"] = 51,
+            w = 33
+        }
+        local I = table.insert
+        local p = X
+        local R = table.concat
+        local A = math.floor
+        local m = string.char
+        local Z = string.sub
+        local E = string.len
+        local s = type
+        for X = 1, #p, 1 do
+            local Q = p[X]
+            if s(Q) == "string" then
+                local s = E(Q)
+                local K = {}
+                local r = 1
+                local x = 0
+                local F = 0
+                while r <= s do
+                    local X = Z(Q, r, r)
+                    local p = T[X]
+                    if p then
+                        x = x + p * (64) ^ ((3) - F)
+                        F = F + (1)
+                        if F == 4 then
+                            F = 0
+                            local X = A(x / (65536))
+                            local T = A((x % (65536)) / (256))
+                            local p = x % (256)
+                            I(K, m(X, T, p))
+                            x = 0
+                        end
+                    elseif X == "=" then
+                        I(K, m(A(x / (65536))))
+                        if r >= s or Z(Q, r + (1), r + (1)) ~= "=" then
+                            I(K, m(A((x % (65536)) / (256))))
+                        end
+                        break
+                    end
+                    r = r + (1)
+                end
+                p[X] = R(K)
+            end
+        end
+    end
+    return (function(X, p, R, A, m, Z, E, D, I, l, x, Q, s, F, K, r)
+        l, I, D, F, r, Q, s, x, K = function(X, T)
+            local p = x(T)
+            local R = function(...)
+                return I(X, {
+                    ...
+                }, T, p)
+            end
+            return R
+        end, function(I, R, A, m)
+            local s, D, K, r, w, Q, l, F, x, E
+            while I do
+                if I < 7605055 then
+                    if I < 4907629 then
+                        if I < 1082650 then
+                            if I < 357766 then
+                                l = T(58581)
+                                I = Q + D
+                                E = X[l]
+                                Q = I
+                                w = T(58582)
+                                l = E(w, D, Q)
+                                D = nil
+                                I = 9372094
+                            else
+                                F = T(58581)
+                                D = T(58584)
+                                x = X[F]
+                                F = x(D, r)
+                                I = 4614609
+                            end
+                        else
+                            if I < 4169578 then
+                                I = X[T(58577)]
+                                F = T(58581)
+                                D = T(58580)
+                                E = {}
+                                x = X[F]
+                                F = x(D, Q, K, r)
+                                Q = nil
+                                K = nil
+                                r = nil
+                            else
+                                F = 4
+                                x = r >= F
+                                I = x and 3054805 or 15740641
+                            end
+                        end
+                    else
+                        if I < 6030788 then
+                            if I < 5547256 then
+                                E = 5
+                                I = K < E
+                                I = I and 6359910 or 5960491
+                            else
+                                x = 4
+                                E = 0
+                                I = 15740641
+                                r = E
+                                E = r >= x
+                            end
+                        else
+                            if I < 6313857 then
+                                Q = T(58586)
+                                E = T(58581)
+                                I = X[E]
+                                E = I(Q)
+                                I = 0
+                                Q = I
+                                K = 5
+                                E = 1
+                                r = K
+                                I = 9372094
+                                K = 1
+                                s = R
+                                x = K
+                                K = 0
+                                F = x < K
+                                K = E - x
+                            else
+                                E = 1
+                                I = K + E
+                                K = I
+                                r = 2
+                                E = K == r
+                                I = E and 10424775 or 11212424
+                            end
+                        end
+                    end
+                else
+                    if I < 11188563 then
+                        if I < 9910442 then
+                            if I < 9660787 then
+                                K = K + x
+                                E = K <= r
+                                D = not F
+                                E = D and E
+                                D = K >= r
+                                D = F and D
+                                E = D or E
+                                D = 9920682
+                                I = E and D
+                                E = 13370090
+                                I = I or E
+                            else
+                                I = 9372094
+                                D = nil
+                            end
+                        else
+                            if I < 10087275 then
+                                D = K
+                                l = 2
+                                E = D % l
+                                l = 0
+                                I = E == l
+                                I = I and 9842459 or 70402
+                            else
+                                I = 4914917
+                            end
+                        end
+                    else
+                        if I < 13631902 then
+                            if I < 12135028 then
+                                I = 4914917
+                                x = T(58578)
+                                r = T(58581)
+                                E = X[r]
+                                r = E(x, K)
+                            else
+                                I = 0
+                                K = I
+                                I = 4914917
+                            end
+                        else
+                            if I < 15476454 then
+                                I = 4614609
+                            else
+                                x = 1
+                                E = r + x
+                                F = 2
+                                r = E
+                                x = r == F
+                                I = x and 14325941 or 366547
+                            end
+                        end
+                    end
+                end
+            end
+            I = #m
+            return p(E)
+        end, function(X)
+            Q[X] = Q[X] - (1)
+            if 0 == Q[X] then
+                Q[X], s[X] = nil, nil
+            end
+        end, function(X)
+            local T, I = 1, X[1]
+            while I do
+                Q[I], T = Q[I] - (1), (1) + T
+                if Q[I] == 0 then
+                    Q[I], s[I] = nil, nil
+                end
+                I = X[T]
+            end
+        end, 0, {}, {}, function(X)
+            for T = 1, #X, 1 do
+                Q[X[T]] = Q[X[T]] + (1)
+            end
+            if R then
+                local I = R(true)
+                local p = m(I)
+                p[T(58587)], p[T(58579)], p[T(58585)] = X, F, function()
+                    return 84540
+                end
+                return I
+            else
+                return A({}, {
+                    [T(58579)] = F,
+                    [T(58587)] = X,
+                    [T(58585)] = function()
+                        return 84540
+                    end
+                })
+            end
+        end, function()
+            r = (1) + r
+            Q[r] = 1
+            return r
+        end
+        return (l(6306426, {}))(p(E))
+    end)(getfenv and getfenv() or _ENV, unpack or table[T(58583)], newproxy, setmetatable, getmetatable, select, {
+        ...
+    })
+end)(...)

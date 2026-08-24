@@ -1,0 +1,332 @@
+return (function(...)
+    local R = {
+        "dOsndlW5NGpVJlMj",
+        "1EuOdV==",
+        "gGZ5NjJtNHnn66qZNkw=",
+        "NKs4eOw=",
+        "dOsndlW5FUZ4evr=",
+        "1EuWJl/=",
+        "dOsndlW5JGuc",
+        "FlYVdlyt",
+        "dOsndlW5JlYh",
+        "dOsndlW5NkxZNOw=",
+        "1Eu4eGxnaz=="
+    }
+    local function f(f)
+        return R[f - (48698)]
+    end
+    for f, x in ipairs({
+        {
+            1,
+            11
+        },
+        {
+            1,
+            7
+        },
+        {
+            8,
+            11
+        }
+    }) do
+        while x[1] < x[2] do
+            R[x[1]], R[x[2]], x[1], x[2] = R[x[2]], R[x[1]], x[1] + (1), x[2] - (1)
+        end
+    end
+    do
+        local f = {
+            ["4"] = 41,
+            U = 54,
+            m = 59,
+            G = 38,
+            ["/"] = 56,
+            i = 18,
+            ["2"] = 34,
+            X = 14,
+            Q = 32,
+            D = 49,
+            I = 2,
+            K = 7,
+            l = 22,
+            T = 15,
+            y = 13,
+            ["6"] = 19,
+            x = 17,
+            ["8"] = 35,
+            k = 55,
+            ["1"] = 23,
+            A = 63,
+            J = 25,
+            ["3"] = 46,
+            b = 58,
+            Z = 33,
+            v = 6,
+            W = 44,
+            E = 53,
+            N = 28,
+            a = 30,
+            q = 1,
+            L = 12,
+            B = 11,
+            o = 60,
+            u = 61,
+            t = 43,
+            ["9"] = 47,
+            d = 24,
+            p = 21,
+            R = 62,
+            ["+"] = 3,
+            s = 9,
+            M = 5,
+            Y = 57,
+            C = 40,
+            O = 39,
+            w = 16,
+            n = 37,
+            ["5"] = 45,
+            H = 51,
+            f = 4,
+            c = 50,
+            F = 29,
+            P = 42,
+            h = 36,
+            S = 8,
+            j = 52,
+            ["7"] = 10,
+            e = 27,
+            ["0"] = 31,
+            r = 20,
+            V = 48,
+            z = 0,
+            g = 26
+        }
+        local x = R
+        local z = string.len
+        local P = string.char
+        local r = table.insert
+        local g = math.floor
+        local L = table.concat
+        local O = type
+        local o = string.sub
+        for R = 1, #x, 1 do
+            local J = x[R]
+            if O(J) == "string" then
+                local O = z(J)
+                local A = {}
+                local W = 1
+                local K = 0
+                local D = 0
+                while W <= O do
+                    local R = o(J, W, W)
+                    local x = f[R]
+                    if x then
+                        K = K + x * (64) ^ ((3) - D)
+                        D = D + (1)
+                        if D == 4 then
+                            D = 0
+                            local R = g(K / (65536))
+                            local f = g((K % (65536)) / (256))
+                            local x = K % (256)
+                            r(A, P(R, f, x))
+                            K = 0
+                        end
+                    elseif R == "=" then
+                        r(A, P(g(K / (65536))))
+                        if W >= O or o(J, W + (1), W + (1)) ~= "=" then
+                            r(A, P(g((K % (65536)) / (256))))
+                        end
+                        break
+                    end
+                    W = W + (1)
+                end
+                x[R] = L(A)
+            end
+        end
+    end
+    return (function(R, z, P, r, g, L, O, D, v, x, K, A, W, c, J, o)
+        W, J, K, D, A, x, c, o, v = 0, {}, function(R)
+            for f = 1, #R, 1 do
+                J[R[f]] = (1) + J[R[f]]
+            end
+            if P then
+                local x = P(true)
+                local z = g(x)
+                z[f(48705)], z[f(48707)], z[f(48700)] = R, D, function()
+                    return 1998689
+                end
+                return x
+            else
+                return r({}, {
+                    [f(48707)] = D,
+                    [f(48705)] = R,
+                    [f(48700)] = function()
+                        return 1998689
+                    end
+                })
+            end
+        end, function(R)
+            local f, x = 1, R[1]
+            while x do
+                J[x], f = J[x] - (1), f + (1)
+                if 0 == J[x] then
+                    J[x], o[x] = nil, nil
+                end
+                x = R[f]
+            end
+        end, function()
+            W = W + (1)
+            J[W] = 1
+            return W
+        end, function(x, P, r, g)
+            local v, O, D, A, J, o, Y, c, K, W
+            while x do
+                if x < 5612192 then
+                    if x < 2772870 then
+                        if x < 1372702 then
+                            if x < 138322 then
+                                A = f(48709)
+                                W = f(48699)
+                                O = 1
+                                x = J + O
+                                O = R[A]
+                                J = x
+                                A = O(W, J)
+                                A = 3
+                                O = J == A
+                                x = O and 5167815 or 7615042
+                            else
+                                O = 5
+                                x = J < O
+                                x = x and 20408 or 6296156
+                            end
+                        else
+                            if x < 1641104 then
+                                v = nil
+                                x = 5632469
+                            else
+                                K = 5
+                                W = A >= K
+                                x = W and 4991602 or 5073592
+                            end
+                        end
+                    else
+                        if x < 5156439 then
+                            if x < 5073520 then
+                                K = f(48709)
+                                O = {}
+                                W = R[K]
+                                D = f(48703)
+                                K = W(D, J, A)
+                                x = R[f(48708)]
+                                A = nil
+                                J = nil
+                            else
+                                W = 1
+                                K = f(48709)
+                                O = A + W
+                                D = f(48706)
+                                W = R[K]
+                                A = O
+                                K = W(D, A)
+                                K = 2
+                                W = A == K
+                                x = W and 16244834 or 15293350
+                            end
+                        else
+                            if x < 5174765 then
+                                x = 6296156
+                            else
+                                A = A + K
+                                v = not D
+                                O = A <= W
+                                O = v and O
+                                v = A >= W
+                                v = D and v
+                                O = v or O
+                                v = 10687367
+                                x = O and v
+                                O = 5632469
+                                x = x or O
+                            end
+                        end
+                    end
+                else
+                    if x < 10668412 then
+                        if x < 7311781 then
+                            if x < 6205823 then
+                                x = 5073592
+                                O = 0
+                                A = O
+                                W = 5
+                                O = A >= W
+                            else
+                                O = 1
+                                A = 5
+                                W = A
+                                A = 1
+                                K = A
+                                A = 0
+                                x = 5178428
+                                D = K < A
+                                A = O - K
+                            end
+                        else
+                            if x < 7772415 then
+                                x = 655461
+                            else
+                                v = nil
+                                x = 5178428
+                            end
+                        end
+                    else
+                        if x < 14844358 then
+                            if x < 12443057 then
+                                Y = f(48701)
+                                v = A
+                                c = f(48709)
+                                O = R[c]
+                                c = O(Y, v)
+                                c = 2
+                                O = v == c
+                                x = O and 1502404 or 10534839
+                            else
+                                o = P
+                                J = f(48704)
+                                O = f(48709)
+                                x = R[O]
+                                O = x(J)
+                                x = 0
+                                J = x
+                                x = 655461
+                            end
+                        else
+                            if x < 15910826 then
+                                x = 1741058
+                            else
+                                x = 4991602
+                            end
+                        end
+                    end
+                end
+            end
+            x = #g
+            return z(O)
+        end, function(R, f)
+            local z = K(f)
+            local P = function(...)
+                return x(R, {
+                    ...
+                }, f, z)
+            end
+            return P
+        end, {}, function(R)
+            J[R] = J[R] - (1)
+            if 0 == J[R] then
+                J[R], o[R] = nil, nil
+            end
+        end
+        return (c(12770468, {}))(z(O))
+    end)(getfenv and getfenv() or _ENV, unpack or table[f(48702)], newproxy, setmetatable, getmetatable, select, {
+        ...
+    })
+end)(...)

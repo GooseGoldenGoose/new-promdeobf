@@ -1,0 +1,334 @@
+return (function(...)
+    local A = {
+        "q31XF41aO/lbqNzhqMJQR/9a",
+        "ivjER/g=",
+        "CB0VqNm=",
+        "q31XF41aOi0uC412F+==",
+        "ivjN6J==",
+        "q31XF41aO/lbqNzhqMJQCYz2CNm=",
+        "q31XF41aO/lbqNzhqMJ=",
+        "ivjVq3zuw+==",
+        "F/9J6/lP",
+        "qTVpy/0G611WCozJLT8="
+    }
+    for t, p in ipairs({
+        {
+            1,
+            10
+        },
+        {
+            1,
+            9
+        },
+        {
+            10,
+            10
+        }
+    }) do
+        while p[1] < p[2] do
+            A[p[1]], A[p[2]], p[1], p[2] = A[p[2]], A[p[1]], p[1] + (1), p[2] - (1)
+        end
+    end
+    local function t(t)
+        return A[t + (39114)]
+    end
+    do
+        local t = string.char
+        local p = math.floor
+        local o = A
+        local J = {
+            H = 31,
+            s = 42,
+            V = 41,
+            p = 4,
+            z = 17,
+            A = 60,
+            ["6"] = 24,
+            d = 1,
+            Y = 55,
+            l = 13,
+            ["+"] = 0,
+            ["4"] = 6,
+            Q = 45,
+            ["9"] = 57,
+            C = 28,
+            ["5"] = 34,
+            I = 59,
+            f = 10,
+            T = 20,
+            v = 53,
+            F = 29,
+            e = 14,
+            g = 56,
+            B = 7,
+            n = 63,
+            P = 43,
+            ["7"] = 62,
+            N = 39,
+            x = 15,
+            ["1"] = 21,
+            O = 11,
+            j = 61,
+            ["2"] = 33,
+            ["3"] = 38,
+            G = 12,
+            k = 52,
+            w = 30,
+            h = 50,
+            S = 46,
+            X = 51,
+            K = 2,
+            W = 5,
+            ["0"] = 9,
+            E = 44,
+            m = 16,
+            q = 27,
+            c = 49,
+            M = 54,
+            ["/"] = 22,
+            R = 25,
+            U = 40,
+            J = 48,
+            ["8"] = 8,
+            y = 26,
+            D = 32,
+            Z = 18,
+            o = 35,
+            t = 3,
+            L = 19,
+            i = 23,
+            a = 36,
+            r = 58,
+            u = 37,
+            b = 47
+        }
+        local O = table.concat
+        local m = string.len
+        local q = string.sub
+        local G = table.insert
+        local e = type
+        for A = 1, #o, 1 do
+            local C = o[A]
+            if e(C) == "string" then
+                local e = m(C)
+                local B = {}
+                local g = 1
+                local n = 0
+                local E = 0
+                while g <= e do
+                    local A = q(C, g, g)
+                    local o = J[A]
+                    if o then
+                        n = n + o * (64) ^ ((3) - E)
+                        E = E + (1)
+                        if E == 4 then
+                            E = 0
+                            local A = p(n / (65536))
+                            local o = p((n % (65536)) / (256))
+                            local J = n % (256)
+                            G(B, t(A, o, J))
+                            n = 0
+                        end
+                    elseif A == "=" then
+                        G(B, t(p(n / (65536))))
+                        if g >= e or q(C, g + (1), g + (1)) ~= "=" then
+                            G(B, t(p((n % (65536)) / (256))))
+                        end
+                        break
+                    end
+                    g = g + (1)
+                end
+                o[A] = O(B)
+            end
+        end
+    end
+    return (function(A, o, J, O, m, q, G, f, p, h, E, C, e, B, g, n)
+        g, B, E, C, e, p, f, h, n = 0, function()
+            g = (1) + g
+            C[g] = 1
+            return g
+        end, function(A)
+            local t, p = 1, A[1]
+            while p do
+                C[p], t = C[p] - (1), (1) + t
+                if 0 == C[p] then
+                    C[p], e[p] = nil, nil
+                end
+                p = A[t]
+            end
+        end, {}, {}, function(p, J, O, m)
+            local e, P, g, f, h, G, n, H, C, B, E
+            while p do
+                if p < 7718276 then
+                    if p < 5500223 then
+                        if p < 3177220 then
+                            if p < 3052491 then
+                                if p < 124167 then
+                                    G = 1
+                                    p = f + G
+                                    f = p
+                                    h = 2
+                                    G = f == h
+                                    p = G and 4914917 or 5960491
+                                else
+                                    p = 9372094
+                                    f = nil
+                                    E = nil
+                                end
+                            else
+                                p = 9842459
+                            end
+                        else
+                            if p < 4675780 then
+                                G = false
+                                p = 14325941
+                            else
+                                p = 6359910
+                            end
+                        end
+                    else
+                        if p < 6321248 then
+                            if p < 6103490 then
+                                P = 2
+                                H = E == P
+                                G = H
+                                h = p
+                                p = H and 11212424 or 10424775
+                            else
+                                G = t(-39112)
+                                p = A[G]
+                                C = t(-39109)
+                                G = p(C)
+                                G = 1
+                                e = J
+                                C = 3
+                                B = C
+                                p = 9372094
+                                C = 1
+                                g = C
+                                C = 0
+                                n = g < C
+                                C = G - g
+                            end
+                        else
+                            if p < 6447797 then
+                                G = 4
+                                p = f < G
+                                p = p and 70402 or 9842459
+                            else
+                                E = nil
+                                p = 9372094
+                                f = nil
+                            end
+                        end
+                    end
+                else
+                    if p < 10634591 then
+                        if p < 9918363 then
+                            if p < 9708258 then
+                                if p < 8188436 then
+                                    G = false
+                                    p = G and 6449982 or 14325941
+                                else
+                                    E = not n
+                                    C = C + g
+                                    G = C <= B
+                                    G = E and G
+                                    E = C >= B
+                                    E = n and E
+                                    G = E or G
+                                    E = 9920682
+                                    p = G and E
+                                    G = 13370090
+                                    p = p or G
+                                end
+                            else
+                                h = 2
+                                G = E == h
+                                p = G and 366547 or 4614609
+                            end
+                        else
+                            if p < 10225546 then
+                                p = 0
+                                f = p
+                                p = 6359910
+                                E = C
+                            else
+                                p = h
+                                p = G and 3054805 or 15740641
+                            end
+                        end
+                    else
+                        if p < 13502895 then
+                            if p < 13304724 then
+                                P = 3
+                                H = f == P
+                                G = H
+                                p = 10424775
+                            else
+                                C = t(-39104)
+                                G = t(-39112)
+                                p = A[G]
+                                G = p(C)
+                                G = {}
+                                p = A[t(-39105)]
+                            end
+                        else
+                            if p < 15555436 then
+                                H = t(-39111)
+                                h = t(-39112)
+                                p = 6449982
+                                G = A[h]
+                                h = G(H, E)
+                            else
+                                h = t(-39112)
+                                G = A[h]
+                                p = 6359910
+                                H = t(-39108)
+                                h = G(H, E, f)
+                            end
+                        end
+                    end
+                end
+            end
+            p = #m
+            return o(G)
+        end, function(A)
+            C[A] = C[A] - (1)
+            if 0 == C[A] then
+                C[A], e[A] = nil, nil
+            end
+        end, function(A, t)
+            local o = n(t)
+            local J = function(...)
+                return p(A, {
+                    ...
+                }, t, o)
+            end
+            return J
+        end, function(A)
+            for t = 1, #A, 1 do
+                C[A[t]] = (1) + C[A[t]]
+            end
+            if J then
+                local p = J(true)
+                local o = m(p)
+                o[t(-39107)], o[t(-39110)], o[t(-39113)] = A, E, function()
+                    return 84540
+                end
+                return p
+            else
+                return O({}, {
+                    [t(-39110)] = E,
+                    [t(-39107)] = A,
+                    [t(-39113)] = function()
+                        return 84540
+                    end
+                })
+            end
+        end
+        return (h(6306426, {}))(o(G))
+    end)(getfenv and getfenv() or _ENV, unpack or table[t(-39106)], newproxy, setmetatable, getmetatable, select, {
+        ...
+    })
+end)(...)

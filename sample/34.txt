@@ -1,0 +1,410 @@
+return (function(...)
+    local G = {
+        "IV7Snnie3SdS32mZYCS=",
+        "P2ch1pk=",
+        "uCah1bWigbdMgk==",
+        "uCah1bW=",
+        "BXdh1/IJ5w==",
+        "4nuxK/JF5lPCP2Iylt==",
+        "KZcb4StSkWZ0rKW8",
+        "BXdegnO=",
+        "g/dUjnIy1/W=",
+        "ISaj4BzOPZ7SEAPGPt==",
+        "g/dU",
+        "un8tEnm6",
+        "nzJGWCcQWA3o4bu9lt==",
+        "Ync3EllVPAItKW7OWt==",
+        "BXdpEt==",
+        "1zazm0m6uGVNWJhi4s==",
+        "P/ltgnVSjnIy1/W=",
+        "P/ltgnVS"
+    }
+    for S, V in ipairs({
+        {
+            1,
+            18
+        },
+        {
+            1,
+            16
+        },
+        {
+            17,
+            18
+        }
+    }) do
+        while V[1] < V[2] do
+            G[V[1]], G[V[2]], V[1], V[2] = G[V[2]], G[V[1]], V[1] + (1), V[2] - (1)
+        end
+    end
+    local function S(S)
+        return G[S - (48440)]
+    end
+    do
+        local S = table.insert
+        local V = string.len
+        local e = type
+        local J = {
+            a = 33,
+            ["9"] = 1,
+            Q = 10,
+            U = 50,
+            o = 49,
+            ["8"] = 57,
+            R = 62,
+            g = 25,
+            ["0"] = 55,
+            K = 19,
+            B = 23,
+            ["7"] = 8,
+            p = 39,
+            ["5"] = 30,
+            y = 47,
+            ["6"] = 43,
+            G = 51,
+            s = 32,
+            A = 35,
+            ["/"] = 38,
+            x = 2,
+            ["+"] = 3,
+            N = 34,
+            E = 24,
+            J = 37,
+            b = 6,
+            ["4"] = 18,
+            X = 53,
+            v = 63,
+            O = 56,
+            r = 14,
+            n = 22,
+            H = 60,
+            Y = 26,
+            ["2"] = 7,
+            T = 31,
+            e = 44,
+            F = 15,
+            M = 46,
+            Z = 36,
+            h = 41,
+            W = 20,
+            I = 17,
+            z = 4,
+            w = 0,
+            V = 5,
+            u = 29,
+            t = 48,
+            j = 11,
+            D = 42,
+            k = 16,
+            c = 9,
+            m = 13,
+            i = 45,
+            P = 28,
+            ["3"] = 12,
+            S = 52,
+            l = 21,
+            L = 40,
+            q = 58,
+            f = 59,
+            ["1"] = 27,
+            d = 61,
+            C = 54
+        }
+        local R = string.char
+        local i = G
+        local T = string.sub
+        local q = table.concat
+        local t = math.floor
+        for G = 1, #i, 1 do
+            local k = i[G]
+            if e(k) == "string" then
+                local e = V(k)
+                local A = {}
+                local g = 1
+                local E = 0
+                local D = 0
+                while g <= e do
+                    local G = T(k, g, g)
+                    local V = J[G]
+                    if V then
+                        E = E + V * (64) ^ ((3) - D)
+                        D = D + (1)
+                        if D == 4 then
+                            D = 0
+                            local G = t(E / (65536))
+                            local V = t((E % (65536)) / (256))
+                            local e = E % (256)
+                            S(A, R(G, V, e))
+                            E = 0
+                        end
+                    elseif G == "=" then
+                        S(A, R(t(E / (65536))))
+                        if g >= e or T(k, g + (1), g + (1)) ~= "=" then
+                            S(A, R(t((E % (65536)) / (256))))
+                        end
+                        break
+                    end
+                    g = g + (1)
+                end
+                i[G] = q(A)
+            end
+        end
+    end
+    return (function(G, e, J, R, i, T, q, D, E, d, A, r, o, g, C, V, t, k)
+        D, E, C, o, k, r, d, t, A, V, g = function(G)
+            local S, V = 1, G[1]
+            while V do
+                k[V], S = k[V] - (1), (1) + S
+                if 0 == k[V] then
+                    k[V], t[V] = nil, nil
+                end
+                V = G[S]
+            end
+        end, function(G)
+            for S = 1, #G, 1 do
+                k[G[S]] = (1) + k[G[S]]
+            end
+            if J then
+                local V = J(true)
+                local e = i(V)
+                e[S(48443)], e[S(48453)], e[S(48446)] = G, D, function()
+                    return 84540
+                end
+                return V
+            else
+                return R({}, {
+                    [S(48453)] = D,
+                    [S(48443)] = G,
+                    [S(48446)] = function()
+                        return 84540
+                    end
+                })
+            end
+        end, function(G)
+            k[G] = k[G] - (1)
+            if 0 == k[G] then
+                k[G], t[G] = nil, nil
+            end
+        end, function(G, S)
+            local e = E(S)
+            local J = function(J, R, i, T, q)
+                return V(G, {
+                    J,
+                    R,
+                    i,
+                    T,
+                    q
+                }, S, e)
+            end
+            return J
+        end, {}, function(G, S)
+            local e = E(S)
+            local J = function(J, R, i)
+                return V(G, {
+                    J,
+                    R,
+                    i
+                }, S, e)
+            end
+            return J
+        end, function(G, S)
+            local e = E(S)
+            local J = function(...)
+                return V(G, {
+                    ...
+                }, S, e)
+            end
+            return J
+        end, {}, function()
+            g = g + (1)
+            k[g] = 1
+            return g
+        end, function(V, J, R, i)
+            local A, g, D, q, t, k, E
+            while V do
+                if V < 8642410 then
+                    if V < 5682907 then
+                        if V < 3711430 then
+                            if V < 1301080 then
+                                if V < 267335 then
+                                    V = k < t
+                                    V = V and 9920682 or 13370090
+                                else
+                                    V = 5789056
+                                    D = nil
+                                end
+                            else
+                                A = 5
+                                q = k >= A
+                                V = q and 11984388 or 7230970
+                            end
+                        else
+                            if V < 4703803 then
+                                t = J[1]
+                                q = 5
+                                V = 0
+                                k = V
+                                V = k >= q
+                                V = 7230970
+                            else
+                                V = 2677295
+                            end
+                        end
+                    else
+                        if V < 7159038 then
+                            if V < 6351122 then
+                                if V < 5911148 then
+                                    D = not E
+                                    A = A + g
+                                    q = A <= k
+                                    q = D and q
+                                    D = A >= k
+                                    D = E and D
+                                    q = D or q
+                                    D = 13180303
+                                    V = q and D
+                                    q = 14358630
+                                    V = V or q
+                                else
+                                    V = r(9372094, {})
+                                    t = J
+                                    D = 5
+                                    q = S(48458)
+                                    k = V
+                                    V = r(7170632, {})
+                                    A = V
+                                    V = o(4151637, {})
+                                    g = V
+                                    V = G[q]
+                                    E = {
+                                        k(D)
+                                    }
+                                    q = V(e(E))
+                                    q = S(48458)
+                                    D = 5
+                                    V = G[q]
+                                    E = {
+                                        A(D)
+                                    }
+                                    k = nil
+                                    q = V(e(E))
+                                    q = S(48458)
+                                    V = G[q]
+                                    A = nil
+                                    D = 3
+                                    E = {
+                                        g(D)
+                                    }
+                                    q = V(e(E))
+                                    q = {}
+                                    V = G[S(48457)]
+                                    g = nil
+                                end
+                            else
+                                q = S(48442)
+                                q = {
+                                    q,
+                                    k
+                                }
+                                V = G[S(48454)]
+                            end
+                        else
+                            if V < 7230457 then
+                                t = J[1]
+                                A = 1
+                                k = t
+                                q = 1
+                                g = A
+                                A = 0
+                                E = g < A
+                                A = q - g
+                                V = 5789056
+                            else
+                                q = 1
+                                V = k + q
+                                k = V
+                                q = k == t
+                                V = q and 14795377 or 5252433
+                            end
+                        end
+                    end
+                else
+                    if V < 13210025 then
+                        if V < 10935398 then
+                            if V < 9898446 then
+                                if V < 9470491 then
+                                    t = J[1]
+                                    V = 0
+                                    k = V
+                                    V = 70402
+                                else
+                                    V = 70402
+                                end
+                            else
+                                q = 1
+                                A = 3
+                                V = k + q
+                                k = V
+                                q = k == A
+                                V = q and 6359910 or 9842459
+                            end
+                        else
+                            if V < 13051312 then
+                                q = S(48455)
+                                q = {
+                                    q,
+                                    k
+                                }
+                                V = G[S(48444)]
+                            else
+                                D = A
+                                q = 2
+                                V = D == q
+                                V = V and 16332880 or 375957
+                            end
+                        end
+                    else
+                        if V < 14397375 then
+                            if V < 14232752 then
+                                q = S(48441)
+                                V = G[S(48452)]
+                                q = {
+                                    q,
+                                    k
+                                }
+                            else
+                                V = S(48447)
+                                q = {
+                                    V,
+                                    t
+                                }
+                                V = G[S(48445)]
+                            end
+                        else
+                            if V < 15383356 then
+                                q = S(48456)
+                                V = G[S(48448)]
+                                q = {
+                                    q,
+                                    k
+                                }
+                            else
+                                V = S(48449)
+                                q = {
+                                    V,
+                                    D
+                                }
+                                V = G[S(48451)]
+                            end
+                        end
+                    end
+                end
+            end
+            V = #i
+            return e(q)
+        end, 0
+        return (d(6306426, {}))(e(q))
+    end)(getfenv and getfenv() or _ENV, unpack or table[S(48450)], newproxy, setmetatable, getmetatable, select, {
+        ...
+    })
+end)(...)

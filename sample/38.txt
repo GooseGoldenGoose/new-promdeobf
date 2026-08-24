@@ -1,0 +1,466 @@
+return (function(...)
+    local d = {
+        "yNsSObd=",
+        "pHX6wkgrU/==",
+        "OesWzb9=",
+        "0e3/Ob2xzyVXLb/=",
+        "gHGVUNUWpCK1bBKCgHY=",
+        "OesWzbj=",
+        "yNs6weVKhZ==",
+        "0e3/Ob2xzbB=",
+        "pHX6wkgrU9==",
+        "pbG/UbFM",
+        "pHX6wkgrpk26wZ==",
+        "0e3/Ob2xzbY=",
+        "01P6wD9=",
+        "UDPXweFnzbXKUyOGzyFxUyPx",
+        "OesWzbB=",
+        "UDPXweFnzbXKUyOGzb3+OZ==",
+        "pHX6wkgrOZ==",
+        "OesWzbY=",
+        "0e3/Ob2xzbj=",
+        "OesWzyVXLb/=",
+        "pHX6wkgrUA==",
+        "yNsDU/=="
+    }
+    local function D(D)
+        return d[D - (16358)]
+    end
+    for D, H in ipairs({
+        {
+            1,
+            22
+        },
+        {
+            1,
+            16
+        },
+        {
+            17,
+            22
+        }
+    }) do
+        while H[1] < H[2] do
+            d[H[1]], d[H[2]], H[1], H[2] = d[H[2]], d[H[1]], H[1] + (1), H[2] - (1)
+        end
+    end
+    do
+        local D = string.char
+        local H = string.len
+        local A = type
+        local a = string.sub
+        local y = math.floor
+        local Z = d
+        local X = table.concat
+        local B = {
+            u = 14,
+            ["0"] = 28,
+            f = 42,
+            I = 18,
+            n = 40,
+            q = 36,
+            ["3"] = 21,
+            Z = 0,
+            c = 58,
+            S = 44,
+            b = 22,
+            ["8"] = 31,
+            ["4"] = 10,
+            l = 1,
+            ["7"] = 3,
+            k = 6,
+            V = 17,
+            G = 57,
+            e = 38,
+            N = 53,
+            t = 60,
+            a = 15,
+            j = 12,
+            C = 51,
+            p = 29,
+            L = 26,
+            T = 47,
+            o = 55,
+            P = 9,
+            A = 32,
+            U = 24,
+            x = 52,
+            ["9"] = 16,
+            D = 39,
+            W = 50,
+            ["/"] = 48,
+            ["1"] = 7,
+            H = 54,
+            E = 19,
+            J = 34,
+            F = 13,
+            r = 45,
+            K = 37,
+            h = 30,
+            d = 56,
+            v = 35,
+            i = 2,
+            X = 33,
+            y = 23,
+            ["2"] = 5,
+            ["6"] = 41,
+            z = 11,
+            ["5"] = 63,
+            Y = 8,
+            Q = 59,
+            ["+"] = 46,
+            R = 49,
+            M = 43,
+            m = 62,
+            B = 4,
+            O = 25,
+            g = 20,
+            s = 61,
+            w = 27
+        }
+        local n = table.insert
+        for d = 1, #Z, 1 do
+            local j = Z[d]
+            if A(j) == "string" then
+                local A = H(j)
+                local f = {}
+                local m = 1
+                local N = 0
+                local E = 0
+                while m <= A do
+                    local d = a(j, m, m)
+                    local H = B[d]
+                    if H then
+                        N = N + H * (64) ^ ((3) - E)
+                        E = E + (1)
+                        if E == 4 then
+                            E = 0
+                            local d = y(N / (65536))
+                            local H = y((N % (65536)) / (256))
+                            local A = N % (256)
+                            n(f, D(d, H, A))
+                            N = 0
+                        end
+                    elseif d == "=" then
+                        n(f, D(y(N / (65536))))
+                        if m >= A or a(j, m + (1), m + (1)) ~= "=" then
+                            n(f, D(y((N % (65536)) / (256))))
+                        end
+                        break
+                    end
+                    m = m + (1)
+                end
+                Z[d] = X(f)
+            end
+        end
+    end
+    return (function(d, A, a, y, Z, X, B, s, E, N, j, m, H, G, n, f)
+        m, j, s, n, E, N, G, f, H = 0, {}, function(d)
+            j[d] = j[d] - (1)
+            if j[d] == 0 then
+                j[d], n[d] = nil, nil
+            end
+        end, {}, function(d)
+            local D, H = 1, d[1]
+            while H do
+                j[H], D = j[H] - (1), (1) + D
+                if 0 == j[H] then
+                    j[H], n[H] = nil, nil
+                end
+                H = d[D]
+            end
+        end, function(d)
+            for D = 1, #d, 1 do
+                j[d[D]] = (1) + j[d[D]]
+            end
+            if a then
+                local H = a(true)
+                local A = Z(H)
+                A[D(16359)], A[D(16374)], A[D(16375)] = d, E, function()
+                    return 84540
+                end
+                return H
+            else
+                return y({}, {
+                    [D(16374)] = E,
+                    [D(16359)] = d,
+                    [D(16375)] = function()
+                        return 84540
+                    end
+                })
+            end
+        end, function(d, D)
+            local A = N(D)
+            local a = function(...)
+                return H(d, {
+                    ...
+                }, D, A)
+            end
+            return a
+        end, function()
+            m = (1) + m
+            j[m] = 1
+            return m
+        end, function(H, a, y, Z)
+            local f, N, j, s, B, n, W, E, m, G
+            while H do
+                if H < 8091855 then
+                    if H < 5900371 then
+                        if H < 2757269 then
+                            if H < 1886202 then
+                                if H < 665830 then
+                                    if H < 337269 then
+                                        m = D(16365)
+                                        B = d[m]
+                                        H = 13370090
+                                        f = D(16363)
+                                        m = B(f, j)
+                                    else
+                                        s = m
+                                        G = 2
+                                        B = s <= G
+                                        H = B and 12272113 or 7886567
+                                    end
+                                else
+                                    N = D(16365)
+                                    f = d[N]
+                                    E = D(16378)
+                                    H = 7761117
+                                    N = f(E, m)
+                                end
+                            else
+                                if H < 2083036 then
+                                    H = 6449982
+                                else
+                                    N = D(16365)
+                                    f = d[N]
+                                    E = D(16360)
+                                    H = 841210
+                                    N = f(E, m)
+                                end
+                            end
+                        else
+                            if H < 4013140 then
+                                if H < 3009907 then
+                                    f = 1
+                                    B = m + f
+                                    N = 1
+                                    m = B
+                                    f = m == N
+                                    H = f and 2671368 or 14951384
+                                else
+                                    m = D(16365)
+                                    f = D(16376)
+                                    B = d[m]
+                                    H = 10424775
+                                    m = B(f, j)
+                                end
+                            else
+                                if H < 4769279 then
+                                    s = not E
+                                    m = m + N
+                                    B = m <= f
+                                    B = s and B
+                                    s = m >= f
+                                    s = E and s
+                                    B = s or B
+                                    s = 366547
+                                    H = B and s
+                                    B = 14325941
+                                    H = H or B
+                                else
+                                    H = 5960491
+                                    m = D(16365)
+                                    B = d[m]
+                                    f = D(16373)
+                                    m = B(f, j)
+                                end
+                            end
+                        end
+                    else
+                        if H < 6434220 then
+                            if H < 6285619 then
+                                if H < 6150170 then
+                                    H = 70402
+                                else
+                                    G = D(16365)
+                                    H = 1962594
+                                    B = d[G]
+                                    W = D(16377)
+                                    G = B(W, s)
+                                end
+                            else
+                                if H < 6311306 then
+                                    j = D(16366)
+                                    B = D(16365)
+                                    n = a
+                                    H = d[B]
+                                    B = H(j)
+                                    H = 0
+                                    j = H
+                                    H = 13370090
+                                else
+                                    m = 2
+                                    B = j == m
+                                    H = B and 11212424 or 4914917
+                                end
+                            end
+                        else
+                            if H < 7035477 then
+                                if H < 6636549 then
+                                    G = D(16365)
+                                    W = D(16372)
+                                    H = 4614609
+                                    B = d[G]
+                                    G = B(W, s)
+                                    s = nil
+                                else
+                                    H = 6449982
+                                end
+                            else
+                                if H < 7843815 then
+                                    N = 3
+                                    f = m >= N
+                                    H = f and 8863110 or 2822421
+                                else
+                                    G = 3
+                                    B = s == G
+                                    H = B and 12112941 or 6241773
+                                end
+                            end
+                        end
+                    end
+                else
+                    if H < 11986592 then
+                        if H < 10213730 then
+                            if H < 9561178 then
+                                if H < 9191154 then
+                                    E = D(16368)
+                                    B = {}
+                                    j = nil
+                                    m = nil
+                                    N = D(16365)
+                                    f = d[N]
+                                    H = d[D(16379)]
+                                    N = f(E)
+                                else
+                                    B = 1
+                                    H = j + B
+                                    f = 2
+                                    j = H
+                                    m = j % f
+                                    f = 0
+                                    B = m == f
+                                    H = B and 6359910 or 9842459
+                                end
+                            else
+                                if H < 9881697 then
+                                    m = 1
+                                    B = j == m
+                                    H = B and 3054805 or 15740641
+                                else
+                                    B = 1
+                                    H = 4614609
+                                    m = 4
+                                    f = m
+                                    m = 1
+                                    N = m
+                                    m = 0
+                                    E = N < m
+                                    m = B - N
+                                end
+                            end
+                        else
+                            if H < 11201160 then
+                                if H < 10410595 then
+                                    G = D(16365)
+                                    H = 6843843
+                                    B = d[G]
+                                    W = D(16367)
+                                    G = B(W, s)
+                                else
+                                    H = 70402
+                                end
+                            else
+                                if H < 11274199 then
+                                    m = D(16365)
+                                    H = 5960491
+                                    f = D(16361)
+                                    B = d[m]
+                                    m = B(f, j)
+                                else
+                                    G = D(16365)
+                                    H = 6843843
+                                    W = D(16370)
+                                    B = d[G]
+                                    G = B(W, s)
+                                end
+                            end
+                        end
+                    else
+                        if H < 13803768 then
+                            if H < 12444059 then
+                                if H < 12191206 then
+                                    G = D(16365)
+                                    B = d[G]
+                                    H = 1962594
+                                    W = D(16380)
+                                    G = B(W, s)
+                                else
+                                    G = 1
+                                    B = s == G
+                                    H = B and 10338473 or 11474196
+                                end
+                            else
+                                if H < 13438233 then
+                                    B = 4
+                                    H = j < B
+                                    H = H and 9372094 or 9920682
+                                else
+                                    E = D(16371)
+                                    N = D(16365)
+                                    H = 841210
+                                    f = d[N]
+                                    N = f(E, m)
+                                end
+                            end
+                        else
+                            if H < 14456779 then
+                                if H < 14269933 then
+                                    E = D(16364)
+                                    N = D(16365)
+                                    H = 841210
+                                    f = d[N]
+                                    N = f(E, m)
+                                else
+                                    B = 0
+                                    f = 3
+                                    H = 2822421
+                                    m = B
+                                    B = m >= f
+                                end
+                            else
+                                if H < 15021400 then
+                                    N = 2
+                                    f = m == N
+                                    H = f and 13806672 or 13465297
+                                else
+                                    m = D(16365)
+                                    B = d[m]
+                                    H = 10424775
+                                    f = D(16369)
+                                    m = B(f, j)
+                                end
+                            end
+                        end
+                    end
+                end
+            end
+            H = #Z
+            return A(B)
+        end
+        return (G(6306426, {}))(A(B))
+    end)(getfenv and getfenv() or _ENV, unpack or table[D(16362)], newproxy, setmetatable, getmetatable, select, {
+        ...
+    })
+end)(...)

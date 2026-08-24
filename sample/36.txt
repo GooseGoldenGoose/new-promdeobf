@@ -1,0 +1,576 @@
+return (function(...)
+    local Z = {
+        "SG26PG1M",
+        "nuOg13HC17uB+pFZEE6=",
+        "hx1W",
+        "fEw3NGCgPddHhLn6oE8=",
+        "Eu8=",
+        "hTCU",
+        "hxFmh9sOhAd6cGHk0GCmc/u=",
+        "pBjwfAniQ5==",
+        "pkh=",
+        "hx1U",
+        "hTCq",
+        "hx1q",
+        "s6==",
+        "hx1b",
+        "s9HbP9cXz3sThxOTgs==",
+        "hx1T",
+        "hTCb",
+        "hxFmh9sOSxFwfVEOPAjuQs==",
+        "Eu3=",
+        "h/Cwf9s=",
+        "pBj9P6==",
+        "Nxk2NLigcH1m+oC3",
+        "PuS8zkie+/CU1V8TgTg=",
+        "Eug=",
+        "ss==",
+        "hxFmh9sOcG2u",
+        "sI==",
+        "pBjXcGv=",
+        "su2woTip19bkfBS0",
+        "EG1Gg9h2nBFChB14zI=="
+    }
+    local function U(U)
+        return Z[U - (19538)]
+    end
+    for U, f in ipairs({
+        {
+            1,
+            30
+        },
+        {
+            1,
+            26
+        },
+        {
+            27,
+            30
+        }
+    }) do
+        while f[1] < f[2] do
+            Z[f[1]], Z[f[2]], f[1], f[2] = Z[f[2]], Z[f[1]], f[1] + (1), f[2] - (1)
+        end
+    end
+    do
+        local U = {
+            x = 54,
+            e = 49,
+            ["1"] = 13,
+            ["0"] = 11,
+            ["2"] = 57,
+            I = 32,
+            ["+"] = 14,
+            U = 2,
+            a = 62,
+            r = 10,
+            L = 35,
+            X = 44,
+            v = 56,
+            S = 29,
+            ["6"] = 48,
+            l = 31,
+            V = 6,
+            g = 12,
+            k = 52,
+            J = 58,
+            u = 36,
+            z = 18,
+            N = 26,
+            ["5"] = 0,
+            K = 15,
+            ["4"] = 34,
+            A = 38,
+            ["7"] = 51,
+            B = 53,
+            C = 9,
+            W = 50,
+            P = 24,
+            E = 20,
+            Y = 42,
+            Q = 30,
+            m = 47,
+            Z = 40,
+            G = 22,
+            O = 45,
+            H = 5,
+            w = 41,
+            i = 37,
+            ["9"] = 39,
+            T = 55,
+            h = 28,
+            b = 1,
+            ["8"] = 8,
+            d = 21,
+            o = 19,
+            s = 16,
+            ["3"] = 4,
+            p = 23,
+            f = 27,
+            R = 59,
+            q = 3,
+            ["/"] = 7,
+            j = 61,
+            D = 46,
+            t = 63,
+            n = 17,
+            y = 60,
+            F = 33,
+            c = 25,
+            M = 43
+        }
+        local f = math.floor
+        local j = table.insert
+        local k = string.len
+        local t = type
+        local o = string.char
+        local e = Z
+        local M = string.sub
+        local T = table.concat
+        for Z = 1, #e, 1 do
+            local Y = e[Z]
+            if t(Y) == "string" then
+                local t = k(Y)
+                local m = {}
+                local q = 1
+                local E = 0
+                local s = 0
+                while q <= t do
+                    local Z = M(Y, q, q)
+                    local k = U[Z]
+                    if k then
+                        E = E + k * (64) ^ ((3) - s)
+                        s = s + (1)
+                        if s == 4 then
+                            s = 0
+                            local Z = f(E / (65536))
+                            local U = f((E % (65536)) / (256))
+                            local k = E % (256)
+                            j(m, o(Z, U, k))
+                            E = 0
+                        end
+                    elseif Z == "=" then
+                        j(m, o(f(E / (65536))))
+                        if q >= t or M(Y, q + (1), q + (1)) ~= "=" then
+                            j(m, o(f((E % (65536)) / (256))))
+                        end
+                        break
+                    end
+                    q = q + (1)
+                end
+                e[Z] = T(m)
+            end
+        end
+    end
+    return (function(Z, j, k, t, o, e, M, w, c, b, x, q, s, O, K, Y, m, T, f, E)
+        K, m, x, b, q, c, E, s, T, Y, w, f, O = function(Z, U)
+            local j = E(U)
+            local k = function(k, t, o)
+                return f(Z, {
+                    k,
+                    t,
+                    o
+                }, U, j)
+            end
+            return k
+        end, function()
+            q = q + (1)
+            Y[q] = 1
+            return q
+        end, function(Z)
+            Y[Z] = Y[Z] - (1)
+            if Y[Z] == 0 then
+                Y[Z], T[Z] = nil, nil
+            end
+        end, function(Z, U)
+            local j = E(U)
+            local k = function()
+                return f(Z, {}, U, j)
+            end
+            return k
+        end, 0, function(Z, U)
+            local j = E(U)
+            local k = function(...)
+                return f(Z, {
+                    ...
+                }, U, j)
+            end
+            return k
+        end, function(Z)
+            for U = 1, #Z, 1 do
+                Y[Z[U]] = Y[Z[U]] + (1)
+            end
+            if k then
+                local f = k(true)
+                local j = o(f)
+                j[U(19542)], j[U(19555)], j[U(19562)] = Z, s, function()
+                    return 84540
+                end
+                return f
+            else
+                return t({}, {
+                    [U(19555)] = s,
+                    [U(19542)] = Z,
+                    [U(19562)] = function()
+                        return 84540
+                    end
+                })
+            end
+        end, function(Z)
+            local U, f = 1, Z[1]
+            while f do
+                Y[f], U = Y[f] - (1), U + (1)
+                if Y[f] == 0 then
+                    Y[f], T[f] = nil, nil
+                end
+                f = Z[U]
+            end
+        end, {}, {}, function(Z, U)
+            local j = E(U)
+            local k = function(k, t, o, e, M)
+                return f(Z, {
+                    k,
+                    t,
+                    o,
+                    e,
+                    M
+                }, U, j)
+            end
+            return k
+        end, function(f, k, t, o)
+            local Y, T, m, E, M, q, s
+            while f do
+                if f < 9322064 then
+                    if f < 5654578 then
+                        if f < 4682681 then
+                            if f < 3219808 then
+                                if f < 3038125 then
+                                    M = Y
+                                    f = q
+                                    f = Y and 3045874 or 16762774
+                                else
+                                    f = M and 8071875 or 10388284
+                                end
+                            else
+                                if f < 3902571 then
+                                    f = q
+                                    f = 9961030
+                                    M = Y
+                                else
+                                    E = U(19544)
+                                    q = f
+                                    m = Z[E]
+                                    E = m()
+                                    f = E and 3518537 or 7480279
+                                    Y = E
+                                end
+                            end
+                        else
+                            if f < 4961095 then
+                                if f < 4806510 then
+                                    M = Y
+                                    f = q
+                                    f = Y and 14811816 or 4928456
+                                else
+                                    q = U(19545)
+                                    f = 14811816
+                                    Y = Z[q]
+                                    q = Y()
+                                    M = q
+                                end
+                            else
+                                M = U(19554)
+                                m = U(19543)
+                                T = U(19539)
+                                f = Z[M]
+                                q = Z[m]
+                                m = U(19567)
+                                Y = q[m]
+                                q = U(19543)
+                                M = f(T, Y)
+                                Y = Z[q]
+                                q = U(19567)
+                                T = Y[q]
+                                Y = 2
+                                M = T % Y
+                                T = 1
+                                f = M == T
+                                M = {
+                                    f
+                                }
+                                f = Z[U(19557)]
+                            end
+                        end
+                    else
+                        if f < 8054568 then
+                            if f < 7660384 then
+                                if f < 6858764 then
+                                    T = k
+                                    M = U(19543)
+                                    f = Z[M]
+                                    M = U(19550)
+                                    Y = 0
+                                    f[M] = Y
+                                    M = U(19548)
+                                    f = O(9372094, {})
+                                    Z[M] = f
+                                    M = U(19544)
+                                    f = w(7886567, {})
+                                    Z[M] = f
+                                    f = O(10150443, {})
+                                    M = U(19546)
+                                    Z[M] = f
+                                    f = 11235862
+                                else
+                                    E = U(19546)
+                                    f = 3518537
+                                    m = Z[E]
+                                    E = m()
+                                    Y = E
+                                end
+                            else
+                                M = U(19554)
+                                T = U(19561)
+                                f = Z[M]
+                                m = U(19543)
+                                q = Z[m]
+                                m = U(19550)
+                                Y = q[m]
+                                q = U(19543)
+                                M = f(T, Y)
+                                Y = Z[q]
+                                q = U(19550)
+                                T = Y[q]
+                                Y = 2
+                                M = T % Y
+                                T = 0
+                                f = M == T
+                                M = {
+                                    f
+                                }
+                                f = Z[U(19568)]
+                            end
+                        else
+                            if f < 8534537 then
+                                if f < 8368209 then
+                                    M = U(19554)
+                                    f = Z[M]
+                                    E = U(19543)
+                                    s = U(19543)
+                                    m = Z[E]
+                                    E = U(19550)
+                                    q = m[E]
+                                    Y = U(19560)
+                                    E = Z[s]
+                                    s = U(19567)
+                                    m = E[s]
+                                    M = f(Y, q, m)
+                                    M = {}
+                                    f = Z[U(19556)]
+                                else
+                                    E = U(19540)
+                                    f = 4735199
+                                    m = Z[E]
+                                    E = m()
+                                    Y = E
+                                end
+                            else
+                                T = U(19558)
+                                M = U(19554)
+                                m = U(19543)
+                                f = Z[M]
+                                q = Z[m]
+                                m = U(19567)
+                                Y = q[m]
+                                M = f(T, Y)
+                                f = false
+                                M = {
+                                    f
+                                }
+                                f = Z[U(19563)]
+                            end
+                        end
+                    end
+                else
+                    if f < 13649385 then
+                        if f < 10001230 then
+                            if f < 9807899 then
+                                if f < 9387988 then
+                                    M = U(19543)
+                                    f = Z[M]
+                                    m = U(19543)
+                                    q = Z[m]
+                                    M = U(19550)
+                                    m = U(19550)
+                                    Y = q[m]
+                                    q = 1
+                                    T = Y + q
+                                    f[M] = T
+                                    m = U(19543)
+                                    M = U(19554)
+                                    f = Z[M]
+                                    T = U(19559)
+                                    q = Z[m]
+                                    m = U(19550)
+                                    Y = q[m]
+                                    M = f(T, Y)
+                                    Y = U(19543)
+                                    T = Z[Y]
+                                    Y = U(19550)
+                                    M = T[Y]
+                                    T = 4
+                                    f = M < T
+                                    M = {
+                                        f
+                                    }
+                                    f = Z[U(19549)]
+                                else
+                                    E = U(19540)
+                                    m = Z[E]
+                                    f = 1316689
+                                    E = m()
+                                    Y = E
+                                end
+                            else
+                                f = M and 14614534 or 14106269
+                            end
+                        else
+                            if f < 11045753 then
+                                if f < 10208031 then
+                                    M = U(19554)
+                                    f = Z[M]
+                                    T = U(19547)
+                                    m = U(19543)
+                                    q = Z[m]
+                                    m = U(19550)
+                                    Y = q[m]
+                                    M = f(T, Y)
+                                    f = true
+                                    M = {
+                                        f
+                                    }
+                                    f = Z[U(19564)]
+                                else
+                                    M = U(19554)
+                                    Y = U(19541)
+                                    E = U(19543)
+                                    f = Z[M]
+                                    m = Z[E]
+                                    E = U(19567)
+                                    q = m[E]
+                                    M = f(Y, q)
+                                    f = 14954892
+                                end
+                            else
+                                q = U(19548)
+                                Y = Z[q]
+                                q = Y()
+                                M = q
+                                f = q and 4035998 or 9961030
+                            end
+                        end
+                    else
+                        if f < 14651109 then
+                            if f < 14327974 then
+                                if f < 13869899 then
+                                    M = U(19543)
+                                    f = Z[M]
+                                    m = U(19543)
+                                    q = Z[m]
+                                    m = U(19567)
+                                    Y = q[m]
+                                    M = U(19567)
+                                    q = 1
+                                    T = Y + q
+                                    m = U(19543)
+                                    f[M] = T
+                                    M = U(19554)
+                                    f = Z[M]
+                                    q = Z[m]
+                                    T = U(19553)
+                                    m = U(19567)
+                                    Y = q[m]
+                                    M = f(T, Y)
+                                    Y = U(19543)
+                                    T = Z[Y]
+                                    Y = U(19567)
+                                    M = T[Y]
+                                    T = 3
+                                    f = M >= T
+                                    M = {
+                                        f
+                                    }
+                                    f = Z[U(19566)]
+                                else
+                                    M = U(19543)
+                                    Y = 0
+                                    f = Z[M]
+                                    M = U(19567)
+                                    f[M] = Y
+                                    M = U(19551)
+                                    E = U(19551)
+                                    f = b(13707145, {})
+                                    Z[M] = f
+                                    f = K(5252433, {})
+                                    M = U(19540)
+                                    Z[M] = f
+                                    M = U(19545)
+                                    f = w(9158541, {})
+                                    Z[M] = f
+                                    q = f
+                                    m = Z[E]
+                                    E = m()
+                                    f = E and 8513343 or 4735199
+                                    Y = E
+                                end
+                            else
+                                E = U(19543)
+                                M = U(19554)
+                                f = Z[M]
+                                Y = U(19552)
+                                m = Z[E]
+                                E = U(19550)
+                                q = m[E]
+                                M = f(Y, q)
+                                f = 11235862
+                            end
+                        else
+                            if f < 15823271 then
+                                if f < 14921500 then
+                                    f = 10388284
+                                else
+                                    q = f
+                                    E = U(19551)
+                                    m = Z[E]
+                                    E = m()
+                                    Y = E
+                                    f = E and 9391782 or 1316689
+                                end
+                            else
+                                q = U(19545)
+                                Y = Z[q]
+                                q = Y()
+                                M = q
+                                f = 3045874
+                            end
+                        end
+                    end
+                end
+            end
+            f = #o
+            return j(M)
+        end, function(Z, U)
+            local j = E(U)
+            local k = function(k, t)
+                return f(Z, {
+                    k,
+                    t
+                }, U, j)
+            end
+            return k
+        end
+        return (c(6306426, {}))(j(M))
+    end)(getfenv and getfenv() or _ENV, unpack or table[U(19565)], newproxy, setmetatable, getmetatable, select, {
+        ...
+    })
+end)(...)
