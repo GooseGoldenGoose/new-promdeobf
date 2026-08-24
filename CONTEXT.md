@@ -870,3 +870,10 @@ Do actual implementation/testing/commits/pushes, not just suggestions.
 At the end of EVERY project-related turn, the final line must be EXACTLY:
 Done for this turn — you can prompt now.
 ```
+## Latest Sample 51 Config Checkpoint (2026-08-24)
+
+- `sample/51.source.lua` is `print("HI")`; current local Medium preset now runs **Anti Tamper** before Vmify. Raw obfuscated output executes as `HI`.
+- Formatter normalization completes, but the formatted fixture triggers `Tamper Detected!`; therefore formatted, normal deobfuscated, and beta-CF runtime also hit the tamper guard. This is a formatter-vs-line-sensitive anti-tamper issue, not a structural deobfuscation failure.
+- Normal deobfuscation succeeds: 45/53 dispatcher leaves, 8 dead pruned, 7 VM functions. Beta succeeds: 308 versioned assignments, 0 skips. Beta-CF succeeds: 45 states, 7 closure regions, 2 numeric-for loops, 1 while, 13 branches, 12 joins, 14 recovered cells.
+- Standalone beta runtime still fails with the known cross-state beta-local presentation issue (`attempt to call local r_v1_8 (a nil value)`).
+

@@ -1,0 +1,885 @@
+return (function(...)
+    local M = {
+        "3NPNiaini5ZUQRjW33==",
+        "zyuOQH863tPmfAXVfD==",
+        "rN+lrN8v",
+        "KY9pKf8CfczNMtjo9k==",
+        "G9XqsajmP5ZUGq9l",
+        "QC+lQhy6Td4=",
+        "dy+xGtiqsE==",
+        "dy+bThn=",
+        "GR4=",
+        "pk==",
+        "MAimFhZo",
+        "TNyjQCPU",
+        "QhZDrhPW",
+        "MCPjGCD=",
+        "Ka5=",
+        "9C8/MC9m4aiqQC9HQC9543==",
+        "Qh/R9ITyQI86KHufFYc=",
+        "TdXmGA4=",
+        "Mfi9MhgF9tyu9ayc",
+        "GcqOK586T98VTcD=",
+        "MYXxGo3=",
+        "rvqiQRiUTai4Q9XF",
+        "MR9uFAu8Q8xRp3==",
+        "Qv+d9c/9ca/mFAj8P3==",
+        "GRa=",
+        "p6kqTLUxpk==",
+        "sa3yGo8nivTSfc8C",
+        "QC86GCc=",
+        "Gt8T9AutphxAhoxzTRz=",
+        "TAPyrk==",
+        "Mt8lTC+/",
+        "Gh8vFE==",
+        "dy+orD==",
+        "QC+IQYXxGtM=",
+        "z5P93c8rFa/V3hPn"
+    }
+    for X, b in ipairs({
+        {
+            1,
+            35
+        },
+        {
+            1,
+            29
+        },
+        {
+            30,
+            35
+        }
+    }) do
+        while b[1] < b[2] do
+            M[b[1]], M[b[2]], b[1], b[2] = M[b[2]], M[b[1]], b[1] + (1), b[2] - (1)
+        end
+    end
+    local function X(X)
+        return M[X - (65259)]
+    end
+    do
+        local X = {
+            h = 22,
+            m = 50,
+            ["4"] = 8,
+            o = 39,
+            x = 41,
+            W = 43,
+            s = 30,
+            f = 19,
+            r = 24,
+            y = 53,
+            a = 4,
+            ["3"] = 16,
+            E = 0,
+            ["9"] = 21,
+            A = 55,
+            J = 62,
+            u = 1,
+            ["+"] = 61,
+            M = 28,
+            X = 9,
+            w = 58,
+            ["8"] = 5,
+            k = 32,
+            V = 15,
+            p = 14,
+            P = 13,
+            K = 18,
+            l = 46,
+            O = 10,
+            L = 2,
+            ["0"] = 63,
+            ["/"] = 45,
+            ["5"] = 36,
+            ["6"] = 34,
+            S = 47,
+            ["1"] = 59,
+            d = 23,
+            D = 48,
+            e = 60,
+            q = 37,
+            b = 44,
+            U = 40,
+            G = 27,
+            ["7"] = 42,
+            B = 11,
+            z = 12,
+            t = 38,
+            c = 20,
+            ["2"] = 31,
+            v = 52,
+            R = 3,
+            H = 35,
+            N = 54,
+            T = 25,
+            F = 26,
+            I = 51,
+            i = 17,
+            Z = 57,
+            j = 33,
+            C = 6,
+            Y = 7,
+            g = 49,
+            Q = 29,
+            n = 56
+        }
+        local b = type
+        local j = table.concat
+        local y = string.char
+        local z = table.insert
+        local g = math.floor
+        local K = string.sub
+        local x = M
+        local G = string.len
+        for M = 1, #x, 1 do
+            local t = x[M]
+            if b(t) == "string" then
+                local b = G(t)
+                local C = {}
+                local S = 1
+                local D = 0
+                local F = 0
+                while S <= b do
+                    local M = K(t, S, S)
+                    local j = X[M]
+                    if j then
+                        D = D + j * (64) ^ ((3) - F)
+                        F = F + (1)
+                        if F == 4 then
+                            F = 0
+                            local M = g(D / (65536))
+                            local X = g((D % (65536)) / (256))
+                            local b = D % (256)
+                            z(C, y(M, X, b))
+                            D = 0
+                        end
+                    elseif M == "=" then
+                        z(C, y(g(D / (65536))))
+                        if S >= b or K(t, S + (1), S + (1)) ~= "=" then
+                            z(C, y(g((D % (65536)) / (256))))
+                        end
+                        break
+                    end
+                    S = S + (1)
+                end
+                x[M] = j(C)
+            end
+        end
+    end
+    return (function(M, j, y, z, g, K, x, b, C, S, G, I, h, D, f, u, F, t, w, U)
+        w, U, f, C, I, G, D, b, S, t, h, u, F = function(M)
+            t[M] = t[M] - (1)
+            if 0 == t[M] then
+                t[M], G[M] = nil, nil
+            end
+        end, function(M, X)
+            local j = D(X)
+            local y = function(...)
+                return b(M, {
+                    ...
+                }, X, j)
+            end
+            return y
+        end, function(M, X)
+            local j = D(X)
+            local y = function()
+                return b(M, {}, X, j)
+            end
+            return y
+        end, function()
+            S = S + (1)
+            t[S] = 1
+            return S
+        end, function(M, X)
+            local j = D(X)
+            local y = function(y, z, g, K, x)
+                return b(M, {
+                    y,
+                    z,
+                    g,
+                    K,
+                    x
+                }, X, j)
+            end
+            return y
+        end, {}, function(M)
+            for X = 1, #M, 1 do
+                t[M[X]] = (1) + t[M[X]]
+            end
+            if y then
+                local b = y(true)
+                local j = g(b)
+                j[X(65260)], j[X(65286)], j[X(65261)] = M, F, function()
+                    return -3753286
+                end
+                return b
+            else
+                return z({}, {
+                    [X(65286)] = F,
+                    [X(65260)] = M,
+                    [X(65261)] = function()
+                        return -3753286
+                    end
+                })
+            end
+        end, function(b, y, z, g)
+            local O, l, L, m, a, v, S, r, p, D, A, F, i, B, H, E, x, o, Q, c, J, W, R, Y, U, s, e, V, q, T, n, k, t, P
+            while b do
+                if b < 8054510 then
+                    if b < 3974202 then
+                        if b < 1918532 then
+                            if b < 1607467 then
+                                if b < 754809 then
+                                    if b < 581923 then
+                                        b = 10412503
+                                    else
+                                        n = not e
+                                        p = p + L
+                                        x = p <= W
+                                        x = n and x
+                                        n = p >= W
+                                        n = e and n
+                                        x = n or x
+                                        n = 12671702
+                                        b = x and n
+                                        x = 16297918
+                                        b = b or x
+                                    end
+                                else
+                                    if b < 1562500 then
+                                        e = X(65262)
+                                        b = M[e]
+                                        e = X(65278)
+                                        M[e] = b
+                                        b = 10866468
+                                    else
+                                        W = E == q
+                                        p = W
+                                        b = 5478922
+                                    end
+                                end
+                            else
+                                if b < 1781219 then
+                                    if b < 1678238 then
+                                        b = true
+                                        b = b and 15374115 or 6446590
+                                    else
+                                        b = J
+                                        b = l and 8051088 or 5153651
+                                        x = l
+                                    end
+                                else
+                                    L = 1
+                                    b = G[v]
+                                    e = 6
+                                    W = b(L, e)
+                                    e = X(65262)
+                                    b = X(65262)
+                                    M[b] = W
+                                    L = M[e]
+                                    e = 2
+                                    b = L > e
+                                    b = b and 13987108 or 1168243
+                                end
+                            end
+                        else
+                            if b < 2981349 then
+                                if b < 2639042 then
+                                    if b < 2062088 then
+                                        b = true
+                                        b = b and 1907058 or 10747141
+                                    else
+                                        T = G[S]
+                                        x = T
+                                        b = T and 6583595 or 16042229
+                                    end
+                                else
+                                    if b < 2917103 then
+                                        D = G[z[6]]
+                                        S = D == t
+                                        b = 2931433
+                                        x = S
+                                    else
+                                        b = 7157887
+                                        G[z[5]] = x
+                                        t = nil
+                                    end
+                                end
+                            else
+                                if b < 3801643 then
+                                    if b < 3708560 then
+                                        x = 11757847
+                                        S = X(65277)
+                                        D = 4547020
+                                        t = S ^ D
+                                        b = x - t
+                                        x = X(65273)
+                                        t = b
+                                        b = x / t
+                                        x = {
+                                            b
+                                        }
+                                        b = M[X(65288)]
+                                    else
+                                        D = G[z[9]]
+                                        b = {}
+                                        F = D
+                                        t = b
+                                        D = 1
+                                        U = D
+                                        D = 0
+                                        S = 1
+                                        b = 3856374
+                                        O = U < D
+                                        D = S - U
+                                    end
+                                else
+                                    v = not O
+                                    D = D + U
+                                    S = D <= F
+                                    S = v and S
+                                    v = D >= F
+                                    v = O and v
+                                    S = v or S
+                                    v = 6696355
+                                    b = S and v
+                                    S = 7036913
+                                    b = b or S
+                                end
+                            end
+                        end
+                    else
+                        if b < 6214636 then
+                            if b < 5154684 then
+                                if b < 4710884 then
+                                    if b < 4033419 then
+                                        a = X(65281)
+                                        q = M[a]
+                                        a = X(65266)
+                                        E = q[a]
+                                        b = 1756146
+                                        l = E
+                                    else
+                                        b = 1990327
+                                    end
+                                else
+                                    if b < 5068625 then
+                                        b = f(16090015, {
+                                            F
+                                        })
+                                        W = {
+                                            b()
+                                        }
+                                        b = M[X(65272)]
+                                        x = {
+                                            j(W)
+                                        }
+                                    else
+                                        J = X(65266)
+                                        l = M[J]
+                                        b = 8051088
+                                        x = l
+                                    end
+                                end
+                            else
+                                if b < 5782410 then
+                                    if b < 5207130 then
+                                        b = true
+                                        b = 4849322
+                                    else
+                                        G[S] = p
+                                        b = G[S]
+                                        b = b and 574805 or 5163732
+                                    end
+                                else
+                                    b = c
+                                    x = T
+                                    b = 16042229
+                                end
+                            end
+                        else
+                            if b < 7019971 then
+                                if b < 6689049 then
+                                    if b < 6556640 then
+                                        b = M[X(65282)]
+                                        x = {}
+                                    else
+                                        c = b
+                                        P = 1
+                                        Q = A[P]
+                                        P = false
+                                        R = Q == P
+                                        b = R and 8055469 or 6164196
+                                        T = R
+                                    end
+                                else
+                                    o = 0
+                                    b = G[z[1]]
+                                    S = D
+                                    l = 255
+                                    v = b(o, l)
+                                    b = 3856374
+                                    t[S] = v
+                                    S = nil
+                                end
+                            else
+                                if b < 7403693 then
+                                    if b < 7146775 then
+                                        b = G[z[10]]
+                                        S = G[z[11]]
+                                        t[b] = S
+                                        b = G[z[12]]
+                                        S = {
+                                            b(t)
+                                        }
+                                        x = {
+                                            j(S)
+                                        }
+                                        b = M[X(65275)]
+                                    else
+                                        b = G[z[7]]
+                                        b = b and 11968253 or 3758149
+                                    end
+                                else
+                                    l = C()
+                                    a = X(65267)
+                                    E = 65
+                                    G[l] = x
+                                    J = 3
+                                    b = G[v]
+                                    x = b(J, E)
+                                    b = 0
+                                    k = u(3587475, {})
+                                    J = C()
+                                    G[J] = x
+                                    E = b
+                                    b = 0
+                                    x = M[a]
+                                    q = b
+                                    a = {
+                                        x(k)
+                                    }
+                                    b = {
+                                        j(a)
+                                    }
+                                    x = 2
+                                    a = b
+                                    L = X(65287)
+                                    b = a[x]
+                                    k = b
+                                    x = X(65294)
+                                    b = M[x]
+                                    r = G[D]
+                                    W = M[L]
+                                    L = W(k)
+                                    W = X(65279)
+                                    p = r(L, W)
+                                    r = {
+                                        p()
+                                    }
+                                    x = b(j(r))
+                                    r = C()
+                                    G[r] = x
+                                    x = 1
+                                    p = G[J]
+                                    W = p
+                                    p = 1
+                                    L = p
+                                    p = 0
+                                    e = L < p
+                                    p = x - L
+                                    b = 605844
+                                end
+                            end
+                        end
+                    end
+                else
+                    if b < 12727856 then
+                        if b < 10760188 then
+                            if b < 10313144 then
+                                if b < 9139770 then
+                                    if b < 8810846 then
+                                        P = 2
+                                        Q = A[P]
+                                        P = G[i]
+                                        R = Q == P
+                                        b = 6164196
+                                        T = R
+                                    else
+                                        V = w(V)
+                                        A = nil
+                                        b = 605844
+                                        B = w(B)
+                                        Y = w(Y)
+                                        n = w(n)
+                                        i = w(i)
+                                        H = w(H)
+                                    end
+                                else
+                                    if b < 9228752 then
+                                        b = 13698953
+                                        S = G[z[2]]
+                                        D = G[z[3]]
+                                        t = S == D
+                                        x = t
+                                    else
+                                        b = true
+                                        D = X(65264)
+                                        S = C()
+                                        t = y
+                                        G[S] = b
+                                        x = M[D]
+                                        D = X(65265)
+                                        b = x[D]
+                                        D = C()
+                                        F = C()
+                                        G[D] = b
+                                        v = X(65267)
+                                        U = C()
+                                        b = h(11167978, {})
+                                        o = u(12690470, {
+                                            U
+                                        })
+                                        G[F] = b
+                                        b = false
+                                        G[U] = b
+                                        O = M[v]
+                                        v = O(o)
+                                        b = v and 15685399 or 12708111
+                                        x = v
+                                    end
+                                end
+                            else
+                                if b < 10733585 then
+                                    if b < 10430557 then
+                                        O = nil
+                                        U = w(U)
+                                        J = w(J)
+                                        E = nil
+                                        v = w(v)
+                                        S = w(S)
+                                        D = w(D)
+                                        o = nil
+                                        a = nil
+                                        q = nil
+                                        D = X(65274)
+                                        b = M[X(65270)]
+                                        l = w(l)
+                                        r = w(r)
+                                        F = w(F)
+                                        S = M[D]
+                                        k = nil
+                                        x = {}
+                                        F = X(65268)
+                                        D = S(F)
+                                    else
+                                        b = true
+                                        b = b and 4086877 or 4849322
+                                    end
+                                else
+                                    b = M[X(65290)]
+                                    x = {}
+                                end
+                            end
+                        else
+                            if b < 12293157 then
+                                if b < 11641009 then
+                                    if b < 11116602 then
+                                        b = 1990327
+                                    else
+                                        t = X(65269)
+                                        x = X(65271)
+                                        b = M[x]
+                                        x = b(t)
+                                        b = M[X(65293)]
+                                        x = {}
+                                    end
+                                else
+                                    t = X(65271)
+                                    b = M[t]
+                                    S = G[z[8]]
+                                    D = 0
+                                    t = b(S, D)
+                                    b = 3758149
+                                end
+                            else
+                                if b < 12691541 then
+                                    if b < 12686642 then
+                                        n = C()
+                                        G[n] = p
+                                        R = X(65287)
+                                        V = X(65285)
+                                        B = 255
+                                        x = M[V]
+                                        V = X(65284)
+                                        b = x[V]
+                                        A = 2
+                                        V = 1
+                                        i = 1
+                                        H = 100
+                                        x = b(V, H)
+                                        V = C()
+                                        G[V] = x
+                                        b = G[v]
+                                        H = 0
+                                        x = b(H, B)
+                                        B = 1
+                                        s = 0
+                                        H = C()
+                                        G[H] = x
+                                        b = G[v]
+                                        Y = G[V]
+                                        x = b(B, Y)
+                                        B = C()
+                                        G[B] = x
+                                        m = 10000
+                                        x = G[v]
+                                        Y = x(i, A)
+                                        x = 1
+                                        b = Y == x
+                                        Y = C()
+                                        A = X(65263)
+                                        x = X(65279)
+                                        G[Y] = b
+                                        c = M[R]
+                                        Q = G[v]
+                                        b = X(65283)
+                                        P = {
+                                            Q(s, m)
+                                        }
+                                        R = c(j(P))
+                                        b = k[b]
+                                        c = X(65263)
+                                        T = R .. c
+                                        i = A .. T
+                                        b = b(k, x, i)
+                                        i = C()
+                                        T = h(16676646, {
+                                            v,
+                                            n,
+                                            J,
+                                            D,
+                                            S,
+                                            r,
+                                            Y,
+                                            i,
+                                            V,
+                                            B,
+                                            H,
+                                            l
+                                        })
+                                        G[i] = b
+                                        A = X(65267)
+                                        x = M[A]
+                                        A = {
+                                            x(T)
+                                        }
+                                        b = {
+                                            j(A)
+                                        }
+                                        A = b
+                                        b = G[Y]
+                                        b = b and 2309081 or 13249751
+                                    else
+                                        b = true
+                                        G[z[1]] = b
+                                        x = {}
+                                        b = M[X(65292)]
+                                    end
+                                else
+                                    O = x
+                                    v = X(65285)
+                                    x = M[v]
+                                    q = X(65281)
+                                    v = X(65284)
+                                    b = x[v]
+                                    v = C()
+                                    o = X(65281)
+                                    G[v] = b
+                                    x = M[o]
+                                    o = X(65291)
+                                    b = x[o]
+                                    J = b
+                                    E = M[q]
+                                    l = E
+                                    o = b
+                                    b = E and 4026511 or 1756146
+                                end
+                            end
+                        end
+                    else
+                        if b < 14977316 then
+                            if b < 14167791 then
+                                if b < 13477142 then
+                                    if b < 13232521 then
+                                        G[S] = T
+                                        P = G[B]
+                                        s = 1
+                                        Q = P + s
+                                        R = A[Q]
+                                        c = E + R
+                                        R = 256
+                                        b = c % R
+                                        E = b
+                                        Q = G[H]
+                                        b = 9111659
+                                        R = q + Q
+                                        Q = 256
+                                        c = R % Q
+                                        q = c
+                                    else
+                                        c = G[S]
+                                        T = c
+                                        b = c and 14710272 or 12760675
+                                    end
+                                else
+                                    if b < 13964284 then
+                                        b = x and 14573283 or 7157887
+                                    else
+                                        L = X(65287)
+                                        n = X(65278)
+                                        b = M[L]
+                                        e = M[n]
+                                        L = b(e)
+                                        b = X(65262)
+                                        M[b] = L
+                                        b = 10866468
+                                    end
+                                end
+                            else
+                                if b < 14704068 then
+                                    if b < 14563485 then
+                                        x = 174517
+                                        D = 13088272
+                                        S = X(65289)
+                                        t = S ^ D
+                                        b = x - t
+                                        x = X(65276)
+                                        t = b
+                                        b = x / t
+                                        x = {
+                                            b
+                                        }
+                                        b = M[X(65280)]
+                                    else
+                                        x = X(65294)
+                                        F = X(65287)
+                                        o = X(65267)
+                                        b = M[x]
+                                        t = G[z[4]]
+                                        D = M[F]
+                                        l = I(14497380, {})
+                                        v = M[o]
+                                        o = {
+                                            v(l)
+                                        }
+                                        v = 2
+                                        O = {
+                                            j(o)
+                                        }
+                                        U = O[v]
+                                        F = D(U)
+                                        D = X(65279)
+                                        S = t(F, D)
+                                        t = {
+                                            S()
+                                        }
+                                        x = b(j(t))
+                                        t = x
+                                        S = G[z[5]]
+                                        x = S
+                                        b = S and 2913118 or 2931433
+                                    end
+                                else
+                                    R = 1
+                                    c = A[R]
+                                    b = 12760675
+                                    T = c
+                                end
+                            end
+                        else
+                            if b < 16085471 then
+                                if b < 15992020 then
+                                    if b < 15671315 then
+                                        x = X(65262)
+                                        b = M[x]
+                                        t = X(65278)
+                                        x = M[t]
+                                        t = X(65278)
+                                        M[t] = b
+                                        t = X(65262)
+                                        b = 1639104
+                                        M[t] = x
+                                        t = G[z[1]]
+                                        S = t()
+                                    else
+                                        b = 12708111
+                                        O = G[U]
+                                        x = O
+                                    end
+                                else
+                                    G[S] = x
+                                    b = 9111659
+                                end
+                            else
+                                if b < 16465225 then
+                                    if b < 16161087 then
+                                        b = 1639104
+                                    else
+                                        W = G[S]
+                                        b = W and 1564330 or 5478922
+                                        p = W
+                                    end
+                                else
+                                    U = 2
+                                    S = G[z[1]]
+                                    F = 1
+                                    D = S(F, U)
+                                    S = 1
+                                    t = D == S
+                                    x = t
+                                    b = t and 13698953 or 9166786
+                                end
+                            end
+                        end
+                    end
+                end
+            end
+            b = #g
+            return j(x)
+        end, 0, {}, function(M, X)
+            local j = D(X)
+            local y = function(y, z, g, K)
+                return b(M, {
+                    y,
+                    z,
+                    g,
+                    K
+                }, X, j)
+            end
+            return y
+        end, function(M, X)
+            local j = D(X)
+            local y = function(y, z)
+                return b(M, {
+                    y,
+                    z
+                }, X, j)
+            end
+            return y
+        end, function(M)
+            local X, b = 1, M[1]
+            while b do
+                t[b], X = t[b] - (1), X + (1)
+                if 0 == t[b] then
+                    t[b], G[b] = nil, nil
+                end
+                b = M[X]
+            end
+        end
+        return (U(9990744, {}))(j(x))
+    end)(getfenv and getfenv() or _ENV, unpack or table[X(65266)], newproxy, setmetatable, getmetatable, select, {
+        ...
+    })
+end)(...)
