@@ -44,6 +44,50 @@ function mergeSetMaps(maps) {
     return out;
 }
 
+function createStateDominanceChecker(blocks, closureEntries) {
+    const blockByState = new Map(blocks.map(block => [block.stateId, block]));
+    const entries = [...closureEntries].filter(entry => blockByState.has(entry));
+    const cache = new Map();
+
+    function reaches(entryId, targetId, blockedId = null) {
+        const key = `${entryId}\0${targetId}\0${blockedId ?? "none"}`;
+        if (cache.has(key)) return cache.get(key);
+        if (entryId === blockedId) {
+            cache.set(key, false);
+            return false;
+        }
+        const queue = [entryId];
+        const seen = new Set();
+        let cursor = 0;
+        while (cursor < queue.length) {
+            const stateId = queue[cursor++];
+            if (stateId === blockedId || seen.has(stateId)) continue;
+            seen.add(stateId);
+            if (stateId === targetId) {
+                cache.set(key, true);
+                return true;
+            }
+            const state = blockByState.get(stateId);
+            if (!state) continue;
+            for (const successor of state.successors || []) {
+                if (successor !== blockedId && blockByState.has(successor) && !seen.has(successor)) queue.push(successor);
+            }
+        }
+        cache.set(key, false);
+        return false;
+    }
+
+    return function stateDominates(candidateId, targetId) {
+        if (candidateId === targetId) return true;
+        let hasRelevantEntry = false;
+        for (const entryId of entries) {
+            if (!reaches(entryId, targetId, null)) continue;
+            hasRelevantEntry = true;
+            if (reaches(entryId, targetId, candidateId)) return false;
+        }
+        return hasRelevantEntry;
+    };
+}
 function collectReadNames(node, candidateNames, out = [], parent = null, parentKey = null) {
     if (!isNode(node) || node.type === "FunctionDeclaration") return out;
     if (node.type === "Identifier") {
@@ -276,6 +320,66 @@ function analyzeBetaRegisterLifetimes({
         }
     }
 
+    // ReturnVal is also used as a compiler scratch register. Only coalesce temporary
+    // ReturnVal definitions at a join when one reaching definition dominates every alternate
+    // definition and the join use. The dominance proof is valid across loop backedges, so
+    // this preserves the real physical scratch value without inventing sibling-only phis.
+    const returnJoinGroups = [];
+    const returnJoinGroupByDefinitionId = new Map();
+    if (cfgComplete) {
+        const stateDominates = createStateDominanceChecker(blocks, closureEntries);
+        for (const use of uses) {
+            if (use.name !== returnName) continue;
+            const concrete = [];
+            let blocked = false;
+            for (const id of use.reachingDefinitionIds) {
+                if (unknownDefinitionIds.has(id)) { blocked = true; break; }
+                const definition = definitionById.get(id);
+                if (!definition || definition.name !== returnName || !definition.supported || definition.isNil) {
+                    blocked = true;
+                    break;
+                }
+                concrete.push(definition);
+            }
+            if (blocked || concrete.length < 2) continue;
+
+            const declarationCandidates = concrete.filter(candidate => {
+                const dominatesUse = candidate.blockState === use.blockState
+                    ? candidate.statementIndex < use.statementIndex
+                    : stateDominates(candidate.blockState, use.blockState);
+                if (!dominatesUse) return false;
+                return concrete.every(definition => {
+                    if (candidate.id === definition.id) return true;
+                    if (candidate.blockState === definition.blockState) return candidate.statementIndex <= definition.statementIndex;
+                    return stateDominates(candidate.blockState, definition.blockState);
+                });
+            });
+            if (declarationCandidates.length !== 1) continue;
+            const declaration = declarationCandidates[0];
+
+            const existingGroups = new Set(concrete.map(definition => returnJoinGroupByDefinitionId.get(definition.id)).filter(Boolean));
+            if (existingGroups.size > 1) continue;
+            let group = existingGroups.size === 1 ? [...existingGroups][0] : null;
+            if (group && group.declarationDefinitionId !== declaration.id) continue;
+            if (!group) {
+                group = {
+                    id: returnJoinGroups.length + 1,
+                    declarationDefinitionId: declaration.id,
+                    definitionIds: new Set(),
+                    useStates: new Set(),
+                };
+                returnJoinGroups.push(group);
+            }
+            group.useStates.add(use.blockState);
+            for (const definition of concrete) {
+                const assigned = returnJoinGroupByDefinitionId.get(definition.id);
+                if (assigned && assigned !== group) { blocked = true; break; }
+                group.definitionIds.add(definition.id);
+            }
+            if (blocked) continue;
+            for (const definition of concrete) returnJoinGroupByDefinitionId.set(definition.id, group);
+        }
+    }
     // Ordinary-register block liveness. This is intentionally independent from cleanup
     // syntax and is retained in the analysis result for later stronger ownership proofs.
     const blockUse = new Map();
@@ -578,6 +682,40 @@ function analyzeBetaRegisterLifetimes({
         if (epoch) epochByStatement.set(definition.statement, { key: epoch.key, epoch, isKill: false });
     }
 
+    let returnJoinEpochCount = 0;
+    let returnJoinMergedDefinitionCount = 0;
+    for (const group of returnJoinGroups) {
+        const groupDefinitions = [...group.definitionIds]
+            .map(id => definitionById.get(id))
+            .filter(Boolean)
+            .sort((left, right) => left.sourceOffset - right.sourceOffset);
+        if (groupDefinitions.length < 2) continue;
+        const declaration = definitionById.get(group.declarationDefinitionId);
+        if (!declaration || !group.definitionIds.has(declaration.id)) continue;
+        const epoch = {
+            key: `${returnName}:join:${returnJoinEpochCount + 1}`,
+            name: returnName,
+            ordinal: returnJoinEpochCount + 1,
+            definitionIds: groupDefinitions.map(definition => definition.id),
+            cleanupIds: [],
+            firstOffset: Math.min(...groupDefinitions.map(definition => definition.sourceOffset)),
+            kind: "return-join",
+            declarationDefinitionId: declaration.id,
+            useStates: [...group.useStates],
+        };
+        epochs.push(epoch);
+        returnJoinEpochCount++;
+        returnJoinMergedDefinitionCount += groupDefinitions.length - 1;
+        for (const definition of groupDefinitions) {
+            epochByStatement.set(definition.statement, {
+                key: epoch.key,
+                epoch,
+                isKill: false,
+                kind: "return-join",
+                declareHere: definition.id === declaration.id,
+            });
+        }
+    }
     // A proven cleanup terminates an already-established epoch. It never merges epochs.
     // If several distinct epochs reach the cleanup, keep the nil write conservative.
     let attachedCleanupCount = 0;
@@ -636,6 +774,8 @@ function analyzeBetaRegisterLifetimes({
             provenCleanupCount: cleanupCandidates.length,
             attachedCleanupCount,
             epochCount: epochs.length,
+            returnJoinEpochCount,
+            returnJoinMergedDefinitionCount,
             mergedDefinitionCount: epochs.reduce((sum, epoch) => sum + Math.max(0, epoch.definitionIds.length - 1), 0),
             livenessRounds,
         },

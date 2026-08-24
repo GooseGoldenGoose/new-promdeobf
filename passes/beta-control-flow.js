@@ -1336,11 +1336,10 @@ function matchCompilerNumericFor(graph, checkStateId) {
     const loopVariableDefinitions = [];
     for (const stateId of region.ids) {
         const state = stateById.get(stateId);
-        const transitionIndex = state.operations.findLastIndex(operation => operation?.kind === 'state-transition');
-        if (transitionIndex !== state.operations.length - 1) return null;
-        for (let index = 0; index < transitionIndex; index++) {
-            const operation = state.operations[index];
-            if (!operation?.emittedTarget) continue;
+        const stateInfo = transitionInfo(state);
+        if (stateInfo.error || !stateInfo.operation || !canCanonicalizeTransitionTail(state, stateInfo)) return null;
+        for (const operation of state.operations || []) {
+            if (operation === stateInfo.operation || !operation?.emittedTarget) continue;
             const expression = parseOperationExpression(operation);
             if (identifierName(expression) === currentName) {
                 loopVariableDefinitions.push({ stateId, operation });
@@ -1799,6 +1798,9 @@ function canonicalCompilerExpression(node, latestDefinitions) {
     if (node.type === 'Identifier') {
         const localDefinition = latestDefinitions.get(node.name);
         return { type: 'Identifier', binding: localDefinition === undefined ? 'external:' + node.name : 'definition:' + localDefinition };
+    }
+    if (node.type === 'StringLiteral') {
+        return { type: 'StringLiteral', raw: String(node.raw ?? '') };
     }
     const output = {};
     for (const key of Object.keys(node).sort()) {

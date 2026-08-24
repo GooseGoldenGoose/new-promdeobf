@@ -560,7 +560,8 @@ function versionVmBlockRegisters(source, ast) {
                 let version;
                 let declareVersion = true;
 
-                if (epoch && plan.originalName !== stateName && plan.originalName !== returnName) {
+                const isReturnJoinEpoch = epoch?.kind === "return-join";
+                if (epoch && plan.originalName !== stateName && (plan.originalName !== returnName || isReturnJoinEpoch)) {
                     const epochKey = plan.originalName + "\0" + epoch.key;
                     let existing = epochNames.get(epochKey);
                     if (!existing) {
@@ -572,8 +573,13 @@ function versionVmBlockRegisters(source, ast) {
                     }
                     newName = existing.newName;
                     version = existing.version;
-                    declareVersion = !existing.declared;
-                    existing.declared = true;
+                    if (isReturnJoinEpoch) {
+                        declareVersion = epoch.declareHere === true;
+                        if (declareVersion) existing.declared = true;
+                    } else {
+                        declareVersion = !existing.declared;
+                        existing.declared = true;
+                    }
                     plan.isLifetimeKill = epoch.isKill;
                     plan.registerEpoch = epoch.key;
                 } else {
