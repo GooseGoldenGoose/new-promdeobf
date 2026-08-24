@@ -157,11 +157,16 @@ function factoryCallFromOperation(operation) {
 function indexedWriteFromOperation(operation) {
     const parsed = parseStatement(operation?.emittedText);
     const statement = parsed?.statement;
-    if (statement?.type !== "AssignmentStatement") return null;
-    const variables = statement.variables || [];
-    const init = statement.init || [];
-    if (variables.length !== 1 || init.length !== 1 || !isUpvalueValuesIndex(variables[0])) return null;
-    return { parsed, statement, target: variables[0], value: init[0] };
+    if (statement?.type === "AssignmentStatement") {
+        const variables = statement.variables || [];
+        const init = statement.init || [];
+        if (variables.length !== 1 || init.length !== 1 || !isUpvalueValuesIndex(variables[0])) return null;
+        return { parsed, statement, target: variables[0], value: init[0], compoundOperator: null };
+    }
+    if (statement?.type === "CompoundAssignmentStatement" && isUpvalueValuesIndex(statement.variable)) {
+        return { parsed, statement, target: statement.variable, value: statement.value, compoundOperator: statement.op || null };
+    }
+    return null;
 }
 
 function releaseCellFromOperation(operation) {
@@ -726,14 +731,18 @@ function recoverBetaUpvalues(betaResult) {
                 const rhsText = write.parsed.source.slice(write.value.range[0], write.value.range[1]);
                 const rewritten = rewriteExpressionUpvalues(rhsText, position.ownerEntry, resolveCellIndex, bindingByCell);
                 if (rewritten.error) return { applied: false, safe: false, reason: rewritten.error };
+                const isCompound = Boolean(write.compoundOperator);
                 replacements.set(operation, {
                     ...operation,
                     kind: "upvalue-write",
                     originalTarget: bindingName,
                     emittedTarget: bindingName,
                     rhs: rewritten.text,
-                    reads: [...new Set([...(operation.reads || []).filter(name => !localCellNames.has(name)), ...rewritten.bindingReads])],
-                    emittedText: `${bindingName} = ${rewritten.text}`,
+                    compoundOperator: write.compoundOperator,
+                    reads: [...new Set([...(operation.reads || []).filter(name => !localCellNames.has(name)), ...(isCompound ? [bindingName] : []), ...rewritten.bindingReads])],
+                    emittedText: isCompound
+                        ? `${bindingName} ${write.compoundOperator}= ${rewritten.text}`
+                        : `${bindingName} = ${rewritten.text}`,
                     returnSinkSafe: false,
                 });
                 writeRewriteCount++;

@@ -504,4 +504,36 @@ assert.deepEqual(atomicMultiCallOperation.callArgumentOriginals, ["args", "r2"])
 assert(atomicMultiCallOperation.emittedText.includes("r2, r4 ="));
 parseLua(atomicMultiCallResult.source, "<beta-atomic-multi-call-output>");
 
+
+const compoundEffectSource = `vm = function(state, args, upvalues, gcProxy)
+    local r1, r2, ReturnVal
+    while state do
+        if state == 1 then
+            r1 = cellKey
+            r2 = 1
+            upvalueValues[r1] += r2
+            ReturnVal = {}
+            state = nil
+        end
+    end
+    state = #gcProxy
+    return unpack(ReturnVal)
+end
+root = createClosure(1, {})`;
+const compoundEffectResult = versionVmBlockRegisters(
+    compoundEffectSource,
+    parseLua(compoundEffectSource, "<beta-compound-effect-write-test>")
+);
+assert.equal(compoundEffectResult.skippedAssignments, 0);
+assert.equal(compoundEffectResult.orderedEffectWriteCount, 1);
+const compoundEffectOperation = compoundEffectResult.graph.states[0].operations.find(operation =>
+    operation.kind === "effect-write" && String(operation.originalText || "").includes("+=")
+);
+assert(compoundEffectOperation);
+const compoundR1Base = compoundEffectResult.mapping.find(item => item.originalName === "r1")?.baseName;
+const compoundR2Base = compoundEffectResult.mapping.find(item => item.originalName === "r2")?.baseName;
+assert(compoundR1Base && compoundR2Base);
+assert(compoundEffectOperation.emittedText.includes(`upvalueValues[${compoundR1Base}_1] += ${compoundR2Base}_1`));
+parseLua(compoundEffectResult.source, "<beta-compound-effect-write-output>");
+
 console.log("beta register versioning tests passed");

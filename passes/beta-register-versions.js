@@ -17,11 +17,18 @@ function isIndexedWriteTarget(node) {
 }
 
 function isOrderedEffectAssignment(statement) {
-    if (statement?.type !== "AssignmentStatement" || !Array.isArray(statement.range)) return false;
-    const variables = statement.variables || [];
-    const init = statement.init || [];
-    return variables.length === 1 && init.length === 1 && isIndexedWriteTarget(variables[0]) &&
-        Array.isArray(variables[0]?.range) && Array.isArray(init[0]?.range);
+    if (!Array.isArray(statement?.range)) return false;
+    if (statement.type === "AssignmentStatement") {
+        const variables = statement.variables || [];
+        const init = statement.init || [];
+        return variables.length === 1 && init.length === 1 && isIndexedWriteTarget(variables[0]) &&
+            Array.isArray(variables[0]?.range) && Array.isArray(init[0]?.range);
+    }
+    if (statement.type === "CompoundAssignmentStatement") {
+        return isIndexedWriteTarget(statement.variable) &&
+            Array.isArray(statement.variable?.range) && Array.isArray(statement.value?.range);
+    }
+    return false;
 }
 
 function isAtomicMultiCallAssignment(statement, candidateNames) {
@@ -104,18 +111,27 @@ function rewriteExpression(source, expression, latestVersions, usedVersions = nu
 }
 
 function rewriteUnsupportedAssignmentReads(source, statement, latestVersions, usedVersions = null) {
-    if (statement?.type !== "AssignmentStatement" || !Array.isArray(statement.range)) return null;
+    if (!Array.isArray(statement?.range)) return null;
     const edits = [];
 
-    // Plain identifier targets are writes, not reads. Complex assignment targets
-    // still evaluate their base/index expressions, so beta versions must flow into
-    // addresses such as table[index] as well as into every RHS expression.
-    for (const variable of statement.variables || []) {
-        if (isIdentifier(variable)) continue;
-        collectIdentifierReadEdits(variable, latestVersions, edits);
-    }
-    for (const value of statement.init || []) {
-        collectIdentifierReadEdits(value, latestVersions, edits);
+    if (statement.type === "AssignmentStatement") {
+        // Plain identifier targets are writes, not reads. Complex assignment targets
+        // still evaluate their base/index expressions, so beta versions must flow into
+        // addresses such as table[index] as well as into every RHS expression.
+        for (const variable of statement.variables || []) {
+            if (isIdentifier(variable)) continue;
+            collectIdentifierReadEdits(variable, latestVersions, edits);
+        }
+        for (const value of statement.init || []) {
+            collectIdentifierReadEdits(value, latestVersions, edits);
+        }
+    } else if (statement.type === "CompoundAssignmentStatement") {
+        // Compound assignment reads the indexed/member target and RHS before writing
+        // the target back, so both sides must consume the reaching beta versions.
+        collectIdentifierReadEdits(statement.variable, latestVersions, edits);
+        collectIdentifierReadEdits(statement.value, latestVersions, edits);
+    } else {
+        return null;
     }
 
     if (usedVersions) {
@@ -465,15 +481,14 @@ function versionVmBlockRegisters(source, ast) {
 
         for (let statementIndex = 0; statementIndex < statements.length; statementIndex++) {
             const statement = statements[statementIndex];
-            if (statement?.type !== "AssignmentStatement") continue;
-            const variables = statement.variables || [];
-            const init = statement.init || [];
-
             if (isOrderedEffectAssignment(statement)) {
                 plans.set(statement, { kind: "effect-write" });
                 orderedEffectWriteCount++;
                 continue;
             }
+            if (statement?.type !== "AssignmentStatement") continue;
+            const variables = statement.variables || [];
+            const init = statement.init || [];
 
             if (isAtomicMultiCallAssignment(statement, candidateNames)) {
                 for (const variable of variables) {
@@ -698,19 +713,7 @@ function versionVmBlockRegisters(source, ast) {
         const incomingVersionNames = new Set(latestVersions.values());
 
         for (const statement of block.statements) {
-            if (statement?.type !== "AssignmentStatement") {
-                graphOperations.push({
-                    index: graphOperations.length + 1,
-                    kind: "statement",
-                    originalText: Array.isArray(statement?.range) ? source.slice(statement.range[0], statement.range[1]).trim() : String(statement?.type || "unknown"),
-                    reads: [],
-                });
-                continue;
-            }
             const plan = block.plans.get(statement);
-            const variables = statement.variables || [];
-            const init = statement.init || [];
-
             if (plan?.kind === "effect-write") {
                 const usedVersions = new Set();
                 const rewritten = rewriteUnsupportedAssignmentReads(source, statement, latestVersions, usedVersions);
@@ -737,6 +740,18 @@ function versionVmBlockRegisters(source, ast) {
                 });
                 continue;
             }
+
+            if (statement?.type !== "AssignmentStatement") {
+                graphOperations.push({
+                    index: graphOperations.length + 1,
+                    kind: "statement",
+                    originalText: Array.isArray(statement?.range) ? source.slice(statement.range[0], statement.range[1]).trim() : String(statement?.type || "unknown"),
+                    reads: [],
+                });
+                continue;
+            }
+            const variables = statement.variables || [];
+            const init = statement.init || [];
 
             if (plan?.kind === "multi-call-write") {
                 const usedVersions = new Set();

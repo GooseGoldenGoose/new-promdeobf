@@ -955,6 +955,7 @@ const genericForStructured = solveBetaControlFlow(ast, {
     graph: {
         cfgComplete: true,
         stateName: "state",
+        recoveredUpvalueBindings: ["capturedCopy"],
         entries: [1],
         states: [
             { id: 1, predecessors: [], successors: [2], operations: [
@@ -969,7 +970,8 @@ const genericForStructured = solveBetaControlFlow(ast, {
             ] },
             { id: 3, predecessors: [2], successors: [2], operations: [
                 { kind: "epoch-start", originalTarget: "r3", emittedTarget: "i", rhs: "r2", emittedText: "local i = r2", reads: [] },
-                { kind: "statement", originalText: "consume(i, r4)", emittedText: "consume(i, r4)", reads: ["i"] },
+                { kind: "upvalue-binding-start", originalTarget: "capturedCopy", emittedTarget: "capturedCopy", rhs: "r4", emittedText: "local capturedCopy = r4", reads: ["r4"] },
+                { kind: "statement", originalText: "consume(i, r4, capturedCopy)", emittedText: "consume(i, r4, capturedCopy)", reads: ["i", "r4", "capturedCopy"] },
                 { kind: "epoch-kill", originalTarget: "r3", emittedTarget: "i", rhs: "nil", emittedText: "i = nil", reads: [] },
                 { kind: "version-define", originalTarget: "r4", emittedTarget: "deadSecond", rhs: "nil", emittedText: "local deadSecond = nil", reads: [] },
                 { kind: "state-transition", originalTarget: "state", emittedTarget: "state", rhs: "2", emittedText: "state = 2", reads: [] },
@@ -986,7 +988,8 @@ assert.equal(genericForStructured.genericForLoopCount, 1);
 assert.equal(genericForStructured.numericForLoopCount, 0);
 assert.equal(genericForStructured.whileLoopCount, 0);
 assert(genericForStructured.source.includes("for i, r4 in iter, invariant, initialControl do"));
-assert(genericForStructured.source.includes("consume(i, r4)"));
+assert(genericForStructured.source.includes("consume(i, r4, capturedCopy)"));
+assert(genericForStructured.source.includes("local capturedCopy = r4"));
 assert(!genericForStructured.source.includes("r2, r4 ="));
 assert(!genericForStructured.source.includes("state ="));
 parseLua(genericForStructured.source, "<beta-cf-generic-for-output>");

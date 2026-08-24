@@ -308,4 +308,38 @@ assert(forInAliasRoot.some(op => op.emittedTarget === "seen" && op.rhs === "loop
 assert(forInAliasChild.some(op => op.emittedTarget === "captured" && op.rhs === "loopValue"));
 assert(forInCellAlias.graph.recoveredUpvalueBindings.includes("loopValue"));
 
+
+const compoundCapturedWrite = recoverBetaUpvalues({
+    applied: true,
+    graph: {
+        cfgComplete: true,
+        entries: [1, 2],
+        states: [
+            { id: 1, predecessors: [], successors: [], operations: [
+                { kind: "epoch-start", emittedTarget: "cell", emittedText: "local cell = allocUpvalue()", rhs: "allocUpvalue()", reads: [] },
+                { kind: "effect-write", emittedText: "upvalueValues[cell] = 0", reads: ["cell"] },
+                { kind: "version-define", emittedTarget: "delta", emittedText: "local delta = 1", rhs: "1", reads: [] },
+                { kind: "effect-write", emittedText: "upvalueValues[cell] += delta", reads: ["cell", "delta"] },
+                { kind: "version-define", emittedTarget: "closure", emittedText: "local closure = createClosure2(2, { cell })", rhs: "createClosure2(2, { cell })", reads: ["cell"] },
+                { kind: "epoch-mutate", emittedTarget: "cell", emittedText: "cell = releaseUpvalue(cell)", rhs: "releaseUpvalue(cell)", reads: ["cell"] },
+                ...terminalOps(),
+            ] },
+            { id: 2, predecessors: [], successors: [], operations: [
+                { kind: "version-define", emittedTarget: "captured", emittedText: "local captured = upvalueValues[upvalues[1]]", rhs: "upvalueValues[upvalues[1]]", reads: [] },
+                { kind: "return-payload", terminalCompilerReturnPayload: true, returnExpressions: ["captured"], emittedTarget: "ReturnVal", emittedText: "ReturnVal = { captured }", rhs: "{ captured }", reads: ["captured"] },
+                { kind: "state-transition", emittedTarget: "state", emittedText: "state = nil", rhs: "nil", reads: [] },
+            ] },
+        ],
+    },
+});
+assert.equal(compoundCapturedWrite.safe, true);
+assert.equal(compoundCapturedWrite.applied, true);
+assert.equal(compoundCapturedWrite.stats.writeRewriteCount, 1);
+const compoundCapturedRoot = compoundCapturedWrite.graph.states.find(state => state.id === 1).operations;
+const compoundCapturedChild = compoundCapturedWrite.graph.states.find(state => state.id === 2).operations;
+assert(compoundCapturedRoot.some(op => op.emittedText === "cell += delta" && op.reads.includes("cell")));
+assert(compoundCapturedRoot.some(op => op.rhs === "createClosure2(2, {})"));
+assert(!compoundCapturedRoot.some(op => String(op.emittedText || "").includes("releaseUpvalue")));
+assert(compoundCapturedChild.some(op => op.emittedTarget === "captured" && op.rhs === "cell"));
+
 console.log("beta upvalue recovery tests passed");

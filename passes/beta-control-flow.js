@@ -1549,12 +1549,30 @@ function matchCompilerGenericFor(graph, checkStateId) {
         operation?.emittedTarget &&
         recoveredUpvalueBindings.has(operation.emittedTarget)
     );
-    if (secondBindingCandidates.length > 1) return null;
-    const secondBinding = secondBindingCandidates[0] || null;
-    const secondVariable = secondBinding?.emittedTarget || secondVariableOriginal;
-    const secondVariableCaptured = Boolean(secondBinding);
 
     const requiredCleanupStates = new Set([...region.latchIds, ...(region.breakIds || [])]);
+    const secondOrdinaryCleanups = [];
+    for (const stateId of region.ids) {
+        for (const operation of stateById.get(stateId)?.operations || []) {
+            if (originalOperationTarget(operation) !== secondVariableOriginal) continue;
+            const expression = parseOperationExpression(operation);
+            if (expression?.type === "NilLiteral") secondOrdinaryCleanups.push({ stateId, operation });
+        }
+    }
+    const secondCleanupStates = new Set(secondOrdinaryCleanups.map(item => item.stateId));
+    const secondHasCompilerCleanup =
+        secondOrdinaryCleanups.length === requiredCleanupStates.size &&
+        sameMembers([...secondCleanupStates], [...requiredCleanupStates]);
+
+    // A real captured second ForIn variable has its releaseUpvalue scaffolding
+    // consumed by beta-upvalues, so no ordinary var=nil cleanup remains. If the
+    // compiler cleanup is still present, any recovered binding initialized from
+    // that iterator value is an ordinary captured local copy inside the body.
+    if (!secondHasCompilerCleanup && secondOrdinaryCleanups.length !== 0) return null;
+    if (!secondHasCompilerCleanup && secondBindingCandidates.length !== 1) return null;
+    const secondBinding = secondHasCompilerCleanup ? null : secondBindingCandidates[0];
+    const secondVariable = secondBinding?.emittedTarget || secondVariableOriginal;
+    const secondVariableCaptured = Boolean(secondBinding);
     const cleanupOperations = new Set();
     for (const variable of [
         { name: firstVariableOriginal, captured: firstVariableCaptured },
