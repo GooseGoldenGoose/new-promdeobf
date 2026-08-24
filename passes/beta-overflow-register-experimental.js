@@ -129,9 +129,6 @@ function remapOverflowBetaVersions(beta, prepared) {
         if (typeof next.rhs === "string") next.rhs = rewrite(next.rhs);
         if (typeof next.emittedText === "string") next.emittedText = rewrite(next.emittedText);
         if (Array.isArray(next.returnExpressions)) next.returnExpressions = next.returnExpressions.map(rewrite);
-        if (physicalNames.has(next.originalTarget)) {
-            next.originalTarget = `o_phys${prepared.byPhysical.get(next.originalTarget).dense}`;
-        }
         return next;
     }
 
@@ -141,9 +138,7 @@ function remapOverflowBetaVersions(beta, prepared) {
         epochs: (beta.graph.epochs || []).map(epoch => ({
             ...epoch,
             name: oldToNew.get(epoch.name) || epoch.name,
-            originalRegister: physicalNames.has(epoch.originalRegister)
-                ? `o_phys${prepared.byPhysical.get(epoch.originalRegister).dense}`
-                : epoch.originalRegister,
+            originalRegister: epoch.originalRegister,
             events: (epoch.events || []).map(event => ({ ...event, text: rewrite(event.text) })),
         })),
         experimentalOverflowScalarVersions: true,

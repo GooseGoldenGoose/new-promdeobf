@@ -196,18 +196,17 @@ Repeat recovery is intended to remove the local compiler's discarded first repea
 
 ## Experimental Overflow beta-CF Fork
 
-An isolated experimental fork now exists for trying new RegisterOverflow strategies without changing the verified production solver:
+Isolated experimental files:
 
 ```text
 passes/beta-control-flow-overflow-experimental.js
+passes/beta-overflow-register-experimental.js
 tools/beta-control-flow-overflow-experimental.js
 ```
 
-The fork starts as a behavior-identical copy of production beta-CF, but its overflow normalizer is named `normalizeRegisterOverflowGraphExperimental`. The experimental CLI defaults to `*.beta.overflow-exp.cf.lua`, so it cannot overwrite normal production `*.beta.cf.lua` output by accident.
+Production `passes/beta-control-flow.js` remains unchanged. The experimental CLI defaults to `*.beta.overflow-exp.cf.lua` so it cannot overwrite production beta-CF output.
 
-Baseline validation: experimental fork generated beta-CF successfully for numeric samples 1-63 and all 63 outputs were byte-for-byte identical to the production beta-CF outputs. Future overflow experiments should be developed in this fork first; production `passes/beta-control-flow.js` stays unchanged until the new method is proven.
-
-Example:
+Run example:
 
 ```text
 node tools\beta-control-flow-overflow-experimental.js output\5.lua output\5.beta.overflow-exp.cf.lua
@@ -215,22 +214,33 @@ node tools\beta-control-flow-overflow-experimental.js output\5.lua output\5.beta
 
 ## RegisterOverflow
 
-Production final CF normalizes proven static slots per recovered function:
+Production final CF still uses proven per-function table presentation:
+`RegisterOverflow[n] -> RegisterOverflow.vN`.
 
-`RegisterOverflow[n] -> RegisterOverflow.vN`
+Experimental scalar method:
+- `passes/beta-overflow-register-experimental.js` proves the RegisterOverflow binding and every static numeric slot structurally.
+- Sorted observed slots get dense synthetic physical scalar identities; e.g. slots 23/24 become synthetic overflow physical bases 1/2.
+- Synthetic overflow physicals are inserted into the ordinary VM scalar-register declaration before beta versioning.
+- From that point onward they use the exact normal beta lifetime/version solver. There is no overflow-specific nil/reset/lifetime logic.
+- Final emitted beta names only are remapped to `o_vN_K`, where `K` is exactly the normal beta version number.
+- Analysis metadata keeps the original synthetic physical identity unchanged; do not rename `originalTarget`/`originalRegister` independently of `originalText`, because compiler duplicate-condition/lifetime proofs depend on identity consistency.
+- If aggressive overflow prevents the normal pipeline from producing exact normalized VM leaves, the experimental CLI scalarizes first, reruns the existing Step 3 VM-state recovery and production register scheduler, then invokes unchanged beta versioning. This is fail-closed and only retries after the specific `No exact normalized VM state leaves were found` condition.
 
-Each function gets its own `local RegisterOverflow = {}` only when it directly uses overflow storage. Dynamic/bare/invalid accesses fail closed.
+Forced WeAreDevs test compiler fork:
+`C:\Users\reala\Desktop\!workspaces\promdeobf ova\wearedev obf overflow-test`
 
-Experimental fork:
-- `passes/beta-overflow-register-experimental.js` scalarizes every proven static overflow slot before beta versioning.
-- Sorted observed slots get dense synthetic physical registers; e.g. slots 23/24 become overflow bases 1/2.
-- Those synthetic physical registers are inserted into the normal VM scalar-register declaration and then go through the exact existing beta register lifetime/version solver. There is no overflow-specific nil/reset/lifetime rule after scalarization.
-- Only presentation is remapped afterward: the normal beta version for overflow base N becomes `o_vN_K`, preserving the normal solver's K exactly.
-- Experimental CLI: `tools/beta-control-flow-overflow-experimental.js`; output is isolated from production beta-CF.
-- Numeric sweep: 63/63 experimental CF passes; 61/63 are byte-identical to production and only overflow fixtures 5/10 differ.
-- Forced WeAreDevs test compiler fork: `C:\Users\reala\Desktop\!workspaces\promdeobf ova\wearedev obf overflow-test`, currently `MAX_REGS = 20`. Lower tested thresholds (<=16) break normal state recovery; 20 preserves 20/20 state leaves while forcing overflow on a tiny fixture.
+Current test setting: `MAX_REGS = 5`. The original WeAreDevs compiler is untouched.
 
-Samples 5 and 10 are overflow stress fixtures. Their final CF can exceed LuaJIT's 200-local main-function limit; that is not a beta-CF generation failure.
+MAX_REGS=5 regenerated source fixtures 1-10 were tested through source -> obfuscation -> formatter -> normal -> experimental beta-CF:
+- beta-CF generation: 10/10
+- final experimental CF: zero `RegisterOverflow[...]` refs in all 10
+- runtime source/obfuscated/normal/experimental-CF parity: samples 1,2,3,4,6,7,8,9 pass; samples 2 and 7 were checked on both user `math.random(1,2)` branches with a targeted runtime shim
+- samples 5 and 10: source/obfuscated/normal runtime parity passes and experimental CF generates, but LuaJIT cannot compile final CF because scalarization exposes more than 200 locals
+- sample 4 initially exposed inconsistent experimental `originalTarget` presentation metadata; preserving the synthetic physical identity fixed repeat recognition, and sample 4 now recovers 35 states with 1 while + 3 repeats and matches source runtime
+
+Existing tracked normal outputs 1-63 still pass the experimental solver: 63/63 generate; 61/63 remain byte-identical to production beta-CF and only true overflow fixtures 5/10 differ.
+
+Samples 5 and 10 can exceed the Lua/Luau/LuaJIT local-register limit after scalar overflow presentation. This is a real practical downside of the scalar experiment, separate from CFG generation correctness.
 
 ## Verification State
 

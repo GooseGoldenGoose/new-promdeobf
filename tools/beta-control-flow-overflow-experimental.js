@@ -1,8 +1,10 @@
 const fs = require("fs");
 const path = require("path");
-const { parseLuaStructural } = require("../main");
+const { parseLua, parseLuaStructural } = require("../main");
 const { versionVmBlockRegisters } = require("../passes/beta-register-versions");
 const { solveBetaControlFlow } = require("../passes/beta-control-flow-overflow-experimental");
+const { recoverVmStateGraph } = require("../passes/vm-state");
+const { scheduleVmRegisterUses } = require("../passes/vm-register-scheduler");
 const { prepareOverflowAsScalarRegisters, remapOverflowBetaVersions } = require("../passes/beta-overflow-register-experimental");
 
 function defaultOutputPath(inputPath) {
@@ -16,19 +18,42 @@ function generateBetaControlFlowFromSource(source, ast, outputPath) {
     if (!prepared.applied && (prepared.slots || []).length > 0) {
         throw new Error(prepared.reason || "Experimental overflow scalarization failed closed");
     }
-    const betaRaw = versionVmBlockRegisters(prepared.source, prepared.ast);
+    let betaSource = prepared.source;
+    let betaAst = prepared.ast;
+    let earlyVmState = null;
+    let earlyRegisterSchedule = null;
+    let betaRaw = versionVmBlockRegisters(betaSource, betaAst);
+
+    // With an aggressively low compiler MAX_REGS, even temporary values used to
+    // compute state transitions can live in RegisterOverflow. The normal pipeline
+    // therefore cannot normalize the dispatcher before this experimental pass.
+    // Once overflow slots are scalarized, retry the exact production state +
+    // register-scheduling stages, then hand the result to ordinary beta versioning.
+    if (!betaRaw.applied && betaRaw.reason === "No exact normalized VM state leaves were found" && prepared.applied) {
+        earlyVmState = recoverVmStateGraph(betaSource, betaAst);
+        if (!earlyVmState.found || !earlyVmState.normalized) {
+            throw new Error(earlyVmState.reason || "Early overflow-scalar VM state recovery failed closed");
+        }
+        betaSource = earlyVmState.source;
+        const scheduleAst = parseLua(betaSource, "<experimental overflow before VM register scheduling>");
+        earlyRegisterSchedule = scheduleVmRegisterUses(betaSource, scheduleAst);
+        if (earlyRegisterSchedule.applied) betaSource = earlyRegisterSchedule.source;
+        betaAst = parseLuaStructural(betaSource, "<experimental overflow after VM state recovery>");
+        betaRaw = versionVmBlockRegisters(betaSource, betaAst);
+    }
+
     if (!betaRaw.found || !betaRaw.applied) {
         throw new Error(betaRaw.reason || "Beta register analysis did not apply");
     }
     const beta = remapOverflowBetaVersions(betaRaw, prepared);
 
-    const controlFlow = solveBetaControlFlow(prepared.ast, beta);
+    const controlFlow = solveBetaControlFlow(betaAst, beta);
     if (!controlFlow.applied) throw new Error(controlFlow.reason || "Beta control-flow solving did not apply");
 
     parseLuaStructural(controlFlow.source, `${resolvedOutput} <beta control flow>`);
     fs.mkdirSync(path.dirname(resolvedOutput), { recursive: true });
     fs.writeFileSync(resolvedOutput, controlFlow.source, "utf8");
-    return { beta, controlFlow, overflow: beta.experimentalOverflow, outputPath: resolvedOutput };
+    return { beta, controlFlow, overflow: beta.experimentalOverflow, earlyVmState, earlyRegisterSchedule, outputPath: resolvedOutput };
 }
 
 function generateBetaControlFlow(inputPath, outputPath = null) {
