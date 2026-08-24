@@ -1203,4 +1203,73 @@ const usedPosPreservationKept = removeCompilerPosPreservationOperations(usedPosP
 assert.deepEqual(usedPosPreservationKept, { removed: 0, saveCount: 0, restoreCount: 0, orphanSaveCount: 0 });
 assert(usedPosPreservationGraph.states[0].operations.some(operation => operation.emittedTarget === "savedPos"));
 
+
+const overflowNormalized = solveBetaControlFlow(ast, {
+    applied: true,
+    graph: {
+        cfgComplete: true,
+        entries: [1],
+        states: [{
+            id: 1, predecessors: [], successors: [], operations: [
+                { kind: "effect-write", emittedText: "RegisterOverflow[91] = 1", reads: [] },
+                { kind: "version-define", emittedTarget: "overflowValue", emittedText: "local overflowValue = RegisterOverflow[7]", rhs: "RegisterOverflow[7]", reads: [] },
+                { kind: "return-payload", terminalCompilerReturnPayload: true, returnExpressions: ["overflowValue"], emittedText: "ReturnVal = { overflowValue }", rhs: "{ overflowValue }", reads: ["overflowValue"] },
+                { kind: "state-transition", emittedTarget: "state", emittedText: "state = nil", rhs: "nil", reads: [] },
+            ],
+        }],
+    },
+});
+assert.equal(overflowNormalized.applied, true);
+assert.equal(overflowNormalized.registerOverflowUsed, true);
+assert.equal(overflowNormalized.registerOverflowSlotCount, 2);
+assert(overflowNormalized.source.includes("local RegisterOverflow = {}"));
+assert(overflowNormalized.source.includes("RegisterOverflow.v2 = 1"));
+assert(overflowNormalized.source.includes("local overflowValue = RegisterOverflow.v1"));
+assert(!overflowNormalized.source.includes("RegisterOverflow["));
+parseLua(overflowNormalized.source, "<beta-cf-overflow-normalized>");
+
+const nestedOverflowNormalized = solveBetaControlFlow(ast, {
+    applied: true,
+    graph: {
+        cfgComplete: true,
+        entries: [1, 2],
+        states: [
+            { id: 1, predecessors: [], successors: [], operations: [
+                { kind: "version-define", emittedTarget: "child", emittedText: "local child = createClosure2(2, {})", rhs: "createClosure2(2, {})", reads: [] },
+                { kind: "return-payload", terminalCompilerReturnPayload: true, returnExpressions: ["child"], emittedText: "ReturnVal = { child }", rhs: "{ child }", reads: ["child"] },
+                { kind: "state-transition", emittedTarget: "state", emittedText: "state = nil", rhs: "nil", reads: [] },
+            ] },
+            { id: 2, predecessors: [], successors: [], operations: [
+                { kind: "effect-write", emittedText: "RegisterOverflow[44] = 5", reads: [] },
+                { kind: "version-define", emittedTarget: "value", emittedText: "local value = RegisterOverflow[44]", rhs: "RegisterOverflow[44]", reads: [] },
+                { kind: "return-payload", terminalCompilerReturnPayload: true, returnExpressions: ["value"], emittedText: "ReturnVal = { value }", rhs: "{ value }", reads: ["value"] },
+                { kind: "state-transition", emittedTarget: "state", emittedText: "state = nil", rhs: "nil", reads: [] },
+            ] },
+        ],
+    },
+});
+assert.equal(nestedOverflowNormalized.applied, true);
+assert.equal((nestedOverflowNormalized.source.match(/local RegisterOverflow = \{\}/g) || []).length, 1);
+assert(nestedOverflowNormalized.source.includes("RegisterOverflow.v1 = 5"));
+assert(nestedOverflowNormalized.source.includes("local value = RegisterOverflow.v1"));
+assert(!nestedOverflowNormalized.source.includes("RegisterOverflow["));
+parseLua(nestedOverflowNormalized.source, "<beta-cf-nested-overflow-normalized>");
+
+const dynamicOverflowRejected = solveBetaControlFlow(ast, {
+    applied: true,
+    graph: {
+        cfgComplete: true,
+        entries: [1],
+        states: [{
+            id: 1, predecessors: [], successors: [], operations: [
+                { kind: "effect-write", emittedText: "RegisterOverflow[index] = 1", reads: ["index"] },
+                { kind: "return-payload", terminalCompilerReturnPayload: true, returnExpressions: [], emittedText: "ReturnVal = {}", rhs: "{}", reads: [] },
+                { kind: "state-transition", emittedTarget: "state", emittedText: "state = nil", rhs: "nil", reads: [] },
+            ],
+        }],
+    },
+});
+assert.equal(dynamicOverflowRejected.applied, false);
+assert(dynamicOverflowRejected.reason.includes("non-static"));
+
 console.log("beta control-flow tests passed");

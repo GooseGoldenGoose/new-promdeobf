@@ -1,5 +1,6 @@
 const luaparse = require("../parser/luaparse");
 const { recoverBetaUpvalues } = require("./beta-upvalues");
+const { applyTextEdits } = require("./text-edits");
 
 function isNode(value) {
     return value && typeof value === "object" && typeof value.type === "string";
@@ -74,6 +75,151 @@ function operationText(operation) {
     return operation?.emittedText || operation?.originalText || null;
 }
 
+function parseControlFlowStatement(text) {
+    const source = String(text || "");
+    try {
+        const ast = luaparse.parse(source, {
+            luaVersion: "luau",
+            comments: false,
+            scope: false,
+            locations: false,
+            ranges: true,
+        });
+        if ((ast.body || []).length !== 1) return null;
+        return { source, statement: ast.body[0] };
+    } catch {
+        return null;
+    }
+}
+
+function collectRegisterOverflowSlots(node, slots, edits = null, slotNames = null) {
+    let error = null;
+    function visit(current) {
+        if (!isNode(current) || error) return;
+        if (current.type === "IndexExpression" && isIdentifier(current.base, "RegisterOverflow")) {
+            const slot = numericValue(current.index);
+            if (!Number.isInteger(slot) || slot < 1) {
+                error = "RegisterOverflow has a non-static or invalid slot access";
+                return;
+            }
+            slots.add(slot);
+            if (edits && slotNames) {
+                const field = slotNames.get(slot);
+                if (!field) {
+                    error = `RegisterOverflow slot ${slot} has no normalized field`;
+                    return;
+                }
+                edits.push({ start: current.range[0], end: current.range[1], replacement: `RegisterOverflow.${field}` });
+            }
+            visit(current.index);
+            return;
+        }
+        if (isIdentifier(current, "RegisterOverflow")) {
+            error = "RegisterOverflow appears outside a proven static numeric slot access";
+            return;
+        }
+        for (const [key, value] of Object.entries(current)) {
+            if (key === "loc" || key === "range") continue;
+            if (Array.isArray(value)) {
+                for (const child of value) visit(child);
+            } else if (isNode(value)) {
+                visit(value);
+            }
+        }
+    }
+    visit(node);
+    return error;
+}
+
+function analyzeRegisterOverflowText(text, expression) {
+    const source = String(text || "");
+    if (!source.includes("RegisterOverflow")) return { slots: new Set() };
+    const parsed = expression ? parseTransitionExpression(source) : parseControlFlowStatement(source);
+    const node = expression ? parsed?.expression : parsed?.statement;
+    if (!node) return { error: "RegisterOverflow operation could not be structurally reparsed" };
+    const slots = new Set();
+    const error = collectRegisterOverflowSlots(node, slots);
+    return error ? { error } : { slots };
+}
+
+function rewriteRegisterOverflowText(text, expression, slotNames) {
+    const sourceText = String(text || "");
+    if (!sourceText.includes("RegisterOverflow")) return { text: sourceText };
+    const parsed = expression ? parseTransitionExpression(sourceText) : parseControlFlowStatement(sourceText);
+    const node = expression ? parsed?.expression : parsed?.statement;
+    if (!node) return { error: "RegisterOverflow operation could not be structurally reparsed" };
+    const slots = new Set();
+    const edits = [];
+    const error = collectRegisterOverflowSlots(node, slots, edits, slotNames);
+    if (error) return { error };
+    if (!edits.length) return { text: sourceText };
+    if (expression) {
+        const rewrittenSource = applyTextEdits(parsed.source, edits);
+        const prefixLength = parsed.source.length - sourceText.length;
+        return { text: rewrittenSource.slice(prefixLength) };
+    }
+    return { text: applyTextEdits(parsed.source, edits) };
+}
+
+function normalizeRegisterOverflowGraph(graph) {
+    const slots = new Set();
+    for (const state of graph.states || []) {
+        for (const operation of state.operations || []) {
+            const statement = analyzeRegisterOverflowText(operationText(operation), false);
+            if (statement.error) return { error: statement.error };
+            for (const slot of statement.slots) slots.add(slot);
+            if (operation?.rhs) {
+                const rhs = analyzeRegisterOverflowText(operation.rhs, true);
+                if (rhs.error) return { error: rhs.error };
+                for (const slot of rhs.slots) slots.add(slot);
+            }
+        }
+    }
+    const orderedSlots = [...slots].sort((left, right) => left - right);
+    const slotNames = new Map(orderedSlots.map((slot, index) => [slot, `v${index + 1}`]));
+    const states = [];
+    for (const state of graph.states || []) {
+        const operations = [];
+        for (const operation of state.operations || []) {
+            const next = { ...operation };
+            if (operation.emittedText) {
+                const rewritten = rewriteRegisterOverflowText(operation.emittedText, false, slotNames);
+                if (rewritten.error) return { error: rewritten.error };
+                next.emittedText = rewritten.text;
+            } else if (operation.originalText) {
+                const rewritten = rewriteRegisterOverflowText(operation.originalText, false, slotNames);
+                if (rewritten.error) return { error: rewritten.error };
+                next.originalText = rewritten.text;
+            }
+            if (operation.rhs) {
+                const rewritten = rewriteRegisterOverflowText(operation.rhs, true, slotNames);
+                if (rewritten.error) return { error: rewritten.error };
+                next.rhs = rewritten.text;
+            }
+            if (Array.isArray(operation.returnExpressions)) {
+                const returnExpressions = [];
+                for (const expression of operation.returnExpressions) {
+                    const rewritten = rewriteRegisterOverflowText(expression, true, slotNames);
+                    if (rewritten.error) return { error: rewritten.error };
+                    returnExpressions.push(rewritten.text);
+                }
+                next.returnExpressions = returnExpressions;
+            }
+            operations.push(next);
+        }
+        states.push({ ...state, operations });
+    }
+    return {
+        graph: {
+            ...graph,
+            states,
+            registerOverflowUsed: orderedSlots.length > 0,
+            registerOverflowSlotCount: orderedSlots.length,
+            registerOverflowSlotNames: Object.fromEntries(orderedSlots.map(slot => [slot, slotNames.get(slot)])),
+        },
+    };
+}
+
 function hasUnsafeUnsupportedOperation(operations) {
     return operations.some(operation => operation?.kind === "unsupported");
 }
@@ -128,7 +274,7 @@ function lowerTerminalReturn(operations) {
     return { operations: result, lowered: true, returnText };
 }
 
-function buildPresentedSource(originalAst, bodyText) {
+function buildPresentedSource(originalAst, bodyText, options = {}) {
     const headerLines = [];
     let environmentHeader = null;
     if (/\b_env\b/.test(bodyText)) {
@@ -140,6 +286,11 @@ function buildPresentedSource(originalAst, bodyText) {
         headerLines.push(environmentHeader);
     }
     headerLines.push("local args = { ... }");
+    let registerOverflowHeader = null;
+    if (options.registerOverflowUsed === true) {
+        registerOverflowHeader = "local RegisterOverflow = {}";
+        headerLines.push(registerOverflowHeader);
+    }
 
     const sections = ["--headers"];
     if (headerLines.length) sections.push(headerLines.join("\n"));
@@ -149,6 +300,7 @@ function buildPresentedSource(originalAst, bodyText) {
         applied: true,
         source: sections.join("\n\n") + "\n",
         environmentHeader,
+        registerOverflowHeader,
     };
 }
 
@@ -173,7 +325,7 @@ function solveSingleState(originalAst, graph) {
     const lowered = lowerTerminalReturn(sunk.operations);
     const bodyLines = lowered.operations.map(operationText);
     const bodyText = bodyLines.join("\n\n");
-    const presented = buildPresentedSource(originalAst, bodyText);
+    const presented = buildPresentedSource(originalAst, bodyText, { registerOverflowUsed: graph.registerOverflowUsed === true });
     if (!presented.applied) return presented;
 
     return {
@@ -190,6 +342,8 @@ function solveSingleState(originalAst, graph) {
         terminalReturnLowered: lowered.lowered,
         terminalReturnText: lowered.returnText,
         environmentHeader: presented.environmentHeader,
+        registerOverflowUsed: graph.registerOverflowUsed === true,
+        registerOverflowSlotCount: graph.registerOverflowSlotCount || 0,
     };
 }
 
@@ -3184,7 +3338,7 @@ function solveAcyclicStructured(originalAst, graph) {
     if (scopeError) return { applied: false, reason: scopeError };
 
     const bodyText = formatStructuredNodes(structured.nodes);
-    const presented = buildPresentedSource(originalAst, bodyText);
+    const presented = buildPresentedSource(originalAst, bodyText, { registerOverflowUsed: graph.registerOverflowUsed === true });
     if (!presented.applied) return presented;
 
     return {
@@ -3203,6 +3357,8 @@ function solveAcyclicStructured(originalAst, graph) {
         terminalReturnLowered: terminalReturnCount > 0,
         terminalReturnText: null,
         environmentHeader: presented.environmentHeader,
+        registerOverflowUsed: graph.registerOverflowUsed === true,
+        registerOverflowSlotCount: graph.registerOverflowSlotCount || 0,
     };
 }
 
@@ -3312,16 +3468,19 @@ function presentedBody(source) {
     return String(source).slice(index + marker.length).trimEnd();
 }
 
-function nestedFunctionExpression(bodyText) {
+function nestedFunctionExpression(bodyText, options = {}) {
     const body = String(bodyText || "").trim();
     const lines = [
         "function(...)",
         "    --headers",
         "",
         "    local args = { ... }",
-        "",
-        "    --body",
     ];
+    if (options.registerOverflowUsed === true) lines.push("    local RegisterOverflow = {}");
+    lines.push(
+        "",
+        "    --body"
+    );
     if (body) lines.push("", indentText(body, 1));
     lines.push("end");
     return lines.join("\n");
@@ -3342,19 +3501,37 @@ function replaceClosureFactoryOperation(operation, functionExpression) {
 }
 
 function regionGraph(graph, entry, ownerByState, solvedBodies) {
-    const states = [];
+    const rawStates = [];
     for (const state of graph.states) {
         if (ownerByState.get(state.id) !== entry) continue;
+        const predecessors = (state.predecessors || []).filter(id => ownerByState.get(id) === entry);
+        const successors = [...(state.successors || [])];
+        if (successors.some(id => ownerByState.get(id) !== entry)) {
+            return { error: `Closure entry ${entry} has a CFG edge into another closure region` };
+        }
+        rawStates.push({
+            ...state,
+            predecessors,
+            successors,
+            operations: (state.operations || []).map(operation => ({ ...operation })),
+        });
+    }
+
+    const normalized = normalizeRegisterOverflowGraph({ ...graph, entries: [entry], states: rawStates });
+    if (normalized.error) return { error: `Closure entry ${entry}: ${normalized.error}` };
+
+    const states = normalized.graph.states.map(state => {
         const operations = [];
         for (const operation of state.operations || []) {
             const call = parseClosureFactoryCall(operation.rhs);
-            if (call && solvedBodies.has(call.entry)) {
+            const child = call ? solvedBodies.get(call.entry) : null;
+            if (call && child) {
                 if (call.captureCount !== 0) {
                     return { error: `Closure entry ${call.entry} has ${call.captureCount} capture value(s); capture reconstruction is not implemented` };
                 }
                 const replacement = replaceClosureFactoryOperation(
                     operation,
-                    nestedFunctionExpression(solvedBodies.get(call.entry))
+                    nestedFunctionExpression(child.bodyText, { registerOverflowUsed: child.registerOverflowUsed === true })
                 );
                 if (!replacement) {
                     return { error: `Closure factory for entry ${call.entry} has no replaceable beta assignment target` };
@@ -3364,17 +3541,14 @@ function regionGraph(graph, entry, ownerByState, solvedBodies) {
                 operations.push({ ...operation });
             }
         }
-        const predecessors = (state.predecessors || []).filter(id => ownerByState.get(id) === entry);
-        const successors = [...(state.successors || [])];
-        if (successors.some(id => ownerByState.get(id) !== entry)) {
-            return { error: `Closure entry ${entry} has a CFG edge into another closure region` };
-        }
-        states.push({ ...state, predecessors, successors, operations });
-    }
+        return { ...state, operations };
+    });
+    const stateError = states.find(state => state?.error);
+    if (stateError?.error) return { error: stateError.error };
+
     return {
         graph: {
-            ...graph,
-            entries: [entry],
+            ...normalized.graph,
             states,
         },
     };
@@ -3481,7 +3655,10 @@ function solveClosureRegions(originalAst, graph) {
         if (bodyText === null) {
             return { applied: false, reason: `Closure entry ${entry} produced no structured body section` };
         }
-        solvedBodies.set(entry, bodyText);
+        solvedBodies.set(entry, {
+            bodyText,
+            registerOverflowUsed: solved.registerOverflowUsed === true,
+        });
         solvedResults.set(entry, solved);
     }
 
@@ -3531,9 +3708,14 @@ function solveBetaControlFlow(originalAst, betaResult) {
     if (!graph.cfgComplete) {
         return { applied: false, reason: "Beta CFG is incomplete" };
     }
-    const solved = graph.entries.length === 1
-        ? solveSingleEntryControlFlow(originalAst, graph)
-        : solveClosureRegions(originalAst, graph);
+    let solved;
+    if (graph.entries.length === 1) {
+        const normalized = normalizeRegisterOverflowGraph(graph);
+        if (normalized.error) return { applied: false, reason: normalized.error };
+        solved = solveSingleEntryControlFlow(originalAst, normalized.graph);
+    } else {
+        solved = solveClosureRegions(originalAst, graph);
+    }
     if (!solved.applied) return solved;
     return {
         ...solved,
@@ -3561,5 +3743,6 @@ module.exports = {
     collapseCompilerStructuredLoops,
     forwardControlOnlyJoinBranches,
     removeCompilerPosPreservationOperations,
+    normalizeRegisterOverflowGraph,
     solveBetaControlFlow,
 };
