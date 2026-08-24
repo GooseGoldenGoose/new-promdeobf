@@ -587,6 +587,57 @@ assert(!numericForStructured.source.includes("current = current + step"));
 assert(!numericForStructured.source.includes("state ="));
 parseLua(numericForStructured.source, "<beta-cf-numeric-for-output>");
 
+const numericForMutatedVariable = solveBetaControlFlow(ast, {
+    applied: true,
+    graph: {
+        cfgComplete: true,
+        stateName: "state",
+        entries: [1],
+        states: [
+            { id: 1, predecessors: [], successors: [2], operations: [
+                { kind: "version-define", emittedTarget: "final", rhs: "2", emittedText: "local final = 2", reads: [] },
+                { kind: "version-define", emittedTarget: "step", rhs: "1", emittedText: "local step = 1", reads: [] },
+                { kind: "version-define", emittedTarget: "zero", rhs: "0", emittedText: "local zero = 0", reads: [] },
+                { kind: "version-define", emittedTarget: "neg", rhs: "step < zero", emittedText: "local neg = step < zero", reads: ["step", "zero"] },
+                { kind: "version-define", emittedTarget: "start", rhs: "1", emittedText: "local start = 1", reads: [] },
+                { kind: "epoch-mutate", emittedTarget: "current", rhs: "start - step", emittedText: "current = start - step", reads: ["start", "step"] },
+                { kind: "state-transition", emittedTarget: "state", rhs: "2", emittedText: "state = 2", reads: [] },
+            ] },
+            { id: 2, predecessors: [1, 3], successors: [3, 4], operations: [
+                { kind: "version-define", emittedTarget: "notneg", rhs: "not neg", emittedText: "local notneg = not neg", reads: ["neg"] },
+                { kind: "epoch-mutate", emittedTarget: "current", rhs: "current + step", emittedText: "current = current + step", reads: ["current", "step"] },
+                { kind: "version-define", emittedTarget: "le", rhs: "current <= final", emittedText: "local le = current <= final", reads: ["current", "final"] },
+                { kind: "version-define", emittedTarget: "pos", rhs: "notneg and le", emittedText: "local pos = notneg and le", reads: ["notneg", "le"] },
+                { kind: "epoch-start", emittedTarget: "ge", rhs: "current >= final", emittedText: "local ge = current >= final", reads: ["current", "final"], registerEpoch: "ge:1" },
+                { kind: "epoch-mutate", emittedTarget: "ge", rhs: "neg and ge", emittedText: "ge = neg and ge", reads: ["neg", "ge"], registerEpoch: "ge:1" },
+                { kind: "version-define", emittedTarget: "cond", rhs: "ge or pos", emittedText: "local cond = ge or pos", reads: ["ge", "pos"] },
+                { kind: "version-define", emittedTarget: "bodyId", rhs: "3", emittedText: "local bodyId = 3", reads: [] },
+                { kind: "version-define", emittedTarget: "stateTmp", rhs: "cond and bodyId", emittedText: "local stateTmp = cond and bodyId", reads: ["cond", "bodyId"] },
+                { kind: "version-define", emittedTarget: "exitId", rhs: "4", emittedText: "local exitId = 4", reads: [] },
+                { kind: "state-transition", emittedTarget: "state", rhs: "stateTmp or exitId", emittedText: "state = stateTmp or exitId", reads: ["stateTmp", "exitId"] },
+            ] },
+            { id: 3, predecessors: [2], successors: [2], operations: [
+                { kind: "epoch-start", emittedTarget: "loopVar", rhs: "current", emittedText: "local loopVar = current", reads: ["current"], registerEpoch: "loop:1" },
+                { kind: "version-define", emittedTarget: "next", rhs: "loopVar + 10", emittedText: "local next = loopVar + 10", reads: ["loopVar"] },
+                { kind: "epoch-mutate", emittedTarget: "loopVar", rhs: "next", emittedText: "loopVar = next", reads: ["next"], registerEpoch: "loop:1" },
+                { kind: "version-define", emittedTarget: "sink", rhs: "consume(loopVar)", emittedText: "local sink = consume(loopVar)", reads: ["loopVar"] },
+                { kind: "epoch-kill", emittedTarget: "loopVar", rhs: "nil", emittedText: "loopVar = nil", reads: [], registerEpoch: "loop:1" },
+                { kind: "state-transition", emittedTarget: "state", rhs: "2", emittedText: "state = 2", reads: [] },
+            ] },
+            { id: 4, predecessors: [2], successors: [], operations: [
+                { kind: "return-payload", terminalCompilerReturnPayload: true, returnExpressions: [], emittedText: "ReturnVal = {}", rhs: "{}", reads: [] },
+                { kind: "state-transition", emittedTarget: "state", rhs: "nil", emittedText: "state = nil", reads: [] },
+            ] },
+        ],
+    },
+});
+assert.equal(numericForMutatedVariable.applied, true);
+assert.equal(numericForMutatedVariable.numericForLoopCount, 1);
+assert(numericForMutatedVariable.source.includes("loopVar = next"));
+assert(numericForMutatedVariable.source.includes("consume(loopVar)"));
+assert(!numericForMutatedVariable.source.includes("current = current + step"));
+parseLua(numericForMutatedVariable.source, "<beta-cf-numeric-for-mutated-variable-output>");
+
 const numericForBranchBody = solveBetaControlFlow(ast, {
     applied: true,
     graph: {

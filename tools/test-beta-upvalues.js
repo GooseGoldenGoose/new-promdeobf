@@ -206,6 +206,43 @@ assert(captureBeforeRoot.some(op => op.emittedText === "r_v1_1 = args[1]"));
 assert(captureBeforeRoot.some(op => op.rhs === "createClosure2(2, {})"));
 
 
+const dominatedMultiStateCell = recoverBetaUpvalues({
+    applied: true,
+    graph: {
+        cfgComplete: true,
+        entries: [1, 5],
+        states: [
+            { id: 1, predecessors: [], successors: [2], operations: [
+                { kind: "state-transition", emittedTarget: "state", emittedText: "state = 2", rhs: "2", reads: [] },
+            ] },
+            { id: 2, predecessors: [1, 3], successors: [3, 4], operations: [
+                { kind: "state-transition", emittedTarget: "state", emittedText: "state = cond and 3 or 4", rhs: "cond and 3 or 4", reads: ["cond"] },
+            ] },
+            { id: 3, predecessors: [2], successors: [2], operations: [
+                { kind: "epoch-start", emittedTarget: "cell", emittedText: "local cell = allocUpvalue()", rhs: "allocUpvalue()", reads: [] },
+                { kind: "version-define", emittedTarget: "closure", emittedText: "local closure = createClosure2(5, { cell })", rhs: "createClosure2(5, { cell })", reads: ["cell"] },
+                { kind: "unsupported", emittedText: "upvalueValues[cell] = current", reads: ["cell", "current"] },
+                { kind: "epoch-mutate", emittedTarget: "cell", emittedText: "cell = releaseUpvalue(cell)", rhs: "releaseUpvalue(cell)", reads: ["cell"] },
+                { kind: "state-transition", emittedTarget: "state", emittedText: "state = 2", rhs: "2", reads: [] },
+            ] },
+            { id: 4, predecessors: [2], successors: [], operations: [...terminalOps()] },
+            { id: 5, predecessors: [], successors: [], operations: [
+                { kind: "version-define", emittedTarget: "captured", emittedText: "local captured = upvalueValues[upvalues[1]]", rhs: "upvalueValues[upvalues[1]]", reads: [] },
+                { kind: "return-payload", terminalCompilerReturnPayload: true, returnExpressions: ["captured"], emittedTarget: "ReturnVal", emittedText: "ReturnVal = { captured }", rhs: "{ captured }", reads: ["captured"] },
+                { kind: "state-transition", emittedTarget: "state", emittedText: "state = nil", rhs: "nil", reads: [] },
+            ] },
+        ],
+    },
+});
+assert.equal(dominatedMultiStateCell.safe, true);
+assert.equal(dominatedMultiStateCell.applied, true);
+assert.equal(dominatedMultiStateCell.cells[0].bindingMode, "hoisted-cell-binding");
+const dominatedBody = dominatedMultiStateCell.graph.states.find(state => state.id === 3).operations;
+assert(dominatedBody.some(op => op.emittedText === "local cell"));
+assert(dominatedBody.some(op => op.emittedText === "cell = current"));
+assert(dominatedBody.some(op => op.rhs === "createClosure2(5, {})"));
+assert(!dominatedBody.some(op => String(op.emittedText || "").includes("releaseUpvalue")));
+
 const escaped = recoverBetaUpvalues({
     applied: true,
     graph: {

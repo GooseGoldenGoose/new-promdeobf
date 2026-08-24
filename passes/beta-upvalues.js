@@ -285,12 +285,53 @@ function recoverBetaUpvalues(betaResult) {
     const graph = cloneGraph(originalGraph);
     const partition = partitionClosureRegions(graph);
     if (partition.error) return { applied: false, safe: false, reason: partition.error };
-    const { ownerByState } = partition;
+    const { ownerByState, stateById } = partition;
     const positions = operationPositions(graph, ownerByState);
-    const regionStateCount = new Map();
-    for (const state of graph.states) {
-        const owner = ownerByState.get(state.id);
-        regionStateCount.set(owner, (regionStateCount.get(owner) || 0) + 1);
+
+    // CFG dominance is computed per closure owner. A captured cell does not need
+    // its whole owner function to be single-state: it is sufficient for the
+    // allocation point to dominate every owner-side occurrence of that cell.
+    // This keeps a cell allocated inside a loop body inside that loop body, while
+    // cells allocated in a loop preheader remain visible to the loop states they
+    // dominate.
+    const dominatorsByState = new Map();
+    for (const ownerEntry of graph.entries) {
+        const ownerStateIds = graph.states
+            .filter(state => ownerByState.get(state.id) === ownerEntry)
+            .map(state => state.id);
+        const ownerSet = new Set(ownerStateIds);
+        const allOwnerStates = new Set(ownerStateIds);
+        const dominators = new Map();
+        for (const stateId of ownerStateIds) {
+            dominators.set(stateId, stateId === ownerEntry ? new Set([stateId]) : new Set(allOwnerStates));
+        }
+
+        let changed = true;
+        while (changed) {
+            changed = false;
+            for (const stateId of ownerStateIds) {
+                if (stateId === ownerEntry) continue;
+                const state = stateById.get(stateId);
+                const predecessors = (state?.predecessors || []).filter(id => ownerSet.has(id));
+                if (!predecessors.length) continue;
+                let intersection = new Set(dominators.get(predecessors[0]) || []);
+                for (const predecessor of predecessors.slice(1)) {
+                    const predecessorDominators = dominators.get(predecessor) || new Set();
+                    intersection = new Set([...intersection].filter(id => predecessorDominators.has(id)));
+                }
+                intersection.add(stateId);
+                const previous = dominators.get(stateId) || new Set();
+                if (previous.size !== intersection.size || [...previous].some(id => !intersection.has(id))) {
+                    dominators.set(stateId, intersection);
+                    changed = true;
+                }
+            }
+        }
+        for (const [stateId, stateDominators] of dominators) dominatorsByState.set(stateId, stateDominators);
+    }
+
+    function dominates(dominatorStateId, stateId) {
+        return dominatorsByState.get(stateId)?.has(dominatorStateId) === true;
     }
 
     const cells = new Map();
@@ -398,8 +439,16 @@ function recoverBetaUpvalues(betaResult) {
     for (const cellId of capturedCellIds) {
         const cell = cells.get(cellId);
         if (!cell) return { applied: false, safe: false, reason: `Captured cell ${cellId} has no allocUpvalue definition` };
-        if ((regionStateCount.get(cell.ownerEntry) || 0) !== 1) {
-            return { applied: false, safe: false, reason: `Captured cell ${cellId} is allocated in a multi-state owner region; lexical dominance proof is not implemented yet` };
+
+        const ownerFootprint = positions.filter(position => {
+            if (position.ownerEntry !== cell.ownerEntry) return false;
+            const text = String(position.operation?.emittedText || "");
+            if (!text.includes(cell.registerName)) return false;
+            const parsed = parseStatement(text);
+            return parsed ? countIdentifier(parsed.statement, cell.registerName) > 0 : false;
+        });
+        if (!ownerFootprint.length || ownerFootprint.some(position => !dominates(cell.allocation.stateId, position.stateId))) {
+            return { applied: false, safe: false, reason: `Captured cell ${cellId} has owner-side uses not dominated by its allocation state` };
         }
 
         const candidates = [];
@@ -446,16 +495,26 @@ function recoverBetaUpvalues(betaResult) {
         // lexical scope for the already-created nested function. In that case,
         // keep the recovered cell binding name but hoist only its declaration to
         // the original allocUpvalue site, then assign the value at the original
-        // initialization site. Region ownership is single-state here, so the
-        // operation order is a proven lexical order inside one function region.
-        const firstCaptureIndex = factorySites
-            .filter(site =>
-                site.ownerEntry === cell.ownerEntry &&
-                site.stateId === cell.allocation.stateId &&
-                site.captures.some(capture => resolveCellIndex(site.ownerEntry, capture) === cellId)
-            )
-            .reduce((best, site) => Math.min(best, site.operationIndex), Infinity);
-        if (firstCaptureIndex < cell.initialization.operationIndex) {
+        // initialization site. Same-state order is textual; cross-state order is
+        // accepted only when CFG dominance proves which point must execute first.
+        const captureSites = factorySites.filter(site =>
+            site.ownerEntry === cell.ownerEntry &&
+            site.captures.some(capture => resolveCellIndex(site.ownerEntry, capture) === cellId)
+        );
+        let captureBeforeInitialization = false;
+        for (const site of captureSites) {
+            if (site.stateId === cell.initialization.stateId) {
+                if (site.operationIndex < cell.initialization.operationIndex) captureBeforeInitialization = true;
+                continue;
+            }
+            if (dominates(cell.initialization.stateId, site.stateId)) continue;
+            if (dominates(site.stateId, cell.initialization.stateId)) {
+                captureBeforeInitialization = true;
+                continue;
+            }
+            return { applied: false, safe: false, reason: `Captured cell ${cellId} has a factory capture with ambiguous order relative to initialization` };
+        }
+        if (captureBeforeInitialization) {
             cell.bindingName = cell.registerName;
             cell.bindingMode = "hoisted-cell-binding";
         }

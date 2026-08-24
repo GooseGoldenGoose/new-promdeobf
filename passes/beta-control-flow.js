@@ -1353,11 +1353,16 @@ function matchCompilerNumericFor(graph, checkStateId) {
 
     const cleanupCandidates = [];
     const loopVariableWrites = [];
+    const capturedLoopDeclarations = [];
     for (const stateId of region.ids) {
         const state = stateById.get(stateId);
         for (const operation of state.operations || []) {
             if (operation?.emittedTarget !== loopVariable) continue;
             loopVariableWrites.push(operation);
+            if (operation.kind === 'upvalue-binding-declaration') {
+                capturedLoopDeclarations.push({ stateId, operation });
+                continue;
+            }
             const expression = parseOperationExpression(operation);
             if (expression?.type === 'NilLiteral' &&
                 (!loopVariableDefinition.registerEpoch || !operation.registerEpoch || loopVariableDefinition.registerEpoch === operation.registerEpoch)) {
@@ -1365,13 +1370,48 @@ function matchCompilerNumericFor(graph, checkStateId) {
             }
         }
     }
+
+    const recoveredCapturedLoopVariable =
+        (loopVariableDefinition.kind === 'upvalue-binding-init' || loopVariableDefinition.kind === 'upvalue-binding-start') &&
+        capturedLoopDeclarations.length <= 1 &&
+        capturedLoopDeclarations.every(candidate => candidate.stateId === bodyId);
+
     const requiredCleanupStates = new Set([...region.latchIds, ...(region.breakIds || [])]);
     const cleanupStateIds = new Set(cleanupCandidates.map(candidate => candidate.stateId));
-    if (cleanupCandidates.length !== requiredCleanupStates.size || !sameMembers([...cleanupStateIds], [...requiredCleanupStates])) return null;
+    if (recoveredCapturedLoopVariable) {
+        // beta-upvalues already consumed the compiler releaseUpvalue(cell) cleanup.
+        if (cleanupCandidates.length !== 0) return null;
+    } else if (cleanupCandidates.length !== requiredCleanupStates.size || !sameMembers([...cleanupStateIds], [...requiredCleanupStates])) {
+        return null;
+    }
     const cleanupOperations = new Set(cleanupCandidates.map(candidate => candidate.operation));
-    if (loopVariableWrites.some(operation => operation !== loopVariableDefinition && !cleanupOperations.has(operation))) return null;
 
-    const skipOperations = new Set([loopVariableDefinition, ...cleanupOperations]);
+    const sourceLoopVariableWrites = loopVariableWrites.filter(operation =>
+        operation !== loopVariableDefinition &&
+        !cleanupOperations.has(operation) &&
+        !capturedLoopDeclarations.some(candidate => candidate.operation === operation)
+    );
+    if (sourceLoopVariableWrites.some(operation =>
+        loopVariableDefinition.registerEpoch && operation.registerEpoch &&
+        loopVariableDefinition.registerEpoch !== operation.registerEpoch
+    )) return null;
+
+    // Source writes to the visible numeric-for variable are legal in Lua/Luau.
+    // They must not be confused with the compiler's hidden induction machinery:
+    // current/step/final/negative are proven from the check/preheader signature and
+    // must never be written by the structured body.
+    const protectedInductionNames = new Set([currentName, stepName, finalName, negativeFlagName]);
+    for (const stateId of region.ids) {
+        for (const operation of stateById.get(stateId)?.operations || []) {
+            if (protectedInductionNames.has(operation?.emittedTarget)) return null;
+        }
+    }
+
+    const skipOperations = new Set([
+        loopVariableDefinition,
+        ...cleanupOperations,
+        ...capturedLoopDeclarations.map(candidate => candidate.operation),
+    ]);
     const structuredBody = structureLoopBodyRegion(stateById, region, bodyId, check.id, skipOperations, currentName, exitId, true);
     if (!structuredBody) return null;
 
