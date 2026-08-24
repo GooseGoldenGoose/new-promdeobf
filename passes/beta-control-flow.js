@@ -78,21 +78,6 @@ function hasUnsafeUnsupportedOperation(operations) {
     return operations.some(operation => operation?.kind === "unsupported");
 }
 
-function canSinkTerminalReturnAcross(payload, operation) {
-    const expressions = payload?.returnExpressions;
-    if (!Array.isArray(expressions)) return false;
-
-    // Empty compiler returns carry no value dependency. In beta CF they represent the
-    // function's terminal no-value return, so the marker can be placed at the proven stop.
-    if (expressions.length === 0) return true;
-
-    // Non-empty returns may only cross compiler bookkeeping that is structurally pure.
-    // Never cross a write to a version consumed by the return payload.
-    if (operation?.returnSinkSafe !== true) return false;
-    const returnedReads = new Set(payload.reads || []);
-    return !returnedReads.has(operation.emittedTarget);
-}
-
 function sinkTerminalReturnPayload(operations) {
     const result = [...operations];
     const finalTransitionIndex = result.findLastIndex(operation => operation.kind === "state-transition");
@@ -109,10 +94,6 @@ function sinkTerminalReturnPayload(operations) {
     const payloadIndex = payloadIndexes[0];
     if (payloadIndex === finalTransitionIndex - 1) return { operations: result, moved: false };
     const payload = result[payloadIndex];
-    const crossed = result.slice(payloadIndex + 1, finalTransitionIndex);
-    if (!crossed.every(operation => canSinkTerminalReturnAcross(payload, operation))) {
-        return { operations: result, moved: false };
-    }
 
     result.splice(payloadIndex, 1);
     const newTransitionIndex = result.findLastIndex(operation => operation.kind === "state-transition");
@@ -274,12 +255,44 @@ function transitionInfo(state, options = {}) {
     if (expression?.type !== "LogicalExpression" || expression.operator !== "or") {
         return { error: `State ${state.id} branch transition is not the proven condition-and-true-or-false shape` };
     }
-    const left = expression.left;
+
+    const transitionIndex = state.operations.indexOf(operation);
+    function uniquePriorDefinition(name) {
+        if (!name || transitionIndex < 0) return null;
+        const matches = state.operations.slice(0, transitionIndex).filter(candidate => candidate?.emittedTarget === name);
+        return matches.length === 1 ? matches[0] : null;
+    }
+    function resolveNumericArm(node) {
+        const direct = numericValue(node);
+        if (direct !== null) return { value: direct, operation: null };
+        if (!isIdentifier(node)) return null;
+        const definition = uniquePriorDefinition(node.name);
+        if (!definition) return null;
+        const value = numericValue(parseOperationExpression(definition));
+        return value === null ? null : { value, operation: definition };
+    }
+
+    let left = expression.left;
+    let leftSource = parsed.source;
+    let conditionProofOperation = operation;
+    if (isIdentifier(left)) {
+        const definition = uniquePriorDefinition(left.name);
+        const definitionParsed = definition ? parseTransitionExpression(String(definition.rhs || "").trim()) : null;
+        const definitionExpression = definitionParsed?.expression;
+        if (definitionExpression?.type === "LogicalExpression" && definitionExpression.operator === "and") {
+            left = definitionExpression;
+            leftSource = definitionParsed.source;
+            conditionProofOperation = definition;
+        }
+    }
     if (left?.type !== "LogicalExpression" || left.operator !== "and") {
         return { error: `State ${state.id} branch transition is missing its condition-and-true arm` };
     }
-    const onTrue = numericValue(left.right);
-    const onFalse = numericValue(expression.right);
+
+    const trueArm = resolveNumericArm(left.right);
+    const falseArm = resolveNumericArm(expression.right);
+    const onTrue = trueArm?.value ?? null;
+    const onFalse = falseArm?.value ?? null;
     if (onTrue !== state.successors[0] || onFalse !== state.successors[1]) {
         return { error: `State ${state.id} branch targets do not match its proven CFG successors` };
     }
@@ -290,8 +303,8 @@ function transitionInfo(state, options = {}) {
     if (!isIdentifier(left.left) || !Array.isArray(left.left.range)) {
         return { error: `State ${state.id} branch condition is not a precomputed beta register` };
     }
-    const condition = parsed.source.slice(left.left.range[0], left.left.range[1]);
-    const conditionReads = [...(operation.reads || [])];
+    const condition = leftSource.slice(left.left.range[0], left.left.range[1]);
+    const conditionReads = [...(conditionProofOperation?.reads || [])];
     const conditionProven = conditionReads.includes(left.left.name);
     if (!conditionProven && options.allowUnprovenCondition !== true) {
         return { error: `State ${state.id} branch condition ${left.left.name} has no proven beta read provenance` };
@@ -2092,60 +2105,115 @@ function betaOperationWrites(operation) {
     return writes;
 }
 
-function findUniqueCompilerOperationSubsequence(operations, pattern) {
-    if (!pattern.length) return { start: -1, operations: new Set(), indices: [] };
+function compilerOperationsCanCommute(left, right) {
+    if (left?.returnSinkSafe !== true || right?.returnSinkSafe !== true) return false;
+    if (!left?.emittedTarget || !right?.emittedTarget) return false;
+    const leftOriginal = originalOperationTarget(left);
+    const rightOriginal = originalOperationTarget(right);
+    if (leftOriginal && rightOriginal && leftOriginal === rightOriginal) return false;
+    const leftWrites = new Set(betaOperationWrites(left));
+    const rightWrites = new Set(betaOperationWrites(right));
+    const leftReads = new Set(left?.reads || []);
+    const rightReads = new Set(right?.reads || []);
+    for (const name of leftWrites) if (rightWrites.has(name) || rightReads.has(name)) return false;
+    for (const name of rightWrites) if (leftReads.has(name)) return false;
+    return true;
+}
 
-    const patternDefinitions = new Map();
-    const patternExpressions = [];
+function collectCanonicalDefinitionRefs(value, output = new Set()) {
+    if (Array.isArray(value)) {
+        if (value[0] === 'def' && Number.isInteger(value[1])) output.add(value[1]);
+        for (const child of value) collectCanonicalDefinitionRefs(child, output);
+        return output;
+    }
+    if (value && typeof value === 'object') {
+        for (const child of Object.values(value)) collectCanonicalDefinitionRefs(child, output);
+    }
+    return output;
+}
+
+function buildCompilerOperationPattern(pattern) {
+    const latestDefinitions = new Map();
+    const nodes = [];
     for (let index = 0; index < pattern.length; index++) {
-        const rhs = originalOperationRhs(pattern[index]);
+        const operation = pattern[index];
+        const rhs = originalOperationRhs(operation);
         if (!rhs) return null;
         const parsed = parseTransitionExpression(rhs)?.expression || null;
         if (!parsed) return null;
-        patternExpressions.push(JSON.stringify(canonicalCompilerExpression(parsed, patternDefinitions)));
-        const target = originalOperationTarget(pattern[index]);
-        if (target) patternDefinitions.set(target, index);
-    }
+        const canonical = canonicalCompilerExpression(parsed, latestDefinitions);
+        const dependencies = collectCanonicalDefinitionRefs(canonical);
 
-    const candidates = [];
-    function visit(patternIndex, searchStart, selectedIndices, selectedDefinitions) {
-        if (candidates.length > 1) return;
-        if (patternIndex === pattern.length) {
+        // Preserve original order for any pair that cannot be proven safe to commute.
+        // Only pure, data-independent compiler definitions may change topological order.
+        for (let prior = 0; prior < index; prior++) {
+            if (!compilerOperationsCanCommute(pattern[prior], operation)) dependencies.add(prior);
+        }
+
+        nodes.push({
+            index,
+            operation,
+            expression: JSON.stringify(canonical),
+            dependencies,
+        });
+        const target = originalOperationTarget(operation);
+        if (target) latestDefinitions.set(target, index);
+    }
+    return nodes;
+}
+
+function findUniqueCompilerOperationSubsequence(operations, pattern) {
+    if (!pattern.length) return { start: -1, operations: new Set(), indices: [] };
+    const patternNodes = buildCompilerOperationPattern(pattern);
+    if (!patternNodes) return null;
+
+    const candidates = new Map();
+    function visit(searchStart, matchedPattern, selectedIndices, selectedDefinitions) {
+        if (candidates.size > 1) return;
+        if (matchedPattern.size === patternNodes.length) {
             const selected = new Set(selectedIndices);
             const removedWrites = new Set();
             for (const index of selectedIndices) {
                 for (const name of betaOperationWrites(operations[index])) removedWrites.add(name);
             }
-
             for (let index = 0; index < operations.length; index++) {
                 if (selected.has(index)) continue;
                 if ((operations[index]?.reads || []).some(name => removedWrites.has(name))) return;
             }
-
-            candidates.push([...selectedIndices]);
+            candidates.set(selectedIndices.join(','), [...selectedIndices]);
             return;
         }
 
-        const remaining = pattern.length - patternIndex;
-        for (let index = searchStart; index <= operations.length - remaining; index++) {
-            const rhs = originalOperationRhs(operations[index]);
+        const ready = patternNodes.filter(node =>
+            !matchedPattern.has(node.index) &&
+            [...node.dependencies].every(dependency => matchedPattern.has(dependency))
+        );
+        if (!ready.length) return;
+
+        const remaining = patternNodes.length - matchedPattern.size;
+        for (let operationIndex = searchStart; operationIndex <= operations.length - remaining; operationIndex++) {
+            const rhs = originalOperationRhs(operations[operationIndex]);
             if (!rhs) continue;
             const parsed = parseTransitionExpression(rhs)?.expression || null;
             if (!parsed) continue;
             const candidateExpression = JSON.stringify(canonicalCompilerExpression(parsed, selectedDefinitions));
-            if (candidateExpression !== patternExpressions[patternIndex]) continue;
 
-            const nextDefinitions = new Map(selectedDefinitions);
-            const target = originalOperationTarget(operations[index]);
-            if (target) nextDefinitions.set(target, patternIndex);
-            visit(patternIndex + 1, index + 1, [...selectedIndices, index], nextDefinitions);
-            if (candidates.length > 1) return;
+            for (const node of ready) {
+                if (candidateExpression !== node.expression) continue;
+                const nextMatched = new Set(matchedPattern);
+                nextMatched.add(node.index);
+                const nextDefinitions = new Map(selectedDefinitions);
+                const target = originalOperationTarget(operations[operationIndex]);
+                if (target) nextDefinitions.set(target, node.index);
+                visit(operationIndex + 1, nextMatched, [...selectedIndices, operationIndex], nextDefinitions);
+                if (candidates.size > 1) return;
+            }
         }
     }
 
-    visit(0, 0, [], new Map());
-    if (candidates.length !== 1) return null;
-    const indices = candidates[0];
+    visit(0, new Set(), [], new Map());
+    if (candidates.size !== 1) return null;
+    const indices = [...candidates.values()][0];
     return {
         start: indices[0],
         indices,

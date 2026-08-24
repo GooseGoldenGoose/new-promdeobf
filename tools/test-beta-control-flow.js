@@ -100,9 +100,44 @@ const unsafeSink = solveBetaControlFlow(ast, {
     },
 });
 assert.equal(unsafeSink.applied, true);
-assert.equal(unsafeSink.terminalReturnPayloadSunk, false);
-assert.equal(unsafeSink.terminalReturnLowered, false);
-assert(unsafeSink.source.indexOf("ReturnVal = { r_v1_1 }") < unsafeSink.source.indexOf("mark(\"after\")"));
+assert.equal(unsafeSink.terminalReturnPayloadSunk, true);
+assert.equal(unsafeSink.terminalReturnLowered, true);
+assert(!unsafeSink.source.includes("ReturnVal ="));
+assert(!unsafeSink.source.includes("state = nil"));
+assert(unsafeSink.source.indexOf("mark(\"after\")") < unsafeSink.source.indexOf("return r_v1_1"));
+
+const splitBranchStructured = solveBetaControlFlow(ast, {
+    applied: true,
+    graph: {
+        cfgComplete: true,
+        stateName: "state",
+        entries: [1],
+        states: [
+            { id: 1, predecessors: [], successors: [2, 3], operations: [
+                { kind: "version-define", emittedTarget: "cond", rhs: "check()", emittedText: "local cond = check()", reads: [] },
+                { kind: "version-define", emittedTarget: "trueId", rhs: "2", emittedText: "local trueId = 2", reads: [], returnSinkSafe: true },
+                { kind: "version-define", emittedTarget: "trueArm", rhs: "cond and trueId", emittedText: "local trueArm = cond and trueId", reads: ["cond", "trueId"] },
+                { kind: "version-define", emittedTarget: "falseId", rhs: "3", emittedText: "local falseId = 3", reads: [], returnSinkSafe: true },
+                { kind: "state-transition", emittedTarget: "state", rhs: "trueArm or falseId", emittedText: "state = trueArm or falseId", reads: ["trueArm", "falseId"] },
+            ] },
+            { id: 2, predecessors: [1], successors: [], operations: [
+                { kind: "statement", emittedText: "onTrue()", originalText: "onTrue()", reads: [] },
+                { kind: "return-payload", terminalCompilerReturnPayload: true, returnExpressions: [], emittedText: "ReturnVal = {}", rhs: "{}", reads: [] },
+                { kind: "state-transition", emittedTarget: "state", rhs: "nil", emittedText: "state = nil", reads: [] },
+            ] },
+            { id: 3, predecessors: [1], successors: [], operations: [
+                { kind: "statement", emittedText: "onFalse()", originalText: "onFalse()", reads: [] },
+                { kind: "return-payload", terminalCompilerReturnPayload: true, returnExpressions: [], emittedText: "ReturnVal = {}", rhs: "{}", reads: [] },
+                { kind: "state-transition", emittedTarget: "state", rhs: "nil", emittedText: "state = nil", reads: [] },
+            ] },
+        ],
+    },
+});
+assert.equal(splitBranchStructured.applied, true);
+assert.equal(splitBranchStructured.branchCount, 1);
+assert(splitBranchStructured.source.includes("if cond then"));
+assert(!splitBranchStructured.source.includes("state ="));
+parseLua(splitBranchStructured.source, "<beta-cf-split-branch-output>");
 
 const acyclicStructured = solveBetaControlFlow(ast, {
     applied: true,
@@ -794,6 +829,79 @@ assert(!repeatUntilStructured.source.includes("junkFn"));
 assert(!repeatUntilStructured.source.includes("junkCond"));
 assert(!repeatUntilStructured.source.includes("state ="));
 parseLua(repeatUntilStructured.source, "<beta-cf-repeat-until-output>");
+
+const reorderedRepeatCondition = solveBetaControlFlow(ast, {
+    applied: true,
+    graph: {
+        cfgComplete: true,
+        stateName: "state",
+        entries: [1],
+        states: [
+            { id: 1, predecessors: [], successors: [2], operations: [
+                { kind: "version-define", emittedTarget: "junkB", rhs: '"key"', emittedText: 'local junkB = "key"', originalTarget: "r2", originalText: 'r2 = "key"', reads: [], returnSinkSafe: true },
+                { kind: "version-define", emittedTarget: "junkA", rhs: "7", emittedText: "local junkA = 7", originalTarget: "r1", originalText: "r1 = 7", reads: [], returnSinkSafe: true },
+                { kind: "version-define", emittedTarget: "junkFn", rhs: "combine(junkA, junkB)", emittedText: "local junkFn = combine(junkA, junkB)", originalTarget: "r3", originalText: "r3 = combine(r1, r2)", reads: ["junkA", "junkB"] },
+                { kind: "version-define", emittedTarget: "junkCond", rhs: "junkFn()", emittedText: "local junkCond = junkFn()", originalTarget: "state", originalText: "state = r3()", reads: ["junkFn"] },
+                { kind: "state-transition", emittedTarget: "state", rhs: "2", emittedText: "state = 2", originalText: "state = 2", reads: [] },
+            ] },
+            { id: 2, predecessors: [1, 3], successors: [3], operations: [
+                { kind: "statement", emittedText: "body()", originalText: "body()", reads: [] },
+                { kind: "state-transition", emittedTarget: "state", rhs: "3", emittedText: "state = 3", originalText: "state = 3", reads: [] },
+            ] },
+            { id: 3, predecessors: [2], successors: [4, 2], operations: [
+                { kind: "version-define", emittedTarget: "realA", rhs: "7", emittedText: "local realA = 7", originalTarget: "r1", originalText: "r1 = 7", reads: [], returnSinkSafe: true },
+                { kind: "version-define", emittedTarget: "realB", rhs: '"key"', emittedText: 'local realB = "key"', originalTarget: "r2", originalText: 'r2 = "key"', reads: [], returnSinkSafe: true },
+                { kind: "version-define", emittedTarget: "realFn", rhs: "combine(realA, realB)", emittedText: "local realFn = combine(realA, realB)", originalTarget: "r3", originalText: "r3 = combine(r1, r2)", reads: ["realA", "realB"] },
+                { kind: "version-define", emittedTarget: "realCond", rhs: "realFn()", emittedText: "local realCond = realFn()", originalTarget: "state", originalText: "state = r3()", reads: ["realFn"] },
+                { kind: "state-transition", emittedTarget: "state", rhs: "realCond and 4 or 2", emittedText: "state = realCond and 4 or 2", originalText: "state = state and 4 or 2", reads: ["realCond"] },
+            ] },
+            { id: 4, predecessors: [3], successors: [], operations: [
+                { kind: "return-payload", terminalCompilerReturnPayload: true, returnExpressions: [], emittedText: "ReturnVal = {}", rhs: "{}", reads: [] },
+                { kind: "state-transition", emittedTarget: "state", emittedText: "state = nil", rhs: "nil", reads: [] },
+            ] },
+        ],
+    },
+});
+assert.equal(reorderedRepeatCondition.applied, true);
+assert.equal(reorderedRepeatCondition.repeatLoopCount, 1);
+assert.equal(reorderedRepeatCondition.removedRepeatCompilerConditionOperationCount, 4);
+assert(!reorderedRepeatCondition.source.includes("junkA"));
+assert(!reorderedRepeatCondition.source.includes("junkB"));
+assert(reorderedRepeatCondition.source.includes("until realCond"));
+parseLua(reorderedRepeatCondition.source, "<beta-cf-reordered-repeat-output>");
+
+const effectfulReorderedRepeatRejected = solveBetaControlFlow(ast, {
+    applied: true,
+    graph: {
+        cfgComplete: true,
+        stateName: "state",
+        entries: [1],
+        states: [
+            { id: 1, predecessors: [], successors: [2], operations: [
+                { kind: "version-define", emittedTarget: "junkB", rhs: "bar()", emittedText: "local junkB = bar()", originalTarget: "r2", originalText: "r2 = bar()", reads: [] },
+                { kind: "version-define", emittedTarget: "junkA", rhs: "foo()", emittedText: "local junkA = foo()", originalTarget: "r1", originalText: "r1 = foo()", reads: [] },
+                { kind: "version-define", emittedTarget: "junkCond", rhs: "test(junkA, junkB)", emittedText: "local junkCond = test(junkA, junkB)", originalTarget: "state", originalText: "state = test(r1, r2)", reads: ["junkA", "junkB"] },
+                { kind: "state-transition", emittedTarget: "state", rhs: "2", emittedText: "state = 2", originalText: "state = 2", reads: [] },
+            ] },
+            { id: 2, predecessors: [1, 3], successors: [3], operations: [
+                { kind: "statement", emittedText: "body()", originalText: "body()", reads: [] },
+                { kind: "state-transition", emittedTarget: "state", rhs: "3", emittedText: "state = 3", originalText: "state = 3", reads: [] },
+            ] },
+            { id: 3, predecessors: [2], successors: [4, 2], operations: [
+                { kind: "version-define", emittedTarget: "realA", rhs: "foo()", emittedText: "local realA = foo()", originalTarget: "r1", originalText: "r1 = foo()", reads: [] },
+                { kind: "version-define", emittedTarget: "realB", rhs: "bar()", emittedText: "local realB = bar()", originalTarget: "r2", originalText: "r2 = bar()", reads: [] },
+                { kind: "version-define", emittedTarget: "realCond", rhs: "test(realA, realB)", emittedText: "local realCond = test(realA, realB)", originalTarget: "state", originalText: "state = test(r1, r2)", reads: ["realA", "realB"] },
+                { kind: "state-transition", emittedTarget: "state", rhs: "realCond and 4 or 2", emittedText: "state = realCond and 4 or 2", originalText: "state = state and 4 or 2", reads: ["realCond"] },
+            ] },
+            { id: 4, predecessors: [3], successors: [], operations: [
+                { kind: "return-payload", terminalCompilerReturnPayload: true, returnExpressions: [], emittedText: "ReturnVal = {}", rhs: "{}", reads: [] },
+                { kind: "state-transition", emittedTarget: "state", emittedText: "state = nil", rhs: "nil", reads: [] },
+            ] },
+        ],
+    },
+});
+assert.equal(effectfulReorderedRepeatRejected.applied, false);
+assert(effectfulReorderedRepeatRejected.reason.includes("loop/backedge"));
 
 const dependentRepeatJunkRejected = solveBetaControlFlow(ast, {
     applied: true,
