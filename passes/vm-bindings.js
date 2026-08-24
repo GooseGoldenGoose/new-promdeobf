@@ -1,4 +1,7 @@
 
+const { findVmFunction } = require("./vm-state");
+const { findVmReturnRegister } = require("./vm-register-names");
+
 function isNode(value) {
     return value && typeof value === "object" && typeof value.type === "string";
 }
@@ -24,6 +27,32 @@ function setEquals(a, b) {
     if (a.size !== b.size) return false;
     for (const value of a) if (!b.has(value)) return false;
     return true;
+}
+
+class UnionFind {
+    constructor(ids) {
+        this.parent = new Map();
+        for (const id of ids) this.parent.set(id, id);
+    }
+
+    find(id) {
+        let root = id;
+        while (this.parent.get(root) !== root) root = this.parent.get(root);
+        while (this.parent.get(id) !== id) {
+            const next = this.parent.get(id);
+            this.parent.set(id, root);
+            id = next;
+        }
+        return root;
+    }
+
+    union(left, right) {
+        const a = this.find(left);
+        const b = this.find(right);
+        if (a === b) return false;
+        this.parent.set(b, a);
+        return true;
+    }
 }
 
 function mapOfSetsClone(source) {
@@ -576,7 +605,136 @@ function buildDefinitionLiveness(blockIds, blockSet, root, definitionsById, uses
     };
 }
 
-function buildFunctionAnalysis(root, functionId) {
+function buildOrdinaryRegisterEpochs(functionAnalysis, excludedNames = new Set()) {
+    const definitions = functionAnalysis.definitions;
+    const definitionsById = functionAnalysis.definitionsById;
+    const eligibleDefinitions = definitions.filter(definition =>
+        definition.exactRhs &&
+        definition.rhs?.type !== "NilLiteral" &&
+        definition.kind !== "alloc-upvalue" &&
+        definition.valueProvenance?.kind === "register-value" &&
+        !excludedNames.has(definition.name)
+    );
+    const eligibleIds = new Set(eligibleDefinitions.map(definition => definition.id));
+    const unionFind = new UnionFind(eligibleIds);
+    let joinMergeCount = 0;
+    let mutationMergeCount = 0;
+
+    // A read that can observe several concrete definitions of the same physical
+    // register proves those definitions belong to one live value/storage epoch.
+    // Environment/external/unknown values are intentionally ineligible here.
+    for (const use of functionAnalysis.uses) {
+        if (excludedNames.has(use.name) || use.reachingDefIds.length < 2) continue;
+        const ids = use.reachingDefIds;
+        if (!ids.every(id => eligibleIds.has(id) && definitionsById.get(id)?.name === use.name)) continue;
+        for (let index = 1; index < ids.length; index++) {
+            if (unionFind.union(ids[0], ids[index])) joinMergeCount++;
+        }
+    }
+
+    // Mutation evidence is stronger than register-name reuse: the new definition
+    // must data-depend (possibly through compiler temporaries) on an earlier
+    // definition of the same register that is still reaching immediately before
+    // the write. A cleanup/reuse handoff therefore blocks the merge naturally.
+    for (const definition of eligibleDefinitions) {
+        const queue = [...(definition.rhsReachingDefIds || [])];
+        const seen = new Set();
+        let cursor = 0;
+        while (cursor < queue.length) {
+            const id = queue[cursor++];
+            if (seen.has(id)) continue;
+            seen.add(id);
+            const dependency = definitionsById.get(id);
+            if (!dependency) continue;
+            for (const parentId of dependency.rhsReachingDefIds || []) {
+                if (!seen.has(parentId)) queue.push(parentId);
+            }
+        }
+
+        const previousIds = (definition.previousReachingDefIds || []).filter(id =>
+            eligibleIds.has(id) && definitionsById.get(id)?.name === definition.name
+        );
+        for (const previousId of previousIds) {
+            if (!seen.has(previousId)) continue;
+            if (unionFind.union(definition.id, previousId)) mutationMergeCount++;
+        }
+    }
+
+    const stateOrder = new Map(functionAnalysis.stateIds.map((id, index) => [id, index]));
+    const components = new Map();
+    for (const definition of eligibleDefinitions) {
+        const root = unionFind.find(definition.id);
+        if (!components.has(root)) components.set(root, []);
+        components.get(root).push(definition);
+    }
+
+    const byRegister = new Map();
+    for (const items of components.values()) {
+        const name = items[0].name;
+        const first = items.reduce((best, item) => {
+            const key = [stateOrder.get(item.blockId) ?? Number.MAX_SAFE_INTEGER, item.statementIndex, item.variableIndex];
+            if (!best) return key;
+            for (let i = 0; i < key.length; i++) {
+                if (key[i] < best[i]) return key;
+                if (key[i] > best[i]) return best;
+            }
+            return best;
+        }, null);
+        if (!byRegister.has(name)) byRegister.set(name, []);
+        byRegister.get(name).push({ items, first });
+    }
+
+    const epochByDefinitionId = new Map();
+    const epochs = [];
+    for (const [name, groups] of byRegister) {
+        groups.sort((left, right) => {
+            for (let i = 0; i < left.first.length; i++) {
+                if (left.first[i] !== right.first[i]) return left.first[i] - right.first[i];
+            }
+            return 0;
+        });
+        for (let index = 0; index < groups.length; index++) {
+            const items = groups[index].items;
+            const definitionIds = items.map(item => item.id);
+            const lifetimeItems = definitionIds
+                .map(id => functionAnalysis.definitionLifetimes.find(item => item.definitionId === id))
+                .filter(Boolean);
+            const epoch = {
+                id: `f${functionAnalysis.id}:${name}:epoch${index + 1}`,
+                functionId: functionAnalysis.id,
+                registerName: name,
+                ordinal: index + 1,
+                definitionIds,
+                blockIds: [...new Set(items.map(item => item.blockId))],
+                crossBlock: lifetimeItems.some(item => item.crossBlock),
+                loopCarried: lifetimeItems.some(item => item.loopCarried),
+                cleanupDefinitionIds: [],
+                ownershipHandoffAfter: false,
+                sourceBindingProven: false,
+            };
+            epochs.push(epoch);
+            for (const id of definitionIds) epochByDefinitionId.set(id, epoch);
+        }
+    }
+
+    for (const cleanup of functionAnalysis.bindingEndCandidates || []) {
+        const epoch = epochByDefinitionId.get(cleanup.previousDefinitionId);
+        if (!epoch) continue;
+        epoch.cleanupDefinitionIds.push(cleanup.definitionId);
+        if (cleanup.registerReusedInBlock) epoch.ownershipHandoffAfter = true;
+    }
+
+    return {
+        epochs,
+        epochByDefinitionId,
+        eligibleDefinitionCount: eligibleDefinitions.length,
+        joinMergeCount,
+        mutationMergeCount,
+        mergedDefinitionCount: epochs.reduce((sum, epoch) => sum + Math.max(0, epoch.definitionIds.length - 1), 0),
+    };
+}
+
+function buildFunctionAnalysis(root, functionId, excludedEpochNames = new Set()) {
     const blockIds = root.graph.order.filter(id => root.graph.blocks.has(id));
     const blockSet = new Set(blockIds);
     const predecessors = new Map(blockIds.map(id => [id, new Set()]));
@@ -717,8 +875,13 @@ function buildFunctionAnalysis(root, functionId) {
             for (const def of definitionsByBlock.get(blockId) || []) {
                 if (def.statementIndex !== statementIndex) continue;
                 def.previousReachingDefIds = [...(reaching.get(def.name) || [])];
-                if (def.exactRhs && isIdentifier(def.rhs)) {
-                    def.rhsReachingDefIds = [...(reaching.get(def.rhs.name) || [])];
+                if (def.exactRhs && def.rhs) {
+                    const rhsReachingDefIds = new Set();
+                    walkExpression(def.rhs, current => {
+                        if (!isIdentifier(current) || !definitionsByName.has(current.name)) return;
+                        for (const id of reaching.get(current.name) || []) rhsReachingDefIds.add(id);
+                    });
+                    def.rhsReachingDefIds = [...rhsReachingDefIds];
                 }
                 reaching.set(def.name, new Set([def.id]));
             }
@@ -770,6 +933,16 @@ function buildFunctionAnalysis(root, functionId) {
         });
     }
 
+    const ordinaryRegisterEpochs = buildOrdinaryRegisterEpochs({
+        id: functionId,
+        stateIds: blockIds,
+        definitions,
+        definitionsById,
+        uses,
+        definitionLifetimes: definitionLiveness.lifetimes,
+        bindingEndCandidates,
+    }, excludedEpochNames);
+
     return {
         id: functionId,
         kind: root.kind,
@@ -787,6 +960,13 @@ function buildFunctionAnalysis(root, functionId) {
         definitionLifetimes: definitionLiveness.lifetimes,
         definitionJoinGroups: definitionLiveness.joinGroups,
         bindingEndCandidates,
+        ordinaryRegisterEpochs: ordinaryRegisterEpochs.epochs,
+        ordinaryRegisterEpochStats: {
+            eligibleDefinitionCount: ordinaryRegisterEpochs.eligibleDefinitionCount,
+            joinMergeCount: ordinaryRegisterEpochs.joinMergeCount,
+            mutationMergeCount: ordinaryRegisterEpochs.mutationMergeCount,
+            mergedDefinitionCount: ordinaryRegisterEpochs.mergedDefinitionCount,
+        },
         valueProvenance,
         liveness: {
             converged: definitionLiveness.converged,
@@ -815,7 +995,13 @@ function recoverVmBindings(source, ast, vmState) {
         };
     }
 
-    const functions = vmState.graphRoots.map((root, index) => buildFunctionAnalysis(root, index));
+    const excludedEpochNames = new Set(["state", "args", "upvalues", "gcProxy"]);
+    if (ast) {
+        const vm = findVmFunction(ast);
+        const returnRegister = vm ? findVmReturnRegister(vm.functionNode) : null;
+        if (returnRegister?.name) excludedEpochNames.add(returnRegister.name);
+    }
+    const functions = vmState.graphRoots.map((root, index) => buildFunctionAnalysis(root, index, excludedEpochNames));
     const functionByEntry = new Map(functions.map(fn => [fn.entryId, fn]));
     const captures = [];
 
@@ -868,6 +1054,7 @@ function recoverVmBindings(source, ast, vmState) {
     }
 
     const definitionLifetimes = functions.flatMap(fn => fn.definitionLifetimes);
+    const ordinaryRegisterEpochs = functions.flatMap(fn => fn.ordinaryRegisterEpochs || []);
     const bindingEndCandidates = functions.flatMap(fn => fn.bindingEndCandidates || []);
     const definitionJoinGroups = functions.flatMap(fn => fn.definitionJoinGroups);
     const definitions = functions.flatMap(fn => fn.definitions);
@@ -941,6 +1128,13 @@ function recoverVmBindings(source, ast, vmState) {
         functions,
         definitions,
         definitionLifetimes,
+        ordinaryRegisterEpochs,
+        ordinaryRegisterEpochStats: {
+            eligibleDefinitionCount: functions.reduce((sum, fn) => sum + (fn.ordinaryRegisterEpochStats?.eligibleDefinitionCount || 0), 0),
+            joinMergeCount: functions.reduce((sum, fn) => sum + (fn.ordinaryRegisterEpochStats?.joinMergeCount || 0), 0),
+            mutationMergeCount: functions.reduce((sum, fn) => sum + (fn.ordinaryRegisterEpochStats?.mutationMergeCount || 0), 0),
+            mergedDefinitionCount: functions.reduce((sum, fn) => sum + (fn.ordinaryRegisterEpochStats?.mergedDefinitionCount || 0), 0),
+        },
         definitionJoinGroups,
         bindingEndCandidates,
         ownershipHandoffCandidates: bindingEndCandidates.filter(item => item.registerReusedInBlock),
