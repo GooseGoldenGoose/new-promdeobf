@@ -1,998 +1,338 @@
-# Project Overview
+# Prometheus Lua/Luau Deobfuscator - Live Handoff
 
-The user is starting a brand-new Lua/Luau deobfuscator project intended to recover readable, source-like Lua from Prometheus-obfuscated code. The new project should be designed from the ground up using the user's base ideas, while keeping the semantic lessons learned from the previous `promdeobf` project without carrying over its accumulated implementation mistakes.
-
-The active project directory is:
-
-```text
-C:\Users\reala\Desktop\!workspaces\promdeobf ova\new promdeobf
-```
-
-The Git repository is connected to:
-
-```text
-https://github.com/GooseGoldenGoose/new-promdeobf.git
-```
-
-# Fresh-Chat Startup / Mandatory Workflow
-
-When continuing this project in a new chat:
-
-- Read this entire `CONTEXT.md` first and treat it as the authoritative live handoff. Do not ask the user to repeat decisions already recorded here.
-- Active workspace: `C:\Users\reala\Desktop\!workspaces\promdeobf ova\new promdeobf` on branch `main`; remote is `https://github.com/GooseGoldenGoose/new-promdeobf.git`.
-- Use the connected Windows shell for project work. Prefer direct file edits / Node UTF-8 writes over PowerShell text round-trips when changing `CONTEXT.md`.
-- Every project code/content change, even tiny, must be checkpointed with `git add` for only intended files, a focused commit, and `git push origin main`. Keep conceptually separate changes in separate commits when practical.
-- Keep `CONTEXT.md` continuously updated after meaningful implementation/analysis decisions. Compact or replace stale/superseded notes rather than accumulating contradictions.
-- Never stage or modify unrelated untracked workspace items. `formater/` remains intentionally untracked; every tracked `sample/N.txt` must have a matching tracked `sample/N.source.lua`.
-- Everything must be structural/generalized: never hardcode sample IDs, state numbers, register names, closure arities, strings, filenames, or random constants. Fix root causes, not output text afterward.
-- After transformations, reparse generated Lua and run runtime regressions whenever executable fixtures permit it. Compare original/readable source, obfuscated input, and deobfuscated output where useful.
-- When the user says **Prometheus**, they mean the local WeAreDevs obfuscator/compiler fixture at `C:\Users\reala\Desktop\!workspaces\promdeobf ova\wearedev obf`. Verify exact behavior against that local source first. Only use the public/canonical repository if the user explicitly asks for canonical/public Prometheus.
-- Preserve stable pipeline behavior when experimenting. A recovery pass must fail closed: if proof is incomplete, preserve the previous safe output rather than guess.
-- End every project-related turn with exactly: `Done for this turn — you can prompt now.`
-
-Latest implementation checkpoint is `479d355 Track ordinary VM register epochs` on `main`, pushed to `origin/main`; latest fixture checkpoint is `8cc21a6 Add anti-tamper sample 47`. Beta-CF supports compiler-proven numeric `for`, pre-test `while`, post-test `repeat ... until`, explicit `break`, proven `continue` edges, early `return` inside loop bodies, multi-state short-circuit loop conditions, captured cells in multi-state owners when allocation dominance is proven, captured numeric-for variables, and source mutation of the visible numeric-for variable when hidden induction machinery remains independent. Control-only joins are structured directly rather than introducing `_beta_phi` helpers. Repeat recovery still removes the local compiler's discarded first condition evaluation to restore readable-source semantics. All tracked fixtures `sample/1` through `sample/47` remain paired.
-
-# Core Knowledge & Rules
-
-## General Deobfuscation Philosophy
-
-- Recover **source-like Lua/Luau semantics**, not merely code that parses or happens to run.
-- Fix problems at the **earliest responsible AST / CFG / data-flow / scope stage**.
-- Never patch final emitted text to hide structural mistakes.
-- Do not hardcode fixture filenames, VM register names, block IDs, source strings, methods, URLs, or specific sample constants.
-- Obfuscator/runtime signatures may be specialized when they are genuinely part of the Prometheus implementation, but fixture-specific assumptions are forbidden.
-- Always preserve evaluation order, reaching definitions, lexical scope, closure captures, mutable upvalue semantics, table/object identity, call count, multi-return behavior, and loop behavior including zero-iteration cases.
-- Do not invent locals for globals. Globals such as `game`, `table.insert`, `pairs`, and `ipairs` should remain globals unless lexical evidence proves otherwise.
-- Only inline values when movement is provably semantics-safe.
-- Do not collapse aliases merely because nearby code looks related.
-- Namecall recovery requires receiver identity and call-count proof.
-- Parsing successfully is not enough. Generated output must be inspected for semantic contradictions.
-
-## Working Style
-
-- The user wants direct technical judgment.
-- If an idea is weak or unsafe, say so and propose a better design.
-- Do not agree with an approach just because the user suggested it.
-- Prefer generalized compiler/data-flow reasoning over local pattern hacks.
-- Build incrementally and add focused regressions for semantic rules.
-- Test each coherent change before continuing.
-- Treat `CONTEXT.md` as a live handoff: update it after meaningful decisions or implementation work, compact superseded detail, and remove stale topics that have not mattered for a while.
-- After every project change, even a small one, create a Git checkpoint commit and push it to origin/main.
-- End every project-related assistant turn with exactly: `Done for this turn — you can prompt now.`
-## Prometheus Reference
-
-When the user says **Prometheus**, treat it as the local WeAreDevs obfuscator used by this project:
-
-```text
-C:\Users\reala\Desktop\!workspaces\promdeobf ova\wearedev obf
-```
-
-Its compiler source is under `src/prometheus/compiler/compiler.lua`. Use this local implementation as the authority for exact VM/compiler behavior. Do not substitute the public `wcrddn/Prometheus` repository unless the user explicitly asks for the canonical/public implementation.
-
-## Recommended Implementation Language
-
-Current recommendation:
-
-```text
-TypeScript + Bun
-```
-
-The project is dominated by AST rewriting, CFG reconstruction, scope analysis, reaching definitions, provenance, lifetime tracking, and closure analysis. TypeScript provides strong AST unions and faster iteration than Rust during design-heavy work. Rust is a possible later optimization for expensive analysis if profiling proves it necessary. Do not start hybrid TypeScript/Rust unless profiling justifies it.
-
-Preferred conceptual layout:
-
-```text
-src/
-  parser/
-  ast/
-  analysis/
-    scopes.ts
-    cfg.ts
-    dominators.ts
-    reachingDefs.ts
-    liveness.ts
-    effects.ts
-    captures.ts
-    provenance.ts
-  passes/
-    vm/
-    strings/
-    controlFlow/
-    cleanup/
-  printer/
-  pipeline/
-```
-
-## Core Architectural Principle
-
-Transformations should query formal analysis rather than guessing from adjacency.
-
-Bad:
-
-```ts
-if (previousStatementLooksLikeAlias) {
-    inline()
-}
-```
-
-Preferred:
-
-```ts
-const def = reachingDefs.uniqueDefinition(binding, useSite)
-
-if (
-    def &&
-    !captures.isCaptured(def.binding) &&
-    effects.canMove(def.value, def.site, useSite)
-) {
-    inline()
-}
-```
-
-# Current Progress & Key Decisions
-
-## Old Project
-
-The prior project existed at:
-
-```text
-C:\Users\reala\Desktop\!workspaces\promdeobf ova\promdeobf
-```
-
-It had accumulated many semantic recovery passes and regressions. At the user's request, its `main` branch was reverted to:
-
-```text
-9fb1a43 Recover short-circuit polling loops
-```
-
-and `origin/main` was force-updated to that commit.
-
-The user then decided to stop continuing that implementation and start a new project. The detailed old bug list, fixture-specific repair plan, and later experimental fixes should not drive the new implementation.
-
-Retain only the methodology learned from that work:
-
-- find the earliest destructive transformation
-- reason through real lifetimes
-- treat captured mutable state carefully
-- do not use final-output cleanup to conceal an analysis bug
-- test semantics, not just syntax
-
-## New Project
-
-Active directory:
-
-```text
-C:\Users\reala\Desktop\!workspaces\promdeobf ova\new promdeobf
-```
-
-Git remote:
-
-```text
-https://github.com/GooseGoldenGoose/new-promdeobf.git
-```
-
-Current pushed commits:
-
-```text
-f188f8f Initial commit
-ffda1ba Add Luau AST entrypoint
-c7cf1e9 Add Lua AST inspection tool
-```
-
-Current implementation:
-
-- `main.js` reads Lua/Luau source, parses it with the Luau-capable parser, keeps the AST in memory for future passes, and can dump it to `output/ast.json`.
-- `parser/luaparse.js` is reused only as the syntax frontend; no old deobfuscation passes were ported.
-- `tools/inspect-lua.js` is a developer-only AST inspection helper for node counts, functions, calls, globals, control-flow nodes, and targeted searches by node type/name.
-- Default deobfuscator input is currently `formater/out.txt`.
-- `formater/luau-format.exe` is the normalization stage. Its existing runner formats Lua and simplifies arithmetic/constants before AST processing.
-- Controlled obfuscator fixture source exists at `C:\Users\reala\Desktop\!workspaces\promdeobf ova\wearedev obf`; `run.bat` invokes `luajit cli.lua --preset Medium input.txt`, producing `input.txt.obfuscated.lua`.
-- Both the formatted sample and the direct `wearedev obf\input.txt.obfuscated.lua` parse successfully as a `Chunk` with one top-level statement.
-- Every tracked `sample/N.txt` must have a matching tracked `sample/N.source.lua`. Current paired coverage is samples 1-38.
-- `sample/1.source.lua` is the baseline fixture. It is obfuscated with local WeAreDevs Medium, formatter-normalized into `sample/1.txt`, then deobfuscated to `output/1.lua`. Runtime parity is `baseline 14 4`.
-- Samples 2-4 were reconstructed from the old tracked fixtures/behavior: sample 2 is the `warn("gg")` + random branch regression; sample 3 is the shadowed block plus shared captured `x` regression; sample 4 is the shared `total` if/while/repeat regression with intentionally varied closure arities.
-- Sample 5 is now a controlled static stress source with 115 closure functions plus the root VM function. Its first 44 workers include an additional branch so the local compiler emits exactly 938 reachable dispatcher states, matching the old stress fixture state scale while retaining a source file.
-
-## Prometheus ConstantArray Step
-
-- The arithmetic constant-folding pass was removed; step 1 is Prometheus ConstantArray recovery.
-- `passes/constant-array.js` structurally recovers the literal array, optional rotation, accessor offset, and custom-base64 decoder.
-- Accessor replacement is scope-aware; fixture names, offsets, and constant values are not hardcoded.
-- Missing ConstantArray is now a safe pass-through so later stages still run when that Prometheus step is disabled.
-- Current ConstantArray coverage: sample 1 -> 8 entries / 11 references; sample 2 -> 11 / 14; sample 3 -> 11 / 16; sample 4 -> 13 / 19; sample 5 -> 122 / 125. All have 0 unresolved wrapper/array uses.
-- Keep the current Luau parser while sufficient; Rust Moonlight is acceptable if parser limitations become a correctness blocker.
-
-## Step 2: VM Wrapper Semantic Naming
-
-- Step 2 now uses `passes/environment.js`, `passes/closure-factory.js`, `passes/vm-helpers.js`, and `passes/split-safe-assignments.js`.
-- Environment provenance is recovered from the wrapper call (direct `getgenv()`, Prometheus-style `getfenv and getfenv() or _ENV`, or direct `_ENV`) and the receiving binding is renamed to `_env` with lexical shadow/collision checks.
-- Closure factories are detected by behavior: a factory receives an entry ID and capture list, obtains an upvalue proxy, returns a nested closure, and that closure calls the shared VM with `(entryId, argsTable, captures, proxy)`.
-- The general vararg factory is `createClosure`. Fixed-arity factories are independently named `createClosureN` from the actual nested wrapper arity; do not assume 0/1 or any particular generated binding.
-- The closure-factory graph identifies the shared VM and upvalue-proxy helper without generated-name or numeric-entry-ID assumptions.
-- `passes/vm-helpers.js` currently recovers: `unpack`, `newproxy`, `setmetatable`, `getmetatable`, `select`, `vm`, `createUpvalueProxy`, `releaseUpvalues`, `releaseUpvalue`, `allocUpvalue`, `upvalueRefCounts`, `upvalueValues`, and `currentUpvalueId`.
-- The VM function parameters are renamed structurally to `state`, `args`, `upvalues`, and `gcProxy` from their positions in every detected closure-factory call.
-- Helper parameters are also recovered where proven: `releaseUpvalue(upvalueId)`; proxy/GC helpers use `captures`; closure factories use `(entryId, captures)`.
-- Renaming is binding/scope-aware through `renameFunctionParameterBinding`; collisions are skipped/reported rather than forcing a textual rename.
-- `passes/split-safe-assignments.js` decomposes proven-safe parallel identifier assignments into one assignment per line. It currently permits anonymous function literals, primitive literals, empty table constructors, and signed numeric literals as RHS values; indexed LHS, calls/effectful expressions, local declarations, and other order-sensitive parallel assignments are preserved.
-- Current sample 1 helper initialization splits one parallel statement into 10 individual assignments.
-
-## Step 3: VM State / CFG Recovery
-
-- VM state/CFG recovery is now part of the normal deobfuscation pipeline after helper naming and safe parallel-assignment splitting. The implementation lives in `passes/vm-state.js` and is called from `main.js` through `recoverVmStateGraph(...)`.
-- The normal command is one step: `node main.js <input> <output>`. A separate state resolver is not required; the normal output contains the normalized VM-state result whenever recovery is proven safe.
-- Promotion is conservative: `main.js` applies the VM-state rewrite only when the pass both finds the VM and reports `normalized === true`. If recovery is incomplete or normalization safety fails, main preserves the source from the previous pipeline step instead of forcing an experimental rewrite.
-- `passes/vm-state.js` finds the semantic `vm`, root `createClosure(<entry>, ...)`, all `createClosureN(<entry>, ...)` calls, and `while state do`; state IDs and closure arities are discovered structurally.
-- Dispatcher leaves are resolved by evaluating Prometheus nested numeric comparison trees for candidate state IDs. The walker follows proven POS-register terminators: `state = N` is a direct jump and `state = condition and A or B` is a two-way branch.
-- Critical rule: Prometheus can temporarily reuse `POS_REGISTER` as an ordinary register, so not every assignment to the renamed `state` binding is a control-flow transition. Only the final proven POS/state write in a recovered dispatcher block is treated as its terminator.
-- Graph walking uses a visited set, so back-edges are retained without infinite analysis. Closure-created entry IDs remain separate graph roots unless an actual CFG transition targets them.
-- Normalization requires a closed reachable graph from every discovered closure entry: no unsupported/non-numeric closure-entry calls, no cross-root state overlap, all reached blocks resolved, only proven `jump` / `branch` / canonical-stop terminators, and every numeric successor present in the reachable state map. Full dispatcher-leaf coverage is not required because canonical `emitContainerFuncBody()` emits every block in `self.blocks` without reachability pruning; dispatcher leaves outside the closed reachable graph are dead compiler blocks and can be omitted.
-- Safe graphs receive new contiguous IDs by closure root. Only proven closure entry arguments and CFG jump/branch targets are rewritten; ordinary temporary numeric values assigned through the reused state register are left unchanged.
-- Each closure graph gets a contiguous normalized range, and output uses balanced binary range trees between closure ranges and inside each range. Exact equality is retained at final leaves for invalid-state safety, avoiding large `or` expressions and long linear `elseif` chains.
-- Current sample 1 resolves 5/5 dispatcher states: root `1`, fixed closure `createClosure5` states `2-5`. Source, formatted obfuscation, and deobfuscated output all print `baseline 14 4`.
-- Restored sample 2 resolves 3/3 states and preserves `gg` / `ranf` under the existing LuaJIT warn+seed shim. Restored sample 3 resolves 3/3 states across root + two closures and preserves `block 10 2`, `before 1`, `after 3 3`. Restored sample 4 resolves 16/16 states across root + three closures and preserves `start 0`, `choose 5`, `spin 10`, `trim 2`.
-- New sample 5 resolves 938/938 states across 116 VM functions. It is source-backed and intentionally replaces the former unpaired stress file; all states are reachable in this controlled fixture.
-- `tools/inspect-vm-state.js` remains an optional developer inspection utility for printing graph roots, terminators, dispatcher paths, and normalized ranges; it is not required for normal deobfuscation.
-- Closure-root discovery is now reachability-driven instead of global-AST-driven. Recovery starts from the real outer `createClosure` root, walks its closed CFG, discovers `createClosureN(entry, ...)` calls only inside those reachable blocks, then recursively walks the newly discovered child roots. A closure call that exists only in a dead dispatcher leaf can no longer keep its dead closure graph alive. Reachable unsupported closure-entry calls still fail normalization closed; unsupported/dead calls outside the reachable graph do not poison recovery. `tools/test-vm-state-reachability.js` proves a dead state that creates a dead closure is removed together with that child graph.
-- Canonical compiler confirmation: `setPos(scope, nil)` deliberately emits `state = _env[randomString(12..14)]` instead of literal nil (the source comment retains `--Ast.NilExpression()`). Step 3 treats only this compiler-shaped random alphanumeric `_env[...]` lookup (or literal nil) as a stop; other unknown final state writes block normalization instead of being guessed as stops. Once a stop is proven, normalized rendering removes the obfuscator-only random environment lookup and emits semantic `state = nil` at the actual end of that recovered state body. The relocation is structural and restricted to a single canonical stop assignment; ordinary `_env[...]` lookups remain untouched/effectful.
-- Normalized dispatcher leaf rendering no longer emits the defensive `else -- invalid/unreachable VM state; state = nil` fallback. A normalized CFG is already proven closed from every reachable root/closure entry and every emitted successor is in the normalized state map, so that branch is unreachable scaffolding on valid execution. Exact state equality checks remain, and balanced range-selection `else` branches remain because they route real normalized states. The older non-normalized/fail-closed renderer keeps its defensive fallback.
-- Canonical numeric-for confirmation: Prometheus may split `state = condition and innerId or finalId` across temporary-register statements (`tmpTrue = innerId; state = condition and tmpTrue; tmpFalse = finalId; state = state or tmpFalse`). Step 3 recognizes this exact adjacent data-flow shape and rewrites both target literals during normalization.
-- A fresh temporary Medium numeric-`for` regression resolved 7/7 states and preserved runtime (`numfor 9`) while normalizing its compiler-split branch, confirming the rule is structural rather than fixture-specific.
-- Tracked `sample/6.source.lua` / `sample/6.txt` is the closure-ownership regression. Readable source: top-level captures `seed`; `outer(n)` has an `if` and `while`; inside `outer` a nested `inner(delta)` captures `value` and has its own branch. Runtime for readable source, obfuscated fixture, and deobfuscated output is identical: `theory 8 10 5`, exit 0.
-- Sample 6 resolves 11/11 states into three closure graphs: root `1`; nested `inner` is `createClosure5` states `2-4` (original entry `2234492`); `outer` is `createClosure6` states `5-11` (original entry `7146503`). Root state 1 creates `outer` via `createClosure6(5, ...)`; inside `outer` state 11 creates `inner` via `createClosure5(2, ...)`. This proves multiple states in one range are pieces of one source function, while function nesting is established by a closure-creation call inside another function's reachable CFG, not by nested dispatcher `if` nodes.
-## Control-Flow Understanding
-
-Prometheus-style control-flow flattening should be modeled as a dispatcher/state machine.
-
-Conceptually:
-
-```lua
-local state = A
-
-while true do
-    if state == A then
-        ...
-        state = B
-    elseif state == B then
-        ...
-    end
-end
-```
-
-Prometheus may encode dispatcher selection through nested comparisons instead of direct equality tests.
-
-The new deobfuscator should recover:
-
-```text
-dispatcher state value
-    เนยโ€
-basic block
-    เนยโ€
-successor transitions
-    เนยโ€
-CFG
-```
-
-Recommended basic block model:
-
-```ts
-type Terminator =
-    | { kind: "jump"; target: BlockId }
-    | { kind: "branch"; condition: Expr; onTrue: BlockId; onFalse: BlockId }
-    | { kind: "return"; values: Expr[] }
-    | { kind: "stop" }
-
-interface BasicBlock {
-    id: BlockId
-    statements: Statement[]
-    terminator: Terminator
-}
-```
-
-Preferred recovery pipeline:
-
-```text
-Prometheus dispatcher
-        เนยโ€
-basic blocks
-        เนยโ€
-CFG
-        เนยโ€
-dominators
-post-dominators
-backedge detection
-loop discovery
-        เนยโ€
-structured regions
-        เนยโ€
-Lua/Luau AST
-```
-
-Important decisions:
-
-- Do not immediately turn CFG blocks back into Lua statements.
-- Maintain a real CFG intermediate representation first.
-- Detect loops before aggressively structuring if-statements.
-- Backedges where the target dominates the source are strong natural-loop evidence.
-- Use post-dominators to identify branch joins.
-- Short-circuit boolean expressions should also be reconstructed from CFG structure.
-- The CFG layer must identify dispatcher behavior structurally and must never depend on names such as `r37`, `state`, or `__vm_pc`.
-
-## Prometheus Scope Handling
-
-Prometheus lexical scopes track structures conceptually equivalent to:
-
-```text
-parentScope
-variables
-variablesLookup
-variablesFromHigherScopes
-children
-level
-```
-
-A child scope resolves identifiers through parent scopes. A reference to an outer lexical variable is tracked as a reference to that actual binding rather than only by its text name.
-
-Normal block nesting does not automatically create an upvalue. Crossing a **function boundary** does.
-
-## Prometheus Upvalue Handling
-
-Prometheus treats captured locals as shared mutable cells.
-
-Source:
-
-```lua
-local x = 1
-
-local function inc()
-    x = x + 1
-end
-
-local function get()
-    return x
-end
-```
-
-must behave conceptually like:
-
-```text
-       เนโ€ยเนโ€โฌเนโ€โฌเนโ€โฌเนโ€โฌเนโ€โฌเนโ€โฌเนโ€โฌเนโ€โฌเนโ€โฌเนโ€โฌเนโ€โฌเนโ€โฌเนโ€โฌเนโ€โฌเนโ€โฌเนโ€ย
-inc เนโ€โฌเนโ€โฌเนโ€“เธเนโ€ย shared x cell เนโ€ยเนโ€”ยเนโ€โฌเนโ€โฌ get
-       เนโ€โ€เนโ€โฌเนโ€โฌเนโ€โฌเนโ€โฌเนโ€โฌเนโ€โฌเนโ€โฌเนโ€โฌเนโ€โฌเนโ€โฌเนโ€โฌเนโ€โฌเนโ€โฌเนโ€โฌเนโ€โฌเนโ€ย
-```
-
-It must not be treated as two copied values.
-
-Prometheus runtime structures conceptually include:
-
-```text
-upvaluesTable[id]
-upvaluesReferenceCounts[id]
-```
-
-A captured variable is represented through an upvalue ID/cell.
-
-Conceptual distinction:
-
-```text
-ordinary local:
-register -> value
-```
-
-versus:
-
-```text
-captured local:
-register -> upvalue ID -> shared value
-```
-
-Nested functions receive references to those cells. Deep nesting can relay an upvalue through intermediate functions:
-
-```text
-root binding
-    เนยโ€
-function A upvalue slot
-    เนยโ€
-function B upvalue slot
-    เนยโ€
-function C upvalue slot
-```
-
-Captured function parameters are also promoted into shared upvalue cells.
-
-At scope/function cleanup, Prometheus uses reference counting so a captured cell survives after the original lexical scope ends while closures still reference it.
-
-Therefore the new deobfuscator should recover an explicit binding/capture graph before aggressive inlining.
-
-Suggested model:
-
-```ts
-interface Binding {
-    id: BindingId
-    ownerFunction: FunctionId
-    ownerScope: ScopeId
-    captured: boolean
-    mutable: boolean
-    upvalueCell?: UpvalueCellId
-}
-```
-
-and:
-
-```ts
-interface ClosureCapture {
-    childFunction: FunctionId
-    slot: number
-    binding: BindingId
-}
-```
-
-This should allow VM-level code resembling:
-
-```lua
-upvalueId = allocUpvalue()
-upvalues[upvalueId] = false
-
-makeClosure(..., upvalueId)
-```
-
-to eventually recover as:
-
-```lua
-local enabled = false
-
-local function callback()
-    enabled = ...
-end
-```
-
-without producing unrelated locals.
-
-- Fixture-generation rule: controlled Prometheus fixtures must use `source -> Prometheus Medium -> formater/luau-format.exe input.txt --luraph --output=out.txt -> sample/N.txt`. Do not copy raw Prometheus output directly into a tracked sample fixture; the formatter is part of the expected normalization stage. `formater/` remains intentionally untracked.
-- Current tracked `sample/7.source.lua` now uses `if math.random(1,2) == 1 then` with a shadowed `local b = 2`, `print(b)`, and `return 123` inside that branch. The false branch falls through to `print(b)` using the outer `b = 3`, then creates/calls `w()` which reads captured `a`. Deterministic runtime checks cover both paths: seed 1 prints `1`, `2` and returns `123`; seed 3 prints `1`, `3`, `1` and returns nil. Source, formatted Prometheus fixture, and deobfuscated output match exactly on both seeds.
-- After formatter normalization, sample 7 has 4/4 reachable dispatcher leaves. Step 3 normalizes the root CFG to states `1-3` and the reachable nested `w` closure to state `4`; no dispatcher leaves are pruned. This fixture now exercises branch-dependent early return, fallthrough, ordinary-local shadowing, and a reachable captured closure in one small graph.
-- Current sample-7 data flow keeps the outer `b = 3` value live across the conditional CFG, while the branch-local shadowed `b = 2` is a separate definition used only on the returning branch. Source `a = 1` is represented by one local upvalue cell and the fallthrough path creates `w` with one capture slot pointing to that same cell. Register spellings are randomized fixture evidence only and must never become implementation assumptions.
-- Scope-recovery rule remains: never merge identifiers by spelling or reused VM register name. Recover source binding identity from lexical/function ownership, reaching definitions/liveness, environment-vs-local provenance, and explicit closure capture/upvalue-cell identity; exact original block syntax may be unrecoverable once compilation erases it.
-
-## Step 4: VM Binding / Capture Analysis
-
-- `passes/vm-bindings.js` is now part of the normal analysis pipeline immediately after Step 3 graph recovery. It is analysis-only: it does not rewrite emitted Lua, and it runs only when the VM graph is found, closed, and safely normalized; otherwise it fails closed with no binding claims.
-- Function identity is derived from Step 3 closure graph roots, not dispatcher nesting or VM register names. Closure-factory calls found inside a function's owned CFG infer parent/child function ownership. Sample 6 therefore proves the structural chain root -> outer -> inner even though all states still execute in the shared VM function.
-- Every VM-register write inside an owned CFG receives a distinct definition-site identity. A forward reaching-definitions fixed point is computed across CFG predecessors/backedges. Identifier uses are linked to a source value only when exactly one definition reaches that use; joins with multiple possible definitions remain ambiguous instead of being guessed.
-- Closure capture slots are provenance-classified. An identifier capture becomes a `local-cell` only when its unique reaching definition is a zero-argument `allocUpvalue()` result. Direct `upvalues[n]` capture expressions are recorded as `parent-capture-slot` relays. Capture metadata keeps `childSlot` and `parentSlot` distinct; this fixes the earlier metadata collision where a relayed parent slot could overwrite the child slot. Other forms remain explicitly unproven. This matches canonical Prometheus compiler behavior, where a nested function can capture either a newly allocated local cell or a higher-function upvalue slot.
-- `upvalueValues[...]` reads and writes now have explicit access identities. Their cell index is resolved through reaching definitions for local `allocUpvalue()` IDs or recursively through `upvalues[n]` capture-slot relays. A relayed slot is considered resolved only when every static provenance path is complete and converges to one static cell-allocation identity; cycles, multiple cells, and incomplete provenance remain unresolved.
-- `main.js` exposes compact reaching-definition, lifetime, cell-access, and captured-binding-candidate counts. Step 4 remains analysis-only; its metadata is computed from the proven Step-3 graph and is not rewritten by later presentation scheduling. Final emitted Lua is reparsed after all post-Step-3 scheduling.
-- `454748b Track VM value provenance` adds analysis-only value provenance to every Step-4 VM definition/use. Exact `_env`-rooted identifier/member/index references are `environment-reference`; copies preserve that classification only when all reaching source definitions agree. Computed/literal results are `register-value`, identifiers sourced outside the owned VM-register flow are `external-reference`, and mixed/unresolved joins remain `unknown` rather than guessed. This metadata is intended to prevent future ordinary-local recovery from turning compiler global lookups into invented locals while keeping register-backed candidates separate. `tools/test-vm-bindings-provenance.js` covers direct/chained environment reads, copy propagation, external inputs, computed call results, and a mixed CFG join. All 11 focused suites pass; normal deobfuscation succeeds for samples 1-46 with zero unknown provenance definitions in the current fixtures, and sample 1/7 emitted Lua remained byte-identical before/after this analysis change.
-- `479d355 Track ordinary VM register epochs` adds analysis-only ordinary register value/storage epochs on top of Step-4 provenance/liveness. Epoch candidates require `register-value` provenance and exclude direct environment/external/unknown values, captured `allocUpvalue()` cell IDs, direct nil cleanup writes, the proven VM return register, and semantic special bindings (`state`, `args`, `upvalues`, `gcProxy`). Definitions merge only from two proofs: multiple concrete same-register definitions reaching one use at a CFG join, or a later same-register write transitively depending on an earlier same-register definition that is still reaching immediately before that write. Proven nil cleanup/reuse handoffs therefore split epochs even when a later value depends on an old scratch. Epochs explicitly report `sourceBindingProven=false`; this is not lexical-scope reconstruction. `tools/test-vm-bindings-epochs.js` covers unrelated sequential values staying separate, environment/external exclusion, transitive mutation merging, join merging, and cleanup/reuse splitting. All 12 focused suites pass; normal deobfuscation succeeds for samples 1-46, sample 1/7 output remains byte-identical, and source/normal runtime parity was rechecked for sample 7 seeds 1/3 plus samples 8 and 11. Current analysis examples: sample 7 = 11 epochs / 0 merged defs; sample 8 = 22 epochs / 9 merged defs; sample 11 = 4 epochs / 2 merged defs.
-- Current sample 1 analysis: 2 recovered functions, 34 definitions, 26/27 uniquely resolved uses, 1 join group, 3 cross-block lifetimes, 0 loop-carried lifetimes, 1 local upvalue cell, 1 capture slot, and 2/2 resolved cell accesses.
-- Restored sample 3 has 3 functions, 43 definitions, 2 capture slots, one shared local cell, and 5/5 resolved cell accesses. Restored sample 4 has 4 functions, 97 definitions, 3 capture slots, one shared local cell, and 17/17 resolved cell accesses. New sample 5 has 116 functions, 4,488 definitions, 115 capture slots, one shared local cell, and 983/983 resolved cell accesses.
-
-
-- Local WeAreDevs compiler register-allocation proof: source locals are keyed by `(scope, id)` in `registersForVar`; `getVarRegister(scope, id, ...)` reuses the same reserved `VAR_REGISTER` for repeated reads/writes of that source binding while it is live. `allocRegister(true)` prevents another live variable from taking that occupied register. At lexical block cleanup, `compileBlock` emits `reg = nil` for ordinary locals (or calls the upvalue-release helper for captured locals), then `freeRegister(reg, true)` releases that register for later reuse. Therefore repeated writes to the same VM register can mean mutation of one source binding while its `(scope,id)` remains active, but the same physical register can later represent a different source binding after scope cleanup/release. A visible `reg = nil` is evidence of cleanup only when provenance proves it is the compiler's block-variable cleanup; temporary nil values also exist and must not be treated as scope ends blindly. Captured locals are stronger: the variable register holds an upvalue-cell ID and source assignments update `upvalueValues[cell]`, so a proven identical cell ID is a proven identical captured binding.
-- Register-ownership handoff rule for deobfuscation: the emitted VM has no explicit runtime marker for compiler `freeRegister`; ownership changes are therefore inferred conservatively. Treat every register write as a separate value epoch first. A new source-binding epoch may start only after the previous candidate is dead on all relevant CFG paths and there is structural scope-cleanup evidence (`reg = nil` for an ordinary proven local, or `reg = releaseUpvalue(reg)` for a proven captured-cell register), followed by a later first definition after that cleanup. Never use `reg = nil` alone as proof because explicit source assignments and temporary nil values can look identical. Repeated assignments before a proven ownership handoff remain candidates for mutation of the same binding; after a proven handoff the same physical register may represent a different `(scope,id)`. If cleanup/scope ownership is not provable, keep epochs separate rather than guessing.
-
-- Local-nil initialization proof from tracked sample 9 corrects the earlier overgeneralization. `compileExpression(NilExpression)` first allocates an ordinary temporary with `allocRegister(false)`, which preferentially uses the special POS/RETURN registers when available. `getVarRegister(scope,id,...,potentialId)` explicitly refuses to promote `POS_REGISTER` or `RETURN_REGISTER`, so a standalone `local x` or `local y = nil` commonly becomes `tempSpecial = nil; varReg = tempSpecial`. In sample 9, deobfuscated `x` starts as `state = nil; B = state`, while `y = nil` starts as `U = nil; Q = U`. An in-memory compiler trace confirms `x reg=2` and `y reg=3` each received a special temporary potential and `same=false`. Direct single `R = nil` initialization is only possible when the nil temporary is a promotable general register; it is not the default standalone shape and must never be assumed. Existing binding-end analysis remains conservative because it requires prior reaching-definition/lifetime evidence rather than classifying a nil write by syntax alone.
-
-- POS/state cleanup distinction from the local compiler: source locals can never own `POS_REGISTER` or `RETURN_REGISTER`. `allocRegister(true)` bypasses the special-register fast path, and `getVarRegister(..., potentialId)` explicitly rejects POS/RETURN promotion. Therefore lexical local cleanup via `compileBlock -> setRegister(varReg, nil)` cannot become the random environment sentinel. A temporary expression may use POS and thus emit ordinary `state = <value>` (including potentially `state = nil`) through `setRegister`, but only the dedicated control-flow `setPos(scope, nil)` path emits `state = _env[randomString(12..14)]`. Treat `_env[random]` on state as VM-stop/control-flow evidence, not source-variable cleanup.
-- Tracked `sample/9.source.lua` / `sample/9.txt` is the nil-local initialization regression: it contains both `local x` and `local y = nil`, prints each before and after later non-nil assignments, and follows the required `source -> WeAreDevs Medium -> formatter -> sample/9.txt -> deobfuscator` workflow. Runtime parity is exact across readable source, formatted obfuscation, and `output/9.lua`: `x0 nil`, `x1 5`, `y0 nil`, `y1 6`.
-- Tracked `sample/8.source.lua` / `sample/8.txt` is now the ordinary-register ownership-end regression. It mutates outer `keep`, explicitly assigns `keep = nil` and then reassigns it, creates block-local `inner`, then declares later `after`. An in-memory instrumentation wrapper around the local WeAreDevs compiler proved the ground truth: `keep` stayed on physical register 2; `inner` was bound to physical register 4, `freeRegister(4, true)` occurred at the end of the `do` block, and `after` was then allocated the same physical register 4. The instrumentation changed no compiler file.
-- The emitted sample-8 VM distinguishes explicit source nil assignment from lexical cleanup. Source `keep = nil` compiles as a temporary nil definition followed by a copy into the still-reserved `keep` register (`tmp = nil; keepReg = tmp`), while block cleanup for `inner` is a direct dead `innerReg = nil` write; that same register is then reused by `after`. `passes/vm-bindings.js` now records `bindingEndCandidates` only for direct `NilLiteral` definitions with zero uses, exactly one prior reaching definition, and a previously-used value. A later same-block definition of the same physical register upgrades it to an `ownership-handoff-candidate`. Sample 8 reports 3 binding-end candidates and exactly 1 ownership handoff; the explicit `keep = nil` is correctly excluded because its nil temporary has one use. This remains conservative metadata, not a source rewrite.
-
-
-
-## Post-Step-3 VM Register Scheduling
-
-- `passes/vm-register-scheduler.js` runs after safe Step-3 normalization. Its purpose is readability: compact in-block producer/use chains so unrelated temporary loads do not separate the values consumed by a statement. It never uses fixture register names or state IDs.
-- Scheduling is structural and local to normalized dispatcher leaves. Comments are barriers; blocks with non-whitespace source gaps are left unchanged. The only movable filler remains a one-identifier assignment whose RHS is a primitive literal or a simple identifier copy; assignments to `state`, `args`, `upvalues`, or `gcProxy` are never movable fillers. Table constructors, calls, function literals, indexed writes, arithmetic/other expressions remain non-movable.
-- Overflow-register scheduling is now supported only for a structurally proven compiler register bank. `findRegisterOverflowBinding` identifies the VM return/scalar-register declaration from the VM's own final `return unpack(returnReg)`, then requires exactly one preceding empty-table local whose binding is never aliased/reassigned/shadowed and whose every use is a positive constant numeric index. Each proven `RegisterOverflow[k]`-style slot is normalized internally to its own register identity and participates in the same RAW/WAR/WAW scheduler logic as scalar registers. Arbitrary table/index expressions, dynamic overflow indices, aliases, or ambiguous banks remain conservative/non-register accesses.
-- The scheduler compacts producer -> consumer and write -> next-touch gaps. Primitive literal/nil register loads may sink toward the next read OR next write of their destination when every crossing is RAW/WAR/WAW-safe, grouping overwrite chains without deleting either write. Simple identifier-copy assignments may pull left toward the nearest producer of their RHS when safe, recovering chains such as `z = D + G; ...; D = z` as adjacent statements. After those active-chain passes, any pure one-register assignment whose destination is not read again in the current dispatcher leaf is sunk out of the active chain: if another write to that register comes first it is grouped immediately before that overwrite; otherwise it moves to the actual end of the state body. It is never deleted, so values that are live-out into a successor state remain available before the next `while state do` iteration. The tail is the end of the dispatcher leaf, not the textual location of the final `state` write, because Prometheus may assign POS/state early and continue executing later statements in the same state. After generic scheduling, if the last write to the proven Step-3 state binding is a direct numeric jump (`state = <integer>`), that transition is canonicalized to the physical end of the leaf when no later statement reads or rewrites `state`. Earlier/non-final POS temporary writes are never moved, and split/dynamic branch transitions are left in their proven compiler shape. This gives direct jump leaves the same tail-anchor presentation as terminal `state = nil` without treating arbitrary state writes as terminators.
-- Terminal-state scheduling has an additional compiler-backed canonicalization after ordinary RAW/WAR/WAW validation. `findVmReturnRegister` identifies the true VM return register from the VM function's final `return unpack(<register>)`. When Step 3 has already proven a terminal leaf with final `state = nil`, a compiler-shaped return table assigned to that return register is moved to be immediately before the stop only when every crossed operation is recognized bookkeeping. Current safe crossed forms include fixed argument loads such as `r = args[n]`, captured-cell initialization through the semantic `upvalueValues[...]` table, and earlier POS/state temporary writes that are proven non-terminating because the leaf's actual stop is the final nil. The move is rejected across calls/effects, writes to returned registers, return-register dependencies, or any unrecognized tail. This preserves the invariant `...bookkeeping; ReturnVal = {...}; state = nil` before beta versioning.
-- Effectful/non-movable statements never change relative order. Every candidate crossing checks RAW (left write -> right read), WAR (left read -> right write), and WAW (both write). A second fail-closed validator runs on each reordered segment before source emission: it verifies the same statement objects are present, the complete non-movable/effectful subsequence is unchanged, and every inverted original pair has a pure delayable statement on the left with no register hazard. If validation fails, that segment is emitted unchanged and counted as a safety rejection.
-- Sample 8 exposes the current behavior clearly: `D = "keep1"` stays next to its call, `B = "print"` stays next to `_env[B]`, `z = D + G` stays immediately followed by `D = z` because `D` is read later in that state, while truly unread `j = args` now sinks to the state-body tail with the final cleanup writes. The ownership-handoff pair remains adjacent `D = nil; D = 30`. The scheduler intentionally never removes overwritten or unread stores. Its proven random `_env[...]` stop sentinel is now removed by Step 3 and re-emitted as final `state = nil`, so the stop is structurally at the bottom of the state and unread pure writes stay immediately above it.
-- `tools/test-vm-register-scheduler.js` is a focused scheduler regression covering producer/use compaction, pure producer sinking, identifier-copy pulling, write/write adjacency without deletion, unread-to-tail sinking, RAW/WAR/WAW preservation, and effectful-call-order preservation; it currently passes.
-- Current sample 1 scheduling changes 2 blocks with 43 dependency-safe swaps and 3 unread sinks; runtime parity remains exact.
-- Current paired fixture coverage is samples 1-46. New sample 5 schedules 390 blocks with 221,956 dependency-safe swaps, 217 unread sinks, and a structurally proven 23-slot overflow bank. Sample 10 remains the natural overflow-boundary fixture with 19 slots.
-
-
-## Post-Scheduler VM Register Naming
-
-- `passes/vm-register-names.js` is a presentation-only pass after dependency-aware register scheduling. Step 4 binding/capture analysis remains based on the pre-naming VM register identities; the naming pass returns an explicit old-name -> emitted-name mapping so later source-binding recovery can preserve provenance.
-- The dedicated VM return register is identified only from the `vm` function's own final top-level `return unpack(<identifier>)`, matching the local WeAreDevs compiler `emitContainerFuncBody()` shape where `returnVar` is declared in the VM container and the function ends with `return unpack(returnVar)`. The outer wrapper/root invocation `...unpack(...)` is not evidence and is never used for this detection.
-- Once identified, the same VM-local binding is renamed consistently to `ReturnVal` at its declaration and at every read/write inside the `vm` function. An unrelated identifier with the same textual spelling outside `vm` is untouched. The compiler may borrow `RETURN_REGISTER` as an expression temporary, so intermediate uses of that same physical binding are intentionally also named `ReturnVal`.
-- The remaining scalar bindings in the same compiler-generated VM register declaration are renamed deterministically by declaration order to `r1`, `r2`, ... while skipping `ReturnVal` and any colliding names already used by another VM-scope binding. The separate overflow/spill register table (as exercised by sample 10) is not part of this scalar rename. `state`, `args`, `upvalues`, `gcProxy`, helper bindings, globals, and helper-function locals are outside this pass.
-- The pass fails closed if the final VM return shape is not unique/proven, the scalar register declaration cannot be uniquely identified, a candidate binding is shadowed in a nested lexical scope, or a generated name would collide. It performs binding-scoped AST range edits rather than textual search/replace.
-- Current sample 1 maps VM return register `p -> ReturnVal` and 7 scalar temporaries to deterministic `rN` names.
-- `tools/test-vm-register-names.js` proves full same-binding rename inside `vm`, `rN` scalar renaming, member-key preservation, unrelated same-spelling bindings outside `vm` remaining untouched, and fail-closed behavior when a candidate register name is shadowed. Runtime parity still matches all executable fixtures and both deterministic sample-7 branches.
-
-
-## Experimental Beta Register Versioning (2026-08-23)
-
-- This is a separate analysis/presentation experiment and is NOT part of the normal deobfuscation pipeline. It consumes an already-generated normal output file and writes a sibling beta file.
-- Command: `node tools/beta-register-versions.js <output.lua> [output.beta.lua]`. If the second path is omitted, `output/2.lua` becomes `output/2.beta.lua` generically; no sample number is hardcoded in the transformer.
-- `passes/beta-register-versions.js` finds exact normalized dispatcher leaves (`state == N`) inside the semantic VM and versions scalar VM writes into `r_vN_N` locals. Final `state` writes remain on the original dispatcher binding. Final `ReturnVal` is preserved only for a terminal table-constructor write that occurs before the leaf's final `state = nil`; every other `ReturnVal` write is versioned. Unsupported/complex assignment writes remain unversioned, but their read positions are now rewritten using the current proven beta versions: direct identifier LHS targets are excluded as writes, while indexed/member LHS base/index expressions and all RHS expressions are treated as reads.
-- The first versioned write encountered for an original register gets a stable base such as `ReturnVal -> r_v1`, `state -> r_v2`, `r1 -> r_v3`. Later versioned writes increment the suffix. Reads in the same leaf use the latest version. A preserved final `state` transition consumes the latest versions on its RHS. A preserved terminal `ReturnVal = { ... }` is treated as the VM return payload only when followed by the final nil stop.
-- Sample 2 now versions 18 assignments across 3 dispatcher leaves with 0 skips and has 0 proven cross-state versions. In state 1, final non-table `ReturnVal = 1` is versioned and consumed by the final state condition; state 2's final call result is also versioned. Only state 3 preserves `ReturnVal = {}` together with final `state = nil`.
-- `passes/beta-register-lifetimes.js` now owns the experimental ordinary-register analysis. It builds sparse scalar definitions/uses for all VM registers, computes forward reaching definitions, and computes block liveness for ordinary scalar registers. `state` and `ReturnVal` participate in value provenance but are never promoted into ordinary local epochs.
-- Register epochs are coalesced with union-find from actual data-flow evidence, not from a future nil alone. Current evidence includes: multiple concrete definitions reaching the same use at a CFG join; transitive value dependence through compiler temporaries; and compiler-backed identifier-copy chains anchored either by proven lexical cleanup or by a terminal direct return of that ordinary register. The local WeAreDevs compiler proves that once a source binding owns a `VAR_REGISTER`, later source assignments to that binding are emitted as copies from RHS temporaries into the existing var register.
-- Direct `rN = nil` is only a cleanup candidate when the nil definition itself is unused, all reaching prior definitions are known non-nil ordinary definitions, and at least one prior value was used. Cleanup never merges two epochs; it may only terminate one already-established union root. Explicit source `x = nil` normally compiles as `tmp = nil; xReg = tmp`, so the nil temporary is used and is not misclassified as a cleanup. If data-flow/liveness proof does not converge, beta fails closed to per-write presentation instead of applying epoch grouping.
-- Terminal-return ownership anchor: local compiler `compileStatement(ReturnStatement)` places a directly returned source variable's existing `VAR_REGISTER` into the final `ReturnVal = { ... }` table without first copying that variable to a scratch register. When such a terminal returned ordinary register has a concrete reaching definition that is itself an identifier-copy write, beta may use it as an anchor and walk backward only through the same conservative provenance/copy-linked chain used by cleanup anchoring. This handles `local a = 3; ...; a = 4; return a` even though the early return prevents lexical `a = nil` cleanup from being emitted.
-- The first definition of a proven epoch emits `local r_vN_1 = ...`; later proven mutations emit `r_vN_1 = ...`; reads use that same name across CFG states; an attached cleanup emits `r_vN_1 = nil`. A later distinct epoch on the same physical register gets the next suffix. Singleton scratch epochs remain separate rather than being absorbed merely because the same physical register is later cleaned.
-- Real fixture evidence: sample 8 now separates physical `r6` scratch values (`"keep1"`, then an environment lookup) from the block-local `inner` epoch, kills that epoch at its proven cleanup, then starts a distinct `after` epoch on the reused physical register. Sample 9 separates early scratch uses of physical `r2` from the `y` epoch initialized by a nil temporary-copy; the final direct `r2 = nil` terminates only that epoch. Sample 11 still coalesces the two branch values of source-like `a` into one `r_v2_1` epoch because both definitions reach the same join use.
-- Definitions remain `local` inside the state where the epoch begins even when later state blocks reference that name; current beta is analysis/readability output and is intentionally not required to execute. Normal `output/N.lua` behavior is unchanged. Focused regression `tools/test-beta-register-versions.js` covers join coalescing, compiler-shaped reassignment copies, cleanup boundaries, and scratch-before-local separation; beta output is reparsed before writing.
-- Beta graph command: `node tools/beta-register-graph.js <output.lua> [output-base]`. Default `output/11.lua` output base is `output/11.beta.graph`. It writes `.txt`, `.json`, Graphviz `.dot`, and Mermaid `.mmd`; optional SVG still requires Graphviz `dot`. The graph now calls these structures REGISTER EPOCHS and includes definition/use/provenance/merge/cleanup counts. Sample 11 graph is 3 states / 5 register epochs with 1 attached cleanup; sample 5 full-scale generation succeeds at 938 states / 2291 conservative register epochs, with only 2/2 nil writes proven/attached as cleanups. Focused regression: `tools/test-beta-register-graph.js`.
-- Beta control-flow presentation lives in `passes/beta-control-flow.js` with CLI `node tools/beta-control-flow.js <output.lua> [output.beta.cf.lua]`. Before structuring, `passes/beta-upvalues.js` recovers proven Prometheus captured cells into real lexical beta bindings. It identifies compiler-shaped `allocUpvalue()` cells, their initialization stores, static closure capture tables, and recursively resolvable parent `upvalues[n]` relays; rewrites `upvalueValues[cell]` and `upvalueValues[upvalues[n]]` reads/writes to one shared Lua binding; removes proven `releaseUpvalue(cell)` reference-count bookkeeping; and empties only proven capture tables so closure regions can be emitted as nested `function(...)` values. A dead initialization temporary may be reused as the recovered binding only when its sole read is the cell initialization; otherwise a separate lexical binding is introduced at the original initialization point. Any unexplained cell-ID use/escape or unresolved VM upvalue machinery rejects the transform. The current lexical-dominance proof works per closure CFG: a recovered cell's allocation state must dominate every owner-side allocation/init/capture/read/write/release occurrence; ambiguous capture-vs-initialization order still fails closed. After this stage, single-entry regions still use the existing single-state or acyclic structurer, and multiple disjoint closure entries are solved bottom-up.
-- Numeric `for` recovery: `passes/beta-control-flow.js` detects the exact local WeAreDevs `ForStatement` topology/data flow rather than arbitrary cycles. It requires one preheader -> check edge, the compiler sign test (`step < 0`), current initialization (`start - step`), current increment, paired `<=`/`>=` limit tests, split POS targets, and the visible loop-variable copy. Ordinary loop variables still require proven compiler cleanup on each latch/break path; captured loop variables may instead use the recovered upvalue declaration/init shape because beta-upvalues has already removed `releaseUpvalue`. Source writes to the visible loop variable are preserved when they remain in the same recovered binding epoch and no loop-body write targets the proven hidden current/step/final/sign machinery. The body may contain an acyclic internal CFG region with branches/joins and structured break/continue/return. Multiple sequential/nested loops are collapsed iteratively; unmatched compiler machinery or unsafe induction interference remains fail-closed.
-
-- Pre-test `while` recovery: the local compiler creates an outside preheader -> check/header edge, a header true edge into the body, a header false edge to the continuation, and body latch edge(s) back to the check. Beta-CF proves that natural-loop topology, requires one external preheader and no body escape to the exit, structures the acyclic body region, then emits a guard-break loop so all condition-building operations execute on every iteration: `while true do ... if not (condition) then break end ... end`. Recovery is iterative with numeric-for collapse so mixed nested loop kinds can be reduced innermost-first; numeric-for signatures take priority and are never downgraded to generic while loops.
-- Ordered side-effect assignment support: `passes/beta-register-versions.js` recognizes only one-target/one-value indexed or member assignments with complete AST ranges as `effect-write`. It rewrites beta-register reads in the lvalue base/index and RHS, records no scalar VM definition, and preserves the statement as one indivisible ordered effect. `unsupported` operations still reject CF. This covers environment/global stores, ordinary table/index stores, member stores, and compiler upvalue stores without hardcoding a table or field name.
-- Nested-closure return safety: closure-region solving may emit a non-root region as `function(...)` only when that region reports `terminalReturnLowered === true`. A single-state child that still contains VM `ReturnVal`/`state = nil` form now fails closed instead of becoming a Lua function that would implicitly return nil. Root single-state presentation may still preserve unlowered VM form for analysis, but it is never embedded as child function semantics.
-- Captured-cell lexical declaration order is now preserved when the local compiler creates a child closure before emitting the captured cell's first value initialization (captured parameters are a real case). If the first factory capture precedes the proven initialization, beta upvalue recovery emits only `local <binding>` at the original `allocUpvalue()` position, rewrites the later cell initialization to `<binding> = <value>` at its original position, and empties the closure capture table as usual. Same-state order is textual; cross-state order is accepted only when CFG dominance proves it. This guarantees the already-created nested Lua function lexically captures the recovered local instead of accidentally referring to a global/nil binding. Ambiguous dominance/order still fails closed.
-- Final `ReturnVal` proof is tied to the real local compiler shape. `compileStatement(ReturnStatement)` evaluates return expressions into VM registers first, then emits `ReturnVal = { registerReads... }` with `unpack(register)` only for the final multi-return expression, then stops the state. Beta records those return expressions structurally and CF lowering removes both the payload assignment and terminal `state = nil` in favor of `return ...`. Return-payload movement is now guarded: non-empty returns may cross only structurally pure bookkeeping and never a write to a returned version; unsafe/effectful tails leave the VM form unchanged. Focused regressions cover empty return, multi-return with `unpack`, and an unsafe post-payload effect that must not be crossed.
-- Real-compiler return-tail proof: `compileStatement(ReturnStatement)` appends `setReturn(...)` immediately followed by `setPos(nil)`, then sets `activeBlock.advanceToNextBlock = false`. `Compiler:addStatement(...)` appends only while that flag is true, so block cleanup attempted after the return is discarded and a genuine explicit return cannot have any later compiler statement—effectful or otherwise—between its return payload and stop. Fresh Medium fixtures with captured locals, including a nested-block return, confirmed no effectful cleanup tail. Implicit fallthrough is the separate compiler shape `setPos(nil)` then empty `setReturn({})`. Therefore any spacing between terminal payload and normalized `state = nil` in current deobfuscated output is introduced by Step 3/scheduling; the scheduler moves only proven-pure assignments and never effectful calls. The synthetic effectful-tail beta regression remains defensive/fail-closed coverage, not an expected valid-compiler shape.
-- Beta terminal-return placement is now canonicalized in `passes/beta-register-versions.js` before beta CF. For a proven terminal state, `state = nil` must already be the final normalized state operation. A preserved compiler-shaped `ReturnVal = { ... }` is moved to immediately above that stop when safe. Empty `{}` payloads can move across any leftover tail operation because they contain no returned register dependency; non-empty payloads may cross only operations marked pure/sink-safe and never a write to one of their returned beta versions. Both emitted beta source and graph operation order are updated together. Sample 14 state 5 now ends `print-call; r_v2_1 = nil; ReturnVal = {}; state = nil`, with exactly one reported terminal-placement move. Focused regressions cover the empty-payload move and rejection of a non-empty payload crossing an effectful call.
-
-
-## Performance Optimization Audit (2026-08-23)
-
-- Historical performance measurements before `edc805b` used the previous unpaired sample 5 and remain historical only. The current source-backed sample 5 deliberately matches its 938-state / 116-function scale but is different source, so benchmark numbers are not directly comparable.
-
-- Before the whole-pipeline optimization audit, the user explicitly requested a pushed checkpoint first. Commit `c224017 Optimize VM state traversal queues` is that pre-audit checkpoint. It replaced array `shift()` BFS queues with cursor-based queues, used `Set` membership for queued/ordered state IDs, and kept reachable-state traversal itself O(V + E) aside from dispatcher-leaf resolution/rendering.
-- Optimized implementation checkpoint: `0f4650a Optimize deobfuscator hot paths`. The audit read the complete normal deobfuscation pipeline (main + every current pass) and changed only mechanically equivalent hot paths; parser internals and the proven reaching-def/liveness solver were intentionally not redesigned.
-- Before the 2026-08-24 follow-up optimization pass, the user requested an explicit rollback point; `f0b976d Checkpoint before pipeline optimization` is that pushed checkpoint. `11a5629 Optimize deobfuscation pipeline passes` then batches independent environment/createClosure/helper binding renames into one edit/parse fast path with sequential fail-closed fallback, avoids traversing the VM subtree during root-entry discovery, removes redundant VM rediscovery from binding analysis, and combines register-naming scope scans. Across 25 unaffected tracked fixtures, normal outputs remained byte-for-byte identical. Sample-5 profiling dropped full parses from 11 to 8 and local average runtime from roughly 808 ms to 731 ms (~9.6%); sample 26 dropped roughly 102 ms to 89 ms (~12.7%).
-- `04114c3 Cache beta parser fragments` adds bounded exact-text parse caches for beta upvalue and transition fragments. Sample-20 tiny parser calls dropped from 3,184 to 950 and a direct CF-solver microbenchmark dropped from about 16.4 ms to 10.3 ms (~37%) while sample-20 and sample-26 CF output remained byte-identical. All focused regression suites passed.
-- `passes/text-edits.js` now applies non-overlapping source edits in one ordered chunk build, O(source length + edit payload/count) after sorting, instead of repeatedly slicing/rebuilding the entire source once per edit. ConstantArray replacement, environment rename output, safe-assignment splitting, VM-state range patching, and register-scheduler output all use this path. This removed the largest hidden O(edit_count * source_size) cost.
-- VM helper renaming now uses `passes/batch-parameter-rename.js`: helper-role bindings are planned together and renamed in one lexical AST traversal, including nested VM parameters, while preserving the same shadow/collision rules. If a batch conflict/collision is detected, `renameVmHelperBindings` falls back to the previous sequential implementation rather than guessing. The follow-up optimization now plans helper-role bindings and helper-function parameters from the same structural analysis and applies them in one lexical batch; any conflict/collision falls back to the original sequential implementation. Focused nested-shadowing regression: `tools/test-batch-parameter-rename.js`.
-- Register scheduling caches immutable per-statement read/write sets in `WeakMap`s, eliminating repeated AST walks during RAW/WAR/WAW checks and validation. Scheduling decisions/output are unchanged.
-- New primitive regression `tools/test-text-edits.js` covers replacement/text edits, absolute base offsets, and overlap rejection. Current focused regressions all pass: text edits, batch parameter rename, VM register scheduler, and VM state reachability.
-- Semantic naming was moved from the late post-register stage to the VM-helper stage in `bf7b107`. Before the fixture reset, the then-current samples 1-10 (including stress sample 5) remained byte-for-byte identical. A five-run sample-5 benchmark measured old 1993.5 ms average vs new 1935.4 ms average (~2.9% faster on that run); this is historical local evidence only.
-
-
-## Semantic Naming Layer (2026-08-23)
-
-- `passes/semantic-names.js` now runs immediately with VM helper naming, before safe parallel-assignment splitting and Step 3. It renames only structurally proven compiler roles and never from randomized spelling alone. Moving it earlier is presentation-only; scope reconstruction remains unchanged and analysis-only.
-- The outer wrapper parameter receiving the unique `{...}` argument is renamed `InitialArgs`. This is distinct from the VM parameter `args`: `InitialArgs` is the original top-level vararg table passed into the root closure, while `args` is the per-closure invocation argument table.
-- Proven `createClosure*` helpers rename their `createUpvalueProxy(captures)` local to `gcProxy`, returned nested-function local to `closure`, and fixed-arity nested parameters to `arg1`, `arg2`, ...; the vararg factory keeps `...`.
-- `releaseUpvalues` renames its structural iteration locals to `captureIndex` and `upvalueId`. `createUpvalueProxy` renames its numeric-for index to `captureIndex`, the `newproxy(true)` local to `proxy`, and `getmetatable(proxy)` to `proxyMetatable`.
-- When a VM overflow-register table is proven structurally as the table-backed register bank before the scalar register declaration, it is renamed `RegisterOverflow`. Current tracked samples 5 and 10 exercise this path; other fixtures do not invent it.
-- Focused regression `tools/test-semantic-names.js` covers `InitialArgs`, fixed closure `argN`, `gcProxy`, `closure`, `captureIndex`, `upvalueId`, `proxy`, `proxyMetatable`, and `RegisterOverflow`. Current paired fixtures 1-38 remain parse/runtime-valid where executable.
-
-## Sample 10: Natural Register Overflow Regression (2026-08-23)
-
-- Tracked `sample/10.source.lua` / `sample/10.txt` is a natural compiler-level overflow fixture. The readable source declares 110 ordinary locals in one lexical scope, keeps them alive through later mutations/reads, and follows the required `source -> local WeAreDevs Medium -> formatter -> sample/10.txt -> deobfuscator` path. It does not contain VM-shaped or synthetic register-table code.
-- Local compiler instrumentation (in-memory wrapper only; compiler file unchanged) proves the boundary in this fixture: `v98 -> physical register 99` remains scalar, `v99 -> physical register 100 -> RegisterOverflow[1]`, `v100 -> 101 -> RegisterOverflow[2]`, through `v110 -> 111 -> RegisterOverflow[12]`. Later compiler temporaries naturally use higher overflow indices as well.
-- Runtime parity is exact across readable source, formatted obfuscation, and deobfuscated output: `overflow-test 1001 1098 1099 1100 1101 1110`. The semantic naming pass correctly recognizes `RegisterOverflow`.
-- Important current analysis gap exposed by sample 10: Step-4 reaching-definition/liveness analysis still models only scalar identifier register writes/uses. It reports no definition identity for `RegisterOverflow[k]`, so overflow-backed source locals are preserved semantically in emitted Lua but are not yet normalized into the same register-identity model as scalar VM registers. Keep this fixture as the regression for any future overflow-aware binding analysis.
-
-# Immediate Next Steps
-
-1. Keep Step 3 state normalization as the structural emitted-source boundary; the post-Step-3 scheduler may only reorder proven-independent statements for readability. Step 4 remains proof metadata, and source locals must not be reconstructed from register spelling or adjacency.
-2. Use the new Step-4 value provenance when ordinary-local recovery begins: environment/external references must not become invented locals without independent binding-ownership proof; register-value candidates still require lifetime/epoch proof. Do not implement lexical scope reconstruction merely from this provenance.
-3. Ordinary register-value epochs now exist as analysis-only storage/value candidates. Next, add only compiler-backed ownership anchors needed to relate independent same-register assignments when source-binding continuity is provable; never merge merely from register reuse, adjacency, or a future cleanup. Current sample 7 remains the focused conditional-shadowing/early-return regression. Do not promote an epoch into a source local until function ownership, provenance, lifetime, cleanup/handoff, and binding-continuity proof are unique.
-   - Untracked `sample/spacial.txt` full-pipeline probe is now structurally solved by the ReturnVal-join / CF-tail fixes. Normal deobfuscation succeeds with 64/72 reachable dispatcher leaves (8 dead pruned) across 9 VM functions, 24 capture slots, 21 local cells, and 80/80 upvalue accesses resolved. Beta succeeds with 551 versioned assignments, 60 cross-state versions, 0 skipped assignments, 29/29 cleanups, and 308 epochs. Beta-CF now succeeds with 64 states, 9 closure regions, 15 branches/14 joins, 4 numeric-for loops, 1 while, 2 repeat loops, 21 recovered cells, 24 recovered capture slots, and 10 lowered terminal returns. Runtime of the formatted fixture, normal output, and beta-CF still triggers `Tamper Detected!`, consistent with the known formatting-sensitive anti-tamper behavior; this is no longer a structural CF blocker.
-   - Tracked `sample/47.source.lua` / `sample/47.txt` is the anti-tamper/control-flow stress fixture. The generator-template fragments were materialized into concrete literals only to make the fixture standalone; no transform depends on them. Normal resolves 49/57 leaves (8 dead pruned) across 8 VM functions; beta versions 327 assignments with 0 skips. The former shared short-circuit/`ReturnVal` blocker is now solved structurally: nonterminal `ReturnVal` definitions may share one beta epoch only when one reaching definition dominates every alternate definition and the join use, including loop backedges; terminal `ReturnVal = {...}; state=nil` remains preserved. Numeric-for recognition now accepts logical state transitions followed by tail writes only when the existing transition-tail safety proof allows canonicalization. Repeat-condition canonicalization now preserves string-literal identity so unrelated `_env["..."]` lookups cannot become false duplicate matches. Current sample 47 beta-CF succeeds: 49 states, 8 closure regions, 13 branches/12 joins, 2 numeric-for loops, 1 while, 1 repeat, 14 recovered cells/slots, and 9 lowered terminal returns. All 12 focused regression suites pass after these changes.
-
-4. Relate captured-cell candidates to source initialization/mutation patterns only after dominance/order proof is available; do not infer “initial write” from textual or block order across CFG joins.
-5. The former loop-matrix blockers are now solved: sample 35 proves captured cells across numeric-for/while/repeat with per-cell allocation dominance, and sample 37 proves source mutation of the visible numeric-for variable while hidden induction state remains independent. Samples 45-46 are the minimal regressions for those rules. Generic iterator `for ... in` is covered by samples 53-59: beta preserves the atomic iterator multi-return step, beta-CF recovers direct/custom/pairs/next iterators plus branch/break/continue bodies, and captured generic-for variables are recovered through the proven ForIn temp-cell -> source-register alias shape.
-6. Keep POS-register temporary reuse distinct from true block terminators; extend Prometheus-specific recognition only from evidence in the local WeAreDevs compiler unless the user explicitly requests the public/canonical implementation.
-7. Keep every pass structural/generalized, reparse transformed Lua, runtime-check executable fixtures, and update/commit/push `CONTEXT.md` after meaningful work.
-8. If the current parser becomes a correctness blocker, evaluate Rust Moonlight instead of parser-specific hacks.
-## Fresh Chat Resume Snapshot (2026-08-23)
-
-### Authoritative workspace / Git
-
-- Workspace: `C:\Users\reala\Desktop\!workspaces\promdeobf ova\new promdeobf`.
-- Branch: `main`.
-- Remote: `https://github.com/GooseGoldenGoose/new-promdeobf.git`.
-- Latest pushed implementation checkpoint at this snapshot: `0237d60 Recover captured loops and mutated for variables`; latest normal-pipeline optimization is `11a5629 Optimize deobfuscation pipeline passes`; latest fixture checkpoint is `4cdc9c3 Add minimal loop blocker samples 45-46`. Beta-CF supports numeric `for`, pre-test `while`, post-test `repeat`, loop `break`, proven `continue`, terminal `return` arms inside loops, and multi-state short-circuit conditions. Native `continue` is emitted for proven for/while latch paths; repeat-body continue paths use safe fallthrough when condition setup statements must execute before `until`. Control-only short-circuit joins are structured without `_beta_phi` helper locals. Repeat still removes the compiler-added discarded first condition evaluation to restore source semantics. Captured-cell recovery now uses per-cell CFG dominance in multi-state owners, and numeric-for source-variable mutation is supported when it cannot write the hidden induction machinery.
-- Indexed/member effect-write support from `f16b244` remains active and is consumed normally by beta upvalue recovery/CF.
-- Latest fixture checkpoint is `4cdc9c3 Add minimal loop blocker samples 45-46`; latest loop-control/capture implementation is `0237d60 Recover captured loops and mutated for variables`; tracked samples 1-46 remain paired.
-- Samples 20 and tracked 23 now beta-CF successfully after the terminal-return and capture-order fixes; the user's larger current sample-23 working-copy edits remain intentionally uncommitted.
-- Before changing anything in a new chat: read this entire `CONTEXT.md`, run `git status --short --branch`, then `git log -8 --oneline --decorate`. Never assume the checkout is still at this exact commit if newer work exists.
-- Every project code/content change, even small, gets a focused commit and `git push origin main`. Stage only files belonging to the current change.
-- `formater/` remains intentionally untracked. Generated `output/*.log` or temporary output files must not be committed accidentally. All tracked `sample/N.txt` files must have matching tracked source files.
-- If the user asks for a risky/broad refactor, create and push a checkpoint BEFORE doing it when requested, then make the refactor in separate focused commits.
-- End every project-related assistant turn exactly with: `Done for this turn — you can prompt now.`
-
-### Prometheus authority / fixture workflow
-
-- In this project, “Prometheus” means the LOCAL WeAreDevs compiler at `C:\Users\reala\Desktop\!workspaces\promdeobf ova\wearedev obf`; compiler authority is `src\prometheus\compiler\compiler.lua`. Do not substitute public/canonical Prometheus unless explicitly requested.
-- Controlled fixtures MUST follow: readable `sample/N.source.lua` -> local WeAreDevs Medium -> `formater/luau-format.exe input.txt --luraph --output=out.txt` -> tracked `sample/N.txt` -> `node main.js sample/N.txt output/N.lua`.
-- Use the absolute LuaJIT path when needed: `C:\Users\reala\AppData\Local\Programs\LuaJIT\bin\luajit.exe`.
-- Compiler instrumentation is allowed only as an in-memory/development probe; do not modify the authoritative compiler file as part of the deobfuscator.
-
-### Non-negotiable design rules
-
-- Everything must be structural/generalized/dynamic. Never hardcode sample filenames, random generated names, state IDs, register spellings, string constants, closure arities, offsets, or fixture-specific behavior.
-- Fix the earliest AST/CFG/data-flow cause. Do not patch final emitted text to conceal a bad analysis.
-- Preserve evaluation order, calls, multi-return behavior, lexical ownership, globals, object/table identity, loops, closure capture semantics, mutations, and upvalue-cell sharing.
-- Globals remain globals unless proven lexical. Do not invent aliases for `game`, `table.insert`, etc.
-- Any uncertain transform fails closed and preserves the previous safe source.
-- Parsing successfully is insufficient: reparse transformed Lua and run runtime/source parity wherever possible.
-
-### Current pipeline
-
-1. Parse Luau.
-2. ConstantArray recovery/inlining.
-3. Environment provenance/rename to `_env`.
-4. Structural closure-factory naming: `createClosure`, `createClosureN`.
-5. VM helper + structural semantic naming: helper roles (`unpack`, `newproxy`, `setmetatable`, `getmetatable`, `select`, `vm`, upvalue helpers/tables/parameters) plus `InitialArgs`, closure helper locals, fixed closure `argN`, release/proxy locals, and proven `RegisterOverflow`.
-6. Split only proven-safe parallel assignments.
-7. Step 3 VM-state/CFG recovery: reachability-driven roots, closed graph proof, dead-state pruning, contiguous normalized IDs, balanced dispatcher rendering, canonical stop `state = nil` at actual leaf tail, no normalized invalid/unreachable fallback.
-8. Step 4 VM binding/capture analysis: analysis-only reaching definitions, liveness, definition epochs, capture slots, static upvalue-cell identities, relays, binding-end/ownership-handoff candidates.
-9. Dependency-safe VM register scheduling inside normalized leaves.
-10. VM register presentation naming: the VM’s own final `return unpack(R)` identifies that VM-local binding as `ReturnVal`; every use/write of that same binding inside `vm` is renamed consistently. Other scalar VM registers become deterministic `r1`, `r2`, ... . Same-spelled identifiers outside `vm` are untouched.
-11. Final reparse and output.
-
-### State / scheduler facts that must not regress
-
-- The compiler’s POS/state register has two roles: expression temporary and dispatcher program counter. A plain `state = value` is NOT automatically a terminator.
-- Only proven final POS/state transitions determine CFG edges. Canonical `setPos(nil)` random `_env[12..14 alphanumeric]` is an obfuscated stop and Step 3 normalizes it to final `state = nil` at the actual end of the state body.
-- Reachability starts from the real root; closure entries are discovered only from reachable states. Dead states cannot “rescue” dead child closures.
-- Reachable graph walk uses Set/Map + cursor queues; pruning traversal is O(V+E) apart from dispatcher-leaf resolution/rendering.
-- Scheduler NEVER deletes stores. It moves only proven pure register assignments through RAW/WAR/WAW-safe crossings and validates every reordered segment fail-closed.
-- Unread pure writes sink toward the actual dispatcher-leaf tail; the final canonical `state = nil` remains the last stop anchor.
-- Scalar scheduler reads/writes are cached per statement.
-- Proven overflow register banks participate in exactly the same scheduling logic as scalar registers. Detection is structural and does not depend on the spelling `RegisterOverflow`; semantic naming now runs earlier, so the bank may already carry that name when scheduling starts. Proof still requires a unique empty-table VM bank before the scalar declaration, positive constant numeric indices only, and no alias/bare use/dynamic index/shadowing. Each slot is an internal identity such as `overflow:1`. Ordinary tables remain conservative.
-
-### Current overflow proof / sample 10
-
-- `sample/10.source.lua` and `sample/10.txt` are the tracked NATURAL overflow regression: 110 ordinary source locals in one lexical scope; no synthetic VM/table code.
-- Compiler probe proves `v98 -> physical register 99` stays scalar; `v99 -> register 100 -> RegisterOverflow[1]`, through `v110 -> register 111 -> RegisterOverflow[12]`.
-- Later compiler temporaries naturally use additional overflow slots.
-- Runtime parity source/obfuscated/deobfuscated: `overflow-test 1001 1098 1099 1100 1101 1110`.
-- Scheduler currently detects 19 used overflow slots in sample 10 and performs overflow-aware compaction.
-- IMPORTANT CURRENT GAP: Step-4 reaching-definition/liveness/binding analysis still models scalar identifier registers only. It does NOT yet normalize `RegisterOverflow[k]` slots into definition/use identities. Runtime/emitted Lua is correct; source-binding analysis for overflow-backed locals is incomplete. If implementing this later, reuse the same structural bank detector and model scalar + overflow storage under one VMRegister identity abstraction. Do not treat arbitrary tables as registers.
-
-### Current scope status — DO NOT assume implementation
-
-- The user explicitly said NOT to implement scope recovery yet; the discussion was conceptual only.
-- No source lexical-scope reconstruction pass should be claimed as implemented.
-- What IS known for future work: physical VM register != source variable identity. Dispatcher states are CFG blocks, not lexical scopes. Same source local uses one reserved VAR_REGISTER while alive; compiler cleanup then force-frees it and later bindings can reuse the physical register. `R=nil` alone is never enough to prove scope end. Captured locals use shared upvalue-cell identity, which is stronger proof.
-- Do not use normalized `rN` names, dispatcher nesting, or adjacency as source-scope evidence.
-
-### Fixtures / key validations
-
-- Sample 1: paired baseline (`base`, `compute`, one captured upvalue, branch); runtime `baseline 14 4`; 5/5 states normalized.
-- Sample 2: restored warn/random branch; runtime with deterministic shim `gg`, `ranf`; 3/3 states.
-- Sample 3: restored shadowed block + shared mutable capture; runtime `block 10 2`, `before 1`, `after 3 3`; 3/3 states.
-- Sample 4: restored if/while/repeat + shared `total`; runtime `start 0`, `choose 5`, `spin 10`, `trim 2`; 16/16 states.
-- Sample 5: source-backed stress fixture; 938/938 states, 116 functions, 23 overflow slots; runtime `stress 2 63 182 182`.
-- Sample 6: nested function ownership root -> outer -> inner; beta-CF now also succeeds after multi-state captured-cell dominance recovery (2 recovered cells, 1 structured while); source/normal/beta-CF runtime remains `theory 8 10 5`.
-- Sample 7: conditional shadowing + early return + captured closure; deterministic seeds 1 and 3 both parity-tested.
-- Sample 8: ordinary register cleanup/ownership handoff; proves explicit source nil vs compiler cleanup distinction.
-- Sample 9: `local x` / `local y=nil` initialization via special temp + copy; prevents classifying every direct nil as scope cleanup.
-- Sample 10: natural overflow storage boundary and overflow-aware scheduler regression.
-- Sample 11: beta branch/join fixture from `local a = 3123; if _G.wasd then print(a); a = 3 end; print(a)`. Normal source/obfuscated/deobfuscated parity: false path prints `3123`; true path prints `3123`, `3`. Normalized VM has 3 states, 20 definitions, one join group, and 2 cross-block lifetimes. Beta now coalesces the two physical `r2` value definitions by reaching-def/join evidence, not because they share a future nil: state 1 starts `r_v2_1`, state 2 mutates it, state 3 reads it from either predecessor, and the final direct `r2 = nil` is independently proven and attached as the epoch end.
-- Sample 12: real source-return compiler fixture: `thing("table")`, then `thing("after")`, then `return { thing2 }`. Source, formatter-normalized obfuscation, and normal deobfuscated output all print `table` then `after`. The root VM proves Prometheus evaluates both calls first, stores the first result in a register, builds the source table from that register, and only then emits the terminal `ReturnVal = { register }`; the nested `thing` closure similarly ends with `ReturnVal = { argRegister }`. Beta now preserves both final non-empty compiler-shaped `ReturnVal` assignments instead of renaming them.
-- Sample 13: returned-local mutation fixture: `local a = 3; print(a); a = 4; return a`. It is source-backed through local WeAreDevs Medium + formatter, resolves to one terminal state, and has exact runtime parity: prints `3` and returns `4`. Beta keeps one lifetime for `a` and beta CF now ends directly with `return r_v2_1`; `ReturnVal = { r_v2_1 }` and `state = nil` are removed. The generated beta CF file itself was executed under LuaJIT and prints `3`, returns `4`.
-- Sample 14: paired branch/early-return fixture from `local a = 1; print(a); if math.random(1,2) == 1 then a = 2 end; if math.random(2,3) == 3 then print(a); return end; a = 3; print(a)`. Main resolves 5/5 states in one function and source/normal runtime parity holds for seeds 1-12. Beta register versioning performs exactly one terminal-return placement move on state 5. The acyclic CF solver now reconstructs all five states as two source-level `if` regions: state 2 is the true arm that joins state 3; state 3 then branches to an early-return state 4 or fallthrough terminal state 5. The generated `output/14.beta.cf.lua` has no dispatcher/state assignments, has two real `return`s, and matches source + normal output for seeds 1-12. The same solver also structures sample 11 with both `_G.wasd` paths runtime-matching and sample 2 with deterministic seeds 1-6 runtime-matching.
-- Sample 15: paired `if`/`elseif` + early-return fixture with mutable `g`. It follows the required source -> local WeAreDevs Medium -> formatter workflow. Main resolves 9/9 states in one function. Beta register versioning yields 9 blocks / 65 versioned assignments / 0 skips with one terminal-return placement move. The former shared-continuation failure is fixed structurally: the solver recovers the first `if/elseif` region with its shared block-4 continuation, then recovers the second region where the `L` arm returns early while the `W`/false paths share the final continuation. `output/15.beta.cf.lua` contains no `state = ...` assignments, emits each shared continuation exactly once, and matches readable source runtime for deterministic seeds 1-40. A synthetic regression with unrelated state IDs also places proven jump transitions before later body statements to confirm the solver treats them as logical block terminators without depending on textual position.
-- Sample 16: paired `if`/`elseif`/`else` regression with mutable `g`. The first three-way chain assigns/prints `C`/`G`/`E`; the second prints `W`, or prints `L` and returns early, or prints `Z`, with the non-return paths sharing a final `print("done", g)` continuation. It follows source -> local WeAreDevs Medium -> formatter, and main resolves 11/11 states in one function. Beta CF structures it successfully as an acyclic graph with 4 branches / 4 joins / 1 guard-return / 2 terminal returns and no surviving `state = ...` assignments. Readable source, formatted obfuscation, normal output, and `output/16.beta.cf.lua` match exactly for seeds 1-80, covering all nine `C/G/E × W/L/Z` observable combinations.
-
-- Sample 17: paired anonymous-function / closure-return fixture from `print("1"); local a = function(c,d) print("A"); return c+d end; print(2); print(a(1,2))`. It follows readable source -> local WeAreDevs Medium -> formatter. Main resolves exactly 2/2 states across two VM functions: root `createClosure` state 1 and fixed `createClosure4` state 2. Local compiler proof matters here: `compileFunction` chooses fixed factory arity as `#node.args + math.random(0, 5)`, so the `createClosure4` suffix is NOT source arity; the source function has two parameters and its entry body loads only `args[1]` / `args[2]`. Beta register versioning still yields 2 blocks / 25 versioned assignments / 0 cross-state versions. Beta CF now solves both closure regions, replaces `local r_v2_2 = createClosure4(2, {})` with `local r_v2_2 = function(...)` plus nested `local args = { ... }`, lowers the child terminal pair to `return r_v2_6`, and removes all dispatcher state for both regions. CLI reports `Mode: closure-regions`, 2 states, 2 closure regions, 1 inlined closure factory, and 2 terminal returns. Readable source, formatted obfuscation, normal output, and `output/17.beta.cf.lua` all execute identically as `1`, `2`, `A`, `3`. Focused synthetic coverage also gives the child two states to prove recursive use of the ordinary acyclic solver; an unresolved non-cell capture still fails closed instead of being guessed.
-
-- Sample 18: paired captured-mutable-upvalue fixture from `local a = 123; local b = function() a = a + 1; return true end; print(b()); print(a)`. It follows readable source -> local WeAreDevs Medium -> formatter. Main resolves 2/2 states across root state 1 and child state 2; Step-4 proves 1 capture slot, 1 local cell, 4/4 resolved cell accesses, and one captured-binding candidate. Beta register versioning now reports 2 ordered indexed/member effect writes and 0 skipped assignments; their base/index/RHS reads are rewritten to reaching beta versions. Beta CF then consumes those compiler upvalue stores through captured-cell recovery: removes `allocUpvalue`, initialization cell store, and `releaseUpvalue`; maps child slot 1 to the same lexical beta binding; rewrites child read/write to that binding; empties the factory capture table; and inlines the child as a real nested function. CLI reports 1 recovered cell, 1 capture slot, 2 read rewrites, 1 write rewrite, and 1 release removal. Readable source, formatted obfuscation, normal output, beta output, and beta-CF output all execute identically as `true`, `124`.
-- Sample 19: paired nested upvalue-relay fixture from `local a = 10; outer()` creating `inner()` which mutates/returns `a`, followed by two `outer()` calls and `print(a)`. It follows the required source -> local WeAreDevs Medium -> formatter flow. Main resolves 3/3 states across root/outer/inner, proves 2 capture slots sharing 1 local cell, 5/5 resolved cell accesses, and a complete cell graph. The beta upvalue stage resolves root cell -> outer slot 1 -> inner slot 1 recursively, so the innermost emitted Lua function reads and writes the root lexical beta binding directly. Beta CF reports 3 closure regions, 2 inlined factories, 1 recovered cell, 2 recovered capture slots, 3 read rewrites, 1 write rewrite, and 1 release removal. Source, formatted obfuscation, normal output, beta output, and beta-CF output all execute identically as `12`, `14`, `14`.
-- Sample 20: paired broad Luau language/library basics stress fixture supplied from the Luau test suite and refreshed by the user to avoid the earlier compiler-triggering source form. It covers global/vararg recursion, fixed-arg behavior, direct and propagated upvalues, captured function arguments, local-slot aliasing, mutable locals/upvalues, `self` capture, if/else, and arithmetic. It follows the required source -> local WeAreDevs Medium -> formatter flow. Main resolves 47/48 dispatcher leaves (1 dead leaf pruned) across 35 VM functions, with 391 reaching definitions, 16 capture slots, 9 local cells, 2 shared cells, and 36/36 upvalue accesses resolved. Beta analyzes 47 blocks / 308 versioned assignments / 21 ordered indexed/member effect writes / 6 cross-state versions / 0 skipped assignments, and terminal-return placement now reports 0 beta-stage moves because the normal scheduler already canonicalizes proven terminal payloads. The former single-state child blocker is resolved structurally: scheduler canonicalization keeps POS-register temporary/upvalue bookkeeping above the terminal return pair, then beta upvalue recovery/CF lowering succeeds. Beta CF now emits 47 states across 35 closure regions with 34 inlined factories, 5 branches, 4 joins, 1 guard-return branch, 36 terminal returns, 9 recovered cells, and 16 recovered capture slots; all terminal returns are lowered. `output/20.lua` and `output/20.beta.cf.lua` both execute as `testing language/library basics` then `PASS`.
-- Sample 21: paired reduced language-basics fixture supplied by the user. It keeps global vararg `concat`, fixed-argument `foo`, four if/else assertions, four arithmetic assertions, and a table literal with a closure-valued `tad` field. Required source -> local WeAreDevs Medium -> formatter flow succeeds. Main resolves 24/25 dispatcher leaves (1 dead leaf pruned) across 12 VM functions, with 211 reaching definitions, no capture slots/cells, and 0/0 upvalue accesses. Source, raw Medium, formatted fixture, normal output, beta-only output, and beta-CF output all execute successfully and print `testing language/library basics` then `PASS` plus a process-specific table identity. Beta now reports 24 blocks / 174 versioned assignments / 1 ordered indexed/member effect write / 6 cross-state versions / 0 skipped assignments. The root `_env[key] = closure` from global `concat = function(...)` is preserved as that ordered effect. Beta CF succeeds in `closure-regions` mode: 24 states, 12 closure regions, 11 inlined closure factories, 5 branches, 4 joins, 1 guard-return branch, 13 terminal returns, and all terminal returns lowered. `output/21.beta.cf.lua` executes successfully under LuaJIT.
-
-
-- Sample 22: paired method/member-assignment fixture from `local a = function() print("g") end; local w = {}; function w:hee() print("hee", self) end; w.yai = function(a) print("yai", a) end; w:yai(); w:hee()`. It follows readable source -> local WeAreDevs Medium -> formatter. Main resolves 4/4 states across 4 VM functions, with 41 reaching definitions, no capture slots/cells, and 0/0 upvalue accesses. Beta reports 4 blocks / 33 versioned assignments / 2 ordered indexed/member effect writes / 0 cross-state versions / 0 skipped assignments. Beta CF succeeds in `closure-regions` mode with 4 closure regions, 3 inlined closure factories, and all 4 terminal returns lowered. Source, raw Medium, formatted fixture, normal output, beta output, and beta-CF output all execute with matching behavior: `yai <w table>` then `hee <same w table>`; table addresses vary by process.
-
-- Sample 23: tracked capture/closure stress fixture currently resolves 14/15 dispatcher leaves (1 dead leaf pruned) across 8 VM functions, with 130 reaching definitions, 2 capture slots, 2 local cells, and 8/8 upvalue accesses resolved. Beta reports 14 blocks / 107 versioned assignments / 4 ordered indexed/member effect writes / 4 cross-state versions / 0 skipped assignments and 0 terminal-placement moves after scheduler canonicalization. Beta CF now succeeds with 14 states, 8 closure regions, 7 inlined factories, 3 branches, 2 joins, 1 guard-return branch, 9 terminal returns, 2 recovered cells, and 2 recovered capture slots; all terminal returns are lowered. The previous unused-argument tail (`args[1]` after the return payload) is now kept above the terminal pair. The user's larger current working-copy variant is intentionally uncommitted, but was also validated without staging it: 29/30 leaves, 27 VM functions, 9 recovered cells / 16 capture slots, beta CF 29 states / 27 closure regions / 26 inlined factories, and exact source/normal/beta/beta-CF runtime output `testing language/library basics`, `o`, `l`, `d`, `f`.
-- Sample 24: paired numeric `for` regression from `for i = 1,10 do print(i) end`. Normal deobfuscation resolves 4/4 states with one loop-carried lifetime. Beta register versioning recognizes the compiler split branch, proves 4 cross-state versions, prunes all unused physical `r1`..`r6` declarations, and leaves only `local ReturnVal` in the VM header. Beta-CF now consumes the exact local-compiler numeric-for lowering into a real `for <loopVar> = <start>, <final>, <step> do ... end`, removes the compiler check/sign/current/backedge machinery, removes the loop-variable copy/cleanup, lowers the final return, and executes successfully. Fresh randomized Medium tests pass source/raw/formatted/normal/CF parity for `1,10,1` -> `1..10`, `1,2,2` -> `1`, and `3,1,-1` -> `3,2,1`; a single source containing all three loops also recovers 3 numeric-for loops with exact runtime parity. Generic/non-matching cycles still fail closed.
-- Sample 25: mixed numeric-for regression. Source executes statements before/after the loop, an outer `do ... end`, an inner `do ... end`, an `if/else` inside `for i = 1, 5, 1`, and a statement after the branch within each iteration. Normal resolves 7/7 states. Beta reports 7 blocks / 64 versioned assignments / 5 cross-state versions / 0 skipped assignments and prunes 8 physical register declarations. Beta-CF recovers 1 numeric `for`, 1 internal branch, and 1 join; the emitted `if/else` is nested inside the structured loop and the post-branch body stays inside the loop. Source, raw Medium, formatted, normal, and beta-CF all execute with exact stdout parity (`before`, `outer-do 5`, loop/inner-do/odd-even/after-if for 1..5, then `after`). The handler does not claim source lexical `do` block recovery; the current proof is control-flow/runtime preservation.
-- Sample 26: nested/sequential numeric-for regression. Source has a top-level `for a = 1,2,1` before an outer `for i = 1,3,1`; that outer loop contains an inner `for j = 1,2,1` with an `if/else`; after the outer loop a descending `for k = 3,1,-1` runs. Normal resolves 16/16 states with 7 loop-carried lifetimes. Beta reports 16 blocks / 118 versioned assignments / 18 cross-state versions / 0 skipped assignments and prunes 13 physical register declarations. Beta-CF recovers 4 numeric `for` loops total, including the inner loop nested inside the outer loop, plus 1 branch and 1 join. Source, raw Medium, formatted, normal, and beta-CF all execute with exact stdout parity. This proves the iterative numeric-for collapse handles both sequential loops and nested numeric loops with branched inner bodies.
-- Sample 27: focused pre-test `while` regression from `while math.random(1,2) == 1 do print(27) end`. It follows readable source -> local WeAreDevs Medium -> formatter. Normal resolves 4/4 states in one VM function with 19 reaching definitions, no captures/cells, and no unresolved accesses. Beta reports 4 state blocks / 14 versioned assignments / 5 preserved final state/return writes / 0 ordered effect writes / 0 cross-state versions / 0 skipped assignments and prunes 4 physical register declarations. `a265716` adds structural while recovery: one outside preheader enters a two-way check/header; the true successor is an acyclic body region whose normal paths latch back to the header; the false successor is the exit. Numeric-for signatures are excluded so generic while recovery cannot steal a `for`. The collapsed presentation is `while true do`, condition beta operations, `if not (<condition>) then break end`, body, `end`; state transitions are removed. Source/raw/formatted/normal/beta/beta-CF match exactly across deterministic seeds 1-20. CLI reports 1 while loop / 0 numeric-for loops / 1 terminal return.
-
-- Sample 28: mixed loop/control-flow stress fixture. Source contains a `for` inside a `while`, a `while` inside a `for`, multiple nested `if/else` branches, nested `do ... end` blocks, and a separate local function whose body contains its own `while` + numeric `for` + branch. Normal resolves 32/32 states across 2 VM functions with 208 reaching definitions, 6 joins, 26 cross-block lifetimes, 11 loop-carried lifetimes, no captures/cells, and no unresolved accesses. Beta reports 32 blocks / 174 versioned assignments / 21 cross-state versions / 0 skipped assignments / 11 pruned physical declarations. Beta-CF succeeds in closure-region mode with 3 numeric `for` loops, 3 guard-break `while` loops, 4 branches, 4 joins, 2 closure regions, 1 inlined factory, and 2 lowered terminal returns. Source, raw Medium, formatted, normal, and beta-CF stdout are byte-identical (378 bytes). The standalone `output/28.beta.lua` still fails at runtime on a nil cross-state beta local; this is the known beta-local hoisting/executability gap, while CF output is executable and correct.
-
-- Sample 29: focused `repeat ... until` regression from `repeat; print(12); until math.random(1,2) == 1`. Normal resolves 4/4 states and beta reports 4 blocks / 23 versioned assignments / 0 skipped assignments. `b3d7aa3` adds structural repeat recovery: the real check has `true -> exit`, `false -> body`, every body path reaches the check, and the unique external preheader enters the body. The local compiler also evaluates the same repeat condition once in the preheader and discards it before the first body execution. Beta-CF now identifies that duplicated compiler-added condition by original-operation AST/data-flow equivalence and removes the entire discarded slice, even when effectful, because the project goal is recovery of readable-source semantics. Sample 29 emits one real `repeat ... until`, removes 9 compiler-junk condition operations, removes all dispatcher transitions, and source vs beta-CF runtime matches exactly across deterministic seeds 1-50.
-
-- Sample 30: mixed repeat/control-flow stress fixture. Source covers `for` inside `repeat`, `while` inside `repeat`, `repeat` inside `for`, `repeat` inside `while`, nested `if/else`, `do` blocks, a nested function containing `repeat + numeric for + branch`, and a side-effectful repeat condition. Normal resolves 42/42 states across 3 VM functions with 247 reaching definitions, 32 cross-block lifetimes, 14 loop-carried lifetimes, no captures/cells, and no unresolved accesses. Beta reports 42 blocks / 202 versioned assignments / 24 cross-state versions / 0 skipped assignments. Beta-CF succeeds in closure-region mode with 5 repeat loops, 3 numeric-for loops, 2 while loops, 3 branches, 3 joins, 3 closure regions, 2 inlined factories, and all 3 terminal returns lowered. The side-effect fixture proves source restoration: raw Prometheus/normal output misses the first visible iteration because of the compiler's extra discarded pre-condition call, while beta-CF removes that compiler-added evaluation and matches the readable source byte-for-byte (555 bytes). This stress case also exposed and fixed a scope-validator presentation bug: valid Lua numeric-for shadowing such as `local x = 1; for x = x, limit, step do` is now accepted only when the structured numeric-for variable shadows a proven ancestor declaration; unrelated duplicate beta locals remain rejected.
-
-
-- Samples 31-44 are the focused loop-control matrix (generic iterator `for ... in` intentionally excluded by user request). All paired sources compile through local WeAreDevs Medium + formatter; normal deobfuscation and beta register versioning succeed with 0 skipped assignments.
-  - Sample 31: explicit `break` in while/numeric-for/repeat now structures successfully as 1 numeric-for + 1 while + 1 repeat. Source/raw/formatted/normal/beta-CF stdout are identical (131 bytes).
-  - Sample 32: `continue` in numeric-for/while/repeat now completes CF as 1 numeric-for + 1 while + 1 repeat. Proven for/while latch paths emit native Luau `continue`; repeat uses fallthrough when its condition has setup statements so those statements cannot be skipped. Raw/formatted/normal remain identical (219 bytes). LuaJIT cannot execute native `continue`, and re-obfuscating this particular CF hits an existing local-compiler `Unresolved Upvalue` bug, so do not claim direct runtime CF parity for sample 32 itself.
-  - Sample 33: nested break/continue ownership now structures successfully as 1 numeric-for + 1 while with no `_beta_phi` helper. The source's `repeat ... break ... until false` has an unreachable real condition block after compilation and is semantically flattened rather than reconstructed just for appearance. Re-obfuscating the Luau CF and executing it matches the original raw output exactly (216 bytes).
-  - Sample 34: early `return` inside while/numeric-for/repeat now structures successfully. Return+latch branches prefer source-shaped `if condition then return ... end` and do not invent `continue`. Source/raw/formatted/normal/beta-CF stdout are identical (26 bytes).
-  - Sample 35: multi-state captured-cell recovery now succeeds. Beta-CF recovers 4 cells / 4 capture slots, rewrites 10 reads and 2 writes, removes 4 release operations, and structures 1 numeric-for + 1 while + 1 repeat across 4 closure regions. Each cell's allocation state must dominate all owner-side cell occurrences; cells allocated inside loop bodies stay scoped inside those bodies, while preheader-allocated cells remain visible to dominated loop states. Source/raw/formatted/normal/beta-CF stdout are byte-identical (179 bytes).
-  - Sample 36: side-effectful multi-state short-circuit conditions now structure as 1 while + 1 repeat across 7 closure regions. Control-only joins are forwarded structurally with no `_beta_phi`. Repeat duplicate-condition recovery selects the unique maximal duplicated condition CFG and removes 19 compiler-junk operations. Readable source and beta-CF stdout are exactly identical (219 bytes), intentionally differing from raw Prometheus's 198-byte miscompiled behavior.
-  - Sample 37: source mutation of the numeric-for variable now succeeds. `matchCompilerNumericFor` keeps the compiler copy/cleanup as loop scaffolding, preserves additional same-binding body writes as source mutations, and rejects any body write to proven hidden current/step/final/sign machinery. Beta-CF recovers 1 numeric-for and preserves `i = i + 10`; source/raw/formatted/normal/beta-CF stdout are byte-identical (136 bytes).
-  - Sample 38 remains the positive deeply-branched loop-body regression: 1 numeric-for + 1 while + 1 repeat, 8 branches, exact source/raw/formatted/normal/beta-CF parity (303 bytes).
-  - Samples 39-44 add extra stress after the first loop-control implementation: (39) numeric-for continue followed by an unconditional-break repeat; (40) continue crossing a nested `do` local scope; (41) while continue; (42) repeat continue with condition setup; (43) inner while break plus outer numeric-for continue; (44) return + continue + break in one numeric-for inside a nested function. All six complete normal/beta/CF with 0 skipped beta assignments. Samples 40/42/43 execute directly with raw/formatted/normal/beta-CF parity; samples 39/41/44 contain native Luau `continue`, so their CF was re-obfuscated through the local Prometheus compiler and the resulting LuaJIT execution matches the original raw output exactly.
-  - Sample 45 is the minimal captured numeric-for-loop-variable proof fixture: `for i = 1,2 do local function readI() return i end; print(readI()) end`. Normal resolves root states 1-4 plus child entry state 5; beta has 0 skipped assignments and exact source/raw/formatted/normal runtime output `1`, `2`. Root state 3 contains the complete owner-side cell lifecycle: `cell = allocUpvalue()`, child factory capture of that cell, `upvalueValues[cell] = currentLoopValue`, release, closure call, then backedge. Child state 5 only reads `upvalueValues[upvalues[1]]`. Beta-CF now uses that proof: the allocation state dominates the full owner-side cell footprint, the capture-before-init ordering emits `local binding` at allocation, and numeric-for recovery consumes the recovered captured-loop declaration/init as compiler scaffolding. The result is 1 numeric-for + 1 recovered cell/slot with exact source/raw/formatted/normal/beta-CF output `1`, `2`. Capture-before-initialization ordering still requires `local binding` at allocation followed by assignment at the original initialization point.
-  - Sample 46 is the minimal numeric-for source-variable mutation proof fixture: `for i = 1,2 do i = i + 10; print(i) end`. Normal resolves 4 states; beta has 0 skipped assignments and source/raw/formatted/normal runtime output `11`, `12`. State 1 sets numeric-for start/final/step/current machinery; state 2 increments/checks the hidden current value; state 3 begins with compiler copy `loopVar = current`, then source mutation `tmp = loopVar + 10; loopVar = tmp`, then source use, compiler `loopVar = nil` cleanup, then backedge. The hidden induction/current register is never written from the mutated visible loop variable. Beta-CF now preserves that extra visible-loop-variable write while removing only compiler definition/cleanup scaffolding. Hidden `current` remains independent and protected from body writes; the result is 1 numeric-for with exact source/raw/formatted/normal/beta-CF output `11`, `12`.
-
-### Performance history / boundary
-
-
-### Most recent commits to recognize
-
-`db021b3 Normalize VM register names`
-`fd6a359 Document VM register naming`
-`638cca8 Track semantic VM names`
-`6e76c14 Document semantic VM naming`
-`d6a96bd Add natural register overflow regression`
-`0b60f90 Record overflow regression`
-`b7f6185 Schedule overflow VM registers`
-`7442545 Document overflow register scheduling`
-`bf7b107 Run semantic naming with VM helpers`
-`edc805b Restore paired samples 2 through 5`
-`2643ebc Document restored sample coverage`
-`56784a1 Add beta register versioning`
-`57b8dcb Keep VM state registers unversioned in beta`
-`4717198 Add beta branch sample 11`
-`88a2dc5 Preserve final VM special writes in beta`
-`5ae6133 Preserve only terminal return tables in beta`
-`826ede5 Propagate proven beta register versions across states`
-`f93cc7a Keep beta versions block local`
-`cb2a1af Track beta register lifetime epochs`
-`9e9800e Add beta register flow graph tool`
-`95aebdc Analyze beta register epochs by data flow`
-`555c588 Add beta single-state control-flow output`
-`ef924ef Restrict beta return payload sinking`
-`aa1766f Preserve compiler-shaped beta return payloads`
-`7685b0d Add real return-table compiler fixture`
-`69a84c2 Add returned-local sample 13`
-`25fbddb Add early-return branch sample 14`
-`8b9ffdb Merge returned local beta lifetimes`
-`d2ad98b Lower beta terminal return payloads`
-`f6345a8 Structure acyclic beta control flow`
-`0dc783f Handle beta shared continuation branches`
-`e2cace8 Inline empty-capture beta closure regions`
-`757018e Rewrite beta reads in indexed assignments`
-`39f8d40 Recover beta captured upvalues`
-`1d0ce57 Add nested upvalue relay sample 19`
-`e3ca3c2 Add Luau basics stress sample 20`
-`8dd07f5 Refresh Luau basics sample 20`
-`95dda19 Add reduced language basics sample 21`
-`10e9233 Document reduced sample 21 results`
-`f16b244 Support beta indexed effect writes`
-`9fbb616 Canonicalize terminal VM returns`
-`d919b11 Hoist captured beta bindings`
-`7bce6a9 Add method assignment sample 22`
-`5fb7474 Add language basics sample 23`
-`9474c28 Add numeric for-loop sample 24`
-`08b53ca Recover Prometheus numeric for loops`
-`5f7c7f4 Recover numeric for loops with branched bodies`
-`48daa23 Add mixed numeric for sample 25`
-`40b41fa Add nested numeric for sample 26`
-
-### New-chat operating instruction
-
-When the user pastes the resume prompt from this snapshot, do NOT merely summarize it. First read `CONTEXT.md`, inspect Git status/log, and then continue the user’s new requested task by actually editing/testing/committing/pushing as needed. Never ask them to repeat information already in this file.
-
-## Reusable New-Chat Prompt
-
-Use this prompt when starting a new ChatGPT chat for this project:
-
-```text
-Continue my Prometheus Lua/Luau deobfuscator project.
+## Project
 
 Workspace:
-C:\Users\reala\Desktop\!workspaces\promdeobf ova\new promdeobf
+`C:\Users\reala\Desktop\!workspaces\promdeobf ova\new promdeobf`
 
 Repository:
-https://github.com/GooseGoldenGoose/new-promdeobf.git
-Branch: main
+`https://github.com/GooseGoldenGoose/new-promdeobf.git`
 
-BEFORE DOING ANYTHING:
-1. Read CONTEXT.md completely. Treat it as the authoritative live handoff.
-2. Do not ask me to repeat decisions already written in CONTEXT.md.
-3. Run git status --short --branch.
-4. Run git log --oneline --decorate -8.
-5. Continue from the newest state recorded in CONTEXT.md and Git; do not assume this prompt's commit list is newer than the repository.
+Authoritative branch: `main`.
 
-MANDATORY WORKFLOW:
-- Use the connected native Windows shell for actual project work.
-- Keep CONTEXT.md continuously updated after meaningful implementation, testing, analysis, or design decisions.
-- Compact/remove stale or superseded context instead of accumulating contradictory notes.
-- Every tracked project code/content change, even tiny, gets a focused Git commit and git push origin main.
-- Keep conceptually separate changes in separate commits when practical.
-- Stage ONLY files related to the current change.
-- Never stage or modify unrelated user working-copy files.
-- sample/20.source.lua, sample/23.source.lua, and sample/23.txt may contain unrelated user edits; inspect status and leave them untouched unless I explicitly ask otherwise.
-- formater/, output/, raw sample/*.source.obfuscated.lua, deobf.bat, and sample/spacial.txt may be intentionally untracked; never stage them unless I explicitly ask.
-- Every tracked sample/N.txt must have a matching tracked sample/N.source.lua.
-- Generated raw Prometheus sample/N.source.obfuscated.lua files stay untracked unless I explicitly ask otherwise.
-- Reparse transformed Lua and run focused/full regressions after changes.
-- Runtime-test source/raw/formatted/normal/beta-CF wherever executable. For Luau native continue that LuaJIT cannot execute, use the established local Prometheus re-obfuscation validation path when appropriate.
-- Fail closed whenever structural proof is incomplete. Never make a fixture-specific guess.
+Current best verified solver checkpoint:
+`2a55d22 Optimize beta control-flow hot paths`
 
-DEOBFUSCATOR RULES:
-- Everything must be structural/generalized/dynamic.
-- NEVER hardcode sample IDs, normalized/original state IDs, random register names, random strings/constants, closure suffixes/arities, offsets, or fixture-specific values.
-- Fix root causes in AST/CFG/data-flow/scope/upvalue analysis, not emitted-text cleanup hacks.
-- Preserve evaluation order, call count, effects, multi-return, loops, branches, lexical ownership, globals, object/table identity, closure captures, mutable upvalues, and source-visible behavior.
-- Physical VM register != source binding. Dispatcher nesting != lexical scope.
-- Globals stay globals unless lexical provenance proves otherwise.
-- Namecall ':' semantics must be preserved.
-- Local compiler authority for Prometheus behavior is:
-  C:\Users\reala\Desktop\!workspaces\promdeobf ova\wearedev obf
-  Compiler source: src\prometheus\compiler\compiler.lua
-- Do not substitute public/canonical Prometheus unless I explicitly ask.
+`main` and `origin/main` are aligned at that commit. Prior beta checkpoint:
+`485130e Checkpoint beta solver working tree`.
 
-FIXTURE PIPELINE:
-Readable sample/N.source.lua
--> local WeAreDevs Prometheus Medium
--> formater\luau-format.exe input.txt --luraph --output=out.txt
--> tracked sample/N.txt
--> node main.js sample/N.txt output/N.lua
--> node tools/beta-register-versions.js output/N.lua output/N.beta.lua
--> node tools/beta-control-flow.js output/N.lua output/N.beta.cf.lua
+Treat this file as the authoritative handoff. If Git is newer, Git wins.
 
-CURRENT BETA-CF CAPABILITIES (read CONTEXT.md for newest details):
-- acyclic if/else/shared joins/early return
-- multiple closure regions and proven captured-upvalue recovery
-- numeric for
-- while
-- repeat-until, including removal of the local compiler's discarded first repeat-condition evaluation to restore source semantics
-- nested/sequential mixtures of for/while/repeat
-- break
-- proven continue
-- early return inside loops
-- multi-state short-circuit loop conditions without control-only _beta_phi helpers
-- captured cells in multi-state owners when CFG allocation dominance proves lexical placement
-- captured numeric-for loop variables
-- source mutation of visible numeric-for variables while hidden induction machinery remains independent
+## Mandatory Workflow
 
-IMPORTANT CURRENT CHECKPOINTS:
-- 0237d60 Recover captured loops and mutated for variables
-- 244bd0f Document captured loop recovery
-- 4cdc9c3 Add minimal loop blocker samples 45-46
-- 46f3973 Recover structured loop control edges
-- 66cfa59 Add loop control stress samples 39-44
-- 11a5629 Optimize deobfuscation pipeline passes
-Read git log because there may be newer commits.
+- Read this file first in a new chat.
+- Run `git status --short --branch` and `git log --oneline --decorate -8` before changing anything.
+- Do not ask the user to repeat decisions already recorded here.
+- Use the connected native Windows shell for project work.
+- Every tracked project code/content change gets a focused commit and `git push origin main`.
+- Stage only files belonging to the current change.
+- Never clean/reset/overwrite/stage unrelated working-copy files.
+- Keep `CONTEXT.md` current, but replace stale history instead of endlessly appending.
+- Reparse generated Lua after transformations.
+- Run focused regressions and runtime parity where executable.
+- Fail closed when structural proof is incomplete.
+- End every project-related turn with exactly: `Done for this turn — you can prompt now.`
 
-CURRENT REGRESSION STATE AT THIS HANDOFF:
-- All 12 focused regression suites pass.
-- Loop/CF fixtures 24-46 all generate structured beta-CF successfully.
-- Sample 35 now recovers 4 captured cells / 4 capture slots and structures numeric-for + while + repeat with exact runtime parity.
-- Sample 37 now preserves source mutation of the numeric-for variable with exact runtime parity.
-- Minimal sample 45 proves captured numeric-for loop-variable recovery.
-- Minimal sample 46 proves mutated visible numeric-for variable recovery.
-- Sample 47 is the tracked anti-tamper/shared-short-circuit regression and now passes normal + beta + beta-CF. The same former shared-arm blocker in untracked `sample/spacial.txt` is also solved; keep both as evidence for dominance-proven ReturnVal join recovery and safe CF tail canonicalization.
-- Sample 6 is also unblocked by the new multi-state captured-cell dominance logic and has exact runtime parity.
-- Generic iterator `for ... in` is implemented for the proven two-variable local-compiler shape across samples 53-59, including `next, table`, custom iterator factories, `pairs`, branches, break, continue, and captured loop variables. Other unproven generic-for arities/shapes remain fail-closed.
+### Preserve unrelated working-copy files
 
-COMMUNICATION STYLE FOR PROJECT WORK:
-- Caveman mode.
-- Talk as little as possible.
-- Direct and technical.
-- Do the work instead of narrating plans.
-- Very short updates such as Found:, Fixed:, Tested:, Commit:.
-- No filler and no unnecessary questions if enough information exists.
-- If I ask why/explain, then explain normally.
+Latest known user/unrelated tracked edits:
 
-Do actual implementation/testing/commits/pushes, not just suggestions.
-At the end of EVERY project-related turn, the final line must be EXACTLY:
-Done for this turn — you can prompt now.
+```text
+sample/20.source.lua
+sample/23.source.lua
+sample/23.txt
 ```
-## Latest Sample 51 Config Checkpoint (2026-08-24)
 
-- `sample/51.source.lua` is `print("HI")`; current local Medium preset now runs **Anti Tamper** before Vmify. Raw obfuscated output executes as `HI`.
-- Formatter normalization completes, but the formatted fixture triggers `Tamper Detected!`; therefore formatted, normal deobfuscated, and beta-CF runtime also hit the tamper guard. This is a formatter-vs-line-sensitive anti-tamper issue, not a structural deobfuscation failure.
-- Normal deobfuscation succeeds: 45/53 dispatcher leaves, 8 dead pruned, 7 VM functions. Beta succeeds: 308 versioned assignments, 0 skips. Beta-CF succeeds: 45 states, 7 closure regions, 2 numeric-for loops, 1 while, 13 branches, 12 joins, 14 recovered cells.
-- Standalone beta runtime still fails with the known cross-state beta-local presentation issue (`attempt to call local r_v1_8 (a nil value)`).
+Common intentionally untracked items:
 
+```text
+formater/
+output/
+sample/*.source.obfuscated.lua
+sample/sixzens.txt
+sample/spacial*.txt
+```
 
-## Latest Sample 53 Generic For-In Fixture (2026-08-24)
+Do not stage these automatically.
 
-- `sample/53.source.lua` is `for i,v in pairs({1,2,3}) do print(i,v) end`, generated through the required local Medium -> formatter pipeline. Source, raw obfuscated, formatted, normal deobfuscated, and beta-CF all execute exactly as `1 1`, `2 2`, `3 3`.
-- Normal deobfuscation succeeds with 4/4 states in one VM function. Step-4 reports 25 definitions, one join, 5 cross-block lifetimes, and one loop-carried lifetime.
-- Local compiler `ForInStatement` lowering (compiler.lua 1665-1754) evaluates/pins iterator/state/control registers, then its check block emits a multi-target iterator call equivalent to `control, secondVar = iterator(state, control)` followed by `state = control and body or final`; body copies the control value into the first source loop variable and jumps back to the check.
-- Beta now recognizes identifier-target multi-call assignment as one atomic `multi-call-write` graph operation. RHS reads are resolved before written targets are invalidated, preserving Lua multi-return/read-before-write semantics without splitting the call. Sample 53 beta now has 18 versioned assignments, 2 cross-state versions, and **0 skipped assignments**.
-- Beta-CF now has a dedicated local-compiler generic-for matcher/collapser that runs after numeric-for and before while. It proves the iterator/state/control call protocol, unique preheader, loop body/backedge, first-variable copy, and both compiler cleanup writes; then emits a real Lua `for first, second in iterator, invariantState, initialControl do ... end`. Sample 53 reports 1 generic-for, 0 numeric-for/while/repeat, removes dispatcher/check/copy/cleanup scaffolding, lowers the terminal return, and matches runtime exactly. The current proof intentionally covers the proven two-variable local-compiler shape; other generic-for arities/shapes remain fail-closed until separately proven.
+## Core Rules
 
-- Generic-for CF solution design: add a dedicated compiler-shaped multi-return iterator-step operation instead of splitting `control, secondVar = iterator(invariantState, control)`. RHS reads must be resolved from the pre-assignment versions, then both LHS writes become one atomic operation. A new `matchCompilerGenericFor` should require the local compiler topology `preheader -> check`, check multi-return call plus `control and body or exit`, body-entry copy `firstVar = control`, and body latch back to check; prove iterator/invariant-state are not body-written and recognize/remove compiler loop-variable cleanup. Emit a structured generic-for node using the proven iterator triple (`for firstVar, secondVar in iterator, invariantState, initialControl do ... end`) while retaining unrelated preheader evaluation. Do not require folding that triple back to the original `pairs(...)` expression for initial CF correctness. Run generic-for collapse before generic while, and make while explicitly decline proven generic-for signatures so it cannot degrade the source loop into `while true`. Existing loop-body structuring can then handle nested branches/break/continue once the generic-for scaffolding operations are removed. Captured generic-for variables are now proven by sample 59: local compiler ForIn promotion allocates a cell in a temporary register, initializes it, aliases the cell id into the source loop-variable register, captures that alias, and releases it on the latch. beta-upvalues recognizes only this same-state compiler-shaped alias with exact initialization/alias-write/release proof, records recovered lexical bindings, and the generic-for matcher consumes those captured bindings without requiring ordinary nil cleanup.
+Everything must be structural, generalized, and dynamic.
 
-## Latest Generic For-In Matrix 54-59 (2026-08-24)
+Never hardcode sample IDs, filenames, VM state IDs, register names, random constants/strings, closure suffixes/arities, offsets, methods, URLs, or fixture-specific values.
 
-- Samples 54-59 were generated through local Medium -> formatter. All normal deobfuscations succeed; all beta runs report **0 skipped assignments**; all beta-CF runs recover exactly 1 generic-for and 0 while/repeat.
-- Sample 54 proves `for i,v in next,tb` with exact source/raw/formatted/normal/CF runtime parity: `next 1 10`, `next 2 20`, `next 3 30`. Sample 55 proves a custom iterator factory returning iterator/state/control; sample 56 proves `pairs(asda)`; both have exact runtime parity.
-- Sample 57 proves nested if/else plus break inside generic-for (9 states, 2 branches) with exact runtime parity. Sample 58 proves native Luau continue (6 states, 1 branch); raw/formatted/normal outputs match, and re-obfuscating the beta-CF output then executing under LuaJIT matches exactly: iterations 1,3,4 then `after-continue`.
-- Sample 59 proves a nested function capturing both generic-for variables. The local compiler ForIn upvalue fix allocates each cell through a temporary, writes `upvalueValues[temp] = loopValue`, copies the cell id into the source variable register, captures that alias, then releases the alias on the latch. beta-upvalues now recognizes only this compiler-shaped alias under same-state/order/use proof, removes alias/release machinery, rewrites captures to lexical bindings, and exposes recovered binding metadata to CF. beta-CF then emits one generic-for with 2 recovered cells / 2 capture slots; source/raw/formatted/normal/CF runtime is exactly `cap-b 3`, `cap-a 6`, `cap-b 9`.
-- Focused regressions cover both the ForIn cell-alias recovery and captured generic-for structuring. All 12 focused project suites pass after the change, and CF outputs 54-59 all reparse successfully. Other generic-for arities or cell-alias shapes remain fail-closed unless separately proven.
+Fix the earliest responsible AST/CFG/data-flow/scope/upvalue cause. Never patch final emitted text to hide bad analysis.
 
-## deobf.bat Helper (2026-08-24)
+Preserve evaluation order, call count, side effects, multi-return behavior, lexical ownership, globals vs locals, closure identity, mutable upvalues, table/object identity, zero-iteration loop behavior, break/continue/return, and namecall `:` semantics.
 
-- `deobf.bat` is now the interactive/sample-folder runner. It accepts a sample filename such as `52`, `52.txt`, or `spacial.txt`, strips any supplied path, resolves input only under `sample\`, and writes matching outputs under `output\`.
-- Modes are `normal`, `beta`, and `cf` (also accepted as `1`, `2`, `3`). Double-click/no-argument use prompts for filename and mode; optional CLI arguments also work, e.g. `deobf.bat 52 cf`.
-- Every mode first runs `node main.js sample\<file> output\<base>.lua`; beta then runs `tools\beta-register-versions.js` on the normal output; CF runs `tools\beta-control-flow.js` directly on the normal output, not on the standalone beta file. Missing sample input or any failed stage returns nonzero.
-- Verified with sample 52: normal, beta, and CF modes all exit 0.
+A physical VM register is not one source binding. Dispatcher nesting is not lexical scope. The VM `state`/POS register can also hold ordinary compiler temporaries.
 
-## Latest Sample 52 PRNG/Decrypt Fixture (2026-08-24)
+Globals such as `game`, `pairs`, `ipairs`, `table.insert`, etc. remain globals unless lexical provenance proves otherwise.
 
-- `sample/52.source.lua` materializes the user-provided generator placeholders as concrete numeric literals only so the fixture is standalone; no transform depends on those values.
-- Current local Medium run for sample 52 did not execute Anti Tamper; it went directly through Vmify -> Constant Array -> Numbers To Expressions -> Wrap in Function.
-- Normal deobfuscation succeeds with 20/20 states across 3 VM functions, 10 capture slots, 7 local cells, and 30/30 upvalue accesses resolved.
-- Beta succeeds with 245 versioned assignments, 19 ordered effect writes, 21 cross-state versions, and 0 skips.
-- Beta-CF succeeds with 20 states, 3 closure regions, 2 numeric-for loops, 2 repeat loops, 2 branches/2 joins, 7 recovered cells, 10 recovered capture slots, and 3 lowered terminal returns.
-- Runtime/source parity: readable source, raw obfuscated, formatter-normalized, normal deobfuscated, and beta-CF all exit 0 with no output.
+## Prometheus Authority
 
+When the user says Prometheus, use the local WeAreDevs compiler:
 
-## Latest Sample 60 Broad Control-Flow Smoke Fixture (2026-08-24)
+`C:\Users\reala\Desktop\!workspaces\promdeobf ova\wearedev obf`
 
-- Tracked `sample/60.source.lua` / `sample/60.txt` is the broad language/control-flow smoke fixture. It covers empty `do`, `if`, `while`, numeric-for, generic-for and repeat blocks; locals/tables/member/index access; named and anonymous functions; if/elseif/else and returns; mutable captured closures; method definitions/namecall; numeric-for with continue/break; `pairs` and direct `next, table` generic-for; while with nested block + continue/break; repeat-until; nested numeric/while/generic loops; captured generic-for variables; and logical expressions. The `pairs` observable is reduced to deterministic `pairs-sum 16` so cross-process table iteration order cannot invalidate parity.
-- Fresh local Medium -> formatter -> normal -> beta -> beta-CF succeeds. Normal resolves 80/81 dispatcher leaves (1 dead pruned) across 8 VM functions. Beta versions 379 assignments with 0 skips, 270 register epochs, 18 merged definitions, and 24/24 cleanups. Beta-CF succeeds in closure-region mode with 80 states, 14 branches / 6 joins / 2 guard-return branches, 3 numeric-for loops, 5 generic-for loops, 3 while loops, 2 repeat loops, 10 terminal returns, 8 closure regions, and 4 recovered upvalue cells / 4 capture slots.
-- Raw obfuscated, formatter-normalized, and normal deobfuscated execution are byte-for-byte identical. Beta-CF contains native Luau `continue`, so direct LuaJIT execution is unavailable. Re-obfuscating the CF output through the local compiler currently hits its known `Unresolved Upvalue, this error should not occur!` compiler bug; therefore do not claim CF runtime parity for sample 60, only successful parse/structure generation plus exact raw/formatted/normal parity.
-- Sample 60 exposed and fixed four generalized issues in `1619a15`: (1) ordinary beta lifetime mutation merges now require compiler-shaped identifier-copy writeback, preventing direct call/literal scratch values from absorbing older same-register allocations; cleanup/return anchored backward merging follows the same restriction; (2) upvalue cleanup recognizes the captured cell from the `releaseUpvalue(cell)` argument even when beta gives the dead result a different emitted target, and fails closed if that result is live; (3) numeric-for cleanup/visible-variable matching uses the proven original physical target as well as emitted beta names, allowing empty/unused loop variables whose copy and cleanup get different beta versions; (4) the structured-scope validator permits the same emitted loop-variable name in separate sibling for-loop scopes while still rejecting same-scope duplicates/unrelated raw locals and validating all reads against ancestor declarations.
-- Focused regressions cover scratch fan-in lifetime separation, dead renamed release results, numeric-for copy/cleanup with different emitted names, and sibling generic-for variable reuse. All 12 focused regression suites pass after these fixes.
+Compiler source:
+`src\prometheus\compiler\compiler.lua`
 
+Do not substitute public/canonical Prometheus unless explicitly asked.
 
-## Latest Sample 61 Roblox Namecall/Server-Hop Fixture (2026-08-24)
+Current observed local Medium preset:
 
-- Tracked `sample/61.source.lua` / `sample/61.txt` is the user-provided Roblox server-hop/admin-detection script. It includes an initial `repeat task.wait(5) until game:IsLoaded()`, chained namecalls, service lookups, tables, early returns, nested pcall closures, mutable locals, a global function assignment, multiple HTTP-request fallbacks, JSON encode/decode, file-cache calls, `ipairs` loops with break, PlayerAdded callback capture, and a spawned `while task.wait(5)` loop. The source is preserved exactly, including `WebhookURL = " "` and the `🗺\239\184\143 Map & PlaceID` string escape.
-- Fresh local Medium -> formatter -> normal -> beta -> beta-CF succeeds without deobfuscator changes. Normal resolves 94/94 dispatcher leaves across 10 VM functions; Step-4 reports 795 definitions, 27 capture slots, 14 local cells, 5 shared cells, and 66/66 upvalue accesses resolved.
-- Beta succeeds with 681 versioned assignments, 17 ordered effect writes, 50 cross-state versions, 39/39 cleanups, and **0 skipped assignments**.
-- Beta-CF succeeds in closure-region mode: 94 states, 708 statements, 36 branches / 31 joins / 6 guard-return branches, 2 generic-for loops, 1 while, 1 repeat, 16 terminal returns, 10 closure regions, 9 inlined factories, 14 recovered upvalue cells / 27 capture slots, 49 read rewrites / 3 write rewrites, and 10 release removals. The initial `repeat`, `ipairs` loops, spawned while loop, and nested closure graph are all structurally recovered.
-- The source depends on Roblox/executor globals and services (`game`, `task`, `Players`, `HttpService`, `syn`, request APIs, file APIs), so no standalone LuaJIT runtime parity claim is made. The local Prometheus compiler parsed/obfuscated the source successfully, formatter/normal/beta/CF all parsed/generated successfully, key method-name constants remain present in CF (`IsLoaded`, `GetService`, `GetRankInGroup`, `JSONEncode`, `JSONDecode`, `PostAsync`, `HttpGet`, `GetPlayers`, `TeleportToPlaceInstance`), and all 12 focused project regression suites pass.
+- LuaU
+- EncryptStrings enabled
+- Vmify
+- ConstantArray
+- NumbersToExpressions
+- WrapInFunction
+- AntiTamper absent/disabled in the current Medium pipeline
 
+Do not edit the external compiler preset unless explicitly asked.
 
-## Sample 61 with EncryptStrings + AntiTamper Enabled (2026-08-24)
+## Fixture / Run Pipeline
 
-- Local WeAreDevs Medium preset in `src/presets.lua` was explicitly edited per user request to enable the existing `EncryptStrings` and `AntiTamper` steps before Vmify; `AntiTamper.Settings.UseDebug` remains false. This compiler-side preset edit is outside the deobfuscator repository.
-- `sample/61.txt` was regenerated from the unchanged readable `sample/61.source.lua` through this harder Medium pipeline and formatter. Prometheus log confirms: Encrypt Strings -> Anti Tamper -> Vmify -> Constant Array -> Numbers To Expressions -> Wrap in Function.
-- Normal deobfuscation still succeeds: 163/171 reachable dispatcher leaves (8 dead pruned) across 18 VM functions; 67 capture slots, 37 local cells, 10 shared cells, and 404/404 upvalue accesses resolved. ConstantArray recovery reports 209 entries and string decoding succeeds.
-- Beta still succeeds with 1864 versioned assignments, 116 cross-state versions, 66/66 cleanups, and 0 skipped assignments.
-- Beta-CF blocker is solved structurally. The repeat duplicate-condition matcher no longer requires the discarded pre-condition evaluation to be one contiguous operation slice. It now finds a unique compiler-equivalent operation subsequence and removes only those duplicated condition operations. Interleaved operations are retained, and the transform fails closed if any retained operation reads a beta value produced by the candidate removed subsequence. This handles the EncryptStrings-era `r = nil` bookkeeping inserted between pieces of the duplicated `game:IsLoaded()` evaluation without hardcoding registers, strings, or states. A positive regression preserves an interleaved dead scratch cleanup; a negative regression proves a retained operation that depends on a removed condition result rejects structuring. Sample 61 encrypted/anti-tamper beta-CF now succeeds with 163 states, 54 branches / 48 joins / 7 guard-return branches, 4 numeric-for loops, 2 generic-for loops, 2 while loops, 3 repeat loops, 25 terminal returns, 18 closure regions, 37 recovered cells / 67 capture slots, and 11 removed repeat compiler-junk condition operations. The original `repeat task.wait(5) until game:IsLoaded()` is emitted as a real repeat-until again.
+Typical controlled path:
 
+```text
+sample/N.source.lua
+-> local WeAreDevs Medium
+-> formater\luau-format.exe
+-> sample/N.txt
+-> node main.js sample/N.txt output/N.lua
+-> beta register/version analysis
+-> beta control-flow recovery
+```
 
-## Latest Sample 62 Encrypted Fluent/UI Fixture (2026-08-24)
+Useful commands:
 
-- Tracked `sample/62.source.lua` / `sample/62.txt` is the user-provided Fluent/key-system UI script. It runs through the current local Medium preset with **EncryptStrings + AntiTamper enabled**, then formatter -> normal -> beta -> beta-CF. Raw obfuscated output remains intentionally untracked.
-- Normal deobfuscation succeeds with 182/190 reachable dispatcher leaves (8 dead pruned) across 20 VM functions, 61 capture slots, 36 local cells / 10 shared cells, and 596/596 upvalue accesses resolved. Beta succeeds with 2413 versioned assignments, 65 ordered indexed/member effect writes, 179 cross-state versions, 75/75 cleanups, and 0 skipped assignments.
-- Sample 62 exposed Luau compound captured mutations from source `n1 += 1` / `n1 -= 1`. Vmify emits `upvalueValues[cell] += value` / `-= value` as `CompoundAssignmentStatement`. Beta now treats indexed/member compound assignment as one ordered effect-write with target+RHS read-before-write beta rewriting; beta-upvalues rewrites proven captured-cell compound writes to lexical `binding += value` / `binding -= value` and records the binding itself as a read. Focused beta-register and beta-upvalue regressions cover this.
-- The same sample exposed a generic-for ambiguity: a captured body local initialized from the second iterator result (`local v16 = v15`) looked like a captured second loop variable. `matchCompilerGenericFor` now uses compiler cleanup evidence: an ordinary second loop variable retains exact latch/break `var = nil` cleanup, while a genuinely captured loop variable has its `releaseUpvalue` scaffolding consumed and no ordinary cleanup. This keeps unrelated captured copies in the loop body instead of consuming them as loop-variable scaffolding.
-- Beta-CF now succeeds: 182 states, 63 branches / 58 joins / 5 guard-return branches, 4 numeric-for loops, 2 generic-for loops, 2 while loops, 2 repeat loops, 25 terminal returns, 20 closure regions / 19 inlined factories, 36 recovered cells / 61 capture slots, 542 read rewrites / 18 write rewrites, and 36 release removals. The emitted CF contains lexical compound mutations and no surviving `upvalueValues[...]` for those source updates.
-- Runtime parity is not claimed because the script depends on Roblox services, `loadstring(game:HttpGet(...))`, network/UI behavior, and executor globals. All 12 focused project regression suites pass after the fixes.
+```text
+node main.js sample\63.txt output\63.lua
+node tools\beta-register-versions.js output\63.lua output\63.beta.lua
+node tools\beta-control-flow.js output\63.lua output\63.beta.cf.lua
+```
 
+`deobf.bat <sample> normal|beta|cf` may also be used when present.
 
-## Latest Sample 63 Syncrypt UI Fixture (2026-08-24)
+Standalone `output/*.beta.lua` is solver/intermediate representation and does not need to execute. Correctness matters for normal semantics and especially final beta-CF source.
 
-- Tracked `sample/63.source.lua` / `sample/63.txt` is the user-uploaded Syncrypt UI/client script. The source was copied byte-exact from the uploaded paste, then processed through the current local Medium preset with **EncryptStrings + AntiTamper enabled** -> formatter -> normal -> beta -> beta-CF. Raw `sample/63.source.obfuscated.lua` remains intentionally untracked.
-- Normal deobfuscation succeeds with 216/224 reachable dispatcher leaves (8 dead pruned) across 47 VM functions, 162 capture slots, 53 local cells / 23 shared cells, and 1478/1478 upvalue cell accesses resolved. Beta succeeds with 5919 versioned assignments, 222 ordered effect writes, 133 cross-state versions, 66/66 cleanups, and 0 skipped assignments after the lifetime fix below.
-- Sample 63 exposed an unsafe beta lifetime rule. A scratch register value helped compute another value that was later copied back into the same physical register. The old unanchored transitive provenance merge treated those two scratch lifetimes as one source binding, producing a beta local declared in one branch and mutated after the join; CF correctly rejected it as out-of-scope. Value dependence is now analysis-only for this purpose: same-register definitions merge from independent join evidence or compiler-backed cleanup/terminal-return ownership anchors, not from transitive provenance alone. Focused regression `transitiveScratchReuseSource` proves the two scratch lifetimes remain separate.
-- Beta-CF now succeeds in closure-region mode: 216 states, 6044 statements, 70 branches / 66 joins / 5 guard-return branches, 4 numeric-for loops, 1 while, 3 repeat loops, 52 terminal returns, 47 closure regions / 46 inlined factories, 53 recovered cells / 162 capture slots, 1405 read rewrites / 20 write rewrites, and 44 release removals.
-- Sample 63 also exposed leaked `local ... = state` values after CF. Local compiler proof in `compiler.lua` `OrExpression` / `AndExpression` lowering shows these are compiler-internal POS-register preservation: when `POS_REGISTER` is already occupied, the compiler saves it to a temporary before short-circuit compilation and restores it afterward. `removeCompilerPosPreservationOperations` now removes only a proven save whose reads are exclusively dead beta restore operations, plus an orphan save with zero reads; any non-restore use keeps the chain fail-closed. Sample 63 removes exactly 8 saves + 7 restores (15 operations total) and final beta-CF has **0 raw `state` references**. Positive/negative regressions cover removable save/restore scaffolding and preservation when the saved POS value has another use.
-- Runtime parity is not claimed because the source depends heavily on Roblox/executor/UI globals and services (game, Instance, Enum, getgenv, filesystem helpers, input events, etc.). All 12 focused project regression suites pass after the fix.
+## Current Architecture
 
-## Latest sixzens.txt Probe (2026-08-24)
+Main pipeline:
 
-- Untracked `sample/sixzens.txt` changed on disk during the investigation; the newest observed version is 655,761 bytes and normalizes to 311/319 reachable dispatcher states (8 dead pruned) across 59 VM functions. It remains an untracked probe and was not staged.
-- Normal deobfuscation succeeds: 937 ConstantArray entries, 1,253 references inlined, 58 local cells / 27 shared cells, 194 capture slots, and 1,937/1,937 upvalue accesses resolved. Beta succeeds with 8,011 versioned assignments, 274 ordered effect writes, 237 cross-state versions, 69/69 cleanups, and 0 skipped assignments.
-- Terminal compiler returns now follow the user-requested CF rule: when a proven terminal state has one compiler `ReturnVal = {...}` payload before final `state = nil`, CF removes that payload from its earlier position, preserves intervening operations, places the payload immediately at the proven stop, and lowers the pair to `return ...`. This is restricted to the already-proven terminal compiler payload/stop shape.
-- The newest sixzens exposed split Prometheus branch encoding: `tmp = condition and TRUE; fallback = FALSE; state = tmp or fallback`. `transitionInfo` now resolves unique same-state beta definitions for the split `and` arm and numeric true/false target temporaries, while still requiring the resolved targets to equal the proven CFG successors and the condition to have beta read provenance. A focused synthetic regression covers this shape.
-- The remaining repeat blocker was a duplicated repeat condition whose compiler-generated pure constant definitions appeared in a different topological order between the discarded pre-condition and real check (for example numeric literal then string literal vs string then numeric literal). `findUniqueCompilerOperationSubsequence` now matches a dependency-ready operation pattern instead of one fixed linear order. Data dependencies are explicit; every earlier pair that is not proven safe to commute adds an ordering edge. Only operations with `returnSinkSafe === true`, distinct targets, and no RAW/WAR/WAW dependency may reorder. Effectful calls and dependent definitions retain original order. Matching still requires one unique complete candidate and still rejects if any retained operation reads a value produced by removed duplicate-condition operations. Positive reordered-pure and negative effectful/dependent regressions cover the rule.
-- Newest sixzens beta-CF succeeds: 311 states, 8,150 statements, 90 branches / 82 joins / 5 guard-return branches, 5 numeric-for loops, 10 generic-for loops, 1 while, 6 repeat loops, 64 terminal returns, 59 closure regions / 58 inlined factories, 58 recovered cells / 194 capture slots, 1,859 read rewrites / 20 write rewrites, 47 releases removed, and 30 repeat compiler-junk condition operations removed. The generated CF reparses successfully.
-- Regression sweep after these changes: all 12 focused project suites pass, and beta-CF regeneration also passes for repeat/encrypted fixtures 29, 30, 36, 47, 61, 62, and 63.
-- Known separate presentation issue in newest sixzens: final beta-CF still contains exactly two live `local ... = state` POS-data reads. They are not part of the repeat fix. A prior broad attempt to materialize such live POS values was unsafe and was reverted; only dead POS save/restore scaffolding remains automatically removed.
+```text
+Luau parse
+-> ConstantArray recovery
+-> environment provenance / _env
+-> closure factories
+-> VM/helper semantic naming
+-> safe parallel-assignment splitting
+-> VM state / CFG recovery
+-> binding/capture/provenance analysis
+-> VM register scheduling
+-> register presentation naming
+-> final parse/output
+```
 
-- Standalone beta executability is not a project requirement. output/*.beta.lua is solver/intermediate representation only; it may contain cross-state locals or presentation artifacts. Correctness requirements apply to normal output semantics and especially the final beta-CF recovered source. Do not treat standalone beta runtime failure as a blocker unless it prevents solver analysis or corrupts beta-CF.
+Beta final-recovery path:
 
+```text
+normal output
+-> beta register versions
+-> beta lifetimes / ownership
+-> beta upvalue recovery
+-> beta control-flow structuring
+-> closure-region inlining
+-> final recovered source
+```
 
-## RegisterOverflow CF Presentation + Sample-5 Effect-Write Read Fix (2026-08-24)
+### Structural helper recovery
 
-- `0c10bb8 Recover captured reads in effect writes` fixes the only failure found in the interrupted numeric-fixture CF sweep before the user stopped it at sample 5. Sample 5 left `RegisterOverflow[23] = upvalueValues[cell]` after beta upvalue recovery because captured-cell reads embedded inside ordered `effect-write` statements were not rewritten. Beta upvalue recovery now reparses effect-write statements and rewrites only proven `upvalueValues[cell]` reads to the recovered lexical binding; direct captured-cell writes still use the dedicated write path. Focused regression covers `RegisterOverflow[3] = upvalueValues[cell]`. Sample 5 CF now succeeds: 938 states, 116 closure regions, 115 while loops, 1 recovered cell, 115 capture slots.
-- `beda61f Normalize RegisterOverflow in beta CF` adds final-CF presentation for the structurally proven overflow register bank. Each recovered function/closure scope independently collects positive static `RegisterOverflow[n]` slots, sorts unique original slot identities, maps them densely to `v1`, `v2`, ... and rewrites AST index nodes to member access such as `RegisterOverflow.v1`. The same mapping is applied to emitted statements, RHS expressions, and terminal `returnExpressions` metadata. Bare/dynamic/non-positive RegisterOverflow access fails closed.
-- A recovered function scope gets `local RegisterOverflow = {}` in its `--headers` only when that same function directly uses overflow storage. Nested recovered closures get their own table when they use overflow, matching the original `vm(...)` behavior where the overflow bank is per VM invocation; a child-only overflow use does not cause the parent to share one scratch table.
-- Real fixture checks: sample 5 final CF has 0 `RegisterOverflow[...]` accesses, 46 `RegisterOverflow.vN` accesses, and one overflow header; sample 10 has 0 bracket accesses, 42 `.vN` accesses, and one overflow header. All 12 focused project regression suites pass. LuaJIT runtime parity is not claimed for these large recovered CF outputs because they exceed LuaJIT's 200-local-function limit; sample 5's pre-change CF already hit the same limit.
-- The local WeAreDevs Medium preset currently has `EncryptStrings` enabled and `AntiTamper` removed/disabled, per the user's all-fixture testing instruction. The attempted all-numeric sweep was explicitly stopped by the user at sample 5 and should not be considered complete.
+Current recovery includes `_env`, `unpack`, `newproxy`, `setmetatable`, `getmetatable`, `select`, `vm`, `createUpvalueProxy`, `releaseUpvalues`, `releaseUpvalue`, `allocUpvalue`, `upvalueRefCounts`, `upvalueValues`, `currentUpvalueId`, `createClosure`, and fixed-arity `createClosureN`.
 
-## Full Numeric Sample Sweep (2026-08-24)
+VM parameters are recovered structurally as:
+`state, args, upvalues, gcProxy`.
 
-- Tested every numeric fixture currently present: sample/1.txt through sample/63.txt. On the current working tree, all 63 complete normal deobfuscation, beta register versioning, and beta-CF generation successfully. All 12 focused regression suites also pass. A final-CF scaffold scan found zero surviving normalized dispatcher tests, while-state dispatch loops, createClosure* calls, upvalueValues accesses, allocUpvalue calls, or ReturnVal assignments across outputs 1-63.
-- Direct LuaJIT runtime comparison (same deterministic random seed/shims) confirms normal and final-CF behavior for all directly executable cases except the known compiler repeat-source restoration distinction and one real regression below. Samples 21 and 22 differ only by process-specific table pointer text. Samples 29 and 30 correctly demonstrate the intended behavior: normal Prometheus output reflects the compiler discarded pre-repeat condition evaluation, while beta-CF removes that compiler-added evaluation and matches readable source.
-- CONFIRMED REGRESSION: sample 36 beta-CF no longer restores readable-source repeat semantics. Readable source prints short-repeat-body\t0 before the first condition evaluation, but current beta-CF retains the compiler-discarded pre-repeat short-circuit condition and therefore starts at short-repeat-body\t1. The regression is present at committed HEAD, not caused by current dirty edits. Historical archive testing shows sample 36 source/CF parity is good at 0237d60 and bad starting at 7a881ab (Recover ReturnVal joins and CF tails), remaining bad through current HEAD. Fix this structurally before claiming full 1-63 source-semantic parity.
-- sample/20.source.lua currently has unrelated uncommitted extra prints (o/l/d/f) while tracked sample/20.txt was not regenerated from that edited source, so current source-vs-fixture runtime differs by those prints. This is a working-copy fixture-pair mismatch, not evidence of a deobfuscator transform bug; leave the user source edit untouched unless explicitly asked.
-- Runtime limitations remain classification-only, not generation failures: sample 5 and 10 final CF exceed LuaJIT 200-local main-function limit; Luau-native continue fixtures cannot be executed directly by LuaJIT; the current local Prometheus compiler still throws its known Unresolved Upvalue error when attempting to re-obfuscate some recovered continue CF (confirmed again on sample 32); Roblox/executor fixtures 61-63 require their real environment; anti-tamper/formatter-sensitive fixtures such as 51 are not standalone source-parity runtime checks.
+### State/register invariants
 
-## Beta-CF Performance Optimization (2026-08-24)
+- normalized state IDs are presentation only
+- reaching definitions, provenance, epochs, lifetimes, ownership anchors, and capture cells drive recovery
+- one physical register may hold multiple source lifetimes
+- transitive value provenance alone must not merge unrelated ordinary register lifetimes
+- captured-cell identity is stronger evidence because it is shared mutable storage
+- terminal ReturnVal lowering is restricted to compiler-proven terminal shapes
+- POS/state cleanup removes only proven dead compiler save/restore scaffolding
 
-- Pre-optimization current beta solver work was checkpointed separately as commit `485130e Checkpoint beta solver working tree`; unrelated working-copy sample 20/23 edits were not staged.
-- Beta-CF profiling on sample 63 exposed two avoidable hot paths. The generic AST walkers in `passes/beta-control-flow.js` and `passes/beta-upvalues.js` now support early termination, so environment/provider and upvalue-machinery probes stop once their answer is proven instead of traversing the rest of a large AST.
-- Captured-cell escape validation in `passes/beta-upvalues.js` no longer rescans every operation separately for every cell/register alias. `buildStorageUseIndex(...)` parses/walks each beta operation once, indexes only relevant scalar/overflow storage identities, and the existing proof then visits only operations that actually reference that identity. This changes the dominant validation cost from repeated cells/aliases x operations AST scans to one operations scan plus relevant-use checks; all existing fail-closed validation rules remain in place.
-- Sample 63 benchmark on the same working tree: 5-run beta-CF average dropped from 2605.8 ms before optimization to 945.1 ms after optimization (~63.7% faster).
-- Safety validation: all 12 focused project regression suites pass. Regenerating beta-CF for every numeric fixture 1-63 produced zero failures and every resulting `output/N.beta.cf.lua` SHA-256 matched the pre-optimization file byte-for-byte. The known sample-36 repeat-source semantic regression is therefore unchanged by this performance-only work and remains a separate correctness issue.
+## Beta Control-Flow Capabilities
+
+Current beta-CF supports proven:
+
+- if / elseif / else
+- shared joins
+- guard/early returns
+- multiple closure regions
+- captured mutable upvalues
+- numeric for
+- generic for ... in
+- while
+- repeat ... until
+- break
+- continue
+- early return inside loops
+- nested/sequential loop mixtures
+- multi-state short-circuit conditions
+- captured loop variables
+- visible numeric-for variable mutation with independent hidden induction state
+- split Prometheus branch encodings
+- dependency-safe reordered duplicate repeat-condition operations
+- terminal return payload lowering
+- per-function RegisterOverflow presentation
+
+Generic-for currently proves the local compiler's two-variable shape including `pairs`, `next, table`, custom iterator triples, branches, break/continue, and captured variables. Unproven arities/shapes fail closed.
+
+Repeat recovery is intended to remove the local compiler's discarded first repeat-condition evaluation and restore readable-source semantics.
+
+## RegisterOverflow
+
+Final CF normalizes proven static slots per recovered function:
+
+`RegisterOverflow[n] -> RegisterOverflow.vN`
+
+Each function gets its own `local RegisterOverflow = {}` only when it directly uses overflow storage. Dynamic/bare/invalid accesses fail closed.
+
+Samples 5 and 10 are overflow stress fixtures. Their final CF can exceed LuaJIT's 200-local main-function limit; that is not a beta-CF generation failure.
+
+## Verification State
+
+All numeric fixtures currently present, sample 1 through 63, were tested.
+
+Verified:
+
+```text
+normal generation: 63/63
+beta generation: 63/63
+beta-CF generation: 63/63
+focused regression suites: 12/12 pass
+```
+
+Final-CF scaffold scan found no surviving dispatcher/state loop, `createClosure*`, `upvalueValues[...]`, `allocUpvalue(...)`, or `ReturnVal =` scaffolding in the checked numeric outputs.
+
+During the performance optimization, every regenerated `output/N.beta.cf.lua` for 1-63 was byte-for-byte identical to its pre-optimization result.
+
+Runtime classification:
+
+- 21/22 differences are table pointer addresses only
+- 29/30 prove intended repeat-source restoration; beta-CF matches readable source
+- native Luau continue cannot be directly executed by LuaJIT
+- Roblox/executor fixtures 61-63 require their real environment
+- some CF re-obfuscation still hits the local compiler's known `Unresolved Upvalue` bug
+- anti-tamper/formatter-sensitive fixtures are not always valid standalone LuaJIT parity tests
+
+## Confirmed Correctness Issue: Sample 36
+
+This is the known real beta-CF semantic regression.
+
+Readable source begins repeat body with:
+
+```text
+short-repeat-body    0
+```
+
+Current beta-CF begins with:
+
+```text
+short-repeat-body    1
+```
+
+The solver retains the compiler-discarded pre-repeat short-circuit evaluation instead of fully restoring source repeat semantics.
+
+Historical bisect:
+
+```text
+0237d60  GOOD
+7a881ab  BAD
+```
+
+Regression introduced at:
+`7a881ab Recover ReturnVal joins and CF tails`.
+
+It remains in current main. Do not claim full 1-63 source-semantic parity until fixed structurally.
+
+Sample 20 is separate: its working-copy source has user-added `o/l/d/f` prints while tracked `20.txt` was not regenerated. Do not treat that as a solver regression.
+
+## Large / Special Probes
+
+### Generic-for 53-59
+
+Proves `pairs`, `next, table`, custom iterator factory, nested branches, break, continue, and captured generic-for variables. Captured loop variables use compiler cell allocation/alias/release evidence; do not generalize beyond proven shapes.
+
+### Sample 60
+
+Broad control-flow smoke fixture covering mixed loops, closures, captures, methods/namecall, branches, break/continue, and generic/numeric loops. Beta-CF structures successfully. Runtime validation is constrained by native Luau/compiler re-obfuscation limitations.
+
+### Samples 61-63
+
+Large Roblox/UI/executor scale fixtures. Normal/beta/beta-CF generate successfully. Use for structural regression/scale testing, not standalone LuaJIT parity claims.
+
+### sixzens.txt
+
+Untracked large probe. Latest observed beta-CF succeeded and proved split branch encoding, dependency-ready duplicate repeat-condition matching, terminal payload sinking/lowering, and large captured-cell recovery.
+
+Known separate presentation issue: latest sixzens final CF still had two live `local ... = state` POS-data reads. A broad materialization attempt was unsafe and reverted. Only proven dead POS save/restore scaffolding should be auto-removed.
+
+## Performance
+
+Commit:
+`2a55d22 Optimize beta control-flow hot paths`
+
+Main improvements:
+
+- early-terminating AST walkers for queries whose answer is already proven
+- one-pass captured storage-use indexing in beta-upvalues instead of rescanning every operation for every captured cell/alias
+- fail-closed proof logic unchanged
+
+Sample 63 benchmark on the same working tree:
+
+```text
+before: 2605.8 ms average
+after:   945.1 ms average
+```
+
+About 63.7% faster.
+
+Safety validation:
+
+- 12/12 focused suites pass
+- 1-63 beta-CF regeneration passes
+- 63/63 final CF outputs byte-for-byte identical to pre-optimization output
+
+## Important Recent Commits
+
+```text
+2a55d22 Optimize beta control-flow hot paths
+485130e Checkpoint beta solver working tree
+9f73593 Record full numeric sample sweep
+7138091 Document overflow CF normalization
+beda61f Normalize RegisterOverflow in beta CF
+0c10bb8 Recover captured reads in effect writes
+992a262 Recover sixzens control-flow variants
+272db25 Remove compiler POS preservation scaffolding
+```
+
+Use `git log` for anything newer.
+
+## Immediate Priorities
+
+1. Fix sample 36 repeat-source regression structurally without regressing 29/30 or large encrypted repeat fixtures.
+2. Keep large-file beta-CF near current optimized performance; profile before adding expensive global scans.
+3. Preserve fail-closed behavior for unproven generic-for, POS/state-data, overflow, capture, and lifetime shapes.
+4. Re-test numeric fixtures after meaningful CFG/upvalue/lifetime changes.
+5. Keep this file compact; replace stale sections instead of appending chronology.
+
+## New-Chat Resume
+
+Read this file, inspect Git status/log, preserve unrelated working-copy files, continue the requested implementation directly, test it, update this file if needed, commit only intended files, and push main.
+
+Do not merely summarize this handoff unless the user asks for a summary.
