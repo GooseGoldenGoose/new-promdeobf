@@ -528,7 +528,15 @@ assert(atomicMultiCallOperation);
 assert.deepEqual(atomicMultiCallOperation.originalTargets, ["r2", "r4"]);
 assert.equal(atomicMultiCallOperation.callBaseOriginal, "r1");
 assert.deepEqual(atomicMultiCallOperation.callArgumentOriginals, ["args", "r2"]);
-assert(atomicMultiCallOperation.emittedText.includes("r2, r4 ="));
+assert.equal(atomicMultiCallOperation.emittedTargets.length, 2);
+assert.notDeepEqual(atomicMultiCallOperation.emittedTargets, atomicMultiCallOperation.originalTargets);
+assert.deepEqual(atomicMultiCallOperation.targetDeclarations, [false, true]);
+assert(atomicMultiCallOperation.targetRegisterEpochs.every(Boolean));
+assert(atomicMultiCallOperation.rhs.includes(atomicMultiCallOperation.emittedTargets[0]));
+assert.equal((atomicMultiCallOperation.emittedText.match(/iterator/g) || []).length, 0);
+assert.equal((atomicMultiCallOperation.emittedText.match(/\(/g) || []).length >= 1, true);
+assert(atomicMultiCallOperation.emittedText.startsWith(`${atomicMultiCallOperation.emittedTargets.join(", ")} =`));
+assert(atomicMultiCallResult.source.includes(`local ${atomicMultiCallOperation.emittedTargets[1]}\n${atomicMultiCallOperation.emittedTargets.join(", ")} =`));
 parseLua(atomicMultiCallResult.source, "<beta-atomic-multi-call-output>");
 
 
@@ -562,5 +570,41 @@ const compoundR2Base = compoundEffectResult.mapping.find(item => item.originalNa
 assert(compoundR1Base && compoundR2Base);
 assert(compoundEffectOperation.emittedText.includes(`upvalueValues[${compoundR1Base}_1] += ${compoundR2Base}_1`));
 parseLua(compoundEffectResult.source, "<beta-compound-effect-write-output>");
+
+const liveNilJoinSource = `vm = function(state, args, upvalues, gcProxy)
+    local r1, r2, ReturnVal
+    while state do
+        if state == 1 then
+            r1 = nil
+            state = cond and 2 or 3
+        end
+        if state == 2 then
+            r1 = make()
+            state = 3
+        end
+        if state == 3 then
+            r2 = r1
+            ReturnVal = { r2 }
+            state = nil
+        end
+    end
+    state = #gcProxy
+    return unpack(ReturnVal)
+end
+root = createClosure(1, {})`;
+const liveNilJoinResult = versionVmBlockRegisters(
+    liveNilJoinSource,
+    parseLua(liveNilJoinSource, "<beta-live-nil-join-test>")
+);
+const liveNilStart = liveNilJoinResult.graph.states.find(state => state.id === 1).operations.find(operation => operation.originalTarget === "r1");
+const liveNilMutation = liveNilJoinResult.graph.states.find(state => state.id === 2).operations.find(operation => operation.originalTarget === "r1");
+assert(liveNilStart && liveNilMutation);
+assert.equal(liveNilStart.kind, "epoch-start");
+assert.equal(liveNilMutation.kind, "epoch-mutate");
+assert.equal(liveNilStart.emittedTarget, liveNilMutation.emittedTarget);
+assert.equal(liveNilStart.registerEpoch, liveNilMutation.registerEpoch);
+assert.equal(liveNilStart.rhs, "nil");
+assert.equal(liveNilMutation.rhs, "make()");
+parseLua(liveNilJoinResult.source, "<beta-live-nil-join-output>");
 
 console.log("beta register versioning tests passed");

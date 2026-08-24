@@ -1069,19 +1069,19 @@ const genericForStructured = solveBetaControlFlow(ast, {
             { id: 1, predecessors: [], successors: [2], operations: [
                 { kind: "version-define", originalTarget: "r7", emittedTarget: "iter", rhs: "pairs", emittedText: "local iter = pairs", reads: [] },
                 { kind: "version-define", originalTarget: "r1", emittedTarget: "invariant", rhs: "items", emittedText: "local invariant = items", reads: [] },
-                { kind: "version-define", originalTarget: "r2", emittedTarget: "initialControl", rhs: "nil", emittedText: "local initialControl = nil", reads: [] },
+                { kind: "version-define", originalTarget: "r2", emittedTarget: "controlEpoch", rhs: "nil", emittedText: "local controlEpoch = nil", reads: [] },
                 { kind: "state-transition", originalTarget: "state", emittedTarget: "state", rhs: "2", emittedText: "state = 2", reads: [] },
             ] },
             { id: 2, predecessors: [1, 3], successors: [3, 4], operations: [
-                { kind: "multi-call-write", originalTargets: ["r2", "r4"], emittedTargets: ["r2", "r4"], callBaseOriginal: "r7", callArgumentOriginals: ["r1", "r2"], rhs: "iter(invariant, r2)", emittedText: "r2, r4 = iter(invariant, r2)", reads: ["iter", "invariant"] },
-                { kind: "state-transition", originalTarget: "state", emittedTarget: "state", rhs: "r2 and 3 or 4", emittedText: "state = r2 and 3 or 4", reads: [] },
+                { kind: "multi-call-write", originalTargets: ["r2", "r4"], emittedTargets: ["controlEpoch", "valueEpoch"], callBaseOriginal: "r7", callArgumentOriginals: ["r1", "r2"], rhs: "iter(invariant, controlEpoch)", originalText: "r2, r4 = r7(r1, r2)", emittedText: "controlEpoch, valueEpoch = iter(invariant, controlEpoch)", reads: ["iter", "invariant", "controlEpoch"] },
+                { kind: "state-transition", originalTarget: "state", emittedTarget: "state", rhs: "controlEpoch and 3 or 4", emittedText: "state = controlEpoch and 3 or 4", reads: ["controlEpoch"] },
             ] },
             { id: 3, predecessors: [2], successors: [2], operations: [
-                { kind: "epoch-start", originalTarget: "r3", emittedTarget: "i", rhs: "r2", emittedText: "local i = r2", reads: [] },
-                { kind: "upvalue-binding-start", originalTarget: "capturedCopy", emittedTarget: "capturedCopy", rhs: "r4", emittedText: "local capturedCopy = r4", reads: ["r4"] },
-                { kind: "statement", originalText: "consume(i, r4, capturedCopy)", emittedText: "consume(i, r4, capturedCopy)", reads: ["i", "r4", "capturedCopy"] },
+                { kind: "epoch-start", originalTarget: "r3", emittedTarget: "i", rhs: "controlEpoch", originalText: "r3 = r2", emittedText: "local i = controlEpoch", reads: ["controlEpoch"] },
+                { kind: "upvalue-binding-start", originalTarget: "capturedCopy", emittedTarget: "capturedCopy", rhs: "valueEpoch", originalText: "capturedCopy = r4", emittedText: "local capturedCopy = valueEpoch", reads: ["valueEpoch"] },
+                { kind: "statement", originalText: "consume(i, r4, capturedCopy)", emittedText: "consume(i, valueEpoch, capturedCopy)", reads: ["i", "valueEpoch", "capturedCopy"] },
                 { kind: "epoch-kill", originalTarget: "r3", emittedTarget: "i", rhs: "nil", emittedText: "i = nil", reads: [] },
-                { kind: "version-define", originalTarget: "r4", emittedTarget: "deadSecond", rhs: "nil", emittedText: "local deadSecond = nil", reads: [] },
+                { kind: "epoch-kill", originalTarget: "r4", emittedTarget: "valueEpoch", rhs: "nil", emittedText: "valueEpoch = nil", reads: [] },
                 { kind: "state-transition", originalTarget: "state", emittedTarget: "state", rhs: "2", emittedText: "state = 2", reads: [] },
             ] },
             { id: 4, predecessors: [2], successors: [], operations: [
@@ -1095,10 +1095,10 @@ assert.equal(genericForStructured.applied, true);
 assert.equal(genericForStructured.genericForLoopCount, 1);
 assert.equal(genericForStructured.numericForLoopCount, 0);
 assert.equal(genericForStructured.whileLoopCount, 0);
-assert(genericForStructured.source.includes("for i, r4 in iter, invariant, initialControl do"));
-assert(genericForStructured.source.includes("consume(i, r4, capturedCopy)"));
-assert(genericForStructured.source.includes("local capturedCopy = r4"));
-assert(!genericForStructured.source.includes("r2, r4 ="));
+assert(genericForStructured.source.includes("for i, valueEpoch in iter, invariant, controlEpoch do"));
+assert(genericForStructured.source.includes("consume(i, valueEpoch, capturedCopy)"));
+assert(genericForStructured.source.includes("local capturedCopy = valueEpoch"));
+assert(!genericForStructured.source.includes("controlEpoch, valueEpoch ="));
 assert(!genericForStructured.source.includes("state ="));
 parseLua(genericForStructured.source, "<beta-cf-generic-for-output>");
 
@@ -1254,6 +1254,62 @@ assert(nestedOverflowNormalized.source.includes("RegisterOverflow.v1 = 5"));
 assert(nestedOverflowNormalized.source.includes("local value = RegisterOverflow.v1"));
 assert(!nestedOverflowNormalized.source.includes("RegisterOverflow["));
 parseLua(nestedOverflowNormalized.source, "<beta-cf-nested-overflow-normalized>");
+
+const overflowFactoryNormalized = solveBetaControlFlow(ast, {
+    applied: true,
+    graph: {
+        cfgComplete: true,
+        entries: [1, 2],
+        states: [
+            { id: 1, predecessors: [], successors: [], operations: [
+                { kind: "effect-write", emittedText: "RegisterOverflow[44] = createClosure2(2, {})", rhs: "createClosure2(2, {})", reads: [] },
+                { kind: "return-payload", terminalCompilerReturnPayload: true, returnExpressions: ["RegisterOverflow[44]"], emittedText: "ReturnVal = { RegisterOverflow[44] }", rhs: "{ RegisterOverflow[44] }", reads: [] },
+                { kind: "state-transition", emittedTarget: "state", emittedText: "state = nil", rhs: "nil", reads: [] },
+            ] },
+            { id: 2, predecessors: [], successors: [], operations: [
+                { kind: "return-payload", terminalCompilerReturnPayload: true, returnExpressions: [], emittedText: "ReturnVal = {}", rhs: "{}", reads: [] },
+                { kind: "state-transition", emittedTarget: "state", emittedText: "state = nil", rhs: "nil", reads: [] },
+            ] },
+        ],
+    },
+});
+assert.equal(overflowFactoryNormalized.applied, true);
+assert(overflowFactoryNormalized.source.includes("RegisterOverflow.v1 = function(...)"));
+assert(!overflowFactoryNormalized.source.includes("createClosure2("));
+assert(!overflowFactoryNormalized.source.includes("RegisterOverflow["));
+parseLua(overflowFactoryNormalized.source, "<beta-cf-overflow-factory-normalized>");
+
+const escapingEpochHoisted = solveBetaControlFlow(ast, {
+    applied: true,
+    graph: {
+        cfgComplete: true,
+        stateName: "state",
+        entries: [1],
+        states: [
+            { id: 1, predecessors: [], successors: [2, 3], operations: [
+                { kind: "state-transition", originalTarget: "state", emittedTarget: "state", rhs: "cond and 2 or 3", emittedText: "state = cond and 2 or 3", reads: ["cond"] },
+            ] },
+            { id: 2, predecessors: [1], successors: [4], operations: [
+                { kind: "epoch-start", originalTarget: "r1", emittedTarget: "joinedValue", rhs: "1", emittedText: "local joinedValue = 1", reads: [], registerEpoch: "r1:epoch:1" },
+                { kind: "state-transition", originalTarget: "state", emittedTarget: "state", rhs: "4", emittedText: "state = 4", reads: [] },
+            ] },
+            { id: 3, predecessors: [1], successors: [4], operations: [
+                { kind: "state-transition", originalTarget: "state", emittedTarget: "state", rhs: "4", emittedText: "state = 4", reads: [] },
+            ] },
+            { id: 4, predecessors: [2, 3], successors: [], operations: [
+                { kind: "return-payload", terminalCompilerReturnPayload: true, returnExpressions: ["joinedValue"], emittedTarget: "ReturnVal", emittedText: "ReturnVal = { joinedValue }", rhs: "{ joinedValue }", reads: ["joinedValue"] },
+                { kind: "state-transition", emittedTarget: "state", emittedText: "state = nil", rhs: "nil", reads: [] },
+            ] },
+        ],
+    },
+});
+assert.equal(escapingEpochHoisted.applied, true);
+assert.equal(escapingEpochHoisted.hoistedEpochDeclarationCount, 1);
+assert(escapingEpochHoisted.source.includes("local joinedValue\n"));
+assert(escapingEpochHoisted.source.includes("joinedValue = 1"));
+assert(!escapingEpochHoisted.source.includes("local joinedValue = 1"));
+assert(escapingEpochHoisted.source.includes("return joinedValue"));
+parseLua(escapingEpochHoisted.source, "<beta-cf-escaping-epoch-hoist>");
 
 const dynamicOverflowRejected = solveBetaControlFlow(ast, {
     applied: true,

@@ -100,6 +100,150 @@ function isUpvalueValuesIndex(node) {
     return node?.type === "IndexExpression" && isIdentifier(node.base, "upvalueValues");
 }
 
+function registerOverflowSlot(node) {
+    if (node?.type !== "IndexExpression" || !isIdentifier(node.base, "RegisterOverflow")) return null;
+    const slot = numericValue(node.index);
+    return Number.isInteger(slot) && slot >= 1 ? slot : null;
+}
+
+function operationRhsText(operation) {
+    if (typeof operation?.rhs === "string" && operation.rhs.trim()) return operation.rhs;
+    const parsed = parseStatement(operation?.emittedText);
+    const statement = parsed?.statement;
+    if (statement?.type === "AssignmentStatement") {
+        const init = statement.init || [];
+        if ((statement.variables || []).length === 1 && init.length === 1 && Array.isArray(init[0]?.range)) {
+            return parsed.source.slice(init[0].range[0], init[0].range[1]);
+        }
+    }
+    if (statement?.type === "CompoundAssignmentStatement" && Array.isArray(statement.value?.range)) {
+        return parsed.source.slice(statement.value.range[0], statement.value.range[1]);
+    }
+    return null;
+}
+
+function overflowWriteFromOperation(operation) {
+    const parsed = parseStatement(operation?.emittedText);
+    const statement = parsed?.statement;
+    if (statement?.type === "AssignmentStatement") {
+        const variables = statement.variables || [];
+        const init = statement.init || [];
+        if (variables.length !== 1 || init.length !== 1) return null;
+        const slot = registerOverflowSlot(variables[0]);
+        return slot === null ? null : { parsed, statement, target: variables[0], value: init[0], slot, compound: false };
+    }
+    if (statement?.type === "CompoundAssignmentStatement") {
+        const slot = registerOverflowSlot(statement.variable);
+        return slot === null ? null : { parsed, statement, target: statement.variable, value: statement.value, slot, compound: true };
+    }
+    return null;
+}
+
+function cloneDefinitionMap(map) {
+    return new Map([...map].map(([slot, defs]) => [slot, new Set(defs)]));
+}
+
+function definitionMapsEqual(left, right) {
+    if (left.size !== right.size) return false;
+    for (const [slot, defs] of left) {
+        const other = right.get(slot);
+        if (!other || other.size !== defs.size || [...defs].some(def => !other.has(def))) return false;
+    }
+    return true;
+}
+
+function mergeOverflowDefinitionMaps(maps) {
+    const merged = new Map();
+    for (const map of maps) {
+        for (const [slot, defs] of map || []) {
+            if (!merged.has(slot)) merged.set(slot, new Set());
+            for (const def of defs) merged.get(slot).add(def);
+        }
+    }
+    return merged;
+}
+
+function buildOverflowStorageAnalysis(graph) {
+    const writeByOperation = new Map();
+    const writesByState = new Map();
+    const defInfoById = new Map();
+    for (const state of graph.states || []) {
+        const bySlot = new Map();
+        for (let index = 0; index < (state.operations || []).length; index++) {
+            const operation = state.operations[index];
+            const write = overflowWriteFromOperation(operation);
+            if (!write) continue;
+            const defId = `overflow-def:${write.slot}:${state.id}:${index}`;
+            const info = { ...write, defId, stateId: state.id, operationIndex: index, operation };
+            writeByOperation.set(operation, info);
+            defInfoById.set(defId, info);
+            if (!bySlot.has(write.slot)) bySlot.set(write.slot, []);
+            bySlot.get(write.slot).push(info);
+        }
+        writesByState.set(state.id, bySlot);
+    }
+
+    const inDefinitions = new Map((graph.states || []).map(state => [state.id, new Map()]));
+    const outDefinitions = new Map((graph.states || []).map(state => [state.id, new Map()]));
+    let changed = true;
+    while (changed) {
+        changed = false;
+        for (const state of graph.states || []) {
+            const predMaps = (state.predecessors || []).map(id => outDefinitions.get(id) || new Map());
+            const nextIn = mergeOverflowDefinitionMaps(predMaps);
+            const nextOut = cloneDefinitionMap(nextIn);
+            for (const operation of state.operations || []) {
+                const write = writeByOperation.get(operation);
+                if (write) nextOut.set(write.slot, new Set([write.defId]));
+            }
+            if (!definitionMapsEqual(nextIn, inDefinitions.get(state.id))) {
+                inDefinitions.set(state.id, nextIn);
+                changed = true;
+            }
+            if (!definitionMapsEqual(nextOut, outDefinitions.get(state.id))) {
+                outDefinitions.set(state.id, nextOut);
+                changed = true;
+            }
+        }
+    }
+
+    function uniqueDefinitionBefore(position, slot) {
+        const writes = writesByState.get(position.stateId)?.get(slot) || [];
+        let low = 0;
+        let high = writes.length - 1;
+        let found = null;
+        while (low <= high) {
+            const middle = (low + high) >> 1;
+            if (writes[middle].operationIndex < position.operationIndex) {
+                found = writes[middle];
+                low = middle + 1;
+            } else {
+                high = middle - 1;
+            }
+        }
+        if (found) return found.defId;
+        const incoming = inDefinitions.get(position.stateId)?.get(slot);
+        return incoming?.size === 1 ? incoming.values().next().value : null;
+    }
+
+    function currentWriteDefinition(position) {
+        return writeByOperation.get(position.operation)?.defId || null;
+    }
+
+    return { writeByOperation, defInfoById, uniqueDefinitionBefore, currentWriteDefinition };
+}
+
+function storageReadKey(node, position, overflowAnalysis) {
+    if (isIdentifier(node)) return node.name;
+    const slot = registerOverflowSlot(node);
+    return slot === null ? null : overflowAnalysis.uniqueDefinitionBefore(position, slot);
+}
+
+function operationTargetStorageKey(position, overflowAnalysis) {
+    if (position.operation?.emittedTarget) return position.operation.emittedTarget;
+    return overflowAnalysis.currentWriteDefinition(position);
+}
+
 function tableValues(node) {
     if (node?.type !== "TableConstructorExpression") return null;
     const values = [];
@@ -144,7 +288,7 @@ function partitionClosureRegions(graph) {
 }
 
 function factoryCallFromOperation(operation) {
-    const parsed = parseExpression(operation?.rhs);
+    const parsed = parseExpression(operationRhsText(operation));
     const call = parsed?.expression;
     if (call?.type !== "CallExpression" || !isIdentifier(call.base) || !isClosureFactoryName(call.base.name)) return null;
     const args = call.arguments || [];
@@ -169,27 +313,30 @@ function indexedWriteFromOperation(operation) {
     return null;
 }
 
-function releaseCellFromOperation(operation) {
-    const parsed = parseExpression(operation?.rhs);
+function releaseCellFromOperation(position, overflowAnalysis) {
+    const parsed = parseExpression(operationRhsText(position.operation));
     const expression = parsed?.expression;
     if (!isCall(expression, "releaseUpvalue", 1)) return null;
-    const argument = expression.arguments[0];
-    if (!isIdentifier(argument)) return null;
-    return { cellName: argument.name, resultName: operation?.emittedTarget || null };
+    const cellName = storageReadKey(expression.arguments[0], position, overflowAnalysis);
+    if (!cellName) return null;
+    return { cellName, resultName: operationTargetStorageKey(position, overflowAnalysis) };
 }
 
-function allocationFromOperation(operation) {
-    const parsed = parseExpression(operation?.rhs);
+function allocationFromOperation(position, overflowAnalysis) {
+    const parsed = parseExpression(operationRhsText(position.operation));
     const expression = parsed?.expression;
-    if (!isCall(expression, "allocUpvalue", 0) || !operation?.emittedTarget) return null;
-    return { cellName: operation.emittedTarget };
+    const targetName = operationTargetStorageKey(position, overflowAnalysis);
+    if (!isCall(expression, "allocUpvalue", 0) || !targetName) return null;
+    return { cellName: targetName };
 }
 
-function identifierCopyFromOperation(operation) {
-    const parsed = parseExpression(operation?.rhs);
+function storageCopyFromOperation(position, overflowAnalysis) {
+    const parsed = parseExpression(operationRhsText(position.operation));
     const expression = parsed?.expression;
-    if (!isIdentifier(expression) || !operation?.emittedTarget) return null;
-    return { sourceName: expression.name, targetName: operation.emittedTarget };
+    const sourceName = storageReadKey(expression, position, overflowAnalysis);
+    const targetName = operationTargetStorageKey(position, overflowAnalysis);
+    if (!sourceName || !targetName) return null;
+    return { sourceName, targetName };
 }
 
 function cloneGraph(graph) {
@@ -222,7 +369,7 @@ function operationPositions(graph, ownerByState) {
     return positions;
 }
 
-function rewriteExpressionUpvalues(text, ownerEntry, resolveCellIndex, bindingByCell) {
+function rewriteExpressionUpvalues(text, position, resolveCellIndex, bindingByCell) {
     const parsed = parseExpression(text);
     if (!parsed) return { error: "Expression could not be reparsed during beta upvalue recovery" };
     const edits = [];
@@ -232,7 +379,7 @@ function rewriteExpressionUpvalues(text, ownerEntry, resolveCellIndex, bindingBy
     function visit(node) {
         if (!isNode(node) || unresolved) return;
         if (isUpvalueValuesIndex(node)) {
-            const cellId = resolveCellIndex(ownerEntry, node.index);
+            const cellId = resolveCellIndex(position.ownerEntry, node.index, position);
             if (!cellId) {
                 unresolved = "An upvalueValues read has no uniquely resolved cell";
                 return;
@@ -262,7 +409,7 @@ function rewriteExpressionUpvalues(text, ownerEntry, resolveCellIndex, bindingBy
     return { text: rewritten, bindingReads };
 }
 
-function rewriteStatementUpvalueReads(text, ownerEntry, resolveCellIndex, bindingByCell) {
+function rewriteStatementUpvalueReads(text, position, resolveCellIndex, bindingByCell) {
     const parsed = parseStatement(text);
     if (!parsed) return { error: "Statement could not be reparsed during beta upvalue recovery" };
     const edits = [];
@@ -272,7 +419,7 @@ function rewriteStatementUpvalueReads(text, ownerEntry, resolveCellIndex, bindin
     function visit(node) {
         if (!isNode(node) || unresolved) return;
         if (isUpvalueValuesIndex(node)) {
-            const cellId = resolveCellIndex(ownerEntry, node.index);
+            const cellId = resolveCellIndex(position.ownerEntry, node.index, position);
             if (!cellId) {
                 unresolved = "An upvalueValues read has no uniquely resolved cell";
                 return;
@@ -309,6 +456,45 @@ function countIdentifier(node, name) {
     return count;
 }
 
+function countStorageKeyUsesAtPosition(position, storageKey, overflowAnalysis) {
+    const parsed = parseStatement(position.operation?.emittedText);
+    if (!parsed) return null;
+    if (!String(storageKey).startsWith("overflow-def:")) {
+        return countIdentifier(parsed.statement, storageKey);
+    }
+
+    const statement = parsed.statement;
+    let skipTarget = null;
+    if (statement?.type === "AssignmentStatement") {
+        const variables = statement.variables || [];
+        const init = statement.init || [];
+        if (variables.length === 1 && init.length === 1 && registerOverflowSlot(variables[0]) !== null) {
+            skipTarget = variables[0];
+        }
+    }
+    let count = overflowAnalysis.currentWriteDefinition(position) === storageKey ? 1 : 0;
+
+    function visit(node) {
+        if (!isNode(node) || node === skipTarget) return;
+        const slot = registerOverflowSlot(node);
+        if (slot !== null) {
+            if (storageReadKey(node, position, overflowAnalysis) === storageKey) count++;
+            return;
+        }
+        for (const [key, value] of Object.entries(node)) {
+            if (key === "loc" || key === "range") continue;
+            if (Array.isArray(value)) {
+                for (const child of value) visit(child);
+            } else if (isNode(value)) {
+                visit(value);
+            }
+        }
+    }
+
+    visit(parsed.statement);
+    return count;
+}
+
 function containsVmUpvalueMachinery(text) {
     const parsed = parseStatement(text);
     if (!parsed) return true;
@@ -338,6 +524,7 @@ function recoverBetaUpvalues(betaResult) {
     if (partition.error) return { applied: false, safe: false, reason: partition.error };
     const { ownerByState, stateById } = partition;
     const positions = operationPositions(graph, ownerByState);
+    const overflowAnalysis = buildOverflowStorageAnalysis(graph);
 
     // CFG dominance is computed per closure owner. A captured cell does not need
     // its whole owner function to be single-state: it is sufficient for the
@@ -385,9 +572,26 @@ function recoverBetaUpvalues(betaResult) {
         return dominatorsByState.get(stateId)?.has(dominatorStateId) === true;
     }
 
+    const usedBindingNames = new Set();
+    for (const position of positions) {
+        const parsed = parseStatement(position.operation?.emittedText);
+        if (!parsed) continue;
+        walk(parsed.statement, node => {
+            if (isIdentifier(node)) usedBindingNames.add(node.name);
+        });
+    }
+    let nextOverflowCellBindingId = 1;
+    function allocateCellStorageBindingName(storageName) {
+        if (/^[A-Za-z_][A-Za-z0-9_]*$/.test(String(storageName || ""))) return storageName;
+        while (usedBindingNames.has(`r_overflow_cell_${nextOverflowCellBindingId}`)) nextOverflowCellBindingId++;
+        const name = `r_overflow_cell_${nextOverflowCellBindingId++}`;
+        usedBindingNames.add(name);
+        return name;
+    }
+
     const cells = new Map();
     for (const position of positions) {
-        const allocation = allocationFromOperation(position.operation);
+        const allocation = allocationFromOperation(position, overflowAnalysis);
         if (!allocation) continue;
         if (cells.has(allocation.cellName)) {
             return { applied: false, safe: false, reason: `Beta upvalue cell register ${allocation.cellName} has multiple allocations` };
@@ -395,6 +599,7 @@ function recoverBetaUpvalues(betaResult) {
         cells.set(allocation.cellName, {
             id: allocation.cellName,
             registerName: allocation.cellName,
+            storageBindingName: allocateCellStorageBindingName(allocation.cellName),
             ownerEntry: position.ownerEntry,
             allocation: position,
             initialization: null,
@@ -417,22 +622,22 @@ function recoverBetaUpvalues(betaResult) {
         );
         for (const candidate of sameState) {
             if (candidate.operationIndex <= cell.allocation.operationIndex) continue;
-            const copy = identifierCopyFromOperation(candidate.operation);
+            const copy = storageCopyFromOperation(candidate, overflowAnalysis);
             if (!copy || copy.sourceName !== cell.registerName || copy.targetName === cell.registerName) continue;
 
             const initializationsBeforeCopy = sameState.filter(position => {
                 if (position.operationIndex <= cell.allocation.operationIndex || position.operationIndex >= candidate.operationIndex) return false;
                 const write = indexedWriteFromOperation(position.operation);
-                return write && isIdentifier(write.target.index, cell.registerName);
+                return write && resolveCellIndex(position.ownerEntry, write.target.index, position) === cell.id;
             });
             if (initializationsBeforeCopy.length !== 1) continue;
 
             const aliasWrites = positions.filter(position =>
-                position.ownerEntry === cell.ownerEntry && position.operation?.emittedTarget === copy.targetName
+                position.ownerEntry === cell.ownerEntry && operationTargetStorageKey(position, overflowAnalysis) === copy.targetName
             );
             if (!aliasWrites.length || aliasWrites.some(position => {
                 if (position.operation === candidate.operation) return false;
-                return releaseCellFromOperation(position.operation)?.cellName !== copy.targetName;
+                return releaseCellFromOperation(position, overflowAnalysis)?.cellName !== copy.targetName;
             })) continue;
 
             const existing = cellIdByRegister.get(copy.targetName);
@@ -489,9 +694,10 @@ function recoverBetaUpvalues(betaResult) {
 
     const captureCellsByEntry = new Map([[rootEntry, new Map()]]);
 
-    function resolveCellIndex(ownerEntry, indexNode) {
-        if (isIdentifier(indexNode)) {
-            const cellId = cellIdByRegister.get(indexNode.name);
+    function resolveCellIndex(ownerEntry, indexNode, position) {
+        const storageKey = position ? storageReadKey(indexNode, position, overflowAnalysis) : null;
+        if (storageKey) {
+            const cellId = cellIdByRegister.get(storageKey);
             return cellId && cells.get(cellId)?.ownerEntry === ownerEntry ? cellId : null;
         }
         const slot = upvalueSlot(indexNode);
@@ -511,7 +717,7 @@ function recoverBetaUpvalues(betaResult) {
             const slotMap = new Map();
             for (let index = 0; index < site.captures.length; index++) {
                 const capture = site.captures[index];
-                const cellId = resolveCellIndex(parentEntry, capture);
+                const cellId = resolveCellIndex(parentEntry, capture, site);
                 if (!cellId) {
                     return { applied: false, safe: false, reason: `Closure entry ${site.entry} capture slot ${index + 1} does not resolve to a proven upvalue cell` };
                 }
@@ -538,10 +744,10 @@ function recoverBetaUpvalues(betaResult) {
         const cellRegisterNames = new Set([cell.registerName, ...cell.aliases]);
         const ownerFootprint = positions.filter(position => {
             if (position.ownerEntry !== cell.ownerEntry) return false;
-            const text = String(position.operation?.emittedText || "");
-            if (![...cellRegisterNames].some(name => text.includes(name))) return false;
-            const parsed = parseStatement(text);
-            return parsed ? [...cellRegisterNames].some(name => countIdentifier(parsed.statement, name) > 0) : false;
+            return [...cellRegisterNames].some(name => {
+                const count = countStorageKeyUsesAtPosition(position, name, overflowAnalysis);
+                return count !== null && count > 0;
+            });
         });
         if (!ownerFootprint.length || ownerFootprint.some(position => !dominates(cell.allocation.stateId, position.stateId))) {
             return { applied: false, safe: false, reason: `Captured cell ${cellId} has owner-side uses not dominated by its allocation state` };
@@ -553,7 +759,7 @@ function recoverBetaUpvalues(betaResult) {
             if (position.operationIndex <= cell.allocation.operationIndex) continue;
             const write = indexedWriteFromOperation(position.operation);
             if (!write) continue;
-            const targetCell = resolveCellIndex(position.ownerEntry, write.target.index);
+            const targetCell = resolveCellIndex(position.ownerEntry, write.target.index, position);
             if (targetCell === cellId) candidates.push({ ...position, ...write });
         }
         if (!candidates.length) {
@@ -581,7 +787,7 @@ function recoverBetaUpvalues(betaResult) {
             }
         }
         if (!cell.bindingName) {
-            cell.bindingName = cell.registerName;
+            cell.bindingName = cell.storageBindingName;
             cell.bindingMode = "cell-register-binding";
         }
 
@@ -595,7 +801,7 @@ function recoverBetaUpvalues(betaResult) {
         // accepted only when CFG dominance proves which point must execute first.
         const captureSites = factorySites.filter(site =>
             site.ownerEntry === cell.ownerEntry &&
-            site.captures.some(capture => resolveCellIndex(site.ownerEntry, capture) === cellId)
+            site.captures.some(capture => resolveCellIndex(site.ownerEntry, capture, site) === cellId)
         );
         let captureBeforeInitialization = false;
         for (const site of captureSites) {
@@ -611,7 +817,7 @@ function recoverBetaUpvalues(betaResult) {
             return { applied: false, safe: false, reason: `Captured cell ${cellId} has a factory capture with ambiguous order relative to initialization` };
         }
         if (captureBeforeInitialization) {
-            cell.bindingName = cell.registerName;
+            cell.bindingName = cell.storageBindingName;
             cell.bindingMode = "hoisted-cell-binding";
         }
     }
@@ -624,50 +830,61 @@ function recoverBetaUpvalues(betaResult) {
         for (const alias of cell.aliases) localCellNames.add(alias);
     }
 
-    // Validate every direct allocation register and every proven compiler alias
-    // before deleting the VM cell representation. Alias copies themselves are
-    // recognized scaffolding; any other use must still be a factory capture,
-    // upvalueValues access, or releaseUpvalue cleanup.
+    // Validate every direct allocation storage identity and every proven compiler alias
+    // before deleting the VM cell representation. Scalar beta locals and static
+    // RegisterOverflow slots use the same storage-identity proof here; overflow
+    // identities are distinguished by their unique reaching definition rather than
+    // by the raw physical slot number.
     for (const cellId of capturedCellIds) {
         const cell = cells.get(cellId);
         for (const registerName of [cell.registerName, ...cell.aliases]) {
             for (const position of positions) {
-                const text = position.operation?.emittedText;
-                if (!text || !String(text).includes(registerName)) continue;
-                const statementParsed = parseStatement(text);
-                if (!statementParsed) {
+                const totalUses = countStorageKeyUsesAtPosition(position, registerName, overflowAnalysis);
+                if (totalUses === null) {
                     return { applied: false, safe: false, reason: "Cell " + cellId + " alias " + registerName + " appears in an unparseable beta operation" };
                 }
-                const totalUses = countIdentifier(statementParsed.statement, registerName);
                 if (totalUses === 0) continue;
 
                 let understood = 0;
-                const allocation = allocationFromOperation(position.operation);
-                if (allocation?.cellName === registerName) understood += totalUses;
+                const allocation = allocationFromOperation(position, overflowAnalysis);
+                if (allocation?.cellName === registerName) understood += 1;
 
-                const release = releaseCellFromOperation(position.operation);
-                if (release?.cellName === registerName && cellIdByRegister.get(registerName) === cellId) understood += totalUses;
+                const release = releaseCellFromOperation(position, overflowAnalysis);
+                if (release?.cellName === registerName && cellIdByRegister.get(registerName) === cellId) {
+                    understood += 1;
+                    if (release.resultName === registerName) understood += 1;
+                }
 
                 const factory = factoryCallFromOperation(position.operation);
                 if (factory) {
                     for (const capture of factory.captures) {
-                        if (isIdentifier(capture, registerName) && resolveCellIndex(position.ownerEntry, capture) === cellId) understood += 1;
+                        if (
+                            storageReadKey(capture, position, overflowAnalysis) === registerName &&
+                            resolveCellIndex(position.ownerEntry, capture, position) === cellId
+                        ) understood += 1;
                     }
                 }
 
+                const statementParsed = parseStatement(position.operation?.emittedText);
+                if (!statementParsed) {
+                    return { applied: false, safe: false, reason: "Cell " + cellId + " alias " + registerName + " appears in an unparseable beta operation" };
+                }
                 walk(statementParsed.statement, node => {
                     if (!isUpvalueValuesIndex(node)) return;
-                    if (isIdentifier(node.index, registerName) && resolveCellIndex(position.ownerEntry, node.index) === cellId) understood += 1;
+                    if (
+                        storageReadKey(node.index, position, overflowAnalysis) === registerName &&
+                        resolveCellIndex(position.ownerEntry, node.index, position) === cellId
+                    ) understood += 1;
                 });
 
-                const aliasCopy = identifierCopyFromOperation(position.operation);
+                const aliasCopy = storageCopyFromOperation(position, overflowAnalysis);
                 if (aliasCopyOperations.has(position.operation) && aliasCopy) {
                     if (aliasCopy.sourceName === registerName) understood += 1;
                     if (aliasCopy.targetName === registerName) understood += 1;
                 }
 
                 if (understood < totalUses) {
-                    return { applied: false, safe: false, reason: "Cell " + cellId + " alias " + registerName + " escapes recognized upvalue machinery in state " + position.stateId };
+                    return { applied: false, safe: false, reason: "Cell " + cellId + " alias " + registerName + " escapes recognized upvalue machinery in state " + position.stateId + " op " + (position.operationIndex + 1) + " (" + understood + "/" + totalUses + "): " + String(position.operation?.emittedText || "") };
                 }
             }
         }
@@ -675,10 +892,11 @@ function recoverBetaUpvalues(betaResult) {
 
     const removals = new Set();
     const replacements = new Map();
-    for (const operation of aliasCopyOperations) {
-        const copy = identifierCopyFromOperation(operation);
+    for (const position of positions) {
+        if (!aliasCopyOperations.has(position.operation)) continue;
+        const copy = storageCopyFromOperation(position, overflowAnalysis);
         const cellId = copy ? cellIdByRegister.get(copy.sourceName) : null;
-        if (cellId && capturedCellIds.has(cellId)) removals.add(operation);
+        if (cellId && capturedCellIds.has(cellId)) removals.add(position.operation);
     }
     let readRewriteCount = 0;
     let writeRewriteCount = 0;
@@ -706,7 +924,7 @@ function recoverBetaUpvalues(betaResult) {
             removals.add(cell.initialization.operation);
         } else {
             const initRhsText = cell.initialization.parsed.source.slice(cell.initialization.value.range[0], cell.initialization.value.range[1]);
-            const rewritten = rewriteExpressionUpvalues(initRhsText, cell.ownerEntry, resolveCellIndex, bindingByCell);
+            const rewritten = rewriteExpressionUpvalues(initRhsText, cell.initialization, resolveCellIndex, bindingByCell);
             if (rewritten.error) return { applied: false, safe: false, reason: rewritten.error };
             const hoisted = cell.bindingMode === "hoisted-cell-binding";
             replacements.set(cell.initialization.operation, {
@@ -746,7 +964,7 @@ function recoverBetaUpvalues(betaResult) {
         const operation = position.operation;
         if (removals.has(operation) || replacements.has(operation)) continue;
 
-        const release = releaseCellFromOperation(operation);
+        const release = releaseCellFromOperation(position, overflowAnalysis);
         const releaseCellId = release ? cellIdByRegister.get(release.cellName) : null;
         if (releaseCellId && capturedCellIds.has(releaseCellId)) {
             if (release.resultName && release.resultName !== release.cellName) {
@@ -764,11 +982,11 @@ function recoverBetaUpvalues(betaResult) {
 
         const write = indexedWriteFromOperation(operation);
         if (write) {
-            const cellId = resolveCellIndex(position.ownerEntry, write.target.index);
+            const cellId = resolveCellIndex(position.ownerEntry, write.target.index, position);
             if (cellId && capturedCellIds.has(cellId)) {
                 const bindingName = bindingByCell.get(cellId);
                 const rhsText = write.parsed.source.slice(write.value.range[0], write.value.range[1]);
-                const rewritten = rewriteExpressionUpvalues(rhsText, position.ownerEntry, resolveCellIndex, bindingByCell);
+                const rewritten = rewriteExpressionUpvalues(rhsText, position, resolveCellIndex, bindingByCell);
                 if (rewritten.error) return { applied: false, safe: false, reason: rewritten.error };
                 const isCompound = Boolean(write.compoundOperator);
                 replacements.set(operation, {
@@ -790,7 +1008,7 @@ function recoverBetaUpvalues(betaResult) {
         }
 
         if (operation.kind === "effect-write" && String(operation.emittedText || "").includes("upvalueValues")) {
-            const rewritten = rewriteStatementUpvalueReads(operation.emittedText, position.ownerEntry, resolveCellIndex, bindingByCell);
+            const rewritten = rewriteStatementUpvalueReads(operation.emittedText, position, resolveCellIndex, bindingByCell);
             if (rewritten.error) return { applied: false, safe: false, reason: rewritten.error };
             if (rewritten.text !== operation.emittedText) {
                 replacements.set(operation, {
@@ -804,7 +1022,7 @@ function recoverBetaUpvalues(betaResult) {
             }
         }
         if (operation.rhs && String(operation.rhs).includes("upvalueValues")) {
-            const rewritten = rewriteExpressionUpvalues(operation.rhs, position.ownerEntry, resolveCellIndex, bindingByCell);
+            const rewritten = rewriteExpressionUpvalues(operation.rhs, position, resolveCellIndex, bindingByCell);
             if (rewritten.error) return { applied: false, safe: false, reason: rewritten.error };
             if (rewritten.text !== operation.rhs) {
                 const originalText = String(operation.emittedText || "").trimStart();
@@ -839,7 +1057,7 @@ function recoverBetaUpvalues(betaResult) {
         for (const operation of state.operations || []) {
             const text = String(operation.emittedText || "");
             if (containsVmUpvalueMachinery(text)) {
-                return { applied: false, safe: false, reason: `State ${state.id} retains unresolved VM upvalue machinery after recovery` };
+                return { applied: false, safe: false, reason: `State ${state.id} retains unresolved VM upvalue machinery after recovery: ${text}` };
             }
         }
     }

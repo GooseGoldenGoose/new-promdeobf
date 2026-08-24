@@ -369,4 +369,50 @@ assert.equal(effectWriteCapturedRead.applied, true);
 const effectWriteCapturedRoot = effectWriteCapturedRead.graph.states.find(state => state.id === 1).operations;
 assert(effectWriteCapturedRoot.some(op => op.emittedText === "RegisterOverflow[3] = value" && op.reads.includes("value")));
 assert(!effectWriteCapturedRoot.some(op => String(op.emittedText || "").includes("upvalueValues[")));
+const overflowCellReuse = recoverBetaUpvalues({
+    applied: true,
+    graph: {
+        cfgComplete: true,
+        entries: [1, 2, 3],
+        states: [
+            { id: 1, predecessors: [], successors: [], operations: [
+                { kind: "effect-write", emittedText: "RegisterOverflow[3] = allocUpvalue()", rhs: "allocUpvalue()", reads: [] },
+                { kind: "version-define", emittedTarget: "value", emittedText: "local value = 7", rhs: "7", reads: [] },
+                { kind: "effect-write", emittedText: "upvalueValues[RegisterOverflow[3]] = value", reads: ["value"] },
+                { kind: "version-define", emittedTarget: "closureA", emittedText: "local closureA = createClosure2(2, { RegisterOverflow[3] })", rhs: "createClosure2(2, { RegisterOverflow[3] })", reads: [] },
+                { kind: "effect-write", emittedText: "RegisterOverflow[3] = releaseUpvalue(RegisterOverflow[3])", rhs: "releaseUpvalue(RegisterOverflow[3])", reads: [] },
+                { kind: "effect-write", emittedText: "RegisterOverflow[3] = allocUpvalue()", rhs: "allocUpvalue()", reads: [] },
+                { kind: "version-define", emittedTarget: "other", emittedText: "local other = 9", rhs: "9", reads: [] },
+                { kind: "effect-write", emittedText: "upvalueValues[RegisterOverflow[3]] = other", reads: ["other"] },
+                { kind: "version-define", emittedTarget: "closureB", emittedText: "local closureB = createClosure2(3, { RegisterOverflow[3] })", rhs: "createClosure2(3, { RegisterOverflow[3] })", reads: [] },
+                { kind: "effect-write", emittedText: "RegisterOverflow[3] = releaseUpvalue(RegisterOverflow[3])", rhs: "releaseUpvalue(RegisterOverflow[3])", reads: [] },
+                ...terminalOps(),
+            ] },
+            { id: 2, predecessors: [], successors: [], operations: [
+                { kind: "version-define", emittedTarget: "capturedA", emittedText: "local capturedA = upvalueValues[upvalues[1]]", rhs: "upvalueValues[upvalues[1]]", reads: [] },
+                ...terminalOps(),
+            ] },
+            { id: 3, predecessors: [], successors: [], operations: [
+                { kind: "version-define", emittedTarget: "capturedB", emittedText: "local capturedB = upvalueValues[upvalues[1]]", rhs: "upvalueValues[upvalues[1]]", reads: [] },
+                ...terminalOps(),
+            ] },
+        ],
+    },
+});
+assert.equal(overflowCellReuse.safe, true);
+assert.equal(overflowCellReuse.applied, true);
+assert.equal(overflowCellReuse.stats.recoveredCellCount, 2);
+assert.equal(overflowCellReuse.stats.captureCount, 2);
+assert.equal(overflowCellReuse.stats.releaseRemovalCount, 2);
+assert.equal(new Set(overflowCellReuse.cells.map(cell => cell.id)).size, 2);
+assert.deepEqual(overflowCellReuse.cells.map(cell => cell.bindingName), ["value", "other"]);
+const overflowReuseRoot = overflowCellReuse.graph.states.find(state => state.id === 1).operations;
+const overflowReuseChildA = overflowCellReuse.graph.states.find(state => state.id === 2).operations;
+const overflowReuseChildB = overflowCellReuse.graph.states.find(state => state.id === 3).operations;
+assert(overflowReuseRoot.some(op => op.rhs === "createClosure2(2, {})"));
+assert(overflowReuseRoot.some(op => op.rhs === "createClosure2(3, {})"));
+assert(overflowReuseChildA.some(op => op.emittedTarget === "capturedA" && op.rhs === "value"));
+assert(overflowReuseChildB.some(op => op.emittedTarget === "capturedB" && op.rhs === "other"));
+assert(!overflowReuseRoot.some(op => /allocUpvalue|releaseUpvalue|upvalueValues\[/.test(String(op.emittedText || ""))));
+
 console.log("beta upvalue recovery tests passed");

@@ -491,11 +491,24 @@ function versionVmBlockRegisters(source, ast) {
             const init = statement.init || [];
 
             if (isAtomicMultiCallAssignment(statement, candidateNames)) {
+                const targetPlans = [];
                 for (const variable of variables) {
-                    const rawDefinition = `u:${stateId}:${statement.range?.[0] ?? statementIndex}:${variable.name}`;
-                    lastDefinitions.set(variable.name, rawDefinition);
+                    const originalName = variable.name;
+                    if (specialFinalNames.has(originalName)) {
+                        const rawDefinition = `u:${stateId}:${statement.range?.[0] ?? statementIndex}:${originalName}`;
+                        lastDefinitions.set(originalName, rawDefinition);
+                        targetPlans.push({ originalName, newName: originalName, preservePhysical: true });
+                        continue;
+                    }
+                    const baseId = ensureBase(originalName);
+                    const version = (versionCounts.get(originalName) || 0) + 1;
+                    versionCounts.set(originalName, version);
+                    const newName = `r_v${baseId}_${version}`;
+                    targetPlans.push({ originalName, newName, baseId, version });
+                    lastDefinitions.set(originalName, `v:${newName}`);
+                    versions.push({ blockState: stateId, originalName, baseId, version, newName });
                 }
-                plans.set(statement, { kind: "multi-call-write" });
+                plans.set(statement, { kind: "multi-call-write", targets: targetPlans });
                 continue;
             }
 
@@ -577,63 +590,80 @@ function versionVmBlockRegisters(source, ast) {
 
     if (cfgComplete) {
         const epochByStatement = lifetimeAnalysis?.converged ? lifetimeAnalysis.epochByStatement : new Map();
+        const epochByStatementAndName = lifetimeAnalysis?.converged ? lifetimeAnalysis.epochByStatementAndName : new Map();
         const epochNames = new Map();
         const oldVersionInfo = new Map();
         versionCounts.clear();
         versions.length = 0;
 
+        function statementEpoch(statement, originalName, allowStatementFallback = false) {
+            const key = `${statement?.range?.[0] ?? "?"}\0${originalName}`;
+            return epochByStatementAndName?.get(key) || (allowStatementFallback ? epochByStatement.get(statement) : null);
+        }
+
+        function remapVersionPlan(targetPlan, statement, blockState, allowStatementFallback = false) {
+            if (!targetPlan || targetPlan.preservePhysical) return;
+            const oldName = targetPlan.newName;
+            const epoch = statementEpoch(statement, targetPlan.originalName, allowStatementFallback);
+            let newName;
+            let version;
+            let declareVersion = true;
+
+            const isReturnJoinEpoch = epoch?.kind === "return-join";
+            if (epoch && targetPlan.originalName !== stateName && (targetPlan.originalName !== returnName || isReturnJoinEpoch)) {
+                const epochKey = targetPlan.originalName + "\0" + epoch.key;
+                let existing = epochNames.get(epochKey);
+                if (!existing) {
+                    version = (versionCounts.get(targetPlan.originalName) || 0) + 1;
+                    versionCounts.set(targetPlan.originalName, version);
+                    const baseId = ensureBase(targetPlan.originalName);
+                    existing = { newName: `r_v${baseId}_${version}`, version, declared: false };
+                    epochNames.set(epochKey, existing);
+                }
+                newName = existing.newName;
+                version = existing.version;
+                if (isReturnJoinEpoch) {
+                    declareVersion = epoch.declareHere === true;
+                    if (declareVersion) existing.declared = true;
+                } else {
+                    declareVersion = !existing.declared;
+                    existing.declared = true;
+                }
+                targetPlan.isLifetimeKill = epoch.isKill;
+                targetPlan.registerEpoch = epoch.key;
+            } else {
+                version = (versionCounts.get(targetPlan.originalName) || 0) + 1;
+                versionCounts.set(targetPlan.originalName, version);
+                const baseId = ensureBase(targetPlan.originalName);
+                newName = `r_v${baseId}_${version}`;
+            }
+
+            targetPlan.oldName = oldName;
+            targetPlan.newName = newName;
+            targetPlan.version = version;
+            targetPlan.declareVersion = declareVersion;
+            oldVersionInfo.set(oldName, { newName, isKill: targetPlan.isLifetimeKill === true });
+            versions.push({
+                blockState,
+                originalName: targetPlan.originalName,
+                baseId: ensureBase(targetPlan.originalName),
+                version,
+                newName,
+            });
+        }
+
         for (const block of blocks) {
             for (const statement of block.statements) {
                 const plan = block.plans.get(statement);
-                if (plan?.kind !== "versioned") continue;
-
-                const oldName = plan.newName;
-                const epoch = epochByStatement.get(statement);
-                let newName;
-                let version;
-                let declareVersion = true;
-
-                const isReturnJoinEpoch = epoch?.kind === "return-join";
-                if (epoch && plan.originalName !== stateName && (plan.originalName !== returnName || isReturnJoinEpoch)) {
-                    const epochKey = plan.originalName + "\0" + epoch.key;
-                    let existing = epochNames.get(epochKey);
-                    if (!existing) {
-                        version = (versionCounts.get(plan.originalName) || 0) + 1;
-                        versionCounts.set(plan.originalName, version);
-                        const baseId = ensureBase(plan.originalName);
-                        existing = { newName: `r_v${baseId}_${version}`, version, declared: false };
-                        epochNames.set(epochKey, existing);
-                    }
-                    newName = existing.newName;
-                    version = existing.version;
-                    if (isReturnJoinEpoch) {
-                        declareVersion = epoch.declareHere === true;
-                        if (declareVersion) existing.declared = true;
-                    } else {
-                        declareVersion = !existing.declared;
-                        existing.declared = true;
-                    }
-                    plan.isLifetimeKill = epoch.isKill;
-                    plan.registerEpoch = epoch.key;
-                } else {
-                    version = (versionCounts.get(plan.originalName) || 0) + 1;
-                    versionCounts.set(plan.originalName, version);
-                    const baseId = ensureBase(plan.originalName);
-                    newName = `r_v${baseId}_${version}`;
+                if (plan?.kind === "versioned") {
+                    remapVersionPlan(plan, statement, block.stateId, true);
+                    continue;
                 }
-
-                plan.oldName = oldName;
-                plan.newName = newName;
-                plan.version = version;
-                plan.declareVersion = declareVersion;
-                oldVersionInfo.set(oldName, { newName, isKill: plan.isLifetimeKill === true });
-                versions.push({
-                    blockState: block.stateId,
-                    originalName: plan.originalName,
-                    baseId: plan.baseId,
-                    version,
-                    newName,
-                });
+                if (plan?.kind === "multi-call-write") {
+                    for (const targetPlan of plan.targets || []) {
+                        remapVersionPlan(targetPlan, statement, block.stateId, false);
+                    }
+                }
             }
         }
 
@@ -655,6 +685,11 @@ function versionVmBlockRegisters(source, ast) {
             for (const statement of block.statements) {
                 const plan = block.plans.get(statement);
                 if (plan?.kind === "versioned") plan.declareVersion = true;
+                if (plan?.kind === "multi-call-write") {
+                    for (const targetPlan of plan.targets || []) {
+                        if (!targetPlan.preservePhysical) targetPlan.declareVersion = true;
+                    }
+                }
             }
         }
     }
@@ -770,26 +805,43 @@ function versionVmBlockRegisters(source, ast) {
                 for (const versionName of usedVersions) {
                     if (incomingVersionNames.has(versionName)) crossBlockUsedVersions.add(versionName);
                 }
-                const originalRhs = source.slice(init[0].range[0], init[0].range[1]);
-                if (rhs !== originalRhs) edits.push({ start: init[0].range[0], end: init[0].range[1], replacement: rhs });
                 const call = init[0];
                 const callBaseOriginal = isIdentifier(call.base) ? call.base.name : null;
                 const callArgumentOriginals = (call.arguments || []).map(argument => isIdentifier(argument) ? argument.name : null);
-                const targets = variables.map(variable => variable.name);
+                const originalTargets = variables.map(variable => variable.name);
+                const targetPlans = plan.targets || [];
+                const emittedTargets = targetPlans.map((targetPlan, index) => targetPlan?.newName || originalTargets[index]);
+                const declarations = targetPlans
+                    .filter(targetPlan => targetPlan && !targetPlan.preservePhysical && targetPlan.declareVersion !== false)
+                    .map(targetPlan => targetPlan.newName);
+                let emittedSource;
+                if (declarations.length === emittedTargets.length && targetPlans.every(targetPlan => !targetPlan?.preservePhysical)) {
+                    emittedSource = `local ${emittedTargets.join(", ")} = ${rhs}`;
+                } else {
+                    const declarationText = declarations.length ? `local ${declarations.join(", ")}\n` : "";
+                    emittedSource = `${declarationText}${emittedTargets.join(", ")} = ${rhs}`;
+                }
+                edits.push({ start: statement.range[0], end: statement.range[1], replacement: emittedSource });
                 graphOperations.push({
                     index: graphOperations.length + 1,
                     kind: "multi-call-write",
-                    originalTargets: [...targets],
-                    emittedTargets: [...targets],
+                    originalTargets: [...originalTargets],
+                    emittedTargets: [...emittedTargets],
+                    targetRegisterEpochs: targetPlans.map(targetPlan => targetPlan?.registerEpoch || null),
+                    targetDeclarations: targetPlans.map(targetPlan => Boolean(targetPlan && !targetPlan.preservePhysical && targetPlan.declareVersion !== false)),
                     callBaseOriginal,
                     callArgumentOriginals,
                     rhs,
                     reads: [...usedVersions],
                     originalText: source.slice(statement.range[0], statement.range[1]).trim(),
-                    emittedText: `${targets.join(", ")} = ${rhs}`,
+                    emittedText: `${emittedTargets.join(", ")} = ${rhs}`,
                     returnSinkSafe: false,
                 });
-                for (const variable of variables) latestVersions.delete(variable.name);
+                for (let index = 0; index < originalTargets.length; index++) {
+                    const targetPlan = targetPlans[index];
+                    if (!targetPlan || targetPlan.preservePhysical) latestVersions.delete(originalTargets[index]);
+                    else latestVersions.set(originalTargets[index], targetPlan.newName);
+                }
                 continue;
             }
 

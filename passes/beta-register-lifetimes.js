@@ -206,7 +206,11 @@ function analyzeBetaRegisterLifetimes({
                 const variables = statement.variables || [];
                 const init = statement.init || [];
                 const exactSingle = variables.length === 1 && init.length === 1 && isIdentifier(variables[0], name);
-                const supported = exactSingle && plan?.kind === "versioned";
+                const atomicMultiCall =
+                    plan?.kind === "multi-call-write" &&
+                    variables.length >= 2 && init.length === 1 && init[0]?.type === "CallExpression" &&
+                    variables.some(variable => isIdentifier(variable, name));
+                const supported = (exactSingle && plan?.kind === "versioned") || atomicMultiCall;
                 const id = supported
                     ? `d${nextDefinitionId++}`
                     : `u:${block.stateId}:${statement.range?.[0] ?? statementIndex}:${name}`;
@@ -216,9 +220,9 @@ function analyzeBetaRegisterLifetimes({
                     blockState: block.stateId,
                     statementIndex,
                     statement,
-                    rhs: exactSingle ? init[0] : null,
+                    rhs: exactSingle ? init[0] : (atomicMultiCall ? init[0] : null),
                     supported,
-                    isNil: supported && isNilLiteral(init[0]),
+                    isNil: exactSingle && supported && isNilLiteral(init[0]),
                     sourceOffset: statement.range?.[0] ?? Number.MAX_SAFE_INTEGER,
                     useCount: 0,
                 };
@@ -503,7 +507,9 @@ function analyzeBetaRegisterLifetimes({
     }
 
     const ordinaryDefinitions = definitions.filter(definition =>
-        ordinaryNames.has(definition.name) && definition.supported && !definition.isNil
+        ordinaryNames.has(definition.name) &&
+        definition.supported &&
+        (!definition.isNil || definition.useCount > 0)
     );
     const ordinaryDefinitionIds = new Set(ordinaryDefinitions.map(definition => definition.id));
     const unionFind = new UnionFind(ordinaryDefinitionIds);
@@ -681,9 +687,14 @@ function analyzeBetaRegisterLifetimes({
     }
 
     const epochByStatement = new Map();
+    const epochByStatementAndName = new Map();
+    function setStatementEpoch(definition, info) {
+        epochByStatement.set(definition.statement, info);
+        epochByStatementAndName.set(definitionKey(definition.statement, definition.name), info);
+    }
     for (const definition of ordinaryDefinitions) {
         const epoch = epochByDefinitionId.get(definition.id);
-        if (epoch) epochByStatement.set(definition.statement, { key: epoch.key, epoch, isKill: false });
+        if (epoch) setStatementEpoch(definition, { key: epoch.key, epoch, isKill: false });
     }
 
     let returnJoinEpochCount = 0;
@@ -711,7 +722,7 @@ function analyzeBetaRegisterLifetimes({
         returnJoinEpochCount++;
         returnJoinMergedDefinitionCount += groupDefinitions.length - 1;
         for (const definition of groupDefinitions) {
-            epochByStatement.set(definition.statement, {
+            setStatementEpoch(definition, {
                 key: epoch.key,
                 epoch,
                 isKill: false,
@@ -738,12 +749,15 @@ function analyzeBetaRegisterLifetimes({
         const epoch = epochByRoot.get([...roots][0]);
         if (!epoch) continue;
         epoch.cleanupIds.push(cleanup.id);
-        epochByStatement.set(cleanup.statement, {
-            key: epoch.key,
-            epoch,
-            isKill: true,
-            cleanupId: cleanup.id,
-        });
+        setStatementEpoch(
+            definitionById.get(cleanup.definitionId),
+            {
+                key: epoch.key,
+                epoch,
+                isKill: true,
+                cleanupId: cleanup.id,
+            }
+        );
         attachedCleanupCount++;
     }
 
@@ -763,6 +777,7 @@ function analyzeBetaRegisterLifetimes({
         dependenciesByDefinitionId,
         epochs,
         epochByStatement,
+        epochByStatementAndName,
         stats: {
             valueRegisterCount: valueNames.size,
             registerCount: ordinaryNames.size,

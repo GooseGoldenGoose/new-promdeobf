@@ -840,6 +840,192 @@ function removeCompilerPosPreservationOperations(graph) {
     return { removed: removals.size, saveCount, restoreCount, orphanSaveCount };
 }
 
+function hoistEscapingEpochDeclarations(nodes) {
+    let nextScopeId = 1;
+    const scopes = new Map([[0, { id: 0, parentId: null, insertionBody: nodes }]]);
+    const rawLocations = new Map();
+    const loopVariables = new Set();
+
+    function childScope(parentId, insertionBody) {
+        const id = nextScopeId++;
+        scopes.set(id, { id, parentId, insertionBody });
+        return id;
+    }
+
+    function indexStructure(body, scopeId) {
+        for (const node of body || []) {
+            if (node.type === "raw") {
+                rawLocations.set(node, { scopeId, body });
+                continue;
+            }
+            if (node.type === "numeric-for") {
+                loopVariables.add(node.variable);
+                indexStructure(node.body, childScope(scopeId, node.body));
+                continue;
+            }
+            if (node.type === "generic-for") {
+                for (const variable of node.variables || []) loopVariables.add(variable);
+                indexStructure(node.body, childScope(scopeId, node.body));
+                continue;
+            }
+            if (node.type === "while-guard") {
+                const scope = childScope(scopeId, node.conditionBody);
+                indexStructure(node.conditionBody, scope);
+                indexStructure(node.body, scope);
+                continue;
+            }
+            if (node.type === "repeat-until") {
+                const scope = childScope(scopeId, node.body);
+                indexStructure(node.body, scope);
+                indexStructure(node.conditionBody, scope);
+                continue;
+            }
+            if (node.type === "if") {
+                indexStructure(node.thenBody, childScope(scopeId, node.thenBody));
+                if (node.elseBody) indexStructure(node.elseBody, childScope(scopeId, node.elseBody));
+            }
+        }
+    }
+    indexStructure(nodes, 0);
+
+    const candidates = new Map();
+    for (const [node, location] of rawLocations) {
+        const operation = node.operation || {};
+        const name = operation.emittedTarget;
+        if (!name || operation.kind !== "epoch-start" || !operation.registerEpoch) continue;
+        if (!String(node.text || "").trimStart().startsWith("local ")) continue;
+        if (candidates.has(name)) {
+            candidates.get(name).invalid = true;
+            continue;
+        }
+        candidates.set(name, {
+            name,
+            epoch: operation.registerEpoch,
+            declarationNode: node,
+            declarationScopeId: location.scopeId,
+            occurrenceScopes: new Set(),
+            invalid: loopVariables.has(name),
+        });
+    }
+    if (!candidates.size) return { applied: false, safe: true, count: 0 };
+
+    function recordReads(reads, scopeId) {
+        for (const name of reads || []) {
+            const candidate = candidates.get(name);
+            if (candidate) candidate.occurrenceScopes.add(scopeId);
+        }
+    }
+
+    function collectOccurrences(body, scopeId) {
+        for (const node of body || []) {
+            if (node.type === "raw") {
+                const operation = node.operation || {};
+                const candidate = candidates.get(operation.emittedTarget);
+                if (candidate) {
+                    if (operation.registerEpoch && operation.registerEpoch !== candidate.epoch) candidate.invalid = true;
+                    else candidate.occurrenceScopes.add(scopeId);
+                }
+                recordReads(node.reads, scopeId);
+                continue;
+            }
+            if (node.type === "numeric-for" || node.type === "generic-for") {
+                recordReads(node.reads, scopeId);
+                const child = [...scopes.values()].find(scope => scope.parentId === scopeId && scope.insertionBody === node.body);
+                if (child) collectOccurrences(node.body, child.id);
+                continue;
+            }
+            if (node.type === "while-guard") {
+                const child = [...scopes.values()].find(scope => scope.parentId === scopeId && scope.insertionBody === node.conditionBody);
+                if (!child) continue;
+                collectOccurrences(node.conditionBody, child.id);
+                recordReads(node.reads, child.id);
+                collectOccurrences(node.body, child.id);
+                continue;
+            }
+            if (node.type === "repeat-until") {
+                const child = [...scopes.values()].find(scope => scope.parentId === scopeId && scope.insertionBody === node.body);
+                if (!child) continue;
+                collectOccurrences(node.body, child.id);
+                collectOccurrences(node.conditionBody, child.id);
+                recordReads(node.reads, child.id);
+                continue;
+            }
+            if (node.type === "if") {
+                recordReads(node.reads, scopeId);
+                const thenScope = [...scopes.values()].find(scope => scope.parentId === scopeId && scope.insertionBody === node.thenBody);
+                if (thenScope) collectOccurrences(node.thenBody, thenScope.id);
+                if (node.elseBody) {
+                    const elseScope = [...scopes.values()].find(scope => scope.parentId === scopeId && scope.insertionBody === node.elseBody);
+                    if (elseScope) collectOccurrences(node.elseBody, elseScope.id);
+                }
+            }
+        }
+    }
+    collectOccurrences(nodes, 0);
+
+    function ancestors(scopeId) {
+        const result = [];
+        let current = scopeId;
+        while (current !== null && current !== undefined) {
+            result.push(current);
+            current = scopes.get(current)?.parentId ?? null;
+        }
+        return result;
+    }
+
+    function commonAncestor(scopeIds) {
+        const ids = [...scopeIds];
+        if (!ids.length) return null;
+        const first = ancestors(ids[0]);
+        for (const candidate of first) {
+            if (ids.every(id => ancestors(id).includes(candidate))) return candidate;
+        }
+        return null;
+    }
+
+    let count = 0;
+    for (const candidate of candidates.values()) {
+        if (candidate.invalid) continue;
+        candidate.occurrenceScopes.add(candidate.declarationScopeId);
+        const targetScopeId = commonAncestor(candidate.occurrenceScopes);
+        if (targetScopeId === null) continue;
+
+        const declarationNode = candidate.declarationNode;
+        const operation = declarationNode.operation || {};
+        const rhs = operation.rhs;
+        if (typeof rhs !== "string" || !rhs.trim()) continue;
+
+        const needsHoist = targetScopeId !== candidate.declarationScopeId || candidate.occurrenceScopes.size > 1;
+        if (!needsHoist) continue;
+
+        const declarationOperation = {
+            kind: "epoch-hoisted-declaration",
+            originalTarget: operation.originalTarget,
+            emittedTarget: candidate.name,
+            registerEpoch: candidate.epoch,
+            rhs: null,
+            reads: [],
+            emittedText: `local ${candidate.name}`,
+            returnSinkSafe: false,
+        };
+        const targetBody = scopes.get(targetScopeId)?.insertionBody;
+        if (!targetBody) continue;
+        targetBody.unshift(rawNode(declarationOperation, null));
+
+        const assignmentOperation = {
+            ...operation,
+            kind: "epoch-mutate",
+            emittedText: `${candidate.name} = ${rhs}`,
+        };
+        declarationNode.operation = assignmentOperation;
+        declarationNode.text = assignmentOperation.emittedText;
+        declarationNode.reads = [...(assignmentOperation.reads || [])];
+        count++;
+    }
+
+    return { applied: count > 0, safe: true, count };
+}
+
 function validateStructuredLocalScopes(nodes) {
     let nextScopeId = 1;
     let sequence = 0;
@@ -1390,10 +1576,22 @@ function structureLoopBodyRegion(stateById, region, bodyId, checkId, skipOperati
             ) {
                 const partial = earliestCommonReachableJoin(info.onTrue, info.onFalse, stopState, exitNode, reachableSets);
                 if (partial.ambiguous) throw new Error('loop body branch has ambiguous shared continuation');
-                join = partial.join;
+                if (partial.join !== null) {
+                    join = partial.join;
+                } else {
+                    const trueReachesStop = reachesState(info.onTrue, stopState, reachableSets);
+                    const falseReachesStop = reachesState(info.onFalse, stopState, reachableSets);
+                    if (trueReachesStop || falseReachesStop) {
+                        throw new Error('loop body branch has no unique continuation inside the requested region');
+                    }
+                    // Neither arm can reach the caller's continuation. Keep the
+                    // proven immediate post-dominator: this nested branch terminates
+                    // the current sequence through break/continue/return instead of
+                    // reconverging at the caller stop.
+                }
             }
             if (join === breakNode) join = exitNode;
-            if (join === null || join === current) throw new Error('loop body branch has no unique join');
+            if (join === null || join === current) throw new Error('loop body branch has no unique join at state ' + String(current) + ' true=' + String(info.onTrue) + ' false=' + String(info.onFalse) + ' join=' + String(join));
             if (join !== exitNode && !region.ids.has(join)) throw new Error('loop body branch escapes loop');
 
             function directControlPath(target) {
@@ -1726,13 +1924,20 @@ function matchCompilerGenericFor(graph, checkStateId) {
     const iteratorStep = iteratorSteps[0];
     if ((check.operations || []).length !== 2 || !check.operations.includes(checkInfo.operation)) return null;
     const targets = iteratorStep.originalTargets || [];
+    const emittedTargets = iteratorStep.emittedTargets || targets;
     const args = iteratorStep.callArgumentOriginals || [];
-    if (targets.length !== 2 || !targets.every(Boolean) || !iteratorStep.callBaseOriginal || args.length !== 2 || !args.every(Boolean)) return null;
+    if (
+        targets.length !== 2 || !targets.every(Boolean) ||
+        emittedTargets.length !== 2 || !emittedTargets.every(Boolean) ||
+        !iteratorStep.callBaseOriginal || args.length !== 2 || !args.every(Boolean)
+    ) return null;
     const controlName = targets[0];
+    const emittedControlName = emittedTargets[0];
     const secondVariableOriginal = targets[1];
+    const emittedSecondVariable = emittedTargets[1];
     const iteratorName = iteratorStep.callBaseOriginal;
     const iteratorStateName = args[0];
-    if (args[1] !== controlName || checkInfo.conditionName !== controlName) return null;
+    if (args[1] !== controlName || checkInfo.conditionName !== emittedControlName) return null;
 
     const region = collectLoopBodyRegion(stateById, predecessors, bodyId, check.id, exitId);
     if (!region) return null;
@@ -1763,12 +1968,12 @@ function matchCompilerGenericFor(graph, checkStateId) {
 
     const bodyEntry = stateById.get(bodyId);
     const recoveredUpvalueBindings = new Set(graph.recoveredUpvalueBindings || []);
-    const firstCopies = (bodyEntry?.operations || []).filter(operation =>
-        originalOperationTarget(operation) &&
-        operation?.rhs === controlName &&
-        operation?.emittedTarget &&
-        originalOperationTarget(operation) !== controlName
-    );
+    const firstCopies = (bodyEntry?.operations || []).filter(operation => {
+        const originalTarget = originalOperationTarget(operation);
+        if (!originalTarget || !operation?.emittedTarget || originalTarget === controlName) return false;
+        const rhsOriginal = originalOperationRhs(operation);
+        return rhsOriginal === controlName || operation?.rhs === emittedControlName;
+    });
     if (firstCopies.length !== 1) return null;
     const firstCopy = firstCopies[0];
     const firstVariableOriginal = originalOperationTarget(firstCopy);
@@ -1782,7 +1987,7 @@ function matchCompilerGenericFor(graph, checkStateId) {
     const firstVariableCaptured = recoveredUpvalueBindings.has(firstVariable);
     const secondBindingCandidates = (bodyEntry?.operations || []).filter(operation =>
         (operation?.kind === "upvalue-binding-start" || operation?.kind === "upvalue-binding-init") &&
-        operation?.rhs === secondVariableOriginal &&
+        (originalOperationRhs(operation) === secondVariableOriginal || operation?.rhs === emittedSecondVariable) &&
         operation?.emittedTarget &&
         recoveredUpvalueBindings.has(operation.emittedTarget)
     );
@@ -1808,7 +2013,7 @@ function matchCompilerGenericFor(graph, checkStateId) {
     if (!secondHasCompilerCleanup && secondOrdinaryCleanups.length !== 0) return null;
     if (!secondHasCompilerCleanup && secondBindingCandidates.length !== 1) return null;
     const secondBinding = secondHasCompilerCleanup ? null : secondBindingCandidates[0];
-    const secondVariable = secondBinding?.emittedTarget || secondVariableOriginal;
+    const secondVariable = secondBinding?.emittedTarget || emittedSecondVariable;
     const secondVariableCaptured = Boolean(secondBinding);
     const cleanupOperations = new Set();
     for (const variable of [
@@ -3334,6 +3539,8 @@ function solveAcyclicStructured(originalAst, graph) {
         return { applied: false, reason: `Acyclic structuring emitted ${emittedStates.size}/${states.length} reachable states` };
     }
 
+    const epochHoisting = hoistEscapingEpochDeclarations(structured.nodes);
+    if (!epochHoisting.safe) return { applied: false, reason: epochHoisting.reason || "Beta epoch declaration hoisting failed closed" };
     const scopeError = validateStructuredLocalScopes(structured.nodes);
     if (scopeError) return { applied: false, reason: scopeError };
 
@@ -3357,6 +3564,7 @@ function solveAcyclicStructured(originalAst, graph) {
         terminalReturnLowered: terminalReturnCount > 0,
         terminalReturnText: null,
         environmentHeader: presented.environmentHeader,
+        hoistedEpochDeclarationCount: epochHoisting.count || 0,
         registerOverflowUsed: graph.registerOverflowUsed === true,
         registerOverflowSlotCount: graph.registerOverflowSlotCount || 0,
     };
@@ -3488,9 +3696,22 @@ function nestedFunctionExpression(bodyText, options = {}) {
 
 function replaceClosureFactoryOperation(operation, functionExpression) {
     const text = String(operationText(operation) || "").trimStart();
-    const target = operation?.emittedTarget;
-    if (!target) return null;
-    const localPrefix = text.startsWith("local ") ? "local " : "";
+    let target = operation?.emittedTarget || null;
+    let localPrefix = text.startsWith("local ") ? "local " : "";
+
+    if (!target) {
+        const parsed = parseControlFlowStatement(text);
+        const statement = parsed?.statement;
+        const variables = statement?.variables || [];
+        const init = statement?.init || [];
+        if (
+            (statement?.type !== "AssignmentStatement" && statement?.type !== "LocalStatement") ||
+            variables.length !== 1 || init.length !== 1 || !Array.isArray(variables[0]?.range)
+        ) return null;
+        target = parsed.source.slice(variables[0].range[0], variables[0].range[1]);
+        localPrefix = statement.type === "LocalStatement" ? "local " : "";
+    }
+
     return {
         ...operation,
         rhs: functionExpression,
