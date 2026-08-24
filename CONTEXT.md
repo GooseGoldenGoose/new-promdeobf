@@ -238,7 +238,9 @@ MAX_REGS=5 regenerated source fixtures 1-10 were tested through source -> obfusc
 - samples 5 and 10: source/obfuscated/normal runtime parity passes and experimental CF generates, but LuaJIT cannot compile final CF because scalarization exposes more than 200 locals
 - sample 4 initially exposed inconsistent experimental `originalTarget` presentation metadata; preserving the synthetic physical identity fixed repeat recognition, and sample 4 now recovers 35 states with 1 while + 3 repeats and matches source runtime
 
-Existing tracked normal outputs 1-63 still pass the experimental solver: 63/63 generate; 61/63 remain byte-identical to production beta-CF and only true overflow fixtures 5/10 differ.
+Existing tracked normal outputs 1-63 still pass both solvers: production 63/63 and experimental 63/63. After the sample 36 repeat fix, only sample 36 changes versus the prior production beta-CF baseline; production vs experimental still differ only on true overflow fixtures 5/10.
+
+Saved MAX_REGS=5 regenerated normal outputs 1-63 also pass the experimental solver 63/63 after the repeat fix. Only sample 36 changes versus the prior forced-overflow results, and its runtime now matches readable source with zero `RegisterOverflow[...]` refs.
 
 Samples 5 and 10 can exceed the Lua/Luau/LuaJIT local-register limit after scalar overflow presentation. This is a real practical downside of the scalar experiment, separate from CFG generation correctness.
 
@@ -268,35 +270,26 @@ Runtime classification:
 - some CF re-obfuscation still hits the local compiler's known `Unresolved Upvalue` bug
 - anti-tamper/formatter-sensitive fixtures are not always valid standalone LuaJIT parity tests
 
-## Confirmed Correctness Issue: Sample 36
+## Fixed Repeat Short-Circuit Regression: Sample 36
 
-This is the known real beta-CF semantic regression.
+Sample 36 previously retained Prometheus's compiler-discarded first evaluation of a multi-state short-circuit repeat condition, so readable source began with `short-repeat-body 0` while beta-CF began after `srA()/srC()` side effects at `short-repeat-body 1`.
 
-Readable source begins repeat body with:
+Root cause: the duplicate-condition matcher saw the correct full pre-check region plus smaller suffix matches. It also treated dead pure compiler temporaries / ReturnVal aliases as semantic differences. Because the matcher required exactly one raw match, it rejected the valid full duplicate.
+
+Fix in both production and experimental beta-CF:
+- condition signatures ignore only proven dead scalar temporaries whose beta outputs are unread inside the condition region/transition graph
+- compiler `ReturnVal = <identifier>` aliases are treated as storage bookkeeping, matching the existing compiler-condition signature path
+- nested duplicate matches are filtered by structural containment; only a single maximal enclosing duplicate is accepted, and unrelated multiple maximal matches still fail closed
+
+Verified source behavior is restored:
 
 ```text
 short-repeat-body    0
+RA                    1
+RC                    1
 ```
 
-Current beta-CF begins with:
-
-```text
-short-repeat-body    1
-```
-
-The solver retains the compiler-discarded pre-repeat short-circuit evaluation instead of fully restoring source repeat semantics.
-
-Historical bisect:
-
-```text
-0237d60  GOOD
-7a881ab  BAD
-```
-
-Regression introduced at:
-`7a881ab Recover ReturnVal joins and CF tails`.
-
-It remains in current main. Do not claim full 1-63 source-semantic parity until fixed structurally.
+Historical bisect was `0237d60` GOOD / `7a881ab` BAD. The regression is now fixed structurally without reverting later ReturnVal/join work.
 
 Sample 20 is separate: its working-copy source has user-added `o/l/d/f` prints while tracked `20.txt` was not regenerated. Do not treat that as a solver regression.
 
@@ -349,7 +342,7 @@ Safety validation:
 - all 63 numeric fixtures pass normal + beta + beta-CF generation
 - 189/189 normal/beta/CF outputs were byte-for-byte identical to the frozen pre-optimization baseline
 - combined `tools/deobfuscate-beta-control-flow.js` path passes all 63 numeric fixtures; both generated normal and beta-CF outputs match that frozen baseline byte-for-byte
-- sample 36 known repeat-source semantic regression is unchanged and remains a separate correctness issue
+- sample 36 repeat-source regression is fixed; production and experimental beta-CF now match readable source, including the forced MAX_REGS=5 overflow path
 
 ## Important Recent Commits
 
@@ -368,11 +361,10 @@ Use `git log` for anything newer.
 
 ## Immediate Priorities
 
-1. Fix sample 36 repeat-source regression structurally without regressing 29/30 or large encrypted repeat fixtures.
-2. Keep large-file beta-CF near current optimized performance; profile before adding expensive global scans.
-3. Preserve fail-closed behavior for unproven generic-for, POS/state-data, overflow, capture, and lifetime shapes.
-4. Re-test numeric fixtures after meaningful CFG/upvalue/lifetime changes.
-5. Keep this file compact; replace stale sections instead of appending chronology.
+1. Keep large-file beta-CF near current optimized performance; profile before adding expensive global scans.
+2. Preserve fail-closed behavior for unproven generic-for, POS/state-data, overflow, capture, lifetime, and repeat-duplicate shapes.
+3. Re-test numeric fixtures after meaningful CFG/upvalue/lifetime changes.
+4. Keep this file compact; replace stale sections instead of appending chronology.
 
 ## New-Chat Resume
 

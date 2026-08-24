@@ -2626,11 +2626,52 @@ function collectAcyclicRegionToExit(stateById, predecessors, entryId, exitId) {
     return { ids };
 }
 
-function canonicalConditionStateOperations(state, entryStartIndex = 0) {
-    const operations = (state.operations || []).filter(operation =>
-        operation?.kind !== 'state-transition' && operation?.kind !== 'phi-declare' && operation?.kind !== 'phi-assign'
+function isCompilerReturnAlias(operation) {
+    if (originalOperationTarget(operation) !== 'ReturnVal' || operation?.returnSinkSafe !== true) return false;
+    return parseOperationExpression(operation)?.type === 'Identifier';
+}
+
+function rawConditionStateOperations(state, entryStartIndex = 0) {
+    const operations = (state?.operations || []).filter(operation =>
+        operation?.kind !== 'state-transition' &&
+        operation?.kind !== 'phi-declare' &&
+        operation?.kind !== 'phi-assign' &&
+        !isCompilerReturnAlias(operation)
     );
-    const selected = operations.slice(entryStartIndex);
+    return operations.slice(entryStartIndex);
+}
+
+function conditionRegionIgnoredCompilerTemporaries(stateById, region, entryId, entryStartIndex = 0) {
+    const selectedByState = new Map();
+    const reads = new Set();
+    for (const stateId of region.ids) {
+        const state = stateById.get(stateId);
+        const selected = rawConditionStateOperations(state, stateId === entryId ? entryStartIndex : 0);
+        selectedByState.set(stateId, selected);
+        for (const operation of selected) {
+            for (const name of operation?.reads || []) reads.add(name);
+        }
+        for (const operation of state?.operations || []) {
+            if (operation?.kind !== 'state-transition') continue;
+            for (const name of operation?.reads || []) reads.add(name);
+        }
+    }
+
+    const ignored = new Set();
+    const scalarKinds = new Set(['version-define', 'epoch-start', 'epoch-mutate']);
+    for (const selected of selectedByState.values()) {
+        for (const operation of selected) {
+            if (!scalarKinds.has(operation?.kind)) continue;
+            if (operation?.returnSinkSafe !== true || !operation?.emittedTarget) continue;
+            if (reads.has(operation.emittedTarget)) continue;
+            ignored.add(operation);
+        }
+    }
+    return ignored;
+}
+
+function canonicalConditionStateOperations(state, entryStartIndex = 0, ignoredOperations = null) {
+    const selected = rawConditionStateOperations(state, entryStartIndex).filter(operation => !ignoredOperations?.has(operation));
     if (!selected.length) return '[]';
     const signature = canonicalCompilerOperationSequence(selected);
     if (!signature) return null;
@@ -2640,6 +2681,7 @@ function canonicalConditionStateOperations(state, entryStartIndex = 0) {
 }
 
 function conditionRegionSignature(stateById, region, entryId, exitId, entryStartIndex = 0) {
+    const ignoredOperations = conditionRegionIgnoredCompilerTemporaries(stateById, region, entryId, entryStartIndex);
     const memo = new Map();
     const visiting = new Set();
     function signature(stateId) {
@@ -2650,7 +2692,7 @@ function conditionRegionSignature(stateById, region, entryId, exitId, entryStart
         if (!state) return null;
         const info = transitionInfo(state);
         if (info.error || (info.kind !== 'jump' && info.kind !== 'branch')) return null;
-        const opSig = canonicalConditionStateOperations(state, stateId === entryId ? entryStartIndex : 0);
+        const opSig = canonicalConditionStateOperations(state, stateId === entryId ? entryStartIndex : 0, ignoredOperations);
         if (opSig === null) return null;
         visiting.add(stateId);
         let edgeSig;
@@ -2705,12 +2747,29 @@ function findDuplicatedRepeatConditionRegion(graph, repeatMatch) {
             if (!preSignature) continue;
             for (const real of realCandidates) {
                 if (preSignature === real.signature) {
-                    matches.push({ preEntryId: preEntry.id, preRegion: region, entryStartIndex: startIndex, realEntryId: real.realEntryId });
+                    matches.push({
+                        preEntryId: preEntry.id,
+                        preRegion: region,
+                        entryStartIndex: startIndex,
+                        realEntryId: real.realEntryId,
+                        realRegion: real.region,
+                    });
                 }
             }
         }
     }
-    return matches.length === 1 ? matches[0] : null;
+    const maximal = matches.filter(candidate => !matches.some(other => {
+        if (other === candidate) return false;
+        const candidatePre = candidate.preRegion.ids;
+        const otherPre = other.preRegion.ids;
+        const candidateReal = candidate.realRegion.ids;
+        const otherReal = other.realRegion.ids;
+        const preContained = [...candidatePre].every(id => otherPre.has(id));
+        const realContained = [...candidateReal].every(id => otherReal.has(id));
+        const strictlyLarger = otherPre.size > candidatePre.size || otherReal.size > candidateReal.size;
+        return preContained && realContained && strictlyLarger;
+    }));
+    return maximal.length === 1 ? maximal[0] : null;
 }
 
 function removeDuplicatedRepeatConditionRegions(graph) {

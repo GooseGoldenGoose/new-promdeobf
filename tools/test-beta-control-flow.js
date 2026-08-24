@@ -1,6 +1,11 @@
 const assert = require("assert");
-const { parseLua } = require("../main");
+const fs = require("fs");
+const os = require("os");
+const path = require("path");
+const { parseLua, parseLuaStructural, runDeobfuscator } = require("../main");
+const { versionVmBlockRegisters } = require("../passes/beta-register-versions");
 const { solveBetaControlFlow, removeCompilerPosPreservationOperations } = require("../passes/beta-control-flow");
+const { solveBetaControlFlow: solveExperimentalBetaControlFlow } = require("../passes/beta-control-flow-overflow-experimental");
 
 const wrapperSource = `return (function(_env)
     return 1
@@ -1327,5 +1332,32 @@ const dynamicOverflowRejected = solveBetaControlFlow(ast, {
 });
 assert.equal(dynamicOverflowRejected.applied, false);
 assert(dynamicOverflowRejected.reason.includes("non-static"));
+
+// Regression: Prometheus may compile a repeat condition once before the body and
+// again as the real post-test. A short-circuit condition can create nested suffix
+// matches inside the full duplicated region; recover only the unique maximal copy.
+const repeatShortCircuitInput = path.join(__dirname, "..", "sample", "36.txt");
+const repeatShortCircuitTemp = path.join(os.tmpdir(), `beta-cf-repeat-short-circuit-${process.pid}.lua`);
+try {
+    const normal = runDeobfuscator(repeatShortCircuitInput, repeatShortCircuitTemp, { analyzeBindings: false });
+    const normalAst = parseLuaStructural(normal.outputSource, "<beta-cf-repeat-short-circuit-normal>");
+    const beta = versionVmBlockRegisters(normal.outputSource, normalAst);
+    assert.equal(beta.applied, true);
+
+    const production = solveBetaControlFlow(normalAst, beta);
+    assert.equal(production.applied, true);
+    assert.equal(production.repeatLoopCount, 1);
+    assert.equal(production.removedRepeatCompilerConditionRegionCount, 1);
+    assert.equal(production.removedRepeatCompilerConditionStateCount, 4);
+    assert(production.source.includes('"short-repeat-body"'));
+
+    const experimental = solveExperimentalBetaControlFlow(normalAst, beta);
+    assert.equal(experimental.applied, true);
+    assert.equal(experimental.repeatLoopCount, 1);
+    assert.equal(experimental.removedRepeatCompilerConditionRegionCount, 1);
+    assert.equal(experimental.removedRepeatCompilerConditionStateCount, 4);
+} finally {
+    if (fs.existsSync(repeatShortCircuitTemp)) fs.unlinkSync(repeatShortCircuitTemp);
+}
 
 console.log("beta control-flow tests passed");
