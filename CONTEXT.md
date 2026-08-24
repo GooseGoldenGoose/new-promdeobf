@@ -878,6 +878,13 @@ Done for this turn — you can prompt now.
 - Standalone beta runtime still fails with the known cross-state beta-local presentation issue (`attempt to call local r_v1_8 (a nil value)`).
 
 
+## deobf.bat Helper (2026-08-24)
+
+- `deobf.bat` is now the interactive/sample-folder runner. It accepts a sample filename such as `52`, `52.txt`, or `spacial.txt`, strips any supplied path, resolves input only under `sample\`, and writes matching outputs under `output\`.
+- Modes are `normal`, `beta`, and `cf` (also accepted as `1`, `2`, `3`). Double-click/no-argument use prompts for filename and mode; optional CLI arguments also work, e.g. `deobf.bat 52 cf`.
+- Every mode first runs `node main.js sample\<file> output\<base>.lua`; beta then runs `tools\beta-register-versions.js` on the normal output; CF runs `tools\beta-control-flow.js` directly on the normal output, not on the standalone beta file. Missing sample input or any failed stage returns nonzero.
+- Verified with sample 52: normal, beta, and CF modes all exit 0.
+
 ## Latest Sample 52 PRNG/Decrypt Fixture (2026-08-24)
 
 - `sample/52.source.lua` materializes the user-provided generator placeholders as concrete numeric literals only so the fixture is standalone; no transform depends on those values.
