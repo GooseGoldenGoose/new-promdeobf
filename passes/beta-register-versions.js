@@ -24,6 +24,15 @@ function isOrderedEffectAssignment(statement) {
         Array.isArray(variables[0]?.range) && Array.isArray(init[0]?.range);
 }
 
+function isAtomicMultiCallAssignment(statement, candidateNames) {
+    if (statement?.type !== "AssignmentStatement" || !Array.isArray(statement.range)) return false;
+    const variables = statement.variables || [];
+    const init = statement.init || [];
+    if (variables.length < 2 || init.length !== 1 || init[0]?.type !== "CallExpression" || !Array.isArray(init[0]?.range)) return false;
+    if (!variables.every(variable => isIdentifier(variable) && candidateNames.has(variable.name) && Array.isArray(variable.range))) return false;
+    return true;
+}
+
 function numericValue(node) {
     if (node?.type !== "NumericLiteral") return null;
     const value = typeof node.value === "number" ? node.value : Number(node.raw);
@@ -466,6 +475,15 @@ function versionVmBlockRegisters(source, ast) {
                 continue;
             }
 
+            if (isAtomicMultiCallAssignment(statement, candidateNames)) {
+                for (const variable of variables) {
+                    const rawDefinition = `u:${stateId}:${statement.range?.[0] ?? statementIndex}:${variable.name}`;
+                    lastDefinitions.set(variable.name, rawDefinition);
+                }
+                plans.set(statement, { kind: "multi-call-write" });
+                continue;
+            }
+
             if (variables.length !== 1 || init.length !== 1 || !isIdentifier(variables[0])) {
                 for (const variable of variables) {
                     if (!isIdentifier(variable) || !candidateNames.has(variable.name)) continue;
@@ -717,6 +735,46 @@ function versionVmBlockRegisters(source, ast) {
                     emittedText: rewritten.text.trim(),
                     reads: [...usedVersions],
                 });
+                continue;
+            }
+
+            if (plan?.kind === "multi-call-write") {
+                const usedVersions = new Set();
+                const rhs = rewriteExpression(source, init[0], latestVersions, usedVersions);
+                if (rhs === null) {
+                    graphOperations.push({
+                        index: graphOperations.length + 1,
+                        kind: "unsupported",
+                        originalText: source.slice(statement.range[0], statement.range[1]).trim(),
+                        emittedText: source.slice(statement.range[0], statement.range[1]).trim(),
+                        reads: [],
+                    });
+                    for (const variable of variables) latestVersions.delete(variable.name);
+                    continue;
+                }
+                for (const versionName of usedVersions) {
+                    if (incomingVersionNames.has(versionName)) crossBlockUsedVersions.add(versionName);
+                }
+                const originalRhs = source.slice(init[0].range[0], init[0].range[1]);
+                if (rhs !== originalRhs) edits.push({ start: init[0].range[0], end: init[0].range[1], replacement: rhs });
+                const call = init[0];
+                const callBaseOriginal = isIdentifier(call.base) ? call.base.name : null;
+                const callArgumentOriginals = (call.arguments || []).map(argument => isIdentifier(argument) ? argument.name : null);
+                const targets = variables.map(variable => variable.name);
+                graphOperations.push({
+                    index: graphOperations.length + 1,
+                    kind: "multi-call-write",
+                    originalTargets: [...targets],
+                    emittedTargets: [...targets],
+                    callBaseOriginal,
+                    callArgumentOriginals,
+                    rhs,
+                    reads: [...usedVersions],
+                    originalText: source.slice(statement.range[0], statement.range[1]).trim(),
+                    emittedText: `${targets.join(", ")} = ${rhs}`,
+                    returnSinkSafe: false,
+                });
+                for (const variable of variables) latestVersions.delete(variable.name);
                 continue;
             }
 

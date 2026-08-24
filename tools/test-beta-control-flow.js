@@ -914,4 +914,46 @@ const cyclic = solveBetaControlFlow(ast, {
 assert.equal(cyclic.applied, false);
 assert(cyclic.reason.includes("loop/backedge"));
 
+
+const genericForStructured = solveBetaControlFlow(ast, {
+    applied: true,
+    graph: {
+        cfgComplete: true,
+        stateName: "state",
+        entries: [1],
+        states: [
+            { id: 1, predecessors: [], successors: [2], operations: [
+                { kind: "version-define", originalTarget: "r7", emittedTarget: "iter", rhs: "pairs", emittedText: "local iter = pairs", reads: [] },
+                { kind: "version-define", originalTarget: "r1", emittedTarget: "invariant", rhs: "items", emittedText: "local invariant = items", reads: [] },
+                { kind: "version-define", originalTarget: "r2", emittedTarget: "initialControl", rhs: "nil", emittedText: "local initialControl = nil", reads: [] },
+                { kind: "state-transition", originalTarget: "state", emittedTarget: "state", rhs: "2", emittedText: "state = 2", reads: [] },
+            ] },
+            { id: 2, predecessors: [1, 3], successors: [3, 4], operations: [
+                { kind: "multi-call-write", originalTargets: ["r2", "r4"], emittedTargets: ["r2", "r4"], callBaseOriginal: "r7", callArgumentOriginals: ["r1", "r2"], rhs: "iter(invariant, r2)", emittedText: "r2, r4 = iter(invariant, r2)", reads: ["iter", "invariant"] },
+                { kind: "state-transition", originalTarget: "state", emittedTarget: "state", rhs: "r2 and 3 or 4", emittedText: "state = r2 and 3 or 4", reads: [] },
+            ] },
+            { id: 3, predecessors: [2], successors: [2], operations: [
+                { kind: "epoch-start", originalTarget: "r3", emittedTarget: "i", rhs: "r2", emittedText: "local i = r2", reads: [] },
+                { kind: "statement", originalText: "consume(i, r4)", emittedText: "consume(i, r4)", reads: ["i"] },
+                { kind: "epoch-kill", originalTarget: "r3", emittedTarget: "i", rhs: "nil", emittedText: "i = nil", reads: [] },
+                { kind: "version-define", originalTarget: "r4", emittedTarget: "deadSecond", rhs: "nil", emittedText: "local deadSecond = nil", reads: [] },
+                { kind: "state-transition", originalTarget: "state", emittedTarget: "state", rhs: "2", emittedText: "state = 2", reads: [] },
+            ] },
+            { id: 4, predecessors: [2], successors: [], operations: [
+                { kind: "return-payload", terminalCompilerReturnPayload: true, returnExpressions: [], emittedText: "ReturnVal = {}", rhs: "{}", reads: [] },
+                { kind: "state-transition", originalTarget: "state", emittedTarget: "state", rhs: "nil", emittedText: "state = nil", reads: [] },
+            ] },
+        ],
+    },
+});
+assert.equal(genericForStructured.applied, true);
+assert.equal(genericForStructured.genericForLoopCount, 1);
+assert.equal(genericForStructured.numericForLoopCount, 0);
+assert.equal(genericForStructured.whileLoopCount, 0);
+assert(genericForStructured.source.includes("for i, r4 in iter, invariant, initialControl do"));
+assert(genericForStructured.source.includes("consume(i, r4)"));
+assert(!genericForStructured.source.includes("r2, r4 ="));
+assert(!genericForStructured.source.includes("state ="));
+parseLua(genericForStructured.source, "<beta-cf-generic-for-output>");
+
 console.log("beta control-flow tests passed");

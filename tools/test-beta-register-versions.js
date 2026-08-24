@@ -429,4 +429,46 @@ assert(!/\br[1-4]\b/.test(splitLoopResult.source));
 assert(splitLoopResult.source.includes("state = r_v"));
 parseLua(splitLoopResult.source, "<beta-split-loop-output>");
 
+
+const atomicMultiCallSource = `vm = function(state, args, upvalues, gcProxy)
+    local r1, r2, r3, r4, ReturnVal
+    while state do
+        if state == 1 then
+            r1 = iterator
+            r2 = seed
+            state = 2
+        end
+        if state == 2 then
+            r2, r4 = r1(args, r2)
+            state = r2 and 3 or 4
+        end
+        if state == 3 then
+            r3 = r2
+            consume(r3, r4)
+            r3 = nil
+            r4 = nil
+            state = 2
+        end
+        if state == 4 then
+            ReturnVal = {}
+            state = nil
+        end
+    end
+    state = #gcProxy
+    return unpack(ReturnVal)
+end
+root = createClosure(1, {})`;
+const atomicMultiCallResult = versionVmBlockRegisters(
+    atomicMultiCallSource,
+    parseLua(atomicMultiCallSource, "<beta-atomic-multi-call-test>")
+);
+assert.equal(atomicMultiCallResult.skippedAssignments, 0);
+const atomicMultiCallOperation = atomicMultiCallResult.graph.states.find(state => state.id === 2).operations.find(operation => operation.kind === "multi-call-write");
+assert(atomicMultiCallOperation);
+assert.deepEqual(atomicMultiCallOperation.originalTargets, ["r2", "r4"]);
+assert.equal(atomicMultiCallOperation.callBaseOriginal, "r1");
+assert.deepEqual(atomicMultiCallOperation.callArgumentOriginals, ["args", "r2"]);
+assert(atomicMultiCallOperation.emittedText.includes("r2, r4 ="));
+parseLua(atomicMultiCallResult.source, "<beta-atomic-multi-call-output>");
+
 console.log("beta register versioning tests passed");

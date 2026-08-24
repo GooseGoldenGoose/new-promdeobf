@@ -40,6 +40,7 @@ function main() {
     if (generated.controlFlow.joinCount !== undefined) console.log(`Branch joins: ${generated.controlFlow.joinCount}`);
     if (generated.controlFlow.guardBranchCount !== undefined) console.log(`Guard-return branches: ${generated.controlFlow.guardBranchCount}`);
     if (generated.controlFlow.numericForLoopCount !== undefined) console.log(`Numeric for loops: ${generated.controlFlow.numericForLoopCount}`);
+    if (generated.controlFlow.genericForLoopCount !== undefined) console.log(`Generic for loops: ${generated.controlFlow.genericForLoopCount}`);
     if (generated.controlFlow.whileLoopCount !== undefined) console.log(`While loops: ${generated.controlFlow.whileLoopCount}`);
     if (generated.controlFlow.repeatLoopCount !== undefined) console.log(`Repeat loops: ${generated.controlFlow.repeatLoopCount}`);
     if (generated.controlFlow.removedRepeatCompilerConditionOperationCount) console.log(`Repeat compiler-junk condition operations removed: ${generated.controlFlow.removedRepeatCompilerConditionOperationCount}`);

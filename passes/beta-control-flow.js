@@ -486,6 +486,16 @@ function numericForNode(variable, initial, limit, step, body, reads = []) {
     };
 }
 
+function genericForNode(variables, expressions, body, reads = []) {
+    return {
+        type: "generic-for",
+        variables: [...variables],
+        expressions: [...expressions],
+        body,
+        reads: [...reads],
+    };
+}
+
 function whileGuardNode(condition, conditionReads, conditionBody, body) {
     return {
         type: "while-guard",
@@ -507,7 +517,7 @@ function repeatUntilNode(condition, conditionReads, body, conditionBody) {
 }
 
 function operationNode(operation, stateId) {
-    if ((operation?.kind === "structured-numeric-for" || operation?.kind === "structured-while" || operation?.kind === "structured-repeat") && operation.structuredNode) {
+    if ((operation?.kind === "structured-numeric-for" || operation?.kind === "structured-generic-for" || operation?.kind === "structured-while" || operation?.kind === "structured-repeat") && operation.structuredNode) {
         return operation.structuredNode;
     }
     return rawNode(operation, stateId);
@@ -527,6 +537,14 @@ function formatStructuredNodes(nodes, depth = 0) {
         }
         if (node.type === "numeric-for") {
             const header = `${"    ".repeat(depth)}for ${node.variable} = ${node.initial}, ${node.limit}, ${node.step} do`;
+            const lines = [header];
+            if (node.body.length) lines.push("", formatStructuredNodes(node.body, depth + 1));
+            lines.push("", `${"    ".repeat(depth)}end`);
+            parts.push(lines.join("\n"));
+            continue;
+        }
+        if (node.type === "generic-for") {
+            const header = `${"    ".repeat(depth)}for ${node.variables.join(", ")} in ${node.expressions.join(", ")} do`;
             const lines = [header];
             if (node.body.length) lines.push("", formatStructuredNodes(node.body, depth + 1));
             lines.push("", `${"    ".repeat(depth)}end`);
@@ -572,7 +590,7 @@ function countStructuredStatements(nodes) {
         if (node.type === "if") {
             count += countStructuredStatements(node.thenBody);
             if (node.elseBody) count += countStructuredStatements(node.elseBody);
-        } else if (node.type === "numeric-for") {
+        } else if (node.type === "numeric-for" || node.type === "generic-for") {
             count += countStructuredStatements(node.body);
         } else if (node.type === "while-guard") {
             count += countStructuredStatements(node.conditionBody);
@@ -673,6 +691,17 @@ function validateStructuredLocalScopes(nodes) {
                 parentScope.set(bodyScope, scopeId);
                 const declarationError = addNumericForDeclaration(node.variable, bodyScope, scopeId, sequence);
                 if (declarationError) return declarationError;
+                const bodyError = visit(node.body, bodyScope);
+                if (bodyError) return bodyError;
+                continue;
+            }
+            if (node.type === "generic-for") {
+                const bodyScope = nextScopeId++;
+                parentScope.set(bodyScope, scopeId);
+                for (const variable of node.variables || []) {
+                    const declarationError = addNumericForDeclaration(variable, bodyScope, scopeId, sequence);
+                    if (declarationError) return declarationError;
+                }
                 const bodyError = visit(node.body, bodyScope);
                 if (bodyError) return bodyError;
                 continue;
@@ -1437,6 +1466,118 @@ function matchCompilerNumericFor(graph, checkStateId) {
     };
 }
 
+function matchCompilerGenericFor(graph, checkStateId) {
+    const states = graph.states || [];
+    const stateById = new Map(states.map(state => [state.id, state]));
+    const predecessors = computeGraphPredecessors(states);
+    const check = stateById.get(checkStateId);
+    if (!check || !Array.isArray(check.successors) || check.successors.length !== 2) return null;
+
+    const checkInfo = transitionInfo(check, { allowUnprovenCondition: true });
+    if (checkInfo.error || checkInfo.kind !== "branch") return null;
+    const bodyId = checkInfo.onTrue;
+    const exitId = checkInfo.onFalse;
+    if (!stateById.has(bodyId) || !stateById.has(exitId)) return null;
+
+    const iteratorSteps = (check.operations || []).filter(operation => operation?.kind === "multi-call-write");
+    if (iteratorSteps.length !== 1) return null;
+    const iteratorStep = iteratorSteps[0];
+    if ((check.operations || []).length !== 2 || !check.operations.includes(checkInfo.operation)) return null;
+    const targets = iteratorStep.originalTargets || [];
+    const args = iteratorStep.callArgumentOriginals || [];
+    if (targets.length !== 2 || !targets.every(Boolean) || !iteratorStep.callBaseOriginal || args.length !== 2 || !args.every(Boolean)) return null;
+    const controlName = targets[0];
+    const secondVariableOriginal = targets[1];
+    const iteratorName = iteratorStep.callBaseOriginal;
+    const iteratorStateName = args[0];
+    if (args[1] !== controlName || checkInfo.conditionName !== controlName) return null;
+
+    const region = collectLoopBodyRegion(stateById, predecessors, bodyId, check.id, exitId);
+    if (!region) return null;
+    const checkPreds = predecessors.get(check.id) || [];
+    const preheaderCandidates = checkPreds.filter(id => !region.ids.has(id));
+    if (preheaderCandidates.length !== 1) return null;
+    const preheaderId = preheaderCandidates[0];
+    if (!sameMembers(checkPreds, [preheaderId, ...region.latchIds])) return null;
+    const preheader = stateById.get(preheaderId);
+    if (!preheader || !Array.isArray(preheader.successors) || preheader.successors.length !== 1 || preheader.successors[0] !== check.id) return null;
+    if (hasUnsafeUnsupportedOperation(preheader.operations || [])) return null;
+    const preOps = preheader.operations || [];
+    const preInfo = transitionInfo(preheader);
+    if (preInfo.error || preInfo.kind !== "jump" || preInfo.target !== check.id || !canCanonicalizeTransitionTail(preheader, preInfo)) return null;
+    const preTransitionIndex = preOps.indexOf(preInfo.operation);
+
+    function lastOriginalDefinition(name) {
+        for (let index = preTransitionIndex - 1; index >= 0; index--) {
+            const operation = preOps[index];
+            if (originalOperationTarget(operation) === name && operation?.emittedTarget) return operation;
+        }
+        return null;
+    }
+    const iteratorDef = lastOriginalDefinition(iteratorName);
+    const iteratorStateDef = lastOriginalDefinition(iteratorStateName);
+    const controlDef = lastOriginalDefinition(controlName);
+    if (!iteratorDef || !iteratorStateDef || !controlDef) return null;
+
+    const bodyEntry = stateById.get(bodyId);
+    const firstCopies = (bodyEntry?.operations || []).filter(operation =>
+        originalOperationTarget(operation) &&
+        operation?.rhs === controlName &&
+        operation?.emittedTarget &&
+        originalOperationTarget(operation) !== controlName
+    );
+    if (firstCopies.length !== 1) return null;
+    const firstCopy = firstCopies[0];
+    const firstVariableOriginal = originalOperationTarget(firstCopy);
+    const firstVariable = firstCopy.emittedTarget;
+    const secondVariable = secondVariableOriginal;
+    if (!firstVariableOriginal || firstVariableOriginal === secondVariableOriginal) return null;
+
+    const requiredCleanupStates = new Set([...region.latchIds, ...(region.breakIds || [])]);
+    const cleanupOperations = new Set();
+    for (const variableName of [firstVariableOriginal, secondVariableOriginal]) {
+        const cleanups = [];
+        for (const stateId of region.ids) {
+            for (const operation of stateById.get(stateId)?.operations || []) {
+                if (originalOperationTarget(operation) !== variableName) continue;
+                const expression = parseOperationExpression(operation);
+                if (expression?.type === "NilLiteral") cleanups.push({ stateId, operation });
+            }
+        }
+        const cleanupStates = new Set(cleanups.map(item => item.stateId));
+        if (cleanups.length !== requiredCleanupStates.size || !sameMembers([...cleanupStates], [...requiredCleanupStates])) return null;
+        for (const item of cleanups) cleanupOperations.add(item.operation);
+    }
+
+    const protectedOriginalNames = new Set([iteratorName, iteratorStateName, controlName]);
+    for (const stateId of region.ids) {
+        for (const operation of stateById.get(stateId)?.operations || []) {
+            if (operation === firstCopy || cleanupOperations.has(operation)) continue;
+            const originalTarget = originalOperationTarget(operation);
+            if (protectedOriginalNames.has(originalTarget)) return null;
+            if (originalTarget === firstVariableOriginal || originalTarget === secondVariableOriginal) return null;
+        }
+    }
+
+    const skipOperations = new Set([firstCopy, ...cleanupOperations]);
+    const structuredBody = structureLoopBodyRegion(stateById, region, bodyId, check.id, skipOperations, null, exitId, true);
+    if (!structuredBody) return null;
+
+    return {
+        preheaderId,
+        checkId: check.id,
+        bodyId,
+        bodyStateIds: [...region.ids],
+        exitId,
+        loopVariables: [firstVariable, secondVariable],
+        iteratorExpressions: [iteratorDef.emittedTarget, iteratorStateDef.emittedTarget, controlDef.emittedTarget],
+        retainedPreheaderOperations: preOps.filter(operation => operation !== preInfo.operation),
+        bodyNodes: structuredBody.nodes,
+        bodyBranchCount: structuredBody.branchCount,
+        bodyJoinCount: structuredBody.joinCount,
+    };
+}
+
 function collectAcyclicConditionRegion(stateById, predecessors, entryId, decisionId, forbiddenIds = new Set()) {
     const ids = new Set();
     const visiting = new Set();
@@ -1581,6 +1722,7 @@ function matchCompilerWhile(graph, checkStateId) {
     // A numeric for has the same natural-loop topology. Let the stricter compiler
     // signature own it so generic while recovery cannot degrade a for into while true.
     if (matchCompilerNumericFor(graph, checkStateId)) return null;
+    if (matchCompilerGenericFor(graph, checkStateId)) return null;
 
     const states = graph.states || [];
     const stateById = new Map(states.map(state => [state.id, state]));
@@ -2393,6 +2535,7 @@ function collapseCompilerRepeatLoops(graph) {
 function collapseCompilerStructuredLoops(graph) {
     let working = graph;
     let numericForLoopCount = 0;
+    let genericForLoopCount = 0;
     let whileLoopCount = 0;
     let repeatLoopCount = 0;
     let removedRepeatCompilerConditionOperationCount = 0;
@@ -2407,6 +2550,12 @@ function collapseCompilerStructuredLoops(graph) {
         numericForLoopCount += numeric.loopCount;
         bodyBranchCount += numeric.bodyBranchCount || 0;
         bodyJoinCount += numeric.bodyJoinCount || 0;
+
+        const generic = collapseCompilerGenericForLoops(working);
+        working = generic.graph;
+        genericForLoopCount += generic.loopCount;
+        bodyBranchCount += generic.bodyBranchCount || 0;
+        bodyJoinCount += generic.bodyJoinCount || 0;
 
         const whiles = collapseCompilerWhileLoops(working);
         working = whiles.graph;
@@ -2426,12 +2575,13 @@ function collapseCompilerStructuredLoops(graph) {
         bodyBranchCount += repeats.bodyBranchCount || 0;
         bodyJoinCount += repeats.bodyJoinCount || 0;
 
-        if (numeric.loopCount === 0 && whiles.loopCount === 0 && repeats.loopCount === 0) break;
+        if (numeric.loopCount === 0 && generic.loopCount === 0 && whiles.loopCount === 0 && repeats.loopCount === 0) break;
     }
 
     return {
         graph: working,
         numericForLoopCount,
+        genericForLoopCount,
         whileLoopCount,
         repeatLoopCount,
         removedRepeatCompilerConditionOperationCount,
@@ -2518,6 +2668,64 @@ function collapseCompilerNumericForLoops(graph) {
         bodyJoinCount += match.bodyJoinCount || 0;
     }
 
+    return { graph: working, loopCount, bodyBranchCount, bodyJoinCount };
+}
+
+function collapseCompilerGenericForLoops(graph) {
+    let working = {
+        ...graph,
+        states: (graph.states || []).map(state => ({
+            ...state,
+            predecessors: [...(state.predecessors || [])],
+            successors: [...(state.successors || [])],
+            operations: [...(state.operations || [])],
+        })),
+    };
+    let loopCount = 0;
+    let bodyBranchCount = 0;
+    let bodyJoinCount = 0;
+
+    while (true) {
+        let match = null;
+        for (const state of working.states) {
+            match = matchCompilerGenericFor(working, state.id);
+            if (match) break;
+        }
+        if (!match) break;
+
+        const loopNode = genericForNode(match.loopVariables, match.iteratorExpressions, match.bodyNodes, match.iteratorExpressions);
+        const structuredOperation = {
+            kind: "structured-generic-for",
+            structuredNode: loopNode,
+            emittedText: formatStructuredNodes([loopNode]),
+            reads: [...match.iteratorExpressions],
+            returnSinkSafe: false,
+        };
+        const stateName = graph.stateName || "state";
+        const syntheticTransition = {
+            kind: "state-transition",
+            emittedTarget: stateName,
+            rhs: String(match.exitId),
+            emittedText: `${stateName} = ${match.exitId}`,
+            reads: [],
+        };
+        const removed = new Set([match.checkId, ...match.bodyStateIds]);
+        working = {
+            ...working,
+            states: working.states.filter(state => !removed.has(state.id)).map(state => {
+                if (state.id !== match.preheaderId) return state;
+                return {
+                    ...state,
+                    operations: [...match.retainedPreheaderOperations, structuredOperation, syntheticTransition],
+                    successors: [match.exitId],
+                };
+            }),
+        };
+        working = rebuildGraphPredecessors(working);
+        loopCount++;
+        bodyBranchCount += match.bodyBranchCount || 0;
+        bodyJoinCount += match.bodyJoinCount || 0;
+    }
     return { graph: working, loopCount, bodyBranchCount, bodyJoinCount };
 }
 
@@ -2940,6 +3148,7 @@ function solveSingleEntryControlFlow(originalAst, graph) {
     if (graph.states.length === 1) return {
         ...solveSingleState(originalAst, graph),
         numericForLoopCount: 0,
+        genericForLoopCount: 0,
         whileLoopCount: 0,
         repeatLoopCount: 0,
         removedRepeatCompilerConditionOperationCount: 0,
@@ -2958,6 +3167,7 @@ function solveSingleEntryControlFlow(originalAst, graph) {
         branchCount: (solved.branchCount || 0) + (collapsed.bodyBranchCount || 0),
         joinCount: (solved.joinCount || 0) + (collapsed.bodyJoinCount || 0),
         numericForLoopCount: collapsed.numericForLoopCount,
+        genericForLoopCount: collapsed.genericForLoopCount,
         whileLoopCount: collapsed.whileLoopCount,
         repeatLoopCount: collapsed.repeatLoopCount,
         removedRepeatCompilerConditionOperationCount: collapsed.removedRepeatCompilerConditionOperationCount,
@@ -3052,6 +3262,7 @@ function solveClosureRegions(originalAst, graph) {
         joinCount: sum("joinCount"),
         guardBranchCount: sum("guardBranchCount"),
         numericForLoopCount: sum("numericForLoopCount"),
+        genericForLoopCount: sum("genericForLoopCount"),
         whileLoopCount: sum("whileLoopCount"),
         repeatLoopCount: sum("repeatLoopCount"),
         removedRepeatCompilerConditionOperationCount: sum("removedRepeatCompilerConditionOperationCount"),
@@ -3100,6 +3311,7 @@ module.exports = {
     sinkTerminalReturnPayload,
     lowerTerminalReturn,
     collapseCompilerNumericForLoops,
+    collapseCompilerGenericForLoops,
     collapseCompilerWhileLoops,
     matchCompilerWhileConditionRegion,
     collapseCompilerRepeatLoops,
