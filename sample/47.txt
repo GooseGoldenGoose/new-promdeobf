@@ -1,0 +1,917 @@
+return (function(...)
+    local d = {
+        "EguMkAy=",
+        "olK+kLuN",
+        "EguY6HGYolO+ks==",
+        "cLujcCnB6lo=",
+        "qVN88a3f38VsDieycs==",
+        "xKKGDAnEqidJqmQj",
+        "EguB6lUOxp==",
+        "cAzsRAGr",
+        "DjO+qleH6AcGqizh04p=",
+        "kEnf",
+        "oLGJ6Ls=",
+        "kmgJcLGW",
+        "6HnzGOJJ6VnrkAGOUQ==",
+        "cLK/6LV=",
+        "qe8VqYKSqABk3OGOcVY=",
+        "8O8EqiJWoO8v6KOvGeV=",
+        "kHGgRQ==",
+        "69v=",
+        "3anjDeVgUVn+6K0m6s==",
+        "om8Y6A8YREUJRldO",
+        "DLUGceNj",
+        "Ui8/bVuEAqPOoeUqUEp=",
+        "8LKNoL8fviUOcL8acL8ev0==",
+        "clKMbA0=",
+        "tQ==",
+        "bech6AKk0a3gReimVgv=",
+        "t/QOk7WBtQ==",
+        "6AKYbp==",
+        "Rmu+RmKY",
+        "D4cU6OkO",
+        "oedrVCBG",
+        "oHUfbAz4",
+        "69i=",
+        "cLu+cAg/kEv=",
+        "Egu4Rs==",
+        "cKOy04KD",
+        "kmWgDg8MomsfVVBJ",
+        "kEnf6Hv="
+    }
+    local function C(C)
+        return d[C - (17010)]
+    end
+    for C, j in ipairs({
+        {
+            1,
+            38
+        },
+        {
+            1,
+            33
+        },
+        {
+            34,
+            38
+        }
+    }) do
+        while j[1] < j[2] do
+            d[j[1]], d[j[2]], j[1], j[2] = d[j[2]], d[j[1]], j[1] + (1), j[2] - (1)
+        end
+    end
+    do
+        local C = string.char
+        local j = string.len
+        local V = table.insert
+        local k = math.floor
+        local x = table.concat
+        local h = d
+        local A = string.sub
+        local f = type
+        local e = {
+            F = 59,
+            W = 40,
+            C = 7,
+            y = 56,
+            P = 1,
+            R = 24,
+            d = 49,
+            N = 45,
+            l = 38,
+            T = 63,
+            u = 61,
+            A = 22,
+            f = 50,
+            ["6"] = 27,
+            I = 58,
+            L = 6,
+            z = 57,
+            E = 23,
+            G = 13,
+            ["/"] = 34,
+            x = 30,
+            s = 48,
+            j = 51,
+            n = 9,
+            Q = 32,
+            w = 10,
+            H = 55,
+            g = 53,
+            D = 18,
+            ["7"] = 2,
+            S = 15,
+            ["4"] = 39,
+            a = 35,
+            X = 62,
+            ["2"] = 42,
+            ["8"] = 21,
+            p = 0,
+            r = 43,
+            ["+"] = 46,
+            ["3"] = 12,
+            c = 29,
+            m = 54,
+            k = 25,
+            q = 19,
+            ["1"] = 60,
+            b = 26,
+            h = 47,
+            Z = 11,
+            v = 8,
+            e = 36,
+            K = 5,
+            U = 17,
+            t = 14,
+            o = 28,
+            V = 20,
+            ["0"] = 16,
+            M = 44,
+            ["9"] = 3,
+            Y = 52,
+            O = 37,
+            i = 4,
+            B = 41,
+            J = 33,
+            ["5"] = 31
+        }
+        for d = 1, #h, 1 do
+            local D = h[d]
+            if f(D) == "string" then
+                local f = j(D)
+                local H = {}
+                local g = 1
+                local o = 0
+                local y = 0
+                while g <= f do
+                    local d = A(D, g, g)
+                    local j = e[d]
+                    if j then
+                        o = o + j * (64) ^ ((3) - y)
+                        y = y + (1)
+                        if y == 4 then
+                            y = 0
+                            local d = k(o / (65536))
+                            local j = k((o % (65536)) / (256))
+                            local x = o % (256)
+                            V(H, C(d, j, x))
+                            o = 0
+                        end
+                    elseif d == "=" then
+                        V(H, C(k(o / (65536))))
+                        if g >= f or A(D, g + (1), g + (1)) ~= "=" then
+                            V(H, C(k((o % (65536)) / (256))))
+                        end
+                        break
+                    end
+                    g = g + (1)
+                end
+                h[d] = x(H)
+            end
+        end
+    end
+    return (function(d, V, k, x, h, A, f, e, g, y, D, m, N, o, j, u, H, G, J)
+        y, H, g, G, e, j, o, N, u, m, D, J = function(d)
+            local C, j = 1, d[1]
+            while j do
+                D[j], C = D[j] - (1), C + (1)
+                if D[j] == 0 then
+                    D[j], e[j] = nil, nil
+                end
+                j = d[C]
+            end
+        end, function()
+            g = g + (1)
+            D[g] = 1
+            return g
+        end, 0, function(d, C)
+            local V = o(C)
+            local k = function(k, x, h, A, f)
+                return j(d, {
+                    k,
+                    x,
+                    h,
+                    A,
+                    f
+                }, C, V)
+            end
+            return k
+        end, {}, function(j, k, x, h)
+            local O, K, n, q, o, y, t, p, M, T, v, f, I, S, Q, Y, W, X, L, N, w, b, a, P, r, g, s, B, F, Z, i, D, U, R
+            while j do
+                if j < 8538767 then
+                    if j < 4754960 then
+                        if j < 2451176 then
+                            if j < 1184423 then
+                                if j < 476408 then
+                                    if j < 274020 then
+                                        j = true
+                                        j = j and 5970383 or 4291392
+                                    else
+                                        q = C(17013)
+                                        j = 6108529
+                                        R = d[q]
+                                        f = R
+                                    end
+                                else
+                                    if j < 940297 then
+                                        f = 4920137
+                                        o = 831271
+                                        g = C(17041)
+                                        D = g ^ o
+                                        j = f - D
+                                        D = j
+                                        f = C(17026)
+                                        j = f / D
+                                        f = {
+                                            j
+                                        }
+                                        j = d[C(17021)]
+                                    else
+                                        j = 1647920
+                                    end
+                                end
+                            else
+                                if j < 1650154 then
+                                    if j < 1222657 then
+                                        B = C(17019)
+                                        S = d[B]
+                                        j = 7089778
+                                        B = C(17013)
+                                        W = S[B]
+                                        R = W
+                                    else
+                                        S = nil
+                                        B = nil
+                                        b = nil
+                                        g = u(g)
+                                        q = u(q)
+                                        W = nil
+                                        N = u(N)
+                                        R = u(R)
+                                        X = u(X)
+                                        n = u(n)
+                                        b = C(17015)
+                                        L = nil
+                                        o = u(o)
+                                        o = C(17025)
+                                        j = 3251035
+                                        r = nil
+                                        g = d[o]
+                                        L = C(17046)
+                                        y = u(y)
+                                        X = d[b]
+                                        y = {}
+                                        N = {
+                                            [L] = X
+                                        }
+                                        o = g(y, N)
+                                        N = C(17033)
+                                        y = d[N]
+                                        N = C(17045)
+                                        L = 100
+                                        g = y[N]
+                                        N = 1
+                                        y = g(N, L)
+                                        g = o
+                                        o[y] = g
+                                        g = m(11264285, {})
+                                        y = g(o)
+                                        y = C(17029)
+                                        g = d[y]
+                                    end
+                                else
+                                    if j < 1820562 then
+                                        f = {}
+                                        j = d[C(17018)]
+                                    else
+                                        j = {}
+                                        D = j
+                                        j = 10753396
+                                        g = 1
+                                        o = e[x[9]]
+                                        y = o
+                                        o = 1
+                                        N = o
+                                        o = 0
+                                        L = N < o
+                                        o = g - N
+                                    end
+                                end
+                            end
+                        else
+                            if j < 3583476 then
+                                if j < 3204205 then
+                                    if j < 2899717 then
+                                        b = C(17016)
+                                        f = C(17039)
+                                        R = G(674210, {})
+                                        j = d[f]
+                                        D = e[x[4]]
+                                        y = C(17047)
+                                        o = d[y]
+                                        X = d[b]
+                                        b = {
+                                            X(R)
+                                        }
+                                        L = {
+                                            V(b)
+                                        }
+                                        X = 2
+                                        N = L[X]
+                                        y = o(N)
+                                        o = C(17032)
+                                        g = D(y, o)
+                                        D = {
+                                            g()
+                                        }
+                                        f = j(V(D))
+                                        g = e[x[5]]
+                                        j = g and 13122663 or 11212537
+                                        D = f
+                                        f = g
+                                    else
+                                        b = 0
+                                        j = e[x[1]]
+                                        R = 255
+                                        g = o
+                                        X = j(b, R)
+                                        j = 10753396
+                                        D[g] = X
+                                        g = nil
+                                    end
+                                else
+                                    if j < 3390030 then
+                                        j = 5636914
+                                    else
+                                        f = 7348123
+                                        g = C(17036)
+                                        o = 1192387
+                                        D = g ^ o
+                                        j = f - D
+                                        D = j
+                                        f = C(17035)
+                                        j = f / D
+                                        f = {
+                                            j
+                                        }
+                                        j = d[C(17027)]
+                                    end
+                                end
+                            else
+                                if j < 4342296 then
+                                    if j < 4243779 then
+                                        U = 1
+                                        e[g] = P
+                                        s = e[Y]
+                                        Z = s + U
+                                        I = t[Z]
+                                        i = W + I
+                                        I = 256
+                                        j = i % I
+                                        W = j
+                                        j = 4856692
+                                        Z = e[T]
+                                        I = S + Z
+                                        Z = 256
+                                        i = I % Z
+                                        S = i
+                                    else
+                                        j = J(11818282, {
+                                            y
+                                        })
+                                        v = {
+                                            j()
+                                        }
+                                        f = {
+                                            V(v)
+                                        }
+                                        j = d[C(17042)]
+                                    end
+                                else
+                                    f = C(17043)
+                                    j = d[f]
+                                    D = C(17028)
+                                    f = j(D)
+                                    j = d[C(17020)]
+                                    f = {}
+                                end
+                            end
+                        end
+                    else
+                        if j < 6254408 then
+                            if j < 6009682 then
+                                if j < 5508340 then
+                                    if j < 4902368 then
+                                        T = u(T)
+                                        t = nil
+                                        Q = u(Q)
+                                        F = u(F)
+                                        Y = u(Y)
+                                        j = 14480652
+                                        a = u(a)
+                                        O = u(O)
+                                    else
+                                        I = 1
+                                        i = t[I]
+                                        j = 3585379
+                                        P = i
+                                    end
+                                else
+                                    if j < 5800980 then
+                                        y = C(17029)
+                                        g = d[y]
+                                        j = g and 6026726 or 3251035
+                                    else
+                                        j = 16208649
+                                    end
+                                end
+                            else
+                                if j < 6109932 then
+                                    if j < 6085749 then
+                                        f = {}
+                                        j = d[C(17048)]
+                                        o = nil
+                                    else
+                                        R = H()
+                                        q = 3
+                                        e[R] = f
+                                        j = e[X]
+                                        W = 65
+                                        B = C(17016)
+                                        f = j(q, W)
+                                        j = 0
+                                        W = j
+                                        j = 0
+                                        q = H()
+                                        e[q] = f
+                                        S = j
+                                        r = G(3512164, {})
+                                        f = d[B]
+                                        K = C(17047)
+                                        B = {
+                                            f(r)
+                                        }
+                                        f = 2
+                                        j = {
+                                            V(B)
+                                        }
+                                        B = j
+                                        j = B[f]
+                                        r = j
+                                        f = C(17039)
+                                        j = d[f]
+                                        n = e[o]
+                                        v = d[K]
+                                        K = v(r)
+                                        v = C(17032)
+                                        M = n(K, v)
+                                        n = {
+                                            M()
+                                        }
+                                        f = j(V(n))
+                                        n = H()
+                                        e[n] = f
+                                        f = 1
+                                        M = e[q]
+                                        v = M
+                                        j = 14480652
+                                        M = 1
+                                        K = M
+                                        M = 0
+                                        w = K < M
+                                        M = f - K
+                                    end
+                                else
+                                    j = true
+                                    j = j and 11214440 or 15184190
+                                end
+                            end
+                        else
+                            if j < 7383545 then
+                                if j < 6545573 then
+                                    if j < 6477552 then
+                                        L = f
+                                        X = C(17033)
+                                        f = d[X]
+                                        X = C(17045)
+                                        j = f[X]
+                                        X = H()
+                                        b = C(17019)
+                                        e[X] = j
+                                        f = d[b]
+                                        S = C(17019)
+                                        b = C(17034)
+                                        j = f[b]
+                                        b = j
+                                        W = d[S]
+                                        R = W
+                                        q = j
+                                        j = W and 1198373 or 7089778
+                                    else
+                                        j = true
+                                        j = 4291392
+                                    end
+                                else
+                                    if j < 6998235 then
+                                        j = 9373865
+                                        g = e[x[2]]
+                                        o = e[x[3]]
+                                        D = g == o
+                                        f = D
+                                    else
+                                        j = q
+                                        f = R
+                                        j = R and 6108529 or 406409
+                                    end
+                                end
+                            else
+                                if j < 8469524 then
+                                    if j < 8419084 then
+                                        j = e[x[10]]
+                                        g = e[x[11]]
+                                        D[j] = g
+                                        j = e[x[12]]
+                                        g = {
+                                            j(D)
+                                        }
+                                        f = {
+                                            V(g)
+                                        }
+                                        j = d[C(17024)]
+                                    else
+                                        v = e[g]
+                                        j = v and 12336979 or 13944636
+                                        M = v
+                                    end
+                                else
+                                    j = 16208649
+                                end
+                            end
+                        end
+                    end
+                else
+                    if j < 12737158 then
+                        if j < 10776810 then
+                            if j < 10096471 then
+                                if j < 9123010 then
+                                    if j < 8857449 then
+                                        w = C(17023)
+                                        j = d[w]
+                                        w = C(17038)
+                                        d[w] = j
+                                        j = 8475076
+                                    else
+                                        s = 2
+                                        Z = t[s]
+                                        s = e[a]
+                                        j = 15747935
+                                        I = Z == s
+                                        P = I
+                                    end
+                                else
+                                    if j < 9736782 then
+                                        j = f and 2526778 or 10125058
+                                    else
+                                        o = C(17037)
+                                        g = H()
+                                        D = k
+                                        j = true
+                                        e[g] = j
+                                        f = d[o]
+                                        o = C(17017)
+                                        N = H()
+                                        y = H()
+                                        j = f[o]
+                                        o = H()
+                                        e[o] = j
+                                        j = m(4379208, {})
+                                        e[y] = j
+                                        j = false
+                                        X = C(17016)
+                                        b = m(14773719, {
+                                            N
+                                        })
+                                        e[N] = j
+                                        L = d[X]
+                                        X = L(b)
+                                        f = X
+                                        j = X and 13026278 or 6368993
+                                    end
+                                end
+                            else
+                                if j < 10654931 then
+                                    if j < 10324446 then
+                                        j = e[x[7]]
+                                        j = j and 13127858 or 2155067
+                                    else
+                                        w = 6
+                                        j = e[X]
+                                        K = 1
+                                        v = j(K, w)
+                                        w = C(17023)
+                                        j = C(17023)
+                                        d[j] = v
+                                        K = d[w]
+                                        w = 2
+                                        j = K > w
+                                        j = j and 14727436 or 8814919
+                                    end
+                                else
+                                    X = not L
+                                    o = o + N
+                                    g = o <= y
+                                    g = X and g
+                                    X = o >= y
+                                    X = L and X
+                                    g = X or g
+                                    X = 2979989
+                                    j = g and X
+                                    g = 8408461
+                                    j = j or g
+                                end
+                            end
+                        else
+                            if j < 11954764 then
+                                if j < 11245426 then
+                                    if j < 11213332 then
+                                        e[x[5]] = f
+                                        D = nil
+                                        j = 10125058
+                                    else
+                                        f = C(17023)
+                                        D = C(17038)
+                                        j = d[f]
+                                        f = d[D]
+                                        D = C(17038)
+                                        d[D] = j
+                                        D = C(17023)
+                                        d[D] = f
+                                        D = e[x[1]]
+                                        g = D()
+                                        j = 6171229
+                                    end
+                                else
+                                    if j < 11690054 then
+                                        f = {}
+                                        j = d[C(17031)]
+                                    else
+                                        j = 6171229
+                                    end
+                                end
+                            else
+                                if j < 12246144 then
+                                    if j < 12007465 then
+                                        N = 2
+                                        g = e[x[1]]
+                                        y = 1
+                                        o = g(y, N)
+                                        g = 1
+                                        D = o == g
+                                        j = D and 9373865 or 6713168
+                                        f = D
+                                    else
+                                        i = j
+                                        s = 1
+                                        Z = t[s]
+                                        s = false
+                                        I = Z == s
+                                        j = I and 8892605 or 15747935
+                                        P = I
+                                    end
+                                else
+                                    j = 13944636
+                                    v = W == S
+                                    M = v
+                                end
+                            end
+                        end
+                    else
+                        if j < 14525381 then
+                            if j < 13175767 then
+                                if j < 13055039 then
+                                    if j < 12965177 then
+                                        e[g] = f
+                                        j = 4856692
+                                    else
+                                        L = e[N]
+                                        j = 6368993
+                                        f = L
+                                    end
+                                else
+                                    if j < 13124808 then
+                                        j = 11212537
+                                        o = e[x[6]]
+                                        g = o == D
+                                        f = g
+                                    else
+                                        o = 0
+                                        D = C(17043)
+                                        j = d[D]
+                                        g = e[x[8]]
+                                        D = j(g, o)
+                                        j = 2155067
+                                    end
+                                end
+                            else
+                                if j < 14220975 then
+                                    if j < 13747075 then
+                                        P = e[g]
+                                        j = P and 12145486 or 12886069
+                                        f = P
+                                    else
+                                        e[g] = M
+                                        j = e[g]
+                                        j = j and 1132911 or 6501424
+                                    end
+                                else
+                                    M = M + K
+                                    f = M <= v
+                                    O = not w
+                                    f = O and f
+                                    O = M >= v
+                                    O = w and O
+                                    f = O or f
+                                    O = 14925003
+                                    j = f and O
+                                    f = 8419444
+                                    j = j or f
+                                end
+                            end
+                        else
+                            if j < 15400957 then
+                                if j < 14921717 then
+                                    if j < 14770932 then
+                                        O = C(17038)
+                                        K = C(17047)
+                                        j = d[K]
+                                        w = d[O]
+                                        K = j(w)
+                                        j = C(17023)
+                                        d[j] = K
+                                        j = 8475076
+                                    else
+                                        j = true
+                                        e[x[1]] = j
+                                        f = {}
+                                        j = d[C(17011)]
+                                    end
+                                else
+                                    if j < 14980750 then
+                                        T = 100
+                                        O = H()
+                                        a = 1
+                                        p = 10000
+                                        F = C(17033)
+                                        e[O] = M
+                                        f = d[F]
+                                        F = C(17045)
+                                        U = 0
+                                        j = f[F]
+                                        F = 1
+                                        f = j(F, T)
+                                        F = H()
+                                        t = 2
+                                        Y = 255
+                                        T = 0
+                                        I = C(17047)
+                                        e[F] = f
+                                        j = e[X]
+                                        f = j(T, Y)
+                                        T = H()
+                                        e[T] = f
+                                        Y = 1
+                                        j = e[X]
+                                        Q = e[F]
+                                        f = j(Y, Q)
+                                        Y = H()
+                                        e[Y] = f
+                                        f = e[X]
+                                        Q = f(a, t)
+                                        f = 1
+                                        j = Q == f
+                                        t = C(17030)
+                                        Q = H()
+                                        f = C(17032)
+                                        e[Q] = j
+                                        i = d[I]
+                                        Z = e[X]
+                                        s = {
+                                            Z(U, p)
+                                        }
+                                        j = C(17022)
+                                        I = i(V(s))
+                                        j = r[j]
+                                        i = C(17030)
+                                        P = I .. i
+                                        a = t .. P
+                                        j = j(r, f, a)
+                                        a = H()
+                                        e[a] = j
+                                        t = C(17016)
+                                        P = G(12006068, {
+                                            X,
+                                            O,
+                                            q,
+                                            o,
+                                            g,
+                                            n,
+                                            Q,
+                                            a,
+                                            F,
+                                            Y,
+                                            T,
+                                            R
+                                        })
+                                        f = d[t]
+                                        t = {
+                                            f(P)
+                                        }
+                                        j = {
+                                            V(t)
+                                        }
+                                        t = j
+                                        j = e[Q]
+                                        j = j and 13663710 or 16080998
+                                    else
+                                        f = {}
+                                        j = d[C(17014)]
+                                    end
+                                end
+                            else
+                                if j < 16111534 then
+                                    if j < 15756920 then
+                                        f = P
+                                        j = i
+                                        j = 12886069
+                                    else
+                                        i = e[g]
+                                        P = i
+                                        j = i and 5337475 or 3585379
+                                    end
+                                else
+                                    j = true
+                                    j = j and 10423488 or 1651943
+                                end
+                            end
+                        end
+                    end
+                end
+            end
+            j = #h
+            return V(f)
+        end, function(d)
+            for C = 1, #d, 1 do
+                D[d[C]] = D[d[C]] + (1)
+            end
+            if k then
+                local j = k(true)
+                local V = h(j)
+                V[C(17012)], V[C(17040)], V[C(17044)] = d, y, function()
+                    return 3999764
+                end
+                return j
+            else
+                return x({}, {
+                    [C(17040)] = y,
+                    [C(17012)] = d,
+                    [C(17044)] = function()
+                        return 3999764
+                    end
+                })
+            end
+        end, function(d, C)
+            local V = o(C)
+            local k = function(...)
+                return j(d, {
+                    ...
+                }, C, V)
+            end
+            return k
+        end, function(d)
+            D[d] = D[d] - (1)
+            if D[d] == 0 then
+                D[d], e[d] = nil, nil
+            end
+        end, function(d, C)
+            local V = o(C)
+            local k = function(k, x, h)
+                return j(d, {
+                    k,
+                    x,
+                    h
+                }, C, V)
+            end
+            return k
+        end, {}, function(d, C)
+            local V = o(C)
+            local k = function()
+                return j(d, {}, C, V)
+            end
+            return k
+        end
+        return (N(9970196, {}))(V(f))
+    end)(getfenv and getfenv() or _ENV, unpack or table[C(17013)], newproxy, setmetatable, getmetatable, select, {
+        ...
+    })
+end)(...)
