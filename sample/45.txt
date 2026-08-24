@@ -1,0 +1,261 @@
+return (function(...)
+    local o = {
+        "4XDCeb==",
+        "1YWX0AffN/7k1gXvOZS=",
+        "1YtbeYfo",
+        "4XD86Quz0K==",
+        "fwz8YgOPcxOh0AthuTS=",
+        "4XDENYr=",
+        "cj786CS="
+    }
+    local function i(i)
+        return o[i + (15396)]
+    end
+    for i, H in ipairs({
+        {
+            1,
+            7
+        },
+        {
+            1,
+            6
+        },
+        {
+            7,
+            7
+        }
+    }) do
+        while H[1] < H[2] do
+            o[H[1]], o[H[2]], H[1], H[2] = o[H[2]], o[H[1]], H[1] + (1), H[2] - (1)
+        end
+    end
+    do
+        local i = type
+        local H = string.char
+        local B = table.insert
+        local Q = table.concat
+        local I = math.floor
+        local a = o
+        local O = string.len
+        local b = {
+            ["6"] = 27,
+            K = 0,
+            ["2"] = 63,
+            J = 14,
+            H = 62,
+            W = 49,
+            v = 42,
+            p = 33,
+            ["9"] = 55,
+            ["/"] = 4,
+            k = 20,
+            B = 46,
+            V = 50,
+            q = 10,
+            ["4"] = 23,
+            D = 61,
+            ["5"] = 26,
+            i = 47,
+            s = 34,
+            d = 35,
+            z = 37,
+            M = 18,
+            ["0"] = 30,
+            w = 5,
+            r = 56,
+            ["8"] = 41,
+            o = 43,
+            c = 28,
+            X = 53,
+            F = 3,
+            y = 32,
+            S = 16,
+            E = 44,
+            C = 39,
+            f = 13,
+            Z = 51,
+            t = 57,
+            G = 1,
+            x = 54,
+            L = 15,
+            ["+"] = 2,
+            U = 8,
+            ["3"] = 19,
+            I = 40,
+            j = 7,
+            l = 31,
+            P = 58,
+            ["1"] = 29,
+            h = 12,
+            ["7"] = 9,
+            n = 45,
+            m = 11,
+            T = 52,
+            R = 59,
+            Y = 22,
+            b = 48,
+            A = 6,
+            O = 21,
+            e = 24,
+            Q = 38,
+            g = 36,
+            u = 17,
+            a = 60,
+            N = 25
+        }
+        local j = string.sub
+        for o = 1, #a, 1 do
+            local S = a[o]
+            if i(S) == "string" then
+                local i = O(S)
+                local s = {}
+                local Y = 1
+                local E = 0
+                local y = 0
+                while Y <= i do
+                    local o = j(S, Y, Y)
+                    local Q = b[o]
+                    if Q then
+                        E = E + Q * (64) ^ ((3) - y)
+                        y = y + (1)
+                        if y == 4 then
+                            y = 0
+                            local o = I(E / (65536))
+                            local i = I((E % (65536)) / (256))
+                            local Q = E % (256)
+                            B(s, H(o, i, Q))
+                            E = 0
+                        end
+                    elseif o == "=" then
+                        B(s, H(I(E / (65536))))
+                        if Y >= i or j(S, Y + (1), Y + (1)) ~= "=" then
+                            B(s, H(I((E % (65536)) / (256))))
+                        end
+                        break
+                    end
+                    Y = Y + (1)
+                end
+                a[o] = Q(s)
+            end
+        end
+    end
+    return (function(o, B, Q, I, a, O, b, s, P, j, S, y, H, F, E, r, Y)
+        r, E, j, y, Y, F, H, s, S, P = function(o, i)
+            local B = E(i)
+            local Q = function()
+                return H(o, {}, i, B)
+            end
+            return Q
+        end, function(o)
+            for i = 1, #o, 1 do
+                S[o[i]] = (1) + S[o[i]]
+            end
+            if Q then
+                local H = Q(true)
+                local B = a(H)
+                B[i(-15393)], B[i(-15389)], B[i(-15391)] = o, y, function()
+                    return -994847
+                end
+                return H
+            else
+                return I({}, {
+                    [i(-15389)] = y,
+                    [i(-15393)] = o,
+                    [i(-15391)] = function()
+                        return -994847
+                    end
+                })
+            end
+        end, {}, function(o)
+            local i, H = 1, o[1]
+            while H do
+                S[H], i = S[H] - (1), i + (1)
+                if S[H] == 0 then
+                    S[H], j[H] = nil, nil
+                end
+                H = o[i]
+            end
+        end, 0, function(o)
+            S[o] = S[o] - (1)
+            if 0 == S[o] then
+                S[o], j[o] = nil, nil
+            end
+        end, function(H, Q, I, a)
+            local b, S, E, P, V, Y, A, J, y
+            while H do
+                if H < 6791613 then
+                    if H < 5950767 then
+                        if H < 3374668 then
+                            H = j[I[1]]
+                            b = {
+                                H
+                            }
+                            H = o[i(-15395)]
+                        else
+                            A = s()
+                            H = r(1392556, {
+                                A
+                            })
+                            b = i(-15390)
+                            j[A] = Y
+                            J = H
+                            A = F(A)
+                            H = o[b]
+                            V = {
+                                J()
+                            }
+                            b = H(B(V))
+                            H = 16213073
+                            J = nil
+                        end
+                    else
+                        S = Q
+                        b = 1
+                        Y = 2
+                        E = Y
+                        Y = 1
+                        y = Y
+                        Y = 0
+                        H = 16213073
+                        P = y < Y
+                        Y = b - y
+                    end
+                else
+                    if H < 11594813 then
+                        b = {}
+                        H = o[i(-15392)]
+                    else
+                        Y = Y + y
+                        A = not P
+                        b = Y <= E
+                        b = A and b
+                        A = Y >= E
+                        A = P and A
+                        b = A or b
+                        A = 3876676
+                        H = b and A
+                        b = 8790862
+                        H = H or b
+                    end
+                end
+            end
+            H = #a
+            return B(b)
+        end, function()
+            Y = (1) + Y
+            S[Y] = 1
+            return Y
+        end, {}, function(o, i)
+            local B = E(i)
+            local Q = function(...)
+                return H(o, {
+                    ...
+                }, i, B)
+            end
+            return Q
+        end
+        return (P(5980939, {}))(B(b))
+    end)(getfenv and getfenv() or _ENV, unpack or table[i(-15394)], newproxy, setmetatable, getmetatable, select, {
+        ...
+    })
+end)(...)

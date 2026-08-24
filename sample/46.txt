@@ -1,0 +1,240 @@
+return (function(...)
+    local e = {
+        "ImxoE8D=",
+        "ImxySezAr3==",
+        "6a22N02mU2zg9azBun==",
+        "Imxvu5==",
+        "R/fySvd=",
+        "Z8q5u8Kb"
+    }
+    local function S(S)
+        return e[S - (41970)]
+    end
+    for S, I in ipairs({
+        {
+            1,
+            6
+        },
+        {
+            1,
+            1
+        },
+        {
+            2,
+            6
+        }
+    }) do
+        while I[1] < I[2] do
+            e[I[1]], e[I[2]], I[1], I[2] = e[I[2]], e[I[1]], I[1] + (1), I[2] - (1)
+        end
+    end
+    do
+        local S = string.len
+        local I = string.char
+        local q = string.sub
+        local A = type
+        local V = math.floor
+        local g = table.concat
+        local G = table.insert
+        local j = {
+            a = 3,
+            z = 17,
+            h = 47,
+            ["3"] = 0,
+            W = 34,
+            R = 28,
+            Q = 12,
+            q = 57,
+            K = 13,
+            V = 42,
+            N = 18,
+            i = 15,
+            m = 53,
+            U = 20,
+            A = 37,
+            Y = 52,
+            l = 49,
+            e = 38,
+            r = 30,
+            ["+"] = 63,
+            ["5"] = 48,
+            ["4"] = 58,
+            v = 39,
+            I = 23,
+            E = 25,
+            M = 6,
+            g = 1,
+            P = 2,
+            ["9"] = 26,
+            y = 41,
+            f = 9,
+            c = 54,
+            F = 50,
+            ["1"] = 45,
+            u = 24,
+            j = 31,
+            L = 59,
+            G = 21,
+            X = 46,
+            B = 4,
+            H = 35,
+            C = 40,
+            J = 51,
+            O = 33,
+            T = 10,
+            d = 16,
+            D = 56,
+            n = 32,
+            k = 8,
+            Z = 29,
+            ["7"] = 62,
+            x = 61,
+            s = 11,
+            ["6"] = 19,
+            t = 55,
+            ["/"] = 7,
+            w = 60,
+            ["8"] = 22,
+            ["0"] = 36,
+            ["2"] = 5,
+            S = 27,
+            p = 14,
+            b = 43,
+            o = 44
+        }
+        local y = e
+        for e = 1, #y, 1 do
+            local D = y[e]
+            if A(D) == "string" then
+                local A = S(D)
+                local s = {}
+                local p = 1
+                local f = 0
+                local r = 0
+                while p <= A do
+                    local e = q(D, p, p)
+                    local S = j[e]
+                    if S then
+                        f = f + S * (64) ^ ((3) - r)
+                        r = r + (1)
+                        if r == 4 then
+                            r = 0
+                            local e = V(f / (65536))
+                            local S = V((f % (65536)) / (256))
+                            local q = f % (256)
+                            G(s, I(e, S, q))
+                            f = 0
+                        end
+                    elseif e == "=" then
+                        G(s, I(V(f / (65536))))
+                        if p >= A or q(D, p + (1), p + (1)) ~= "=" then
+                            G(s, I(V((f % (65536)) / (256))))
+                        end
+                        break
+                    end
+                    p = p + (1)
+                end
+                y[e] = g(s)
+            end
+        end
+    end
+    return (function(e, q, A, V, g, G, j, r, D, f, y, W, I, s, Z, p)
+        W, p, r, D, Z, I, s, f, y = function(e, S)
+            local q = f(S)
+            local A = function(...)
+                return I(e, {
+                    ...
+                }, S, q)
+            end
+            return A
+        end, 0, function(e)
+            local S, I = 1, e[1]
+            while I do
+                D[I], S = D[I] - (1), (1) + S
+                if D[I] == 0 then
+                    D[I], y[I] = nil, nil
+                end
+                I = e[S]
+            end
+        end, {}, function(e)
+            D[e] = D[e] - (1)
+            if 0 == D[e] then
+                D[e], y[e] = nil, nil
+            end
+        end, function(I, A, V, g)
+            local D, y, s, p, j, f, Z, r
+            while I do
+                if I < 6620306 then
+                    if I < 5426746 then
+                        j = 10
+                        r = D
+                        I = r + j
+                        r = I
+                        Z = S(41976)
+                        I = 14226156
+                        j = e[Z]
+                        Z = j(r)
+                        r = nil
+                    else
+                        D = 2
+                        j = 1
+                        y = A
+                        s = D
+                        D = 1
+                        I = 14226156
+                        p = D
+                        D = 0
+                        f = p < D
+                        D = j - p
+                    end
+                else
+                    if I < 7349463 then
+                        I = e[S(41974)]
+                        j = {}
+                    else
+                        r = not f
+                        D = D + p
+                        j = D <= s
+                        j = r and j
+                        r = D >= s
+                        r = f and r
+                        j = r or j
+                        r = 5220237
+                        I = j and r
+                        j = 7032936
+                        I = I or j
+                    end
+                end
+            end
+            I = #g
+            return q(j)
+        end, function()
+            p = p + (1)
+            D[p] = 1
+            return p
+        end, function(e)
+            for S = 1, #e, 1 do
+                D[e[S]] = D[e[S]] + (1)
+            end
+            if A then
+                local I = A(true)
+                local q = g(I)
+                q[S(41973)], q[S(41975)], q[S(41972)] = e, r, function()
+                    return -2892368
+                end
+                return I
+            else
+                return V({}, {
+                    [S(41975)] = r,
+                    [S(41973)] = e,
+                    [S(41972)] = function()
+                        return -2892368
+                    end
+                })
+            end
+        end, {}
+        return (W(5608879, {}))(q(j))
+    end)(getfenv and getfenv() or _ENV, unpack or table[S(41971)], newproxy, setmetatable, getmetatable, select, {
+        ...
+    })
+end)(...)
