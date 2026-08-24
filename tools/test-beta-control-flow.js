@@ -742,6 +742,109 @@ assert(!repeatUntilStructured.source.includes("junkCond"));
 assert(!repeatUntilStructured.source.includes("state ="));
 parseLua(repeatUntilStructured.source, "<beta-cf-repeat-until-output>");
 
+const whileBreakStructured = solveBetaControlFlow(ast, {
+    applied: true,
+    graph: {
+        cfgComplete: true, stateName: "state", entries: [1],
+        states: [
+            { id: 1, predecessors: [], successors: [2], operations: [
+                { kind: "state-transition", emittedTarget: "state", rhs: "2", emittedText: "state = 2", reads: [] },
+            ] },
+            { id: 2, predecessors: [1, 4], successors: [3, 5], operations: [
+                { kind: "version-define", emittedTarget: "loopCond", rhs: "looping()", emittedText: "local loopCond = looping()", reads: [] },
+                { kind: "state-transition", emittedTarget: "state", rhs: "loopCond and 3 or 5", emittedText: "state = loopCond and 3 or 5", reads: ["loopCond"] },
+            ] },
+            { id: 3, predecessors: [2], successors: [5, 4], operations: [
+                { kind: "version-define", emittedTarget: "breakCond", rhs: "shouldBreak()", emittedText: "local breakCond = shouldBreak()", reads: [] },
+                { kind: "state-transition", emittedTarget: "state", rhs: "breakCond and 5 or 4", emittedText: "state = breakCond and 5 or 4", reads: ["breakCond"] },
+            ] },
+            { id: 4, predecessors: [3], successors: [2], operations: [
+                { kind: "statement", emittedText: "work()", originalText: "work()", reads: [] },
+                { kind: "state-transition", emittedTarget: "state", rhs: "2", emittedText: "state = 2", reads: [] },
+            ] },
+            { id: 5, predecessors: [2, 3], successors: [], operations: [
+                { kind: "return-payload", terminalCompilerReturnPayload: true, returnExpressions: [], emittedText: "ReturnVal = {}", rhs: "{}", reads: [] },
+                { kind: "state-transition", emittedTarget: "state", rhs: "nil", emittedText: "state = nil", reads: [] },
+            ] },
+        ],
+    },
+});
+assert.equal(whileBreakStructured.applied, true);
+assert.equal(whileBreakStructured.whileLoopCount, 1);
+assert(whileBreakStructured.source.includes("if breakCond then"));
+assert(whileBreakStructured.source.includes("break"));
+assert(whileBreakStructured.source.includes("work()"));
+parseLua(whileBreakStructured.source, "<beta-cf-while-break-output>");
+
+const whileContinueStructured = solveBetaControlFlow(ast, {
+    applied: true,
+    graph: {
+        cfgComplete: true, stateName: "state", entries: [1],
+        states: [
+            { id: 1, predecessors: [], successors: [2], operations: [
+                { kind: "state-transition", emittedTarget: "state", rhs: "2", emittedText: "state = 2", reads: [] },
+            ] },
+            { id: 2, predecessors: [1, 3, 4], successors: [3, 5], operations: [
+                { kind: "version-define", emittedTarget: "loopCond", rhs: "looping()", emittedText: "local loopCond = looping()", reads: [] },
+                { kind: "state-transition", emittedTarget: "state", rhs: "loopCond and 3 or 5", emittedText: "state = loopCond and 3 or 5", reads: ["loopCond"] },
+            ] },
+            { id: 3, predecessors: [2], successors: [2, 4], operations: [
+                { kind: "version-define", emittedTarget: "continueCond", rhs: "shouldContinue()", emittedText: "local continueCond = shouldContinue()", reads: [] },
+                { kind: "state-transition", emittedTarget: "state", rhs: "continueCond and 2 or 4", emittedText: "state = continueCond and 2 or 4", reads: ["continueCond"] },
+            ] },
+            { id: 4, predecessors: [3], successors: [2], operations: [
+                { kind: "statement", emittedText: "work()", originalText: "work()", reads: [] },
+                { kind: "state-transition", emittedTarget: "state", rhs: "2", emittedText: "state = 2", reads: [] },
+            ] },
+            { id: 5, predecessors: [2], successors: [], operations: [
+                { kind: "return-payload", terminalCompilerReturnPayload: true, returnExpressions: [], emittedText: "ReturnVal = {}", rhs: "{}", reads: [] },
+                { kind: "state-transition", emittedTarget: "state", rhs: "nil", emittedText: "state = nil", reads: [] },
+            ] },
+        ],
+    },
+});
+assert.equal(whileContinueStructured.applied, true);
+assert.equal(whileContinueStructured.whileLoopCount, 1);
+assert(whileContinueStructured.source.includes("if continueCond then"));
+assert(whileContinueStructured.source.includes("continue"));
+assert(whileContinueStructured.source.includes("work()"));
+parseLua(whileContinueStructured.source, "<beta-cf-while-continue-output>");
+
+const whileReturnStructured = solveBetaControlFlow(ast, {
+    applied: true,
+    graph: {
+        cfgComplete: true, stateName: "state", entries: [1],
+        states: [
+            { id: 1, predecessors: [], successors: [2], operations: [
+                { kind: "state-transition", emittedTarget: "state", rhs: "2", emittedText: "state = 2", reads: [] },
+            ] },
+            { id: 2, predecessors: [1, 3], successors: [3, 5], operations: [
+                { kind: "version-define", emittedTarget: "loopCond", rhs: "looping()", emittedText: "local loopCond = looping()", reads: [] },
+                { kind: "state-transition", emittedTarget: "state", rhs: "loopCond and 3 or 5", emittedText: "state = loopCond and 3 or 5", reads: ["loopCond"] },
+            ] },
+            { id: 3, predecessors: [2], successors: [4, 2], operations: [
+                { kind: "version-define", emittedTarget: "returnCond", rhs: "shouldReturn()", emittedText: "local returnCond = shouldReturn()", reads: [] },
+                { kind: "state-transition", emittedTarget: "state", rhs: "returnCond and 4 or 2", emittedText: "state = returnCond and 4 or 2", reads: ["returnCond"] },
+            ] },
+            { id: 4, predecessors: [3], successors: [], operations: [
+                { kind: "version-define", emittedTarget: "ret", rhs: "42", emittedText: "local ret = 42", reads: [] },
+                { kind: "return-payload", terminalCompilerReturnPayload: true, returnExpressions: ["ret"], emittedText: "ReturnVal = { ret }", rhs: "{ ret }", reads: ["ret"] },
+                { kind: "state-transition", emittedTarget: "state", rhs: "nil", emittedText: "state = nil", reads: [] },
+            ] },
+            { id: 5, predecessors: [2], successors: [], operations: [
+                { kind: "return-payload", terminalCompilerReturnPayload: true, returnExpressions: [], emittedText: "ReturnVal = {}", rhs: "{}", reads: [] },
+                { kind: "state-transition", emittedTarget: "state", rhs: "nil", emittedText: "state = nil", reads: [] },
+            ] },
+        ],
+    },
+});
+assert.equal(whileReturnStructured.applied, true);
+assert.equal(whileReturnStructured.whileLoopCount, 1);
+assert(whileReturnStructured.source.includes("if returnCond then"));
+assert(whileReturnStructured.source.includes("return ret"));
+assert(!whileReturnStructured.source.includes("continue"));
+parseLua(whileReturnStructured.source, "<beta-cf-while-return-output>");
+
 const cyclic = solveBetaControlFlow(ast, {
     applied: true,
     graph: {
