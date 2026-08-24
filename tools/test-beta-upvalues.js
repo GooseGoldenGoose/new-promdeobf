@@ -269,4 +269,42 @@ const escaped = recoverBetaUpvalues({
 assert.equal(escaped.safe, false);
 assert(escaped.reason.includes("escapes recognized upvalue machinery"));
 
+const forInCellAlias = recoverBetaUpvalues({
+    applied: true,
+    graph: {
+        cfgComplete: true,
+        entries: [101, 205],
+        states: [
+            { id: 101, predecessors: [], successors: [], operations: [
+                { kind: "version-define", emittedTarget: "loopValue", emittedText: "local loopValue = current()", rhs: "current()", reads: [] },
+                { kind: "version-define", emittedTarget: "cellTemp", emittedText: "local cellTemp = allocUpvalue()", rhs: "allocUpvalue()", reads: [] },
+                { kind: "effect-write", emittedText: "upvalueValues[cellTemp] = loopValue", reads: ["cellTemp", "loopValue"] },
+                { kind: "epoch-start", emittedTarget: "loopCell", emittedText: "local loopCell = cellTemp", rhs: "cellTemp", reads: ["cellTemp"] },
+                { kind: "version-define", emittedTarget: "closure", emittedText: "local closure = createClosure2(205, { loopCell })", rhs: "createClosure2(205, { loopCell })", reads: ["loopCell"] },
+                { kind: "version-define", emittedTarget: "seen", emittedText: "local seen = upvalueValues[loopCell]", rhs: "upvalueValues[loopCell]", reads: ["loopCell"] },
+                { kind: "epoch-mutate", emittedTarget: "loopCell", emittedText: "loopCell = releaseUpvalue(loopCell)", rhs: "releaseUpvalue(loopCell)", reads: ["loopCell"] },
+                ...terminalOps(),
+            ] },
+            { id: 205, predecessors: [], successors: [], operations: [
+                { kind: "version-define", emittedTarget: "captured", emittedText: "local captured = upvalueValues[upvalues[1]]", rhs: "upvalueValues[upvalues[1]]", reads: [] },
+                { kind: "return-payload", terminalCompilerReturnPayload: true, returnExpressions: ["captured"], emittedTarget: "ReturnVal", emittedText: "ReturnVal = { captured }", rhs: "{ captured }", reads: ["captured"] },
+                { kind: "state-transition", emittedTarget: "state", emittedText: "state = nil", rhs: "nil", reads: [] },
+            ] },
+        ],
+    },
+});
+assert.equal(forInCellAlias.safe, true);
+assert.equal(forInCellAlias.applied, true);
+assert.equal(forInCellAlias.stats.recoveredCellCount, 1);
+assert.equal(forInCellAlias.stats.captureCount, 1);
+assert.equal(forInCellAlias.stats.releaseRemovalCount, 1);
+const forInAliasRoot = forInCellAlias.graph.states.find(state => state.id === 101).operations;
+const forInAliasChild = forInCellAlias.graph.states.find(state => state.id === 205).operations;
+assert(!forInAliasRoot.some(op => op.emittedTarget === "loopCell"));
+assert(!forInAliasRoot.some(op => String(op.emittedText || "").includes("releaseUpvalue")));
+assert(forInAliasRoot.some(op => op.rhs === "createClosure2(205, {})"));
+assert(forInAliasRoot.some(op => op.emittedTarget === "seen" && op.rhs === "loopValue"));
+assert(forInAliasChild.some(op => op.emittedTarget === "captured" && op.rhs === "loopValue"));
+assert(forInCellAlias.graph.recoveredUpvalueBindings.includes("loopValue"));
+
 console.log("beta upvalue recovery tests passed");

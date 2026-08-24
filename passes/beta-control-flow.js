@@ -1520,6 +1520,7 @@ function matchCompilerGenericFor(graph, checkStateId) {
     if (!iteratorDef || !iteratorStateDef || !controlDef) return null;
 
     const bodyEntry = stateById.get(bodyId);
+    const recoveredUpvalueBindings = new Set(graph.recoveredUpvalueBindings || []);
     const firstCopies = (bodyEntry?.operations || []).filter(operation =>
         originalOperationTarget(operation) &&
         operation?.rhs === controlName &&
@@ -1530,19 +1531,42 @@ function matchCompilerGenericFor(graph, checkStateId) {
     const firstCopy = firstCopies[0];
     const firstVariableOriginal = originalOperationTarget(firstCopy);
     const firstVariable = firstCopy.emittedTarget;
-    const secondVariable = secondVariableOriginal;
     if (!firstVariableOriginal || firstVariableOriginal === secondVariableOriginal) return null;
+
+    // Captured ForIn variables are promoted by the local compiler immediately
+    // after the iterator step. beta-upvalues consumes alloc/init/alias/release
+    // scaffolding and leaves either the first compiler copy as the recovered
+    // binding or a dedicated upvalue-binding init for later loop variables.
+    const firstVariableCaptured = recoveredUpvalueBindings.has(firstVariable);
+    const secondBindingCandidates = (bodyEntry?.operations || []).filter(operation =>
+        (operation?.kind === "upvalue-binding-start" || operation?.kind === "upvalue-binding-init") &&
+        operation?.rhs === secondVariableOriginal &&
+        operation?.emittedTarget &&
+        recoveredUpvalueBindings.has(operation.emittedTarget)
+    );
+    if (secondBindingCandidates.length > 1) return null;
+    const secondBinding = secondBindingCandidates[0] || null;
+    const secondVariable = secondBinding?.emittedTarget || secondVariableOriginal;
+    const secondVariableCaptured = Boolean(secondBinding);
 
     const requiredCleanupStates = new Set([...region.latchIds, ...(region.breakIds || [])]);
     const cleanupOperations = new Set();
-    for (const variableName of [firstVariableOriginal, secondVariableOriginal]) {
+    for (const variable of [
+        { name: firstVariableOriginal, captured: firstVariableCaptured },
+        { name: secondVariableOriginal, captured: secondVariableCaptured },
+    ]) {
         const cleanups = [];
         for (const stateId of region.ids) {
             for (const operation of stateById.get(stateId)?.operations || []) {
-                if (originalOperationTarget(operation) !== variableName) continue;
+                if (originalOperationTarget(operation) !== variable.name) continue;
                 const expression = parseOperationExpression(operation);
                 if (expression?.type === "NilLiteral") cleanups.push({ stateId, operation });
             }
+        }
+        if (variable.captured) {
+            // beta-upvalues already consumed releaseUpvalue for a captured loop binding.
+            if (cleanups.length !== 0) return null;
+            continue;
         }
         const cleanupStates = new Set(cleanups.map(item => item.stateId));
         if (cleanups.length !== requiredCleanupStates.size || !sameMembers([...cleanupStates], [...requiredCleanupStates])) return null;
@@ -1552,14 +1576,14 @@ function matchCompilerGenericFor(graph, checkStateId) {
     const protectedOriginalNames = new Set([iteratorName, iteratorStateName, controlName]);
     for (const stateId of region.ids) {
         for (const operation of stateById.get(stateId)?.operations || []) {
-            if (operation === firstCopy || cleanupOperations.has(operation)) continue;
+            if (operation === firstCopy || operation === secondBinding || cleanupOperations.has(operation)) continue;
             const originalTarget = originalOperationTarget(operation);
             if (protectedOriginalNames.has(originalTarget)) return null;
             if (originalTarget === firstVariableOriginal || originalTarget === secondVariableOriginal) return null;
         }
     }
 
-    const skipOperations = new Set([firstCopy, ...cleanupOperations]);
+    const skipOperations = new Set([firstCopy, ...(secondBinding ? [secondBinding] : []), ...cleanupOperations]);
     const structuredBody = structureLoopBodyRegion(stateById, region, bodyId, check.id, skipOperations, null, exitId, true);
     if (!structuredBody) return null;
 

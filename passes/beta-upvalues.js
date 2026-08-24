@@ -180,6 +180,13 @@ function allocationFromOperation(operation) {
     return { cellName: operation.emittedTarget };
 }
 
+function identifierCopyFromOperation(operation) {
+    const parsed = parseExpression(operation?.rhs);
+    const expression = parsed?.expression;
+    if (!isIdentifier(expression) || !operation?.emittedTarget) return null;
+    return { sourceName: expression.name, targetName: operation.emittedTarget };
+}
+
 function cloneGraph(graph) {
     return {
         ...graph,
@@ -349,7 +356,49 @@ function recoverBetaUpvalues(betaResult) {
             initialization: null,
             bindingName: null,
             bindingMode: null,
+            aliases: new Set(),
         });
+    }
+
+    // Local Prometheus ForIn upvalue promotion may allocate a cell through a
+    // temporary (often the reusable POS register), initialize that cell, then
+    // copy the cell id into the source variable reserved register. Treat only
+    // this compiler-shaped same-state copy as a static alias of the allocation
+    // site; arbitrary identifier copies remain ordinary values.
+    const cellIdByRegister = new Map([...cells.keys()].map(name => [name, name]));
+    const aliasCopyOperations = new Set();
+    for (const cell of cells.values()) {
+        const sameState = positions.filter(position =>
+            position.ownerEntry === cell.ownerEntry && position.stateId === cell.allocation.stateId
+        );
+        for (const candidate of sameState) {
+            if (candidate.operationIndex <= cell.allocation.operationIndex) continue;
+            const copy = identifierCopyFromOperation(candidate.operation);
+            if (!copy || copy.sourceName !== cell.registerName || copy.targetName === cell.registerName) continue;
+
+            const initializationsBeforeCopy = sameState.filter(position => {
+                if (position.operationIndex <= cell.allocation.operationIndex || position.operationIndex >= candidate.operationIndex) return false;
+                const write = indexedWriteFromOperation(position.operation);
+                return write && isIdentifier(write.target.index, cell.registerName);
+            });
+            if (initializationsBeforeCopy.length !== 1) continue;
+
+            const aliasWrites = positions.filter(position =>
+                position.ownerEntry === cell.ownerEntry && position.operation?.emittedTarget === copy.targetName
+            );
+            if (!aliasWrites.length || aliasWrites.some(position => {
+                if (position.operation === candidate.operation) return false;
+                return releaseCellFromOperation(position.operation)?.cellName !== copy.targetName;
+            })) continue;
+
+            const existing = cellIdByRegister.get(copy.targetName);
+            if (existing && existing !== cell.id) {
+                return { applied: false, safe: false, reason: "Beta upvalue alias " + copy.targetName + " resolves to multiple cell allocations" };
+            }
+            cellIdByRegister.set(copy.targetName, cell.id);
+            cell.aliases.add(copy.targetName);
+            aliasCopyOperations.add(candidate.operation);
+        }
     }
 
     const factorySites = [];
@@ -395,10 +444,12 @@ function recoverBetaUpvalues(betaResult) {
     }
 
     const captureCellsByEntry = new Map([[rootEntry, new Map()]]);
-    const cellByRegister = new Map(cells);
 
     function resolveCellIndex(ownerEntry, indexNode) {
-        if (isIdentifier(indexNode)) return cellByRegister.has(indexNode.name) ? indexNode.name : null;
+        if (isIdentifier(indexNode)) {
+            const cellId = cellIdByRegister.get(indexNode.name);
+            return cellId && cells.get(cellId)?.ownerEntry === ownerEntry ? cellId : null;
+        }
         const slot = upvalueSlot(indexNode);
         if (slot === null) return null;
         return captureCellsByEntry.get(ownerEntry)?.get(slot) || null;
@@ -440,12 +491,13 @@ function recoverBetaUpvalues(betaResult) {
         const cell = cells.get(cellId);
         if (!cell) return { applied: false, safe: false, reason: `Captured cell ${cellId} has no allocUpvalue definition` };
 
+        const cellRegisterNames = new Set([cell.registerName, ...cell.aliases]);
         const ownerFootprint = positions.filter(position => {
             if (position.ownerEntry !== cell.ownerEntry) return false;
             const text = String(position.operation?.emittedText || "");
-            if (!text.includes(cell.registerName)) return false;
+            if (![...cellRegisterNames].some(name => text.includes(name))) return false;
             const parsed = parseStatement(text);
-            return parsed ? countIdentifier(parsed.statement, cell.registerName) > 0 : false;
+            return parsed ? [...cellRegisterNames].some(name => countIdentifier(parsed.statement, name) > 0) : false;
         });
         if (!ownerFootprint.length || ownerFootprint.some(position => !dominates(cell.allocation.stateId, position.stateId))) {
             return { applied: false, safe: false, reason: `Captured cell ${cellId} has owner-side uses not dominated by its allocation state` };
@@ -521,49 +573,69 @@ function recoverBetaUpvalues(betaResult) {
     }
 
     const bindingByCell = new Map([...cells.values()].filter(cell => capturedCellIds.has(cell.id)).map(cell => [cell.id, cell.bindingName]));
-    const localCellNames = new Set(capturedCellIds);
-
-    // Validate that every direct cell-register occurrence is part of understood VM
-    // cell machinery before deleting the allocation/reference-count representation.
+    const localCellNames = new Set();
     for (const cellId of capturedCellIds) {
         const cell = cells.get(cellId);
-        for (const position of positions) {
-            const text = position.operation?.emittedText;
-            if (!text || !String(text).includes(cell.registerName)) continue;
-            const statementParsed = parseStatement(text);
-            if (!statementParsed) {
-                return { applied: false, safe: false, reason: `Cell ${cellId} appears in an unparseable beta operation` };
-            }
-            const totalUses = countIdentifier(statementParsed.statement, cell.registerName);
-            if (totalUses === 0) continue;
+        localCellNames.add(cell.registerName);
+        for (const alias of cell.aliases) localCellNames.add(alias);
+    }
 
-            let understood = 0;
-            const allocation = allocationFromOperation(position.operation);
-            if (allocation?.cellName === cell.registerName) understood += totalUses;
-
-            const release = releaseCellFromOperation(position.operation);
-            if (release?.cellName === cell.registerName) understood += totalUses;
-
-            const factory = factoryCallFromOperation(position.operation);
-            if (factory) {
-                for (const capture of factory.captures) {
-                    if (isIdentifier(capture, cell.registerName)) understood += 1;
+    // Validate every direct allocation register and every proven compiler alias
+    // before deleting the VM cell representation. Alias copies themselves are
+    // recognized scaffolding; any other use must still be a factory capture,
+    // upvalueValues access, or releaseUpvalue cleanup.
+    for (const cellId of capturedCellIds) {
+        const cell = cells.get(cellId);
+        for (const registerName of [cell.registerName, ...cell.aliases]) {
+            for (const position of positions) {
+                const text = position.operation?.emittedText;
+                if (!text || !String(text).includes(registerName)) continue;
+                const statementParsed = parseStatement(text);
+                if (!statementParsed) {
+                    return { applied: false, safe: false, reason: "Cell " + cellId + " alias " + registerName + " appears in an unparseable beta operation" };
                 }
-            }
+                const totalUses = countIdentifier(statementParsed.statement, registerName);
+                if (totalUses === 0) continue;
 
-            walk(statementParsed.statement, node => {
-                if (!isUpvalueValuesIndex(node)) return;
-                if (isIdentifier(node.index, cell.registerName)) understood += 1;
-            });
+                let understood = 0;
+                const allocation = allocationFromOperation(position.operation);
+                if (allocation?.cellName === registerName) understood += totalUses;
 
-            if (understood < totalUses) {
-                return { applied: false, safe: false, reason: `Cell ${cellId} escapes recognized upvalue machinery in state ${position.stateId}` };
+                const release = releaseCellFromOperation(position.operation);
+                if (release?.cellName === registerName && cellIdByRegister.get(registerName) === cellId) understood += totalUses;
+
+                const factory = factoryCallFromOperation(position.operation);
+                if (factory) {
+                    for (const capture of factory.captures) {
+                        if (isIdentifier(capture, registerName) && resolveCellIndex(position.ownerEntry, capture) === cellId) understood += 1;
+                    }
+                }
+
+                walk(statementParsed.statement, node => {
+                    if (!isUpvalueValuesIndex(node)) return;
+                    if (isIdentifier(node.index, registerName) && resolveCellIndex(position.ownerEntry, node.index) === cellId) understood += 1;
+                });
+
+                const aliasCopy = identifierCopyFromOperation(position.operation);
+                if (aliasCopyOperations.has(position.operation) && aliasCopy) {
+                    if (aliasCopy.sourceName === registerName) understood += 1;
+                    if (aliasCopy.targetName === registerName) understood += 1;
+                }
+
+                if (understood < totalUses) {
+                    return { applied: false, safe: false, reason: "Cell " + cellId + " alias " + registerName + " escapes recognized upvalue machinery in state " + position.stateId };
+                }
             }
         }
     }
 
     const removals = new Set();
     const replacements = new Map();
+    for (const operation of aliasCopyOperations) {
+        const copy = identifierCopyFromOperation(operation);
+        const cellId = copy ? cellIdByRegister.get(copy.sourceName) : null;
+        if (cellId && capturedCellIds.has(cellId)) removals.add(operation);
+    }
     let readRewriteCount = 0;
     let writeRewriteCount = 0;
     let releaseRemovalCount = 0;
@@ -631,7 +703,8 @@ function recoverBetaUpvalues(betaResult) {
         if (removals.has(operation) || replacements.has(operation)) continue;
 
         const release = releaseCellFromOperation(operation);
-        if (release && capturedCellIds.has(release.cellName)) {
+        const releaseCellId = release ? cellIdByRegister.get(release.cellName) : null;
+        if (releaseCellId && capturedCellIds.has(releaseCellId)) {
             removals.add(operation);
             releaseRemovalCount++;
             continue;
@@ -700,6 +773,8 @@ function recoverBetaUpvalues(betaResult) {
             }
         }
     }
+
+    graph.recoveredUpvalueBindings = [...new Set([...capturedCellIds].map(cellId => cells.get(cellId)?.bindingName).filter(Boolean))];
 
     return {
         applied: true,

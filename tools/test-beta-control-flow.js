@@ -956,4 +956,45 @@ assert(!genericForStructured.source.includes("r2, r4 ="));
 assert(!genericForStructured.source.includes("state ="));
 parseLua(genericForStructured.source, "<beta-cf-generic-for-output>");
 
+const capturedGenericForStructured = solveBetaControlFlow(ast, {
+    applied: true,
+    graph: {
+        cfgComplete: true,
+        stateName: "state",
+        recoveredUpvalueBindings: ["capturedKey", "capturedValue"],
+        entries: [101],
+        states: [
+            { id: 101, predecessors: [], successors: [202], operations: [
+                { kind: "version-define", originalTarget: "iterReg", emittedTarget: "iter", rhs: "next", emittedText: "local iter = next", reads: [] },
+                { kind: "version-define", originalTarget: "stateReg", emittedTarget: "iterState", rhs: "items", emittedText: "local iterState = items", reads: [] },
+                { kind: "version-define", originalTarget: "controlReg", emittedTarget: "initialControl", rhs: "nil", emittedText: "local initialControl = nil", reads: [] },
+                { kind: "state-transition", originalTarget: "state", emittedTarget: "state", rhs: "202", emittedText: "state = 202", reads: [] },
+            ] },
+            { id: 202, predecessors: [101, 303], successors: [303, 404], operations: [
+                { kind: "multi-call-write", originalTargets: ["controlReg", "valueReg"], emittedTargets: ["controlReg", "valueReg"], callBaseOriginal: "iterReg", callArgumentOriginals: ["stateReg", "controlReg"], rhs: "iter(iterState, controlReg)", emittedText: "controlReg, valueReg = iter(iterState, controlReg)", reads: ["iter", "iterState"] },
+                { kind: "state-transition", originalTarget: "state", emittedTarget: "state", rhs: "controlReg and 303 or 404", emittedText: "state = controlReg and 303 or 404", reads: [] },
+            ] },
+            { id: 303, predecessors: [202], successors: [202], operations: [
+                { kind: "epoch-start", originalTarget: "keyReg", emittedTarget: "capturedKey", rhs: "controlReg", emittedText: "local capturedKey = controlReg", reads: [] },
+                { kind: "upvalue-binding-start", originalTarget: "capturedValue", emittedTarget: "capturedValue", rhs: "valueReg", emittedText: "local capturedValue = valueReg", reads: [] },
+                { kind: "statement", originalText: "consume(capturedKey, capturedValue)", emittedText: "consume(capturedKey, capturedValue)", reads: ["capturedKey", "capturedValue"] },
+                { kind: "state-transition", originalTarget: "state", emittedTarget: "state", rhs: "202", emittedText: "state = 202", reads: [] },
+            ] },
+            { id: 404, predecessors: [202], successors: [], operations: [
+                { kind: "return-payload", terminalCompilerReturnPayload: true, returnExpressions: [], emittedText: "ReturnVal = {}", rhs: "{}", reads: [] },
+                { kind: "state-transition", originalTarget: "state", emittedTarget: "state", rhs: "nil", emittedText: "state = nil", reads: [] },
+            ] },
+        ],
+    },
+});
+assert.equal(capturedGenericForStructured.applied, true);
+assert.equal(capturedGenericForStructured.genericForLoopCount, 1);
+assert.equal(capturedGenericForStructured.whileLoopCount, 0);
+assert(capturedGenericForStructured.source.includes("for capturedKey, capturedValue in iter, iterState, initialControl do"));
+assert(capturedGenericForStructured.source.includes("consume(capturedKey, capturedValue)"));
+assert(!capturedGenericForStructured.source.includes("local capturedValue = valueReg"));
+assert(!capturedGenericForStructured.source.includes("controlReg, valueReg ="));
+assert(!capturedGenericForStructured.source.includes("state ="));
+parseLua(capturedGenericForStructured.source, "<beta-cf-captured-generic-for-output>");
+
 console.log("beta control-flow tests passed");
