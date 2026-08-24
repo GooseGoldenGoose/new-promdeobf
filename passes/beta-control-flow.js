@@ -1997,18 +1997,72 @@ function canonicalCompilerOperationSequence(operations) {
     return JSON.stringify(sequence);
 }
 
-function findUniqueCompilerOperationSlice(operations, pattern) {
-    if (!pattern.length) return { start: -1, operations: new Set() };
-    const patternSignature = canonicalCompilerOperationSequence(pattern);
-    if (!patternSignature) return null;
-    const candidates = [];
-    for (let start = 0; start + pattern.length <= operations.length; start++) {
-        const candidate = operations.slice(start, start + pattern.length);
-        if (canonicalCompilerOperationSequence(candidate) === patternSignature) candidates.push(start);
+function betaOperationWrites(operation) {
+    const writes = [];
+    if (operation?.emittedTarget) writes.push(operation.emittedTarget);
+    for (const target of operation?.emittedTargets || []) if (target) writes.push(target);
+    return writes;
+}
+
+function findUniqueCompilerOperationSubsequence(operations, pattern) {
+    if (!pattern.length) return { start: -1, operations: new Set(), indices: [] };
+
+    const patternDefinitions = new Map();
+    const patternExpressions = [];
+    for (let index = 0; index < pattern.length; index++) {
+        const rhs = originalOperationRhs(pattern[index]);
+        if (!rhs) return null;
+        const parsed = parseTransitionExpression(rhs)?.expression || null;
+        if (!parsed) return null;
+        patternExpressions.push(JSON.stringify(canonicalCompilerExpression(parsed, patternDefinitions)));
+        const target = originalOperationTarget(pattern[index]);
+        if (target) patternDefinitions.set(target, index);
     }
+
+    const candidates = [];
+    function visit(patternIndex, searchStart, selectedIndices, selectedDefinitions) {
+        if (candidates.length > 1) return;
+        if (patternIndex === pattern.length) {
+            const selected = new Set(selectedIndices);
+            const removedWrites = new Set();
+            for (const index of selectedIndices) {
+                for (const name of betaOperationWrites(operations[index])) removedWrites.add(name);
+            }
+
+            for (let index = 0; index < operations.length; index++) {
+                if (selected.has(index)) continue;
+                if ((operations[index]?.reads || []).some(name => removedWrites.has(name))) return;
+            }
+
+            candidates.push([...selectedIndices]);
+            return;
+        }
+
+        const remaining = pattern.length - patternIndex;
+        for (let index = searchStart; index <= operations.length - remaining; index++) {
+            const rhs = originalOperationRhs(operations[index]);
+            if (!rhs) continue;
+            const parsed = parseTransitionExpression(rhs)?.expression || null;
+            if (!parsed) continue;
+            const candidateExpression = JSON.stringify(canonicalCompilerExpression(parsed, selectedDefinitions));
+            if (candidateExpression !== patternExpressions[patternIndex]) continue;
+
+            const nextDefinitions = new Map(selectedDefinitions);
+            const target = originalOperationTarget(operations[index]);
+            if (target) nextDefinitions.set(target, patternIndex);
+            visit(patternIndex + 1, index + 1, [...selectedIndices, index], nextDefinitions);
+            if (candidates.length > 1) return;
+        }
+    }
+
+    visit(0, 0, [], new Map());
     if (candidates.length !== 1) return null;
-    const start = candidates[0];
-    return { start, operations: new Set(operations.slice(start, start + pattern.length)) };
+    const indices = candidates[0];
+    return {
+        start: indices[0],
+        indices,
+        operations: new Set(indices.map(index => operations[index])),
+    };
 }
 
 function collectAcyclicRegionToExit(stateById, predecessors, entryId, exitId) {
@@ -2474,7 +2528,7 @@ function matchCompilerRepeat(graph, checkStateId) {
     // in the preheader, discards its result, then compiles it again in the real check.
     // Restore source semantics by removing that compiler-added first evaluation.
     const preBodyOperations = preOps.slice(0, preTransitionIndex);
-    const junkSlice = findUniqueCompilerOperationSlice(preBodyOperations, conditionOperations);
+    const junkSlice = findUniqueCompilerOperationSubsequence(preBodyOperations, conditionOperations);
     if (!junkSlice) return null;
     const retainedPreheaderOperations = preBodyOperations.filter(operation => !junkSlice.operations.has(operation));
 
