@@ -294,4 +294,213 @@ for k, v in f, s, nil do
 end`);
 assert.equal(genericTwoLocalBarrier.stats.genericForTupleInlines, 0);
 
+const whileSnapshotAlias = optimize(`local x = 1
+local a = x
+while check(a) do
+    x = 2
+end`);
+assert(whileSnapshotAlias.source.includes("local a = x"));
+assert(whileSnapshotAlias.source.includes("while check(a) do"));
+
+const repeatSnapshotAlias = optimize(`local x = 1
+local a = x
+repeat
+    x = x + 1
+until done(a)`);
+assert(repeatSnapshotAlias.source.includes("local a = x"));
+assert(repeatSnapshotAlias.source.includes("until done(a)"));
+
+const whileGlobalSnapshot = optimize(`local p = print
+while again() do
+    p("x")
+end`);
+assert(whileGlobalSnapshot.source.includes("local p = print"));
+assert(whileGlobalSnapshot.source.includes('p("x")'));
+
+const whileLiteralInline = optimize(`local a = 3
+while check(a) do
+    tick()
+end`);
+assert(!whileLiteralInline.source.includes("local a = 3"));
+assert(whileLiteralInline.source.includes("while check(3) do"));
+
+const innerLoopIterationAlias = optimize(`while again() do
+    local x = current
+    local a = x
+    consume(a)
+end`);
+assert(!innerLoopIterationAlias.source.includes("local a = x"));
+assert(innerLoopIterationAlias.source.includes("consume(x)"));
+
+const nestedIfBlockCleanup = optimize(`if gate then
+    local a = 3
+    local b = a
+    print(b)
+end`);
+assert(!nestedIfBlockCleanup.source.includes("local a = 3"));
+assert(!nestedIfBlockCleanup.source.includes("local b"));
+assert(nestedIfBlockCleanup.source.includes("print(3)"));
+
+const whileLogicalLadder = optimize(`while true do
+    local out
+    local a = A()
+    out = a
+    if a then
+        local inner
+        local b = B()
+        inner = b
+        if not b then
+            local c = C()
+            inner = c
+        end
+        out = inner
+    end
+    if not out then
+        break
+    end
+    body()
+end`);
+assert(whileLogicalLadder.source.includes("while (A()) and ((B()) or (C())) do"));
+assert(!whileLogicalLadder.source.includes("while true do"));
+assert.equal(whileLogicalLadder.stats.whileConditionsCollapsed, 1);
+
+const repeatLogicalLadder = optimize(`repeat
+    body()
+    local out
+    local a = A()
+    out = a
+    if a then
+        local inner
+        local b = B()
+        inner = b
+        if not b then
+            local c = C()
+            inner = c
+        end
+        out = inner
+    end
+until out`);
+assert(repeatLogicalLadder.source.includes("until (A()) and ((B()) or (C()))"));
+assert(!repeatLogicalLadder.source.includes("local out"));
+assert.equal(repeatLogicalLadder.stats.repeatConditionsCollapsed, 1);
+
+const whileLogicalAliasLeaf = optimize(`while true do
+    local out
+    local a = A()
+    out = a
+    if a then
+        local inner
+        local b = B()
+        inner = b
+        if not b then
+            local snapshot = x
+            local c = snapshot == 1
+            inner = c
+        end
+        out = inner
+    end
+    if not out then break end
+    x = x + 1
+end`);
+assert(whileLogicalAliasLeaf.source.includes("while (A()) and ((B()) or ((x) == 1)) do"));
+
+const whileLogicalNearMiss = optimize(`while true do
+    local out
+    local a = A()
+    out = a
+    if a then
+        local b = B()
+        out = b
+    end
+    if not out then break end
+    print(out)
+end`);
+assert(whileLogicalNearMiss.source.includes("while true do"));
+assert.equal(whileLogicalNearMiss.stats.whileConditionsCollapsed, 0);
+
+const repeatDiscardedAndPrecheck = optimize(`local right
+local first = A()
+right = B
+if first then
+    right()
+end
+repeat
+    body()
+until A() and right()`);
+assert(!repeatDiscardedAndPrecheck.source.includes("local first = A()"));
+assert(!repeatDiscardedAndPrecheck.source.includes("if first then"));
+assert(repeatDiscardedAndPrecheck.source.includes("right = B"));
+assert(repeatDiscardedAndPrecheck.source.includes("until A() and right()"));
+assert.equal(repeatDiscardedAndPrecheck.stats.repeatPrechecksRemoved, 1);
+
+const repeatDiscardedNestedPrecheck = optimize(`local first = A()
+if first then
+    local out
+    local b = B()
+    out = b
+    if not b then
+        local c = C()
+        out = c
+    end
+end
+repeat
+    body()
+until A() and (B() or C())`);
+assert(!repeatDiscardedNestedPrecheck.source.includes("local first = A()"));
+assert(!repeatDiscardedNestedPrecheck.source.includes("if first then"));
+assert(repeatDiscardedNestedPrecheck.source.includes("until A() and (B() or C())"));
+assert.equal(repeatDiscardedNestedPrecheck.stats.repeatPrechecksRemoved, 1);
+
+const repeatPrecheckMismatch = optimize(`local first = A()
+if first then
+    C()
+end
+repeat
+    body()
+until A() and B()`);
+assert(repeatPrecheckMismatch.source.includes("local first = A()"));
+assert(repeatPrecheckMismatch.source.includes("if first then"));
+assert.equal(repeatPrecheckMismatch.stats.repeatPrechecksRemoved, 0);
+
+const whileLongLogicalLadder = optimize(`while true do
+    local out
+    local a = A()
+    out = a
+    if a then
+        local chain
+        local or1
+        local b = B()
+        or1 = b
+        if not b then
+            local or2
+            local c = C()
+            or2 = c
+            if not c then
+                local d = D()
+                or2 = d
+            end
+            or1 = or2
+        end
+        chain = or1
+        if or1 then
+            local or3
+            local e = E()
+            or3 = e
+            if not e then
+                local f = F()
+                or3 = f
+            end
+            chain = or3
+        end
+        out = chain
+    end
+    if not out then break end
+    body()
+end`);
+assert(!whileLongLogicalLadder.source.includes("while true do"));
+assert(whileLongLogicalLadder.source.includes("A()"));
+assert(whileLongLogicalLadder.source.includes("B()"));
+assert(whileLongLogicalLadder.source.includes("F()"));
+assert.equal(whileLongLogicalLadder.stats.whileConditionsCollapsed, 1);
+
 console.log("beta optimizer tests passed");

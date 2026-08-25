@@ -462,6 +462,339 @@ function findGenericForTupleInline(source, block, stats) {
     return null;
 }
 
+function singleAssignmentInfo(statement, targetName = null) {
+    if (statement?.type !== "AssignmentStatement") return null;
+    const variables = statement.variables || [];
+    const init = statement.init || [];
+    if (variables.length !== 1 || init.length !== 1 || !isIdentifier(variables[0])) return null;
+    if (targetName !== null && variables[0].name !== targetName) return null;
+    return { target: variables[0].name, value: init[0] };
+}
+
+function singleIfClause(statement) {
+    if (statement?.type !== "IfStatement") return null;
+    const clauses = statement.clauses || [];
+    if (clauses.length !== 1 || clauses[0]?.type !== "IfClause") return null;
+    return clauses[0];
+}
+
+function uninitializedLocalName(statement) {
+    if (statement?.type !== "LocalStatement") return null;
+    const variables = statement.variables || [];
+    const init = statement.init || [];
+    if (variables.length !== 1 || init.length !== 0 || !isIdentifier(variables[0])) return null;
+    return variables[0].name;
+}
+
+function isNotIdentifier(node, name) {
+    return node?.type === "UnaryExpression" && node.operator === "not" && isIdentifier(node.argument, name);
+}
+
+function renderExpressionWithSimpleDefs(source, node, defs, useCounts, stack = new Set()) {
+    if (!Array.isArray(node?.range)) return null;
+    const edits = [];
+    function visit(value, parent = null, key = null) {
+        if (!isNode(value)) return true;
+        if (isIdentifier(value) && !isNonReadIdentifier(value, parent, key) && defs.has(value.name)) {
+            if (stack.has(value.name)) return false;
+            useCounts.set(value.name, (useCounts.get(value.name) || 0) + 1);
+            const def = defs.get(value.name);
+            const nextStack = new Set(stack);
+            nextStack.add(value.name);
+            const rendered = renderExpressionWithSimpleDefs(source, def, defs, useCounts, nextStack);
+            if (rendered === null) return false;
+            edits.push({ start: value.range[0], end: value.range[1], replacement: `(${rendered})` });
+            return true;
+        }
+        for (const childKey of Object.keys(value)) {
+            if (childKey === "range" || childKey === "loc") continue;
+            const child = value[childKey];
+            if (Array.isArray(child)) {
+                for (const item of child) if (isNode(item) && !visit(item, value, childKey)) return false;
+            } else if (isNode(child) && !visit(child, value, childKey)) {
+                return false;
+            }
+        }
+        return true;
+    }
+    if (!visit(node)) return null;
+    try {
+        return applyTextEdits(sourceOf(source, node), edits, node.range[0]);
+    } catch {
+        return null;
+    }
+}
+
+function buildLeafExpression(source, localStatements, resultTempName) {
+    if (!localStatements.length) return null;
+    const defs = new Map();
+    const order = [];
+    for (const statement of localStatements) {
+        const info = directLocalInfo(statement);
+        if (!info || !info.init || defs.has(info.name)) return null;
+        defs.set(info.name, info.init);
+        order.push(info.name);
+    }
+    if (!defs.has(resultTempName)) return null;
+
+    // Only the final leaf may itself be effectful. Earlier compiler temps are
+    // restricted to literals / one-read aliases so folding cannot change call
+    // count, short-circuit behavior, or object identity.
+    for (const name of order) {
+        if (name === resultTempName) continue;
+        const def = defs.get(name);
+        if (!isLiteral(def) && !isIdentifier(def)) return null;
+    }
+
+    const useCounts = new Map();
+    const rendered = renderExpressionWithSimpleDefs(source, defs.get(resultTempName), defs, useCounts, new Set([resultTempName]));
+    if (rendered === null) return null;
+    for (const name of order) {
+        if (name === resultTempName) continue;
+        const count = useCounts.get(name) || 0;
+        if (count !== 1 && !isLiteral(defs.get(name))) return null;
+        if (count === 0) return null;
+    }
+    return { expression: rendered, names: new Set(order) };
+}
+
+function parseProgramProducer(source, statements, startIndex, resultName) {
+    for (let assignIndex = startIndex + 1; assignIndex < statements.length; assignIndex++) {
+        const assign = singleAssignmentInfo(statements[assignIndex], resultName);
+        if (!assign || !isIdentifier(assign.value)) continue;
+        const truthName = assign.value.name;
+        const prefix = statements.slice(startIndex, assignIndex);
+        if (!prefix.length) continue;
+
+        const leaf = buildLeafExpression(source, prefix, truthName);
+        if (leaf) {
+            return {
+                expression: leaf.expression,
+                truthName,
+                names: leaf.names,
+                nextIndex: assignIndex + 1,
+            };
+        }
+
+        const nested = parseShortCircuitProgram(source, prefix, truthName);
+        if (nested) {
+            return {
+                expression: nested.expression,
+                truthName,
+                names: nested.names,
+                nextIndex: assignIndex + 1,
+            };
+        }
+    }
+    return null;
+}
+
+function parseShortCircuitProgram(source, statements, expectedResultName = null) {
+    if (!Array.isArray(statements) || statements.length < 2) return null;
+    let cursor = 0;
+    let resultName = expectedResultName;
+    const names = new Set();
+
+    const declaredResult = uninitializedLocalName(statements[0]);
+    if (declaredResult && (expectedResultName === null || declaredResult === expectedResultName)) {
+        resultName = declaredResult;
+        names.add(declaredResult);
+        cursor++;
+    }
+    if (!resultName) return null;
+
+    const producer = parseProgramProducer(source, statements, cursor, resultName);
+    if (!producer) return null;
+    for (const name of producer.names) names.add(name);
+    cursor = producer.nextIndex;
+
+    if (cursor === statements.length) {
+        return { resultName, expression: producer.expression, names };
+    }
+    if (cursor + 1 !== statements.length) return null;
+
+    const clause = singleIfClause(statements[cursor]);
+    if (!clause) return null;
+    let operator = null;
+    if (isIdentifier(clause.condition, producer.truthName)) operator = "and";
+    else if (isNotIdentifier(clause.condition, producer.truthName)) operator = "or";
+    else return null;
+
+    const right = parseShortCircuitProgram(source, clause.body || [], resultName);
+    if (!right) return null;
+    for (const name of right.names) names.add(name);
+
+    return {
+        resultName,
+        expression: `(${producer.expression}) ${operator} (${right.expression})`,
+        names,
+    };
+}
+
+function namesUsedInStatements(statements, names) {
+    for (let index = 0; index < statements.length; index++) {
+        for (const name of names) {
+            const result = { reads: [], writes: [], captured: false, redeclared: false };
+            scanNameInNode(statements[index], name, result, index, null, null, true);
+            if (result.reads.length || result.writes.length || result.captured || result.redeclared) return true;
+        }
+    }
+    return false;
+}
+
+function isBreakGuard(statement, resultName) {
+    const clause = singleIfClause(statement);
+    if (!clause || !isNotIdentifier(clause.condition, resultName)) return false;
+    const body = clause.body || [];
+    return body.length === 1 && body[0]?.type === "BreakStatement";
+}
+
+function astShape(node) {
+    if (Array.isArray(node)) return node.map(astShape);
+    if (!node || typeof node !== "object") return node;
+    const out = {};
+    for (const key of Object.keys(node).sort()) {
+        if (key === "range" || key === "loc") continue;
+        out[key] = astShape(node[key]);
+    }
+    return out;
+}
+
+function expressionSignature(node) {
+    return JSON.stringify(astShape(node));
+}
+
+function parseExpressionText(text) {
+    try {
+        const ast = parseLuaStructural(`local __beta_condition_probe = ${text}`, "<beta-condition-probe>");
+        return ast.body?.[0]?.init?.[0] || null;
+    } catch {
+        return null;
+    }
+}
+
+function discardedBranchMatches(source, body, expressionNode) {
+    if (!Array.isArray(body) || body.length === 0 || !expressionNode) return false;
+    const wanted = expressionSignature(expressionNode);
+
+    if (body.length === 1 && body[0]?.type === "CallStatement") {
+        return expressionSignature(body[0].expression) === wanted;
+    }
+    if (body.length === 1) {
+        const info = directLocalInfo(body[0]);
+        if (info?.init && expressionSignature(info.init) === wanted) return true;
+    }
+
+    const parsed = parseShortCircuitProgram(source, body);
+    if (!parsed) return false;
+    const parsedExpression = parseExpressionText(parsed.expression);
+    return parsedExpression !== null && expressionSignature(parsedExpression) === wanted;
+}
+
+function statementMentionsName(statement, name) {
+    const result = { reads: [], writes: [], captured: false, redeclared: false };
+    scanNameInNode(statement, name, result, 0, null, null, true);
+    return result.reads.length || result.writes.length || result.captured || result.redeclared;
+}
+
+function findDiscardedRepeatPrecheck(source, block, stats) {
+    for (let repeatIndex = 0; repeatIndex < block.length; repeatIndex++) {
+        const repeat = block[repeatIndex];
+        if (repeat?.type !== "RepeatStatement" || repeat.condition?.type !== "LogicalExpression") continue;
+        if (repeat.condition.operator !== "and" && repeat.condition.operator !== "or") continue;
+
+        const left = repeat.condition.left;
+        const right = repeat.condition.right;
+        for (let ifIndex = repeatIndex - 1; ifIndex >= 1; ifIndex--) {
+            const clause = singleIfClause(block[ifIndex]);
+            if (!clause) continue;
+
+            let tempName = null;
+            if (repeat.condition.operator === "and" && isIdentifier(clause.condition)) tempName = clause.condition.name;
+            if (repeat.condition.operator === "or" && clause.condition?.type === "UnaryExpression" && clause.condition.operator === "not" && isIdentifier(clause.condition.argument)) {
+                tempName = clause.condition.argument.name;
+            }
+            if (!tempName || !discardedBranchMatches(source, clause.body || [], right)) continue;
+
+            for (let leftIndex = ifIndex - 1; leftIndex >= 0; leftIndex--) {
+                const info = directLocalInfo(block[leftIndex]);
+                if (!info || info.name !== tempName || !info.init) continue;
+                if (expressionSignature(info.init) !== expressionSignature(left)) continue;
+
+                let safeGap = true;
+                for (let index = leftIndex + 1; index < ifIndex; index++) {
+                    if (statementMentionsName(block[index], tempName)) {
+                        safeGap = false;
+                        break;
+                    }
+                }
+                if (!safeGap) continue;
+                for (let index = ifIndex + 1; index < repeatIndex; index++) {
+                    if (statementMentionsName(block[index], tempName)) {
+                        safeGap = false;
+                        break;
+                    }
+                }
+                if (!safeGap) continue;
+
+                stats.repeatPrechecksRemoved++;
+                return {
+                    compound: true,
+                    edits: [
+                        { start: block[leftIndex].range[0], end: block[leftIndex].range[1], replacement: "" },
+                        { start: block[ifIndex].range[0], end: block[ifIndex].range[1], replacement: "" },
+                    ],
+                    kind: "repeat-discarded-precheck",
+                };
+            }
+        }
+    }
+    return null;
+}
+
+function findLoopConditionCollapse(source, block, stats) {
+    for (const statement of block) {
+        if (statement?.type === "WhileStatement" && statement.condition?.type === "BooleanLiteral" && statement.condition.value === true) {
+            const body = statement.body || [];
+            for (let split = 2; split < body.length; split++) {
+                const parsed = parseShortCircuitProgram(source, body.slice(0, split));
+                if (!parsed || !isBreakGuard(body[split], parsed.resultName)) continue;
+                if (namesUsedInStatements(body.slice(split + 1), parsed.names)) continue;
+                stats.whileConditionsCollapsed++;
+                stats.shortCircuitLaddersCollapsed++;
+                return {
+                    compound: true,
+                    edits: [
+                        { start: statement.condition.range[0], end: statement.condition.range[1], replacement: parsed.expression },
+                        { start: body[0].range[0], end: body[split].range[1], replacement: "" },
+                    ],
+                    kind: "while-short-circuit-collapse",
+                };
+            }
+        }
+
+        if (statement?.type === "RepeatStatement" && isIdentifier(statement.condition)) {
+            const body = statement.body || [];
+            for (let start = 0; start < body.length; start++) {
+                const suffix = body.slice(start);
+                const parsed = parseShortCircuitProgram(source, suffix, statement.condition.name);
+                if (!parsed) continue;
+                stats.repeatConditionsCollapsed++;
+                stats.shortCircuitLaddersCollapsed++;
+                return {
+                    compound: true,
+                    edits: [
+                        { start: body[start].range[0], end: body[body.length - 1].range[1], replacement: "" },
+                        { start: statement.condition.range[0], end: statement.condition.range[1], replacement: parsed.expression },
+                    ],
+                    kind: "repeat-short-circuit-collapse",
+                };
+            }
+        }
+    }
+    return null;
+}
+
 function findEnvFold(source, block) {
     const env = findEnvContext(block);
     if (!env) return null;
@@ -486,6 +819,13 @@ function findEnvFold(source, block) {
     }
     for (let index = env.declarationIndex + 1; index < block.length && !found; index++) visit(block[index]);
     return found;
+}
+
+function isRepeatedEvaluationStatement(statement) {
+    return statement?.type === "WhileStatement" ||
+        statement?.type === "RepeatStatement" ||
+        statement?.type === "ForNumericStatement" ||
+        statement?.type === "ForGenericStatement";
 }
 
 function tryOptimizeLocal(source, block, index, stats) {
@@ -534,7 +874,11 @@ function tryOptimizeLocal(source, block, index, stats) {
     }
 
     const directLocals = collectDirectLocalNames(block);
+    const readTopStatement = block[read.topIndex];
     if (isIdentifier(info.init) && directLocals.has(info.init.name)) {
+        // A declaration outside a loop is a one-time snapshot. Replacing its one
+        // AST read inside a loop would re-read the source value every iteration.
+        if (isRepeatedEvaluationStatement(readTopStatement)) return null;
         if (scanWritesInStatements(block, index, read.topIndex, info.init.name)) return null;
         stats.singleUseInlines++;
         return {
@@ -555,6 +899,9 @@ function tryOptimizeLocal(source, block, index, stats) {
         const immediateGenericIteratorUse = read.parent?.type === "ForGenericStatement" &&
             read.key === "iterators" && read.topIndex === index + 1;
         if (!callBaseUse && !immediateGenericIteratorUse) return null;
+        // Direct globals are also snapshots when assigned to a local. Do not turn
+        // one lookup before a loop into a fresh global lookup on every iteration.
+        if (callBaseUse && isRepeatedEvaluationStatement(readTopStatement)) return null;
         if (callBaseUse && !barrierFree(block, index, read.topIndex)) return null;
         stats.globalAliasInlines++;
         return {
@@ -577,9 +924,13 @@ function childStatementBlocks(node) {
     for (const key of Object.keys(node)) {
         if (key === "range" || key === "loc") continue;
         const value = node[key];
-        if (Array.isArray(value) && value.length && value.every(item => !item || isNode(item))) {
-            const statementLike = value.some(item => item && /Statement$/.test(item.type));
-            if (statementLike) blocks.push(value);
+        if (Array.isArray(value)) {
+            const nodes = value.filter(isNode);
+            if (nodes.length && nodes.some(item => /Statement$/.test(item.type))) {
+                blocks.push(value);
+            } else {
+                for (const child of nodes) blocks.push(...childStatementBlocks(child));
+            }
         } else if (isNode(value)) {
             blocks.push(...childStatementBlocks(value));
         }
@@ -631,6 +982,10 @@ function findOneEdit(source, ast, stats) {
     const functionRoots = findFunctionBlocks(ast);
     for (const functionBody of functionRoots) {
         for (const block of allBlocksForFunction(functionBody)) {
+            const repeatPrecheckEdit = findDiscardedRepeatPrecheck(source, block, stats);
+            if (repeatPrecheckEdit) return repeatPrecheckEdit;
+            const loopConditionEdit = findLoopConditionCollapse(source, block, stats);
+            if (loopConditionEdit) return loopConditionEdit;
             const multiReturnEdit = findMultiReturnTableCollapse(source, block, stats);
             if (multiReturnEdit) return multiReturnEdit;
             const unusedReturnEdit = findUnusedMultiReturnTargetRename(source, block, stats);
@@ -674,6 +1029,10 @@ function optimizeBetaSource(source, options = {}) {
         multiReturnUnusedTargets: 0,
         genericForTupleInlines: 0,
         genericForTupleLocalsRemoved: 0,
+        shortCircuitLaddersCollapsed: 0,
+        whileConditionsCollapsed: 0,
+        repeatConditionsCollapsed: 0,
+        repeatPrechecksRemoved: 0,
     };
     let current = source;
     for (let round = 0; round < maxRounds; round++) {
