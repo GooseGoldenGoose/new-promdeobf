@@ -198,4 +198,100 @@ print(c)`);
 assert(/local __beta_unused_return_\d+, __beta_unused_return_\d+, c = f\(\)/.test(packedExtractedButUnusedFirstTwo.source));
 assert.equal(packedExtractedButUnusedFirstTwo.stats.multiReturnUnusedTargets, 2);
 
+
+const genericImmediateGlobalAlias = optimize(`local iterator = next
+for k, v in iterator, t, nil do
+    print(k, v)
+end`);
+assert(/for k, v in next, t, nil do/.test(genericImmediateGlobalAlias.source));
+assert(!genericImmediateGlobalAlias.source.includes("local iterator = next"));
+
+const genericGlobalAliasGap = optimize(`local iterator = next
+sideEffect()
+for k, v in iterator, t, nil do
+    print(k, v)
+end`);
+assert(genericGlobalAliasGap.source.includes("local iterator = next"));
+
+const genericPairsTuple = optimize(`local f, s, c = pairs(t)
+for k, v in f, s, c do
+    print(k, v)
+end`);
+assert(/for k, v in pairs\(t\) do/.test(genericPairsTuple.source));
+assert(!genericPairsTuple.source.includes("local f, s, c"));
+assert.equal(genericPairsTuple.stats.genericForTupleInlines, 1);
+assert.equal(genericPairsTuple.stats.genericForTupleLocalsRemoved, 3);
+
+const genericNextTuple = optimize(`local f, s, c = next, t, nil
+for k, v in f, s, c do
+    print(k, v)
+end`);
+assert(/for k, v in next, t, nil do/.test(genericNextTuple.source));
+assert(!genericNextTuple.source.includes("local f, s, c"));
+
+const genericNextImplicitNil = optimize(`local f, s, c = next, t
+for k, v in f, s, c do
+    print(k, v)
+end`);
+assert(/for k, v in next, t do/.test(genericNextImplicitNil.source));
+
+const genericCustomFactory = optimize(`local f, s, c = makeIterator(source)
+for k, v in f, s, c do
+    consume(k, v)
+end`);
+assert(/for k, v in makeIterator\(source\) do/.test(genericCustomFactory.source));
+
+const genericMethodFactory = optimize(`local f, s, c = object:iterator()
+for k, v in f, s, c do
+    consume(k, v)
+end`);
+assert(/for k, v in object:iterator\(\) do/.test(genericMethodFactory.source));
+
+const genericUsedAfterBarrier = optimize(`local f, s, c = makeIterator(source)
+for k, v in f, s, c do
+    consume(k, v)
+end
+print(f)`);
+assert.equal(genericUsedAfterBarrier.stats.genericForTupleInlines, 0);
+assert(genericUsedAfterBarrier.source.includes("local f, s, c = makeIterator(source)"));
+
+const genericBodyUsesTuple = optimize(`local f, s, c = makeIterator(source)
+for k, v in f, s, c do
+    consume(f, k, v)
+end`);
+assert.equal(genericBodyUsesTuple.stats.genericForTupleInlines, 0);
+
+const genericReorderedTuple = optimize(`local f, s, c = makeIterator(source)
+for k, v in s, f, c do
+    consume(k, v)
+end`);
+assert.equal(genericReorderedTuple.stats.genericForTupleInlines, 0);
+
+const genericEffectGap = optimize(`local f, s, c = makeIterator(source)
+sideEffect()
+for k, v in f, s, c do
+    consume(k, v)
+end`);
+assert.equal(genericEffectGap.stats.genericForTupleInlines, 0);
+assert(genericEffectGap.source.indexOf("makeIterator(source)") < genericEffectGap.source.indexOf("sideEffect()"));
+
+const genericCapturedTuple = optimize(`local f, s, c = makeIterator(source)
+for k, v in f, s, c do
+    local closure = function() return s end
+    consume(closure, k, v)
+end`);
+assert.equal(genericCapturedTuple.stats.genericForTupleInlines, 0);
+
+const genericFourRhsBarrier = optimize(`local f, s, c = next, t, nil, sideEffect()
+for k, v in f, s, c do
+    consume(k, v)
+end`);
+assert.equal(genericFourRhsBarrier.stats.genericForTupleInlines, 0);
+
+const genericTwoLocalBarrier = optimize(`local f, s = makeIterator(source)
+for k, v in f, s, nil do
+    consume(k, v)
+end`);
+assert.equal(genericTwoLocalBarrier.stats.genericForTupleInlines, 0);
+
 console.log("beta optimizer tests passed");

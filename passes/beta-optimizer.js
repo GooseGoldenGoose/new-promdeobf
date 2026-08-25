@@ -410,6 +410,58 @@ function findMultiReturnTableCollapse(source, block, stats) {
     return null;
 }
 
+function findGenericForTupleInline(source, block, stats) {
+    for (let declarationIndex = 0; declarationIndex + 1 < block.length; declarationIndex++) {
+        const declaration = block[declarationIndex];
+        const loop = block[declarationIndex + 1];
+        if (declaration?.type !== "LocalStatement" || loop?.type !== "ForGenericStatement") continue;
+        if (!Array.isArray(declaration.range) || !Array.isArray(loop.range)) continue;
+
+        const variables = declaration.variables || [];
+        const init = declaration.init || [];
+        const iterators = loop.iterators || [];
+        if (variables.length !== 3 || iterators.length !== 3 || init.length < 1 || init.length > 3) continue;
+        if (!variables.every(variable => isIdentifier(variable) && Array.isArray(variable.range))) continue;
+        if (!iterators.every(iterator => isIdentifier(iterator) && Array.isArray(iterator.range))) continue;
+
+        const names = variables.map(variable => variable.name);
+        if (new Set(names).size !== names.length) continue;
+        if (!iterators.every((iterator, index) => iterator.name === names[index])) continue;
+
+        let valid = true;
+        for (let index = 0; index < names.length; index++) {
+            const refs = scanLaterReferences(block, declarationIndex, names[index]);
+            if (refs.writes.length || refs.captured || refs.redeclared || refs.reads.length !== 1) {
+                valid = false;
+                break;
+            }
+            const read = refs.reads[0];
+            if (read.topIndex !== declarationIndex + 1 || read.node !== iterators[index]) {
+                valid = false;
+                break;
+            }
+        }
+        if (!valid) continue;
+
+        const iteratorSource = init.map(expression => sourceOf(source, expression)).join(", ");
+        if (!iteratorSource) continue;
+        const firstIterator = iterators[0].range[0];
+        const lastIterator = iterators[iterators.length - 1].range[1];
+
+        stats.genericForTupleInlines++;
+        stats.genericForTupleLocalsRemoved += variables.length;
+        return {
+            compound: true,
+            edits: [
+                { start: declaration.range[0], end: declaration.range[1], replacement: "" },
+                { start: firstIterator, end: lastIterator, replacement: iteratorSource },
+            ],
+            kind: "generic-for-tuple-inline",
+        };
+    }
+    return null;
+}
+
 function findEnvFold(source, block) {
     const env = findEnvContext(block);
     if (!env) return null;
@@ -499,8 +551,11 @@ function tryOptimizeLocal(source, block, index, stats) {
     // sibling statements and only into call-base position, where it is evaluated
     // before call arguments just like the original declaration was.
     if (isIdentifier(info.init) && !directLocals.has(info.init.name)) {
-        if (!barrierFree(block, index, read.topIndex)) return null;
-        if (read.parent?.type !== "CallExpression" || read.key !== "base") return null;
+        const callBaseUse = read.parent?.type === "CallExpression" && read.key === "base";
+        const immediateGenericIteratorUse = read.parent?.type === "ForGenericStatement" &&
+            read.key === "iterators" && read.topIndex === index + 1;
+        if (!callBaseUse && !immediateGenericIteratorUse) return null;
+        if (callBaseUse && !barrierFree(block, index, read.topIndex)) return null;
         stats.globalAliasInlines++;
         return {
             compound: true,
@@ -580,6 +635,8 @@ function findOneEdit(source, ast, stats) {
             if (multiReturnEdit) return multiReturnEdit;
             const unusedReturnEdit = findUnusedMultiReturnTargetRename(source, block, stats);
             if (unusedReturnEdit) return unusedReturnEdit;
+            const genericForEdit = findGenericForTupleInline(source, block, stats);
+            if (genericForEdit) return genericForEdit;
         }
         const envEdit = findEnvFold(source, functionBody);
         if (envEdit) {
@@ -615,6 +672,8 @@ function optimizeBetaSource(source, options = {}) {
         multiReturnSlotsRecovered: 0,
         multiReturnPlaceholders: 0,
         multiReturnUnusedTargets: 0,
+        genericForTupleInlines: 0,
+        genericForTupleLocalsRemoved: 0,
     };
     let current = source;
     for (let round = 0; round < maxRounds; round++) {

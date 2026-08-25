@@ -31,6 +31,8 @@ function main() {
     console.log(`Multi-return slots recovered: ${result.stats.multiReturnSlotsRecovered}`);
     console.log(`Multi-return placeholders: ${result.stats.multiReturnPlaceholders}`);
     console.log(`Multi-return unused targets: ${result.stats.multiReturnUnusedTargets}`);
+    console.log(`Generic-for tuples inlined: ${result.stats.genericForTupleInlines}`);
+    console.log(`Generic-for tuple locals removed: ${result.stats.genericForTupleLocalsRemoved}`);
     console.log(`Output: ${outputPath}`);
     return result;
 }
