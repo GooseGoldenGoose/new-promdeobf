@@ -317,12 +317,12 @@ end`);
 assert(whileGlobalSnapshot.source.includes("local p = print"));
 assert(whileGlobalSnapshot.source.includes('p("x")'));
 
-const whileLiteralInline = optimize(`local a = 3
+const whileLiteralSnapshot = optimize(`local a = 3
 while check(a) do
     tick()
 end`);
-assert(!whileLiteralInline.source.includes("local a = 3"));
-assert(whileLiteralInline.source.includes("while check(3) do"));
+assert(whileLiteralSnapshot.source.includes("local a = 3"));
+assert(whileLiteralSnapshot.source.includes("while check(a) do"));
 
 const innerLoopIterationAlias = optimize(`while again() do
     local x = current
@@ -331,6 +331,27 @@ const innerLoopIterationAlias = optimize(`while again() do
 end`);
 assert(!innerLoopIterationAlias.source.includes("local a = x"));
 assert(innerLoopIterationAlias.source.includes("consume(x)"));
+
+const naturalWhileLogical = optimize(`while A() and (B() or C()) do
+    body()
+end`);
+assert(naturalWhileLogical.source.includes("while A() and (B() or C()) do"));
+assert.equal(naturalWhileLogical.stats.whileConditionsCollapsed, 0);
+
+const naturalRepeatLogical = optimize(`repeat
+    body()
+until A() or (B() and C())`);
+assert(naturalRepeatLogical.source.includes("until A() or (B() and C())"));
+assert.equal(naturalRepeatLogical.stats.repeatConditionsCollapsed, 0);
+
+const deadCleanupBottomUpChain = optimize(`local a = sideEffect()
+local b = a
+local c = b`);
+assert(deadCleanupBottomUpChain.source.includes("sideEffect()"));
+assert(!deadCleanupBottomUpChain.source.includes("local a"));
+assert(!deadCleanupBottomUpChain.source.includes("local b"));
+assert(!deadCleanupBottomUpChain.source.includes("local c"));
+assert.equal(deadCleanupBottomUpChain.stats.deadCallResults >= 1, true);
 
 const nestedIfBlockCleanup = optimize(`if gate then
     local a = 3

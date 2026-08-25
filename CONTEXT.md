@@ -430,8 +430,12 @@ Current v1 behavior is conservative and iterative:
 - nested `if`/`elseif` clause bodies are traversed as real statement blocks so ordinary dead-local/literal/alias cleanup applies inside short-circuit scaffolding too
 - exact compiler short-circuit value ladders are recursively rebuilt as native `and`/`or` expressions in `while` headers and `repeat ... until` conditions; the recursive matcher handles chained groups and preserves call order / short-circuit effects
 - a discarded pre-repeat condition evaluation is removed only when its left/right expression tree exactly matches the already-recovered logical `until` condition; mismatches fail closed. This fixes the observed extra condition call before the first repeat body without broad dead-effect deletion
-- removes a final bare `return`
-- repeats until no supported change remains and reparses the final source
+- optimizer ordering is structural recovery / compiler-pattern collapse first, then safe inlining; unused/dead local cleanup is a separate final phase only after earlier transforms reach a fixed point
+- final dead-local cleanup scans nested/later blocks and statements bottom-to-top; it never runs early enough to destroy a compiler structure another recovery pass still needs
+- one-use locals declared outside a `while`, `repeat`, numeric-for, or generic-for are treated as one-time snapshots and are not generically inlined into repeated loop evaluation, even for literals; dedicated proven loop/compiler patterns are handled separately
+- natural source conditions already written as `while A and (B or C)` / `repeat ... until A or (B and C)` are left alone; short-circuit collapse only targets the proven compiler temp/assignment ladder shapes
+- removes a final bare `return` during the final cleanup phase
+- reparses after each edit and reparses the final source
 
 It deliberately does not inline arbitrary calls, table/index lookups, closure creation, or other expressions merely because they have one use. This avoids changing evaluation order, call timing, metamethod effects, table/closure identity, or mutable reads.
 

@@ -828,7 +828,7 @@ function isRepeatedEvaluationStatement(statement) {
         statement?.type === "ForGenericStatement";
 }
 
-function tryOptimizeLocal(source, block, index, stats) {
+function tryOptimizeLocal(source, block, index, stats, mode = "inline") {
     const statement = block[index];
     const info = directLocalInfo(statement);
     if (!info) return null;
@@ -836,6 +836,7 @@ function tryOptimizeLocal(source, block, index, stats) {
     if (refs.captured || refs.redeclared || refs.writes.length) return null;
 
     if (refs.reads.length === 0) {
+        if (mode !== "dead") return null;
         if (isEnvHeader(info)) {
             stats.deadLocals++;
             return { start: statement.range[0], end: statement.range[1], replacement: "", kind: "dead-env" };
@@ -856,12 +857,17 @@ function tryOptimizeLocal(source, block, index, stats) {
         return null;
     }
 
+    if (mode === "dead") return null;
     if (refs.reads.length !== 1) return null;
     const read = refs.reads[0];
     if (!Array.isArray(read.node.range)) return null;
+    const readTopStatement = block[read.topIndex];
 
-    // Literals are immutable single values and can move across statements safely.
+    // A source local declared outside a loop is a one-time snapshot even when the
+    // value is literal. Keep that source shape instead of moving it into repeated
+    // evaluation. Compiler-specific loop recovery is handled by dedicated passes.
     if (isLiteral(info.init)) {
+        if (isRepeatedEvaluationStatement(readTopStatement)) return null;
         stats.singleUseInlines++;
         return {
             compound: true,
@@ -874,7 +880,6 @@ function tryOptimizeLocal(source, block, index, stats) {
     }
 
     const directLocals = collectDirectLocalNames(block);
-    const readTopStatement = block[read.topIndex];
     if (isIdentifier(info.init) && directLocals.has(info.init.name)) {
         // A declaration outside a loop is a one-time snapshot. Replacing its one
         // AST read inside a loop would re-read the source value every iteration.
@@ -978,7 +983,7 @@ function allBlocksForFunction(functionBody) {
     return out;
 }
 
-function findOneEdit(source, ast, stats) {
+function findTransformEdit(source, ast, stats) {
     const functionRoots = findFunctionBlocks(ast);
     for (const functionBody of functionRoots) {
         for (const block of allBlocksForFunction(functionBody)) {
@@ -1000,7 +1005,26 @@ function findOneEdit(source, ast, stats) {
         }
         for (const block of allBlocksForFunction(functionBody)) {
             for (let index = 0; index < block.length; index++) {
-                const edit = tryOptimizeLocal(source, block, index, stats);
+                const edit = tryOptimizeLocal(source, block, index, stats, "inline");
+                if (edit) return edit;
+            }
+        }
+    }
+    return null;
+}
+
+function findDeadCleanupEdit(source, ast, stats) {
+    // Cleanup deliberately runs after every structural/inline transform has
+    // reached a fixed point. Scan nested/later code first and statements from
+    // bottom to top so removing dead compiler storage cannot hide a structure
+    // that an earlier recovery pass still needs.
+    const functionRoots = findFunctionBlocks(ast);
+    for (let rootIndex = functionRoots.length - 1; rootIndex >= 0; rootIndex--) {
+        const blocks = allBlocksForFunction(functionRoots[rootIndex]);
+        for (let blockIndex = blocks.length - 1; blockIndex >= 0; blockIndex--) {
+            const block = blocks[blockIndex];
+            for (let index = block.length - 1; index >= 0; index--) {
+                const edit = tryOptimizeLocal(source, block, index, stats, "dead");
                 if (edit) return edit;
             }
             const last = block[block.length - 1];
@@ -1035,14 +1059,29 @@ function optimizeBetaSource(source, options = {}) {
         repeatPrechecksRemoved: 0,
     };
     let current = source;
-    for (let round = 0; round < maxRounds; round++) {
-        const ast = parseLuaStructural(current, `<beta-optimizer-round-${round + 1}>`);
-        const edit = findOneEdit(current, ast, stats);
+    let round = 0;
+
+    // Phase 1: structural recovery and safe inlining to a fixed point.
+    for (; round < maxRounds; round++) {
+        const ast = parseLuaStructural(current, `<beta-optimizer-transform-${round + 1}>`);
+        const edit = findTransformEdit(current, ast, stats);
         if (!edit) break;
         const edits = edit.compound ? edit.edits : [edit];
         current = applyTextEdits(current, edits);
         stats.rounds++;
     }
+
+    // Phase 2: unused/dead cleanup only, bottom-to-top. Do not return to the
+    // transform phase after cleanup; dead storage is intentionally the last pass.
+    for (; round < maxRounds; round++) {
+        const ast = parseLuaStructural(current, `<beta-optimizer-dead-${round + 1}>`);
+        const edit = findDeadCleanupEdit(current, ast, stats);
+        if (!edit) break;
+        const edits = edit.compound ? edit.edits : [edit];
+        current = applyTextEdits(current, edits);
+        stats.rounds++;
+    }
+
     parseLuaStructural(current, "<beta-optimizer-final>");
     return { source: current, applied: current !== source, stats };
 }
