@@ -448,6 +448,109 @@ print("hi")
 Current CF is one state / zero closures. Standalone beta optimizer reduces the live code to `print("hi")`; generated `--headers` / `--body` comments and blank formatting may remain. Stats for that probe: 9 rounds, 1 global fold, 1 global-alias inline, 2 other single-use inlines, 3 dead locals, 1 dead call-result lowering, 1 bare return removed.
 
 Safety regressions cover call-order preservation, dead call-result preservation, literal movement, mutable local aliases, repeated-evaluation loop snapshots, effect barriers for global aliases, `setfenv` blocking, nested clause-block cleanup, dead table removal, full/sparse/out-of-order multi-return slots, only-second/only-third results, method calls, placeholder-name collisions, shadow/capture barriers, table escape, dynamic indexes, duplicate slots, table writes, `#table` observation, generic-for tuple calls, `next, state, nil`, omitted control nil, method/custom factories, direct-global iterator aliases, later/body/captured tuple uses, reordered tuple values, effect gaps, unsupported tuple arities, short and long `and`/`or` ladders, `while`/`repeat` condition recovery, exact repeat precheck removal, and mismatch refusal. LuaJIT parity probes include only-second, sparse 1+3, side-effectful call ordering, five real iterator cases, side-effectful while/repeat conditions, and a 33-state deep mixed-condition loop probe; checked before/after output is identical. Real local-Prometheus iterator probes with EncryptStrings/AntiTamper disabled verify `pairs`, `ipairs`, `next`, a direct custom iterator triple, and a custom iterator factory. Real loop probes verify `while A() and (B() or C())`, side-effectful repeat, and long chained conditions; the side-effectful repeat previously exposed an extra pre-body condition call, now removed only by exact structural duplicate proof. Packed `pairs`/`ipairs`/factory triples collapse and inline into the generic-for header; `next` folds to direct `for ... in next, state, nil`. The direct custom triple remains conservative where post-loop compiler cleanup would make alias deletion require stronger lifetime proof.
+## Current Immediate Beta Optimizer Checkpoint
+
+This is the exact current user-facing development focus as of the latest checkpoint. The optimizer remains experimental and standalone; do not connect it to `main.js`, canonical CF, or `deobf.bat` unless the user explicitly asks later.
+
+Latest relevant commits:
+
+```text
+729b0ac Run beta dead cleanup last
+d1d1da7 Recover logical loop conditions in beta optimizer
+eece1a9 Inline generic-for iterator tuples in beta optimizer
+db2a17d Collapse packed multi-return calls in beta optimizer
+39d3d2f Add standalone beta optimizer
+```
+
+Current optimizer path:
+
+```text
+final beta-CF source
+-> structural compiler-pattern recovery
+   - packed call multi-return table collapse
+   - generic-for iterator tuple recovery
+   - exact while/repeat short-circuit ladder recovery
+   - exact discarded repeat-precheck removal
+-> safe single-use/global/alias inlining
+-> structural transforms reach fixed point
+-> dead/unused cleanup runs last, bottom-to-top
+-> final reparse
+```
+
+Important current behavior / proofs:
+
+- Basic cleanup: removes proven dead locals, preserves effects of unused calls, folds proven `_env["name"]` lookups to globals, safely inlines literals/aliases, and removes a final bare `return`.
+- Multi-return recovery is call-agnostic. Compiler storage like `local t = { call() }; local a=t[1]; local b=t[2]` becomes native `local a,b = call()` only with structural proof.
+- Sparse result use is supported. If only result 2 or 3 is needed, collision-free `__beta_unused_return_N` locals consume earlier return positions instead of using `_` or changing semantics.
+- Packed-result recovery refuses table escape, writes, `#table`, dynamic/duplicate slot reads, capture/shadow changes, or other unproven shapes.
+- Generic-for iterator recovery is also call-agnostic. Proven adjacent iterator tuples become direct source-like loops, e.g. `local f,s,c = pairs(t); for k,v in f,s,c do` -> `for k,v in pairs(t) do`.
+- Verified real iterator shapes include `pairs`, `ipairs`, `next, state, nil`, custom direct iterator triples, and custom iterator factories. `pairs`/`ipairs`/factory triples inline into the loop header; `next` folds to direct `for ... in next, state, nil`. The direct custom triple remains conservative if stronger lifetime proof would be needed to remove aliases/cleanup.
+- One-use locals declared outside `while`, `repeat`, numeric-for, or generic-for are treated as one-time snapshots. They are not generically moved into repeated loop evaluation, including literal snapshots. This prevents one AST use from becoming many runtime reads/evaluations.
+- Nested `if`/`elseif` clause bodies are traversed as real blocks for cleanup.
+- Exact Prometheus short-circuit temp/assignment ladders are recursively rebuilt as native `and` / `or` expressions for `while` and `repeat ... until`. Natural source conditions already written with `and/or` are not rewritten by this pattern recovery.
+- Side-effect order is preserved. The loop-condition matcher only accepts the exact proven ladder structure; calls remain in the same left-to-right short-circuit order.
+- Prometheus can emit a discarded evaluation of a repeat condition before the first body iteration. That precheck is removed only when its expression tree exactly matches the recovered `until` condition. Mismatch refuses optimization.
+- Optimizer ordering matters: structural recovery and safe inlining finish first; dead cleanup runs only afterward and never returns to structural transforms. This prevents dead-storage deletion from destroying compiler patterns needed for recovery.
+
+Controlled examples already verified:
+
+```lua
+print("hi")
+```
+
+reduces from final CF scaffolding to live `print("hi")`.
+
+```lua
+local a, b = pcall(function()
+    return 1 / "hejsks"
+end)
+print(a, b)
+```
+
+has its compiler `{ pcall(...) }` result table recovered to native multi-return assignment. Only-second / only-third result variants are also covered.
+
+```lua
+for i, v in pairs(t) do
+    print(i, v)
+end
+```
+
+is recovered through real Prometheus obfuscation -> CF -> optimizer to direct `for ... in pairs(t) do` form.
+
+Real loop probes cover nested/mixed short-circuit forms such as:
+
+```lua
+while A() and (B() or C()) do
+    ...
+end
+
+repeat
+    ...
+until A() or (B() and C())
+```
+
+including side-effectful condition functions and a deeper mixed-condition probe. Before/after runtime output matched in the checked executable probes.
+
+Current verification state for the standalone optimizer work:
+
+```text
+focused project suites: 14/14 PASS
+real iterator runtime probes: pairs/ipairs/next/custom-direct/custom-factory = equal
+multi-return runtime probes: equal for successful cases
+loop/repeat side-effect parity probes: equal
+optimizer imports from main/CF/deobf.bat: none
+```
+
+Current working tree outside generated/ignored output is intentionally left with only pre-existing user/scratch items:
+
+```text
+M formater/input.txt
+?? sample/input.txt
+```
+
+Do not stage, reset, overwrite, or reinterpret those unless the user explicitly asks.
+
+If a new chat is opened only to establish context, it must read this file and Git state, then explain what it understands. It must not start implementing, testing, changing files, committing, or pushing until the user gives a new action request.
 ## Large / Special Probes
 
 ### Generic-for 53-59
