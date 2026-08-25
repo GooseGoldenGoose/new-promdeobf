@@ -1381,6 +1381,32 @@ const terminalLocalJoinExperimental = solveExperimentalBetaControlFlow(ast, term
 assert.equal(terminalLocalJoinExperimental.applied, true);
 assert.equal((terminalLocalJoinExperimental.source.match(/return 1/g) || []).length, 1);
 parseLua(terminalLocalJoinProduction.source, "<beta-cf-terminal-local-join>");
+// Regression: scalar VM compound writes stay native through beta-CF once
+// lifetime analysis proves the read-modify-write belongs to one beta epoch.
+const nativeCompoundCfSource = `vm = function(state, args, upvalues, gcProxy)
+    local r1, r2, ReturnVal
+    while state do
+        if state == 1 then
+            r1 = 10
+            r2 = 2
+            r1 -= r2
+            ReturnVal = { r1 }
+            state = nil
+        end
+    end
+    state = #gcProxy
+    return unpack(ReturnVal)
+end
+root = createClosure(1, {})`;
+const nativeCompoundCfAst = parseLuaStructural(nativeCompoundCfSource, "<beta-cf-native-compound>");
+const nativeCompoundCfBeta = versionVmBlockRegisters(nativeCompoundCfSource, nativeCompoundCfAst);
+assert.equal(nativeCompoundCfBeta.nativeCompoundWriteCount, 1);
+const nativeCompoundCfResult = solveBetaControlFlow(nativeCompoundCfAst, nativeCompoundCfBeta);
+assert.equal(nativeCompoundCfResult.applied, true);
+assert(nativeCompoundCfResult.source.includes("-="));
+assert(!/\br1\s*-=/.test(nativeCompoundCfResult.source));
+parseLua(nativeCompoundCfResult.source, "<beta-cf-native-compound-output>");
+
 // Regression: Prometheus may compile a repeat condition once before the body and
 // again as the real post-test. A short-circuit condition can create nested suffix
 // matches inside the full duplicated region; recover only the unique maximal copy.

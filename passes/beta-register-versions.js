@@ -57,29 +57,15 @@ function isAtomicParallelAssignment(statement, candidateNames) {
 
 const SIMPLE_REGISTER_COMPOUND_OPERATORS = new Set(["+", "-", "*", "/", "//", "%", "^", ".."]);
 
-function normalizeSimpleRegisterCompoundAssignments(source, leaves, candidateNames) {
-    const edits = [];
-    for (const leaf of leaves || []) {
-        for (const statement of leaf.body || []) {
-            if (statement?.type !== "CompoundAssignmentStatement") continue;
-            if (!isIdentifier(statement.variable) || !candidateNames.has(statement.variable.name)) continue;
-            if (!SIMPLE_REGISTER_COMPOUND_OPERATORS.has(statement.op)) continue;
-            if (!Array.isArray(statement.range) || !Array.isArray(statement.variable.range) || !Array.isArray(statement.value?.range)) continue;
-
-            // A plain VM register identifier is evaluated exactly once either way,
-            // so compound assignment is equivalent to an ordinary read+write. Do
-            // not do this for indexed/member targets: those can have evaluation
-            // side effects and are handled as ordered effect writes instead.
-            const target = source.slice(statement.variable.range[0], statement.variable.range[1]);
-            const value = source.slice(statement.value.range[0], statement.value.range[1]);
-            edits.push({
-                start: statement.range[0],
-                end: statement.range[1],
-                replacement: target + " = " + target + " " + statement.op + " (" + value + ")",
-            });
-        }
-    }
-    return edits.length ? { source: applyTextEdits(source, edits), count: edits.length } : null;
+function isSimpleRegisterCompoundAssignment(statement, candidateNames, specialNames = null) {
+    return statement?.type === "CompoundAssignmentStatement" &&
+        isIdentifier(statement.variable) &&
+        candidateNames.has(statement.variable.name) &&
+        (!specialNames || !specialNames.has(statement.variable.name)) &&
+        SIMPLE_REGISTER_COMPOUND_OPERATORS.has(statement.op) &&
+        Array.isArray(statement.range) &&
+        Array.isArray(statement.variable.range) &&
+        Array.isArray(statement.value?.range);
 }
 
 function numericValue(node) {
@@ -522,16 +508,6 @@ function versionVmBlockRegisters(source, ast) {
         return { source, found: true, applied: false, reason: "No exact normalized VM state leaves were found" };
     }
 
-    const normalizedCompounds = normalizeSimpleRegisterCompoundAssignments(source, leaves, candidateNames);
-    if (normalizedCompounds) {
-        const normalizedAst = parseBetaSource(normalizedCompounds.source);
-        const result = versionVmBlockRegisters(normalizedCompounds.source, normalizedAst);
-        return {
-            ...result,
-            normalizedCompoundAssignmentCount:
-                (result.normalizedCompoundAssignmentCount || 0) + normalizedCompounds.count,
-        };
-    }
 
     const baseIds = new Map();
     const versionCounts = new Map();
@@ -541,6 +517,7 @@ function versionVmBlockRegisters(source, ast) {
     let skippedAssignments = 0;
     let preservedFinalWrites = 0;
     let orderedEffectWriteCount = 0;
+    let nativeCompoundWriteCount = 0;
 
     function ensureBase(name) {
         if (!baseIds.has(name)) baseIds.set(name, nextBaseId++);
@@ -569,6 +546,30 @@ function versionVmBlockRegisters(source, ast) {
         for (let statementIndex = 0; statementIndex < statements.length; statementIndex++) {
             const statement = statements[statementIndex];
             if (isOrderedEffectAssignment(statement)) {
+                plans.set(statement, { kind: "effect-write" });
+                orderedEffectWriteCount++;
+                continue;
+            }
+            if (isSimpleRegisterCompoundAssignment(statement, candidateNames, specialFinalNames)) {
+                const originalName = statement.variable.name;
+                const baseId = ensureBase(originalName);
+                const version = (versionCounts.get(originalName) || 0) + 1;
+                versionCounts.set(originalName, version);
+                const newName = `r_v${baseId}_${version}`;
+                plans.set(statement, {
+                    kind: "compound-write",
+                    originalName,
+                    newName,
+                    baseId,
+                    version,
+                    compoundOperator: statement.op,
+                });
+                lastDefinitions.set(originalName, `v:${newName}`);
+                versions.push({ blockState: stateId, originalName, baseId, version, newName });
+                nativeCompoundWriteCount++;
+                continue;
+            }
+            if (statement?.type === "CompoundAssignmentStatement") {
                 plans.set(statement, { kind: "effect-write" });
                 orderedEffectWriteCount++;
                 continue;
@@ -774,7 +775,7 @@ function versionVmBlockRegisters(source, ast) {
         for (const block of blocks) {
             for (const statement of block.statements) {
                 const plan = block.plans.get(statement);
-                if (plan?.kind === "versioned") {
+                if (plan?.kind === "versioned" || plan?.kind === "compound-write") {
                     remapVersionPlan(plan, statement, block.stateId, true);
                     continue;
                 }
@@ -803,7 +804,7 @@ function versionVmBlockRegisters(source, ast) {
         for (const block of blocks) {
             for (const statement of block.statements) {
                 const plan = block.plans.get(statement);
-                if (plan?.kind === "versioned") plan.declareVersion = true;
+                if (plan?.kind === "versioned" || plan?.kind === "compound-write") plan.declareVersion = true;
                 if (plan?.kind === "multi-call-write" || plan?.kind === "multi-write") {
                     for (const targetPlan of new Set((plan.targets || []).filter(Boolean))) {
                         if (!targetPlan.preservePhysical) targetPlan.declareVersion = true;
@@ -951,6 +952,71 @@ function versionVmBlockRegisters(source, ast) {
                     emittedText: rewritten.text.trim(),
                     reads: [...usedVersions],
                 });
+                continue;
+            }
+
+            if (plan?.kind === "compound-write") {
+                const usedVersions = new Set();
+                const rhs = rewriteExpression(source, statement.value, latestVersions, usedVersions);
+                const priorName = latestVersions.get(plan.originalName) || null;
+                if (priorName) usedVersions.add(priorName);
+                for (const versionName of usedVersions) {
+                    if (incomingVersionNames.has(versionName)) crossBlockUsedVersions.add(versionName);
+                }
+
+                if (rhs !== null && priorName && priorName === plan.newName && plan.declareVersion === false) {
+                    const emittedText = `${plan.newName} ${plan.compoundOperator}= ${rhs}`;
+                    edits.push({ start: statement.range[0], end: statement.range[1], replacement: emittedText });
+                    graphOperations.push({
+                        index: graphOperations.length + 1,
+                        kind: "epoch-mutate",
+                        originalTarget: plan.originalName,
+                        emittedTarget: plan.newName,
+                        rhs,
+                        compoundOperator: plan.compoundOperator,
+                        reads: [...usedVersions],
+                        returnSinkSafe: false,
+                        originalText: source.slice(statement.range[0], statement.range[1]).trim(),
+                        emittedText,
+                        registerEpoch: plan.registerEpoch || null,
+                    });
+                    latestVersions.set(plan.originalName, plan.newName);
+                    continue;
+                }
+
+                if (rhs !== null && priorName) {
+                    const declarationPrefix = plan.declareVersion === false ? "" : "local ";
+                    const emittedText = `${declarationPrefix}${plan.newName} = ${priorName} ${plan.compoundOperator} (${rhs})`;
+                    edits.push({ start: statement.range[0], end: statement.range[1], replacement: emittedText });
+                    graphOperations.push({
+                        index: graphOperations.length + 1,
+                        kind: plan.registerEpoch ? (plan.declareVersion === false ? "epoch-mutate" : "epoch-start") : "version-define",
+                        originalTarget: plan.originalName,
+                        emittedTarget: plan.newName,
+                        rhs: `${priorName} ${plan.compoundOperator} (${rhs})`,
+                        compoundOperator: plan.compoundOperator,
+                        reads: [...usedVersions],
+                        returnSinkSafe: false,
+                        originalText: source.slice(statement.range[0], statement.range[1]).trim(),
+                        emittedText,
+                        registerEpoch: plan.registerEpoch || null,
+                    });
+                    latestVersions.set(plan.originalName, plan.newName);
+                    continue;
+                }
+
+                const rewritten = rewriteUnsupportedAssignmentReads(source, statement, latestVersions, usedVersions);
+                if (rewritten) {
+                    for (const edit of rewritten.edits) edits.push(edit);
+                }
+                graphOperations.push({
+                    index: graphOperations.length + 1,
+                    kind: "unsupported",
+                    originalText: source.slice(statement.range[0], statement.range[1]).trim(),
+                    emittedText: rewritten?.text?.trim() || source.slice(statement.range[0], statement.range[1]).trim(),
+                    reads: [...usedVersions],
+                });
+                latestVersions.delete(plan.originalName);
                 continue;
             }
 
@@ -1286,6 +1352,7 @@ function versionVmBlockRegisters(source, ast) {
         versionedAssignmentCount: versions.length,
         preservedFinalWrites,
         orderedEffectWriteCount,
+        nativeCompoundWriteCount,
         skippedAssignments,
         cfgComplete,
         crossBlockVersionCount: crossBlockUsedVersions.size,

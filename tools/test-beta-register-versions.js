@@ -626,16 +626,87 @@ const scalarCompoundResult = versionVmBlockRegisters(
     scalarCompoundSource,
     parseLua(scalarCompoundSource, "<beta-scalar-compound-test>")
 );
-assert.equal(scalarCompoundResult.normalizedCompoundAssignmentCount, 1);
-assert(!scalarCompoundResult.source.includes("+="));
-assert(!/\br1\s*=\s*r1\b/.test(scalarCompoundResult.source));
-assert(scalarCompoundResult.source.includes(" + ("));
+assert.equal(scalarCompoundResult.nativeCompoundWriteCount, 1);
+assert.equal(scalarCompoundResult.lifetimeAnalysisStats.compoundMutationMergeCount, 1);
+assert(scalarCompoundResult.source.includes("+="));
+assert(!/\br1\s*\+=/.test(scalarCompoundResult.source));
 const scalarCompoundR1Base = scalarCompoundResult.mapping.find(item => item.originalName === "r1")?.baseName;
 const scalarCompoundR2Base = scalarCompoundResult.mapping.find(item => item.originalName === "r2")?.baseName;
 assert(scalarCompoundR1Base && scalarCompoundR2Base);
-assert(scalarCompoundResult.source.includes(scalarCompoundR1Base));
-assert(scalarCompoundResult.source.includes(scalarCompoundR2Base));
+const scalarCompoundOps = scalarCompoundResult.graph.states[0].operations;
+const scalarCompoundStart = scalarCompoundOps.find(operation => operation.originalTarget === "r1" && operation.kind === "epoch-start");
+const scalarCompoundMutation = scalarCompoundOps.find(operation => operation.compoundOperator === "+");
+assert(scalarCompoundStart && scalarCompoundMutation);
+assert.equal(scalarCompoundMutation.kind, "epoch-mutate");
+assert.equal(scalarCompoundMutation.emittedTarget, scalarCompoundStart.emittedTarget);
+assert.equal(scalarCompoundMutation.registerEpoch, scalarCompoundStart.registerEpoch);
+assert.equal(scalarCompoundMutation.emittedText, `${scalarCompoundStart.emittedTarget} += ${scalarCompoundR2Base}_1`);
 parseLua(scalarCompoundResult.source, "<beta-scalar-compound-output>");
+
+for (const compoundOperator of ["+=", "-=", "*=", "/=", "//=", "%=", "^=", "..="]) {
+    const operatorSource = `vm = function(state, args, upvalues, gcProxy)
+    local r1, r2, ReturnVal
+    while state do
+        if state == 1 then
+            r1 = 10
+            r2 = 2
+            r1 ${compoundOperator} r2
+            ReturnVal = { r1 }
+            state = nil
+        end
+    end
+    state = #gcProxy
+    return unpack(ReturnVal)
+end
+root = createClosure(1, {})`;
+    const operatorResult = versionVmBlockRegisters(
+        operatorSource,
+        parseLua(operatorSource, `<beta-native-compound-${compoundOperator}>`)
+    );
+    assert.equal(operatorResult.nativeCompoundWriteCount, 1);
+    assert(operatorResult.source.includes(compoundOperator));
+    assert(operatorResult.graph.states[0].operations.some(operation =>
+        operation.kind === "epoch-mutate" && operation.emittedText.includes(compoundOperator)
+    ));
+    parseLua(operatorResult.source, `<beta-native-compound-output-${compoundOperator}>`);
+}
+
+const compoundJoinSource = `vm = function(state, args, upvalues, gcProxy)
+    local r1, ReturnVal
+    while state do
+        if state == 1 then
+            r1 = 10
+            state = flag and 2 or 3
+        end
+        if state == 2 then
+            r1 = 20
+            state = 4
+        end
+        if state == 3 then
+            r1 = 30
+            state = 4
+        end
+        if state == 4 then
+            r1 -= 1
+            ReturnVal = { r1 }
+            state = nil
+        end
+    end
+    state = #gcProxy
+    return unpack(ReturnVal)
+end
+root = createClosure(1, {})`;
+const compoundJoinResult = versionVmBlockRegisters(
+    compoundJoinSource,
+    parseLua(compoundJoinSource, "<beta-native-compound-join>")
+);
+assert.equal(compoundJoinResult.nativeCompoundWriteCount, 1);
+const compoundJoinMutation = compoundJoinResult.graph.states.find(state => state.id === 4).operations.find(operation => operation.compoundOperator === "-");
+assert(compoundJoinMutation);
+assert.equal(compoundJoinMutation.kind, "epoch-mutate");
+assert(compoundJoinMutation.emittedText.includes("-="));
+assert(!/\br1\s*-=/.test(compoundJoinResult.source));
+parseLua(compoundJoinResult.source, "<beta-native-compound-join-output>");
 
 
 const complexCompoundTargetSource = `vm = function(state, args, upvalues, gcProxy)

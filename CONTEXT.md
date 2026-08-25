@@ -220,7 +220,7 @@ Current beta-CF supports proven:
 - dependency-safe reordered duplicate repeat-condition operations
 - terminal return payload lowering
 - per-function RegisterOverflow presentation
-- simple VM-register compound assignment normalization before beta lifetime/version analysis
+- native simple VM-register compound assignment recovery (`+=`, `-=`, `*=`, `/=`, `//=`, `%=`, `^=`, `..=`) with no normalize/reparse pass
 - generalized atomic parallel / multi-return assignment recovery
 - side-effect-safe indexed/member compound assignment preservation
 
@@ -338,25 +338,32 @@ Historical bisect was `0237d60` GOOD / `7a881ab` BAD. The regression is now fixe
 
 Sample 20 is separate: its working-copy source has user-added `o/l/d/f` prints while tracked `20.txt` was not regenerated. Do not treat that as a solver regression.
 
-## Fixed Scalar Compound Beta Regression
+## Native Scalar Compound Assignment Recovery
 
-A user probe in `sample/input.txt` exposed direct VM register compound assignments such as `r64 += r54` and `r28 += r56`. Normal deobf succeeded, but beta versioning treated `CompoundAssignmentStatement` as a generic statement and emitted no `emittedText`; captured-cell validation then failed with `Captured-cell validation encountered an unparseable beta operation`.
+Direct VM-register compounds are now handled natively instead of being expanded/reparsed first.
 
-Fix in `passes/beta-register-versions.js`:
-- before lifetime/version analysis, direct state-leaf compound assignments whose target is a proven simple VM register identifier are normalized structurally, e.g. `r64 += r54` -> `r64 = r64 + (r54)`
-- only parser-supported compound operators are accepted: `+ - * / // % ^ ..`
-- indexed/member compounds are never normalized because their LHS evaluation can have side effects; existing ordered effect-write handling remains responsible for shapes such as `upvalueValues[idx] += value`
-- the normalized source is reparsed and sent through the unchanged beta lifetime/version pipeline, so register reads/writes and ownership are recovered normally instead of special-casing compound semantics later
-- `normalizedCompoundAssignmentCount` reports how many simple register compounds were expanded
+Supported operators:
+
+```text
++=  -=  *=  /=  //=  %=  ^=  ..=
+```
+
+Rules:
+- `CompoundAssignmentStatement` with a proven simple ordinary VM-register target becomes a `compound-write` beta plan directly.
+- Lifetime analysis treats the compound target as both a read and a write. The compound syntax itself is read-modify-write evidence, so the post-write definition is merged with every fully proven concrete reaching definition of that same register.
+- When that proof gives one beta epoch, emitted source stays native, e.g. `r1 += r2` -> `r_v1_1 += r_v2_1`; no extra beta source normalization or recursive reparse is needed.
+- If native same-epoch emission cannot be proven, beta keeps a safe non-native fallback or preserves the unresolved compound instead of inventing ownership.
+- Complex indexed/member compounds remain on the separate ordered effect-write path so LHS calls/index expressions are never duplicated.
+- `nativeCompoundWriteCount` reports direct scalar compounds seen by beta; lifetime stats expose `compoundMutationMergeCount`.
 
 Verification:
-- focused scalar-compound regression added to `tools/test-beta-register-versions.js`
-- user input normal mode: PASS
-- user input CF mode: PASS, 695 states / 39 closures
-- user input normalized 2 simple register compound assignments
-- final user CF: 0 `RegisterOverflow[...]`, 0 `createClosure*`, 0 `upvalueValues[...]`, 0 `allocUpvalue(...)`, 0 `while state do`, and no physical `r64`/`r28` leftovers
+- native beta regressions cover all 8 parser-supported compound operators
+- branch-join compound mutation is covered
+- final beta-CF preserves native compound syntax
 - 13/13 focused suites pass
-- numeric 1-63 normal + CF are byte-for-byte identical to the verified round-2 baseline; none of those fixtures require the new scalar-compound path
+- numeric 1-63 normal + CF remain byte-for-byte identical to the verified frozen baseline
+- spacial6 normal + CF remain byte-for-byte identical: 3799 states / 554 closures
+- current untracked `sample/input.txt` normal->CF still passes (120 states / 21 closures)
 
 ## Complex Compound and Parallel Assignment Edge Cases
 

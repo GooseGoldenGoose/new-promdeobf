@@ -149,6 +149,11 @@ function statementReadNames(statement, candidateNames) {
 }
 
 function statementWrittenNames(statement, candidateNames) {
+    if (statement?.type === "CompoundAssignmentStatement") {
+        return isIdentifier(statement.variable) && candidateNames.has(statement.variable.name)
+            ? [statement.variable.name]
+            : [];
+    }
     if (statement?.type !== "AssignmentStatement" && statement?.type !== "LocalStatement") return [];
     const out = [];
     const seen = new Set();
@@ -257,7 +262,11 @@ function analyzeBetaRegisterLifetimes({
                 const atomicParallel =
                     plan?.kind === "multi-write" &&
                     variables.some(variable => isIdentifier(variable, name));
-                const supported = (exactSingle && plan?.kind === "versioned") || atomicMultiCall || atomicParallel;
+                const compoundMutation =
+                    plan?.kind === "compound-write" &&
+                    statement?.type === "CompoundAssignmentStatement" &&
+                    isIdentifier(statement.variable, name);
+                const supported = (exactSingle && plan?.kind === "versioned") || atomicMultiCall || atomicParallel || compoundMutation;
                 const id = supported
                     ? `d${nextDefinitionId++}`
                     : `u:${block.stateId}:${statement.range?.[0] ?? statementIndex}:${name}`;
@@ -267,8 +276,9 @@ function analyzeBetaRegisterLifetimes({
                     blockState: block.stateId,
                     statementIndex,
                     statement,
-                    rhs: exactSingle ? init[0] : (atomicMultiCall ? init[0] : null),
+                    rhs: exactSingle ? init[0] : (atomicMultiCall ? init[0] : (compoundMutation ? statement.value : null)),
                     supported,
+                    compoundMutation,
                     isNil: exactSingle && supported && isNilLiteral(init[0]),
                     sourceOffset: statement.range?.[0] ?? Number.MAX_SAFE_INTEGER,
                     useCount: 0,
@@ -613,6 +623,28 @@ function analyzeBetaRegisterLifetimes({
         for (let index = 1; index < concrete.length; index++) unionFind.union(concrete[0], concrete[index]);
     }
 
+    // Native compound assignment is direct read-modify-write evidence for the
+    // same physical register. Merge the post-write definition with every proven
+    // concrete reaching definition observed by that compound read. Unlike generic
+    // arithmetic assignment, this syntax itself proves storage continuity.
+    let compoundMutationMergeCount = 0;
+    for (const definition of ordinaryDefinitions) {
+        if (!definition.compoundMutation) continue;
+        const priorIds = reachingBeforeStatement.get(definition.statement)?.get(definition.name) || EMPTY_DEFINITION_SET;
+        if (!priorIds.size || [...priorIds].some(id => unknownDefinitionIds.has(id))) continue;
+        const priorConcrete = [...priorIds].filter(id => {
+            const prior = definitionById.get(id);
+            return prior && ordinaryDefinitionIds.has(id) && prior.name === definition.name;
+        });
+        if (priorConcrete.length !== priorIds.size) continue;
+        for (const priorId of priorConcrete) {
+            const beforeRoot = unionFind.find(definition.id);
+            const priorRoot = unionFind.find(priorId);
+            unionFind.union(definition.id, priorId);
+            if (beforeRoot !== priorRoot) compoundMutationMergeCount++;
+        }
+    }
+
     // Value dependence alone does not prove source-binding ownership: a scratch
     // register can help compute a value that is later copied back into that same
     // physical register. Build the transitive dependency closure here, but merge
@@ -863,6 +895,7 @@ function analyzeBetaRegisterLifetimes({
             useCount: uses.length,
             provenanceEdgeCount,
             anchoredCopyMergeCount,
+            compoundMutationMergeCount,
             cleanupAnchoredCopyMergeCount,
             terminalReturnAnchorCount,
             terminalReturnCopyMergeCount,
