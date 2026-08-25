@@ -220,6 +220,7 @@ Current beta-CF supports proven:
 - dependency-safe reordered duplicate repeat-condition operations
 - terminal return payload lowering
 - per-function RegisterOverflow presentation
+- simple VM-register compound assignment normalization before beta lifetime/version analysis
 
 Generic-for currently proves the local compiler's two-variable shape including `pairs`, `next, table`, custom iterator triples, branches, break/continue, and captured variables. Unproven arities/shapes fail closed.
 
@@ -334,6 +335,26 @@ RC                    1
 Historical bisect was `0237d60` GOOD / `7a881ab` BAD. The regression is now fixed structurally without reverting later ReturnVal/join work.
 
 Sample 20 is separate: its working-copy source has user-added `o/l/d/f` prints while tracked `20.txt` was not regenerated. Do not treat that as a solver regression.
+
+## Fixed Scalar Compound Beta Regression
+
+A user probe in `sample/input.txt` exposed direct VM register compound assignments such as `r64 += r54` and `r28 += r56`. Normal deobf succeeded, but beta versioning treated `CompoundAssignmentStatement` as a generic statement and emitted no `emittedText`; captured-cell validation then failed with `Captured-cell validation encountered an unparseable beta operation`.
+
+Fix in `passes/beta-register-versions.js`:
+- before lifetime/version analysis, direct state-leaf compound assignments whose target is a proven simple VM register identifier are normalized structurally, e.g. `r64 += r54` -> `r64 = r64 + (r54)`
+- only parser-supported compound operators are accepted: `+ - * / // % ^ ..`
+- indexed/member compounds are never normalized because their LHS evaluation can have side effects; existing ordered effect-write handling remains responsible for shapes such as `upvalueValues[idx] += value`
+- the normalized source is reparsed and sent through the unchanged beta lifetime/version pipeline, so register reads/writes and ownership are recovered normally instead of special-casing compound semantics later
+- `normalizedCompoundAssignmentCount` reports how many simple register compounds were expanded
+
+Verification:
+- focused scalar-compound regression added to `tools/test-beta-register-versions.js`
+- user input normal mode: PASS
+- user input CF mode: PASS, 695 states / 39 closures
+- user input normalized 2 simple register compound assignments
+- final user CF: 0 `RegisterOverflow[...]`, 0 `createClosure*`, 0 `upvalueValues[...]`, 0 `allocUpvalue(...)`, 0 `while state do`, and no physical `r64`/`r28` leftovers
+- 13/13 focused suites pass
+- numeric 1-63 normal + CF are byte-for-byte identical to the verified round-2 baseline; none of those fixtures require the new scalar-compound path
 
 ## Large / Special Probes
 

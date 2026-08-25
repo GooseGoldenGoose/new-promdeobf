@@ -607,4 +607,34 @@ assert.equal(liveNilStart.rhs, "nil");
 assert.equal(liveNilMutation.rhs, "make()");
 parseLua(liveNilJoinResult.source, "<beta-live-nil-join-output>");
 
+const scalarCompoundSource = `vm = function(state, args, upvalues, gcProxy)
+    local r1, r2, ReturnVal
+    while state do
+        if state == 1 then
+            r1 = 10
+            r2 = 2
+            r1 += r2
+            ReturnVal = { r1 }
+            state = nil
+        end
+    end
+    state = #gcProxy
+    return unpack(ReturnVal)
+end
+root = createClosure(1, {})`;
+const scalarCompoundResult = versionVmBlockRegisters(
+    scalarCompoundSource,
+    parseLua(scalarCompoundSource, "<beta-scalar-compound-test>")
+);
+assert.equal(scalarCompoundResult.normalizedCompoundAssignmentCount, 1);
+assert(!scalarCompoundResult.source.includes("+="));
+assert(!/\br1\s*=\s*r1\b/.test(scalarCompoundResult.source));
+assert(scalarCompoundResult.source.includes(" + ("));
+const scalarCompoundR1Base = scalarCompoundResult.mapping.find(item => item.originalName === "r1")?.baseName;
+const scalarCompoundR2Base = scalarCompoundResult.mapping.find(item => item.originalName === "r2")?.baseName;
+assert(scalarCompoundR1Base && scalarCompoundR2Base);
+assert(scalarCompoundResult.source.includes(scalarCompoundR1Base));
+assert(scalarCompoundResult.source.includes(scalarCompoundR2Base));
+parseLua(scalarCompoundResult.source, "<beta-scalar-compound-output>");
+
 console.log("beta register versioning tests passed");

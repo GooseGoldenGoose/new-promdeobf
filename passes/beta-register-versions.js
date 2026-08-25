@@ -42,6 +42,33 @@ function isAtomicMultiCallAssignment(statement, candidateNames) {
     return true;
 }
 
+const SIMPLE_REGISTER_COMPOUND_OPERATORS = new Set(["+", "-", "*", "/", "//", "%", "^", ".."]);
+
+function normalizeSimpleRegisterCompoundAssignments(source, leaves, candidateNames) {
+    const edits = [];
+    for (const leaf of leaves || []) {
+        for (const statement of leaf.body || []) {
+            if (statement?.type !== "CompoundAssignmentStatement") continue;
+            if (!isIdentifier(statement.variable) || !candidateNames.has(statement.variable.name)) continue;
+            if (!SIMPLE_REGISTER_COMPOUND_OPERATORS.has(statement.op)) continue;
+            if (!Array.isArray(statement.range) || !Array.isArray(statement.variable.range) || !Array.isArray(statement.value?.range)) continue;
+
+            // A plain VM register identifier is evaluated exactly once either way,
+            // so compound assignment is equivalent to an ordinary read+write. Do
+            // not do this for indexed/member targets: those can have evaluation
+            // side effects and are handled as ordered effect writes instead.
+            const target = source.slice(statement.variable.range[0], statement.variable.range[1]);
+            const value = source.slice(statement.value.range[0], statement.value.range[1]);
+            edits.push({
+                start: statement.range[0],
+                end: statement.range[1],
+                replacement: target + " = " + target + " " + statement.op + " (" + value + ")",
+            });
+        }
+    }
+    return edits.length ? { source: applyTextEdits(source, edits), count: edits.length } : null;
+}
+
 function numericValue(node) {
     if (node?.type !== "NumericLiteral") return null;
     const value = typeof node.value === "number" ? node.value : Number(node.raw);
@@ -480,6 +507,17 @@ function versionVmBlockRegisters(source, ast) {
         .sort((a, b) => a.range[0] - b.range[0]);
     if (leaves.length === 0) {
         return { source, found: true, applied: false, reason: "No exact normalized VM state leaves were found" };
+    }
+
+    const normalizedCompounds = normalizeSimpleRegisterCompoundAssignments(source, leaves, candidateNames);
+    if (normalizedCompounds) {
+        const normalizedAst = parseBetaSource(normalizedCompounds.source);
+        const result = versionVmBlockRegisters(normalizedCompounds.source, normalizedAst);
+        return {
+            ...result,
+            normalizedCompoundAssignmentCount:
+                (result.normalizedCompoundAssignmentCount || 0) + normalizedCompounds.count,
+        };
     }
 
     const baseIds = new Map();
