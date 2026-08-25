@@ -70,6 +70,8 @@ sample/23.source.lua
 sample/23.txt
 ```
 
+Generated `output/` content is disposable and ignored as a whole. Do not commit regenerated output/test artifacts.
+
 Common intentionally untracked items:
 
 ```text

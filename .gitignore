@@ -1,6 +1,5 @@
-﻿# Generated deobfuscator artifacts
-output/*.json
-output/*.lua
+# Generated deobfuscator artifacts
+output/
 
 # Local formatter artifacts
 formater/out.txt
