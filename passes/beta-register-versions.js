@@ -42,6 +42,19 @@ function isAtomicMultiCallAssignment(statement, candidateNames) {
     return true;
 }
 
+function isAtomicParallelAssignment(statement, candidateNames) {
+    if (statement?.type !== "AssignmentStatement" || !Array.isArray(statement.range)) return false;
+    const variables = statement.variables || [];
+    const init = statement.init || [];
+    if (variables.length === 0 || init.length === 0) return false;
+    if (variables.length === 1 && init.length === 1) return false;
+    if (!variables.every(variable =>
+        Array.isArray(variable?.range) && (isIdentifier(variable) || isIndexedWriteTarget(variable))
+    )) return false;
+    if (!init.every(value => Array.isArray(value?.range))) return false;
+    return variables.some(variable => isIdentifier(variable) && candidateNames.has(variable.name));
+}
+
 const SIMPLE_REGISTER_COMPOUND_OPERATORS = new Set(["+", "-", "*", "/", "//", "%", "^", ".."]);
 
 function normalizeSimpleRegisterCompoundAssignments(source, leaves, candidateNames) {
@@ -586,6 +599,38 @@ function versionVmBlockRegisters(source, ast) {
                 continue;
             }
 
+            if (isAtomicParallelAssignment(statement, candidateNames)) {
+                const targetPlans = [];
+                const planByRegister = new Map();
+                for (const variable of variables) {
+                    if (!isIdentifier(variable) || !candidateNames.has(variable.name)) {
+                        targetPlans.push(null);
+                        continue;
+                    }
+                    const originalName = variable.name;
+                    let targetPlan = planByRegister.get(originalName);
+                    if (!targetPlan) {
+                        if (specialFinalNames.has(originalName)) {
+                            const rawDefinition = `u:${stateId}:${statement.range?.[0] ?? statementIndex}:${originalName}`;
+                            lastDefinitions.set(originalName, rawDefinition);
+                            targetPlan = { originalName, newName: originalName, preservePhysical: true };
+                        } else {
+                            const baseId = ensureBase(originalName);
+                            const version = (versionCounts.get(originalName) || 0) + 1;
+                            versionCounts.set(originalName, version);
+                            const newName = `r_v${baseId}_${version}`;
+                            targetPlan = { originalName, newName, baseId, version };
+                            lastDefinitions.set(originalName, `v:${newName}`);
+                            versions.push({ blockState: stateId, originalName, baseId, version, newName });
+                        }
+                        planByRegister.set(originalName, targetPlan);
+                    }
+                    targetPlans.push(targetPlan);
+                }
+                plans.set(statement, { kind: "multi-write", targets: targetPlans });
+                continue;
+            }
+
             if (variables.length !== 1 || init.length !== 1 || !isIdentifier(variables[0])) {
                 for (const variable of variables) {
                     if (!isIdentifier(variable) || !candidateNames.has(variable.name)) continue;
@@ -733,8 +778,8 @@ function versionVmBlockRegisters(source, ast) {
                     remapVersionPlan(plan, statement, block.stateId, true);
                     continue;
                 }
-                if (plan?.kind === "multi-call-write") {
-                    for (const targetPlan of plan.targets || []) {
+                if (plan?.kind === "multi-call-write" || plan?.kind === "multi-write") {
+                    for (const targetPlan of new Set((plan.targets || []).filter(Boolean))) {
                         remapVersionPlan(targetPlan, statement, block.stateId, false);
                     }
                 }
@@ -759,8 +804,8 @@ function versionVmBlockRegisters(source, ast) {
             for (const statement of block.statements) {
                 const plan = block.plans.get(statement);
                 if (plan?.kind === "versioned") plan.declareVersion = true;
-                if (plan?.kind === "multi-call-write") {
-                    for (const targetPlan of plan.targets || []) {
+                if (plan?.kind === "multi-call-write" || plan?.kind === "multi-write") {
+                    for (const targetPlan of new Set((plan.targets || []).filter(Boolean))) {
                         if (!targetPlan.preservePhysical) targetPlan.declareVersion = true;
                     }
                 }
@@ -920,6 +965,82 @@ function versionVmBlockRegisters(source, ast) {
             }
             const variables = statement.variables || [];
             const init = statement.init || [];
+
+            if (plan?.kind === "multi-write") {
+                const usedVersions = new Set();
+                const rewritten = rewriteUnsupportedAssignmentReads(source, statement, latestVersions, usedVersions);
+                if (!rewritten) {
+                    graphOperations.push({
+                        index: graphOperations.length + 1,
+                        kind: "unsupported",
+                        originalText: source.slice(statement.range[0], statement.range[1]).trim(),
+                        emittedText: source.slice(statement.range[0], statement.range[1]).trim(),
+                        reads: [],
+                    });
+                    for (const targetPlan of new Set((plan.targets || []).filter(Boolean))) {
+                        latestVersions.delete(targetPlan.originalName);
+                    }
+                    continue;
+                }
+
+                const targetPlans = plan.targets || [];
+                const targetEdits = [...rewritten.edits];
+                const candidateOriginalTargets = [];
+                const candidateEmittedTargets = [];
+                const candidateEpochs = [];
+                const candidateDeclarations = [];
+                const declarationNames = [];
+                const declared = new Set();
+                for (let index = 0; index < variables.length; index++) {
+                    const targetPlan = targetPlans[index];
+                    if (!targetPlan) continue;
+                    targetEdits.push({
+                        start: variables[index].range[0],
+                        end: variables[index].range[1],
+                        replacement: targetPlan.newName,
+                    });
+                    candidateOriginalTargets.push(targetPlan.originalName);
+                    candidateEmittedTargets.push(targetPlan.newName);
+                    candidateEpochs.push(targetPlan.registerEpoch || null);
+                    const shouldDeclare = !targetPlan.preservePhysical && targetPlan.declareVersion !== false;
+                    candidateDeclarations.push(shouldDeclare);
+                    if (shouldDeclare && !declared.has(targetPlan.newName)) {
+                        declared.add(targetPlan.newName);
+                        declarationNames.push(targetPlan.newName);
+                    }
+                }
+                for (const versionName of usedVersions) {
+                    if (incomingVersionNames.has(versionName)) crossBlockUsedVersions.add(versionName);
+                }
+                const assignmentText = applyTextEdits(
+                    source.slice(statement.range[0], statement.range[1]),
+                    targetEdits,
+                    statement.range[0]
+                ).trim();
+                const declarationText = declarationNames.length ? `local ${declarationNames.join(", ")}\n` : "";
+                edits.push({
+                    start: statement.range[0],
+                    end: statement.range[1],
+                    replacement: declarationText + assignmentText,
+                });
+                graphOperations.push({
+                    index: graphOperations.length + 1,
+                    kind: "multi-write",
+                    originalTargets: candidateOriginalTargets,
+                    emittedTargets: candidateEmittedTargets,
+                    targetRegisterEpochs: candidateEpochs,
+                    targetDeclarations: candidateDeclarations,
+                    reads: [...usedVersions],
+                    originalText: source.slice(statement.range[0], statement.range[1]).trim(),
+                    emittedText: assignmentText,
+                    returnSinkSafe: false,
+                });
+                for (const targetPlan of new Set(targetPlans.filter(Boolean))) {
+                    if (targetPlan.preservePhysical) latestVersions.delete(targetPlan.originalName);
+                    else latestVersions.set(targetPlan.originalName, targetPlan.newName);
+                }
+                continue;
+            }
 
             if (plan?.kind === "multi-call-write") {
                 const usedVersions = new Set();

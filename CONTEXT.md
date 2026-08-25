@@ -221,6 +221,8 @@ Current beta-CF supports proven:
 - terminal return payload lowering
 - per-function RegisterOverflow presentation
 - simple VM-register compound assignment normalization before beta lifetime/version analysis
+- generalized atomic parallel / multi-return assignment recovery
+- side-effect-safe indexed/member compound assignment preservation
 
 Generic-for currently proves the local compiler's two-variable shape including `pairs`, `next, table`, custom iterator triples, branches, break/continue, and captured variables. Unproven arities/shapes fail closed.
 
@@ -355,6 +357,33 @@ Verification:
 - final user CF: 0 `RegisterOverflow[...]`, 0 `createClosure*`, 0 `upvalueValues[...]`, 0 `allocUpvalue(...)`, 0 `while state do`, and no physical `r64`/`r28` leftovers
 - 13/13 focused suites pass
 - numeric 1-63 normal + CF are byte-for-byte identical to the verified round-2 baseline; none of those fixtures require the new scalar-compound path
+
+## Complex Compound and Parallel Assignment Edge Cases
+
+The two edge classes requested after the scalar-compound fix are now covered structurally.
+
+### Complex compound targets
+
+Indexed/member compound writes such as `table[index()] += value` and `object.field *= value` stay as one compound statement. Beta versioning rewrites only proven VM-register reads inside the target base/index and RHS. It never expands or duplicates the complex LHS, so calls/index expressions are evaluated the same number of times and in the same order. Direct simple VM-register compounds still use the earlier safe normalization path.
+
+Final-CF regressions prove a side-effectful `getIndex(...)` target is emitted exactly once and both indexed/member compound operators survive beta-CF parsing/structuring. The current untracked `sample/input.txt` also exercised two complex compound effect writes and completed CF with no VM/upvalue/overflow scaffold.
+
+### Atomic parallel / multi-return assignments
+
+`passes/beta-register-versions.js` now has a generalized `multi-write` path for assignments whose target/RHS arity is not the old single-target/single-RHS form and that contain at least one proven VM-register target. Supported target nodes are direct identifiers plus indexed/member targets with parser ranges.
+
+Rules:
+- the whole assignment remains one atomic Lua/Luau assignment; it is never split into sequential writes
+- all RHS expressions and all complex LHS address expressions are rewritten against the pre-assignment reaching versions before any target becomes current
+- direct VM-register targets get normal beta lifetime/version names
+- mixed indexed/member/non-register targets stay textually in the same assignment
+- new beta locals needed by direct targets are declared before the atomic assignment; declarations are side-effect free and use fresh beta names
+- repeated direct targets in one parallel assignment share one post-statement beta definition, matching the final physical-register value
+- multiple RHS expressions, target/RHS count mismatch, a last-call multi-return tail (for example `r1, r2, r3 = 1, pair()`), and extra evaluated RHS expressions (for example `r1 = makeA(), makeB()`) are preserved as one statement
+- the old exact all-register + one-call shape remains `multi-call-write` so proven generic-for recognition is unchanged; generalized shapes use graph kind `multi-write`
+- generalized multi-write definitions deliberately carry no invented single-RHS provenance; reaching/lifetime analysis knows the writes but does not fabricate copy provenance across ambiguous multi-result mapping
+
+Regression coverage includes register swap, mixed direct/indexed targets, multi-return tail call, extra RHS values, repeated targets, and final beta-CF structuring. Numeric 1-63 remain byte-for-byte identical to the verified frozen baseline. spacial6 normal + CF also remain byte-for-byte identical.
 
 ## Large / Special Probes
 

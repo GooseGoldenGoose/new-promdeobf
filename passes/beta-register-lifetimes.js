@@ -151,8 +151,11 @@ function statementReadNames(statement, candidateNames) {
 function statementWrittenNames(statement, candidateNames) {
     if (statement?.type !== "AssignmentStatement" && statement?.type !== "LocalStatement") return [];
     const out = [];
+    const seen = new Set();
     for (const variable of statement.variables || []) {
-        if (isIdentifier(variable) && candidateNames.has(variable.name)) out.push(variable.name);
+        if (!isIdentifier(variable) || !candidateNames.has(variable.name) || seen.has(variable.name)) continue;
+        seen.add(variable.name);
+        out.push(variable.name);
     }
     return out;
 }
@@ -251,7 +254,10 @@ function analyzeBetaRegisterLifetimes({
                     plan?.kind === "multi-call-write" &&
                     variables.length >= 2 && init.length === 1 && init[0]?.type === "CallExpression" &&
                     variables.some(variable => isIdentifier(variable, name));
-                const supported = (exactSingle && plan?.kind === "versioned") || atomicMultiCall;
+                const atomicParallel =
+                    plan?.kind === "multi-write" &&
+                    variables.some(variable => isIdentifier(variable, name));
+                const supported = (exactSingle && plan?.kind === "versioned") || atomicMultiCall || atomicParallel;
                 const id = supported
                     ? `d${nextDefinitionId++}`
                     : `u:${block.stateId}:${statement.range?.[0] ?? statementIndex}:${name}`;

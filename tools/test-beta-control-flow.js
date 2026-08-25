@@ -1408,4 +1408,58 @@ try {
     if (fs.existsSync(repeatShortCircuitTemp)) fs.unlinkSync(repeatShortCircuitTemp);
 }
 
+
+const parallelAtomicCfSource = `vm = function(state, args, upvalues, gcProxy)
+    local r1, r2, ReturnVal
+    while state do
+        if state == 1 then
+            r1 = 10
+            r2 = 20
+            r1, r2 = r2, r1
+            ReturnVal = consume(r1, r2)
+            ReturnVal = {}
+            state = nil
+        end
+    end
+    state = #gcProxy
+    return unpack(ReturnVal)
+end
+root = createClosure(1, {})`;
+const parallelAtomicCfAst = parseLua(parallelAtomicCfSource, "<beta-cf-parallel-atomic-input>");
+const parallelAtomicCfBeta = versionVmBlockRegisters(parallelAtomicCfSource, parallelAtomicCfAst);
+const parallelAtomicCfOp = parallelAtomicCfBeta.graph.states[0].operations.find(operation => operation.kind === "multi-write");
+assert(parallelAtomicCfOp);
+const parallelAtomicCf = solveBetaControlFlow(parallelAtomicCfAst, parallelAtomicCfBeta);
+assert.equal(parallelAtomicCf.applied, true);
+assert(parallelAtomicCf.source.includes(parallelAtomicCfOp.emittedText));
+assert(parallelAtomicCf.source.includes(`consume(${parallelAtomicCfOp.emittedTargets[0]},${parallelAtomicCfOp.emittedTargets[1]})`) ||
+    parallelAtomicCf.source.includes(`consume(${parallelAtomicCfOp.emittedTargets[0]}, ${parallelAtomicCfOp.emittedTargets[1]})`));
+parseLua(parallelAtomicCf.source, "<beta-cf-parallel-atomic-output>");
+
+const complexCompoundCfSource = `vm = function(state, args, upvalues, gcProxy)
+    local r1, r2, r3, ReturnVal
+    while state do
+        if state == 1 then
+            r1 = bucket
+            r2 = indexValue
+            r3 = delta
+            r1[getIndex(r2)] += r3
+            r1.value *= r2
+            ReturnVal = {}
+            state = nil
+        end
+    end
+    state = #gcProxy
+    return unpack(ReturnVal)
+end
+root = createClosure(1, {})`;
+const complexCompoundCfAst = parseLua(complexCompoundCfSource, "<beta-cf-complex-compound-input>");
+const complexCompoundCfBeta = versionVmBlockRegisters(complexCompoundCfSource, complexCompoundCfAst);
+const complexCompoundCf = solveBetaControlFlow(complexCompoundCfAst, complexCompoundCfBeta);
+assert.equal(complexCompoundCf.applied, true);
+assert.equal((complexCompoundCf.source.match(/getIndex\(/g) || []).length, 1);
+assert(complexCompoundCf.source.includes("+="));
+assert(complexCompoundCf.source.includes("*="));
+parseLua(complexCompoundCf.source, "<beta-cf-complex-compound-output>");
+
 console.log("beta control-flow tests passed");

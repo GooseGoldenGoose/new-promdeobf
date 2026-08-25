@@ -637,4 +637,172 @@ assert(scalarCompoundResult.source.includes(scalarCompoundR1Base));
 assert(scalarCompoundResult.source.includes(scalarCompoundR2Base));
 parseLua(scalarCompoundResult.source, "<beta-scalar-compound-output>");
 
+
+const complexCompoundTargetSource = `vm = function(state, args, upvalues, gcProxy)
+    local r1, r2, r3, ReturnVal
+    while state do
+        if state == 1 then
+            r1 = bucket
+            r2 = indexValue
+            r3 = delta
+            r1[getIndex(r2)] += r3
+            r1.value *= r2
+            ReturnVal = {}
+            state = nil
+        end
+    end
+    state = #gcProxy
+    return unpack(ReturnVal)
+end
+root = createClosure(1, {})`;
+const complexCompoundTargetResult = versionVmBlockRegisters(
+    complexCompoundTargetSource,
+    parseLua(complexCompoundTargetSource, "<beta-complex-compound-target-test>")
+);
+assert.equal(complexCompoundTargetResult.orderedEffectWriteCount, 2);
+const complexCompoundOps = complexCompoundTargetResult.graph.states[0].operations.filter(operation => operation.kind === "effect-write");
+assert.equal(complexCompoundOps.length, 2);
+const indexedCompoundOp = complexCompoundOps.find(operation => String(operation.originalText).includes("getIndex"));
+const memberCompoundOp = complexCompoundOps.find(operation => String(operation.originalText).includes(".value"));
+assert(indexedCompoundOp && memberCompoundOp);
+assert.equal((indexedCompoundOp.emittedText.match(/getIndex\(/g) || []).length, 1);
+assert(indexedCompoundOp.emittedText.includes("+="));
+assert(memberCompoundOp.emittedText.includes("*="));
+assert(indexedCompoundOp.reads.length >= 3);
+assert(memberCompoundOp.reads.length >= 2);
+parseLua(complexCompoundTargetResult.source, "<beta-complex-compound-target-output>");
+
+const parallelSwapSource = `vm = function(state, args, upvalues, gcProxy)
+    local r1, r2, ReturnVal
+    while state do
+        if state == 1 then
+            r1 = 10
+            r2 = 20
+            r1, r2 = r2, r1
+            consume(r1, r2)
+            ReturnVal = {}
+            state = nil
+        end
+    end
+    state = #gcProxy
+    return unpack(ReturnVal)
+end
+root = createClosure(1, {})`;
+const parallelSwapResult = versionVmBlockRegisters(
+    parallelSwapSource,
+    parseLua(parallelSwapSource, "<beta-parallel-swap-test>")
+);
+const parallelSwapOp = parallelSwapResult.graph.states[0].operations.find(operation => operation.kind === "multi-write");
+assert(parallelSwapOp);
+assert.deepEqual(parallelSwapOp.originalTargets, ["r1", "r2"]);
+assert.equal(parallelSwapOp.emittedTargets.length, 2);
+assert.equal(parallelSwapOp.reads.length, 2);
+assert(parallelSwapOp.emittedText.includes(","));
+assert.equal((parallelSwapOp.emittedText.match(/=/g) || []).length, 1);
+assert(!parallelSwapResult.source.includes("r1, r2 = r2, r1"));
+parseLua(parallelSwapResult.source, "<beta-parallel-swap-output>");
+
+const mixedParallelTargetSource = `vm = function(state, args, upvalues, gcProxy)
+    local r1, r2, ReturnVal
+    while state do
+        if state == 1 then
+            r1 = 10
+            r2 = key
+            r1, box[r2] = produce()
+            consume(r1)
+            ReturnVal = {}
+            state = nil
+        end
+    end
+    state = #gcProxy
+    return unpack(ReturnVal)
+end
+root = createClosure(1, {})`;
+const mixedParallelTargetResult = versionVmBlockRegisters(
+    mixedParallelTargetSource,
+    parseLua(mixedParallelTargetSource, "<beta-mixed-parallel-target-test>")
+);
+const mixedParallelTargetOp = mixedParallelTargetResult.graph.states[0].operations.find(operation => operation.kind === "multi-write");
+assert(mixedParallelTargetOp);
+assert.deepEqual(mixedParallelTargetOp.originalTargets, ["r1"]);
+assert.equal(mixedParallelTargetOp.emittedTargets.length, 1);
+assert.equal((mixedParallelTargetOp.emittedText.match(/produce\(/g) || []).length, 1);
+assert(mixedParallelTargetOp.emittedText.includes("box["));
+assert(mixedParallelTargetOp.reads.length >= 1);
+parseLua(mixedParallelTargetResult.source, "<beta-mixed-parallel-target-output>");
+
+const multiReturnTailSource = `vm = function(state, args, upvalues, gcProxy)
+    local r1, r2, r3, ReturnVal
+    while state do
+        if state == 1 then
+            r1, r2, r3 = 1, pair()
+            consume(r1, r2, r3)
+            ReturnVal = {}
+            state = nil
+        end
+    end
+    state = #gcProxy
+    return unpack(ReturnVal)
+end
+root = createClosure(1, {})`;
+const multiReturnTailResult = versionVmBlockRegisters(
+    multiReturnTailSource,
+    parseLua(multiReturnTailSource, "<beta-multi-return-tail-test>")
+);
+const multiReturnTailOp = multiReturnTailResult.graph.states[0].operations.find(operation => operation.kind === "multi-write");
+assert(multiReturnTailOp);
+assert.deepEqual(multiReturnTailOp.originalTargets, ["r1", "r2", "r3"]);
+assert.equal((multiReturnTailOp.emittedText.match(/pair\(/g) || []).length, 1);
+assert(multiReturnTailOp.emittedText.includes("= 1, pair()"));
+parseLua(multiReturnTailResult.source, "<beta-multi-return-tail-output>");
+
+const extraRhsSource = `vm = function(state, args, upvalues, gcProxy)
+    local r1, ReturnVal
+    while state do
+        if state == 1 then
+            r1 = makeA(), makeB()
+            consume(r1)
+            ReturnVal = {}
+            state = nil
+        end
+    end
+    state = #gcProxy
+    return unpack(ReturnVal)
+end
+root = createClosure(1, {})`;
+const extraRhsResult = versionVmBlockRegisters(
+    extraRhsSource,
+    parseLua(extraRhsSource, "<beta-extra-rhs-test>")
+);
+const extraRhsOp = extraRhsResult.graph.states[0].operations.find(operation => operation.kind === "multi-write");
+assert(extraRhsOp);
+assert.deepEqual(extraRhsOp.originalTargets, ["r1"]);
+assert.equal((extraRhsOp.emittedText.match(/makeA\(/g) || []).length, 1);
+assert.equal((extraRhsOp.emittedText.match(/makeB\(/g) || []).length, 1);
+parseLua(extraRhsResult.source, "<beta-extra-rhs-output>");
+
+const repeatedParallelTargetSource = `vm = function(state, args, upvalues, gcProxy)
+    local r1, ReturnVal
+    while state do
+        if state == 1 then
+            r1, r1 = 1, 2
+            consume(r1)
+            ReturnVal = {}
+            state = nil
+        end
+    end
+    state = #gcProxy
+    return unpack(ReturnVal)
+end
+root = createClosure(1, {})`;
+const repeatedParallelTargetResult = versionVmBlockRegisters(
+    repeatedParallelTargetSource,
+    parseLua(repeatedParallelTargetSource, "<beta-repeated-parallel-target-test>")
+);
+const repeatedParallelTargetOp = repeatedParallelTargetResult.graph.states[0].operations.find(operation => operation.kind === "multi-write");
+assert(repeatedParallelTargetOp);
+assert.equal(new Set(repeatedParallelTargetOp.emittedTargets).size, 1);
+assert.equal(repeatedParallelTargetResult.versions.filter(item => item.originalName === "r1").length, 1);
+parseLua(repeatedParallelTargetResult.source, "<beta-repeated-parallel-target-output>");
+
 console.log("beta register versioning tests passed");
