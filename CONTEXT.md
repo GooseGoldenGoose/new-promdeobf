@@ -373,7 +373,7 @@ The two edge classes requested after the scalar-compound fix are now covered str
 
 ### Complex compound targets
 
-Indexed/member compound writes such as `table[index()] += value` and `object.field *= value` stay as one compound statement. Beta versioning rewrites only proven VM-register reads inside the target base/index and RHS. It never expands or duplicates the complex LHS, so calls/index expressions are evaluated the same number of times and in the same order. Direct simple VM-register compounds still use the earlier safe normalization path.
+Indexed/member compound writes such as `table[index()] += value` and `object.field *= value` stay as one compound statement. Beta versioning rewrites only proven VM-register reads inside the target base/index and RHS. It never expands or duplicates the complex LHS, so calls/index expressions are evaluated the same number of times and in the same order. Direct simple VM-register compounds use the native scalar compound path; complex indexed/member targets remain ordered effect writes.
 
 Final-CF regressions prove a side-effectful `getIndex(...)` target is emitted exactly once and both indexed/member compound operators survive beta-CF parsing/structuring. The current untracked `sample/input.txt` also exercised two complex compound effect writes and completed CF with no VM/upvalue/overflow scaffold.
 
@@ -394,6 +394,45 @@ Rules:
 
 Regression coverage includes register swap, mixed direct/indexed targets, multi-return tail call, extra RHS values, repeated targets, and final beta-CF structuring. Numeric 1-63 remain byte-for-byte identical to the verified frozen baseline. spacial6 normal + CF also remain byte-for-byte identical.
 
+## Standalone Beta Optimizer (Experimental)
+
+A new optimizer is intentionally isolated from normal/CF. Nothing in `main.js`, `deobf.bat`, or the canonical CF path imports it.
+
+Files:
+
+```text
+passes/beta-optimizer.js
+tools/beta-optimizer.js
+tools/test-beta-optimizer.js
+```
+
+Manual usage:
+
+```text
+node tools/beta-optimizer.js <final-cf.lua> [optimized.lua]
+```
+
+Current v1 behavior is conservative and iterative:
+- removes dead single locals only when the initializer is proven effect-free
+- preserves an unused call's effect by changing `local x = f()` into `f()` instead of deleting the call
+- inlines single-use literals
+- inlines single-use local aliases only when the source local is not changed before the use
+- proves the generated `local _env = getfenv()` header before folding static `_env["name"]` lookups to direct globals; any `setfenv` in that function blocks the fold
+- moves a direct global alias only across effect-free sibling statements and only into call-base position
+- removes a final bare `return`
+- repeats until no supported change remains and reparses the final source
+
+It deliberately does not inline arbitrary calls, table/index lookups, closure creation, or other expressions merely because they have one use. This avoids changing evaluation order, call timing, metamethod effects, table/closure identity, or mutable reads.
+
+First controlled probe, with EncryptStrings and AntiTamper disabled during obfuscation:
+
+```lua
+print("hi")
+```
+
+Current CF is one state / zero closures. Standalone beta optimizer reduces the live code to `print("hi")`; generated `--headers` / `--body` comments and blank formatting may remain. Stats for that probe: 9 rounds, 1 global fold, 1 global-alias inline, 2 other single-use inlines, 3 dead locals, 1 dead call-result lowering, 1 bare return removed.
+
+Safety regressions cover call-order preservation, dead call-result preservation, literal movement, mutable local aliases, effect barriers for global aliases, `setfenv` blocking, and dead table removal.
 ## Large / Special Probes
 
 ### Generic-for 53-59
