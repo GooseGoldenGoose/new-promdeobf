@@ -126,12 +126,15 @@ Typical controlled path:
 ```text
 sample/N.source.lua
 -> local WeAreDevs Medium
--> formater\luau-format.exe
--> sample/N.txt
--> node main.js sample/N.txt output/N.lua
+-> raw or already-formatted sample/N.txt
+-> integrated formatter gate (formater\luau-format.exe --luraph)
+-> Luau parse
+-> normal deobf
 -> beta register/version analysis
 -> beta control-flow recovery
 ```
+
+The formatter gate is part of `loadAst`, so both `normal` and `cf` use it before the first Luau parse. It formats to a temporary output and compares exact bytes. If the formatter output matches the input, the original bytes are parsed. If it differs, only the formatted temporary source is parsed; the user input file is not overwritten. Formatter failure/missing `formater\luau-format.exe` fails clearly instead of silently parsing raw input.
 
 Useful commands:
 
@@ -150,7 +153,8 @@ Standalone `output/*.beta.lua` is solver/intermediate representation and does no
 Main pipeline:
 
 ```text
-Luau parse
+formatter canonicalization check (--luraph)
+-> Luau parse
 -> ConstantArray recovery
 -> environment provenance / _env
 -> closure factories
@@ -277,7 +281,7 @@ Historical MAX_REGS=5 validation remains applicable to the promoted solver. Scal
 
 Promotion verification:
 - canonical CF 1-63: 63/63 generated
-- focused regression suites: 12/12 pass
+- focused regression suites: 13/13 pass
 - `deobf.bat spacial6 cf`: succeeds end-to-end
 - `output/spacial6.beta.cf.lua`: 0 `RegisterOverflow[...]` refs and 0 residual VM/upvalue scaffold
 - combined `tools/deobfuscate-beta-control-flow.js` smoke: pass
@@ -292,7 +296,7 @@ Verified:
 normal generation: 63/63
 beta generation: 63/63
 beta-CF generation: 63/63
-focused regression suites: 12/12 pass
+focused regression suites: 13/13 pass
 ```
 
 Final-CF scaffold scan found no surviving dispatcher/state loop, `createClosure*`, `upvalueValues[...]`, `allocUpvalue(...)`, or `ReturnVal =` scaffolding in the checked numeric outputs.
@@ -373,6 +377,7 @@ The current optimization batch changes only execution strategy, parsing cost, in
 
 ```text
 input .txt
+-> integrated formatter gate before any Luau parse
 -> one Node process
 -> runDeobfuscator(..., analyzeBindings=false, structuralIntermediateAsts=true, structuralOutputAst=true)
 -> in-memory normal.outputSource + normal.outputAst
@@ -383,6 +388,15 @@ input .txt
 ```
 
 The old user-facing CF path launched `main.js`, wrote the normal file, launched a second Node process, reread the normal file, and reparsed it. That duplicate process/I/O/parse handoff is removed. Diagnostic VM binding analysis is skipped only in this immediate normal->CF handoff because beta rebuilds the proof it needs; standalone normal mode keeps the normal behavior.
+
+### Input formatter gate
+
+- `passes/input-formatter.js` runs `formater\luau-format.exe <input> --luraph --output=<temp>` before the first parse.
+- Exact byte comparison is the formatted-state check; already-formatted input keeps its original bytes, otherwise the formatted temp bytes become the pipeline source.
+- The original input file is never rewritten by the deobfuscator. Temporary formatter output is removed after the check.
+- `tools/test-input-formatter.js` proves an unformatted snippet is formatted before parse and that the formatted result is then detected as already formatted.
+- Current numeric fixtures 1-63 were all already formatted; formatter-on vs formatter-off with the same current solver produced 63/63 byte-identical normal and CF outputs.
+- Observed formatter-only cost was about 19 ms on sample 1 and about 658 ms on already-formatted spacial6; this cost is intentionally paid for the requested pre-parse canonicalization check.
 
 ### Parser/cache optimizations
 
@@ -442,7 +456,7 @@ CPU profiling also showed garbage-collection sampled time fall from about 3.9 s 
 
 Final gate after every optimization in this batch:
 
-- 12/12 focused regression suites pass
+- 13/13 focused regression suites pass
 - all 63 numeric fixtures regenerate normal + beta-CF successfully
 - 63/63 normal outputs byte-for-byte match the frozen pre-optimization baseline
 - 63/63 beta-CF outputs byte-for-byte match the frozen pre-optimization baseline

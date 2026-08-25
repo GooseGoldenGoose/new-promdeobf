@@ -39,6 +39,7 @@ function main() {
         throw new Error("Usage: node tools/deobfuscate-beta-control-flow.js <sample.txt> [normal.lua] [output.beta.cf.lua]");
     }
     const result = generateDeobfuscatedControlFlow(inputPath, process.argv[3] || null, process.argv[4] || null);
+    if (!result.normal.formatterSkipped) console.log(`Input formatted before parse: ${result.normal.formatted}`);
     console.log(`Normal output: ${result.normalOutputPath}`);
     console.log(`Beta-CF output: ${result.outputPath}`);
     console.log(`States: ${result.controlFlow.stateCount}`);
