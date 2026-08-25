@@ -123,17 +123,19 @@ function runDeobfuscator(inputPath = DEFAULT_INPUT, outputPath = DEFAULT_OUTPUT,
             : parseLua(createClosure.source, `${inputPath} <after createClosure rename>`);
         vmHelpers = renameVmHelperBindings(createClosure.source, createClosureAst, parseLua);
     }
+    const downstreamParse = options.structuralIntermediateAsts === true ? parseLuaStructural : parseLua;
+
     const semanticNames = vmHelpers.found
         ? renameSemanticBindings(vmHelpers.source, vmHelpers.ast || parseLua(vmHelpers.source, `${inputPath} <before semantic naming>`), parseLua)
         : { source: vmHelpers.source, found: false, applied: false, mapping: [], skipped: [] };
     const semanticNamedSource = semanticNames.applied ? semanticNames.source : vmHelpers.source;
     const semanticNamedAst = semanticNames.applied
-        ? parseLua(semanticNamedSource, `${inputPath} <after semantic naming>`)
+        ? downstreamParse(semanticNamedSource, `${inputPath} <after semantic naming>`)
         : (vmHelpers.ast || null);
 
-    const splitAssignments = splitSafeParallelAssignmentsFully(semanticNamedSource, parseLua, 8, semanticNamedAst);
+    const splitAssignments = splitSafeParallelAssignmentsFully(semanticNamedSource, downstreamParse, 8, semanticNamedAst);
 
-    const vmStateAst = splitAssignments.ast || parseLua(splitAssignments.source, `${inputPath} <before VM state recovery>`);
+    const vmStateAst = splitAssignments.ast || downstreamParse(splitAssignments.source, `${inputPath} <before VM state recovery>`);
     const vmState = recoverVmStateGraph(splitAssignments.source, vmStateAst);
     const analyzeBindings = options.analyzeBindings !== false;
     const vmBindings = analyzeBindings
@@ -141,18 +143,20 @@ function runDeobfuscator(inputPath = DEFAULT_INPUT, outputPath = DEFAULT_OUTPUT,
         : { found: false, skipped: true, reason: "VM binding diagnostics disabled for fast pipeline handoff" };
     const vmStateApplied = vmState.found && vmState.normalized;
     const normalizedSource = vmStateApplied ? vmState.source : splitAssignments.source;
-    const normalizedAst = parseLua(normalizedSource, `${inputPath} <before VM register scheduling>`);
+    const normalizedAst = downstreamParse(normalizedSource, `${inputPath} <before VM register scheduling>`);
     const registerSchedule = vmStateApplied
         ? scheduleVmRegisterUses(normalizedSource, normalizedAst)
         : { source: normalizedSource, found: false, applied: false, blocksChanged: 0, swaps: 0 };
     const scheduledSource = registerSchedule.applied ? registerSchedule.source : normalizedSource;
-    const scheduledAst = parseLua(scheduledSource, `${inputPath} <before VM register naming>`);
+    const scheduledAst = downstreamParse(scheduledSource, `${inputPath} <before VM register naming>`);
     const registerNames = vmStateApplied
         ? renameVmRegisterBindings(scheduledSource, scheduledAst)
         : { source: scheduledSource, found: false, applied: false, mapping: [] };
     const finalSource = registerNames.applied ? registerNames.source : scheduledSource;
 
-    const outputAst = parseLua(finalSource, outputPath);
+    const outputAst = options.structuralOutputAst === true
+        ? parseLuaStructural(finalSource, outputPath)
+        : parseLua(finalSource, outputPath);
     const resolvedOutput = writeSource(finalSource, outputPath);
 
     return {

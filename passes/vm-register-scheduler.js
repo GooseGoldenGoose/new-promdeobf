@@ -52,14 +52,17 @@ const WRITES_CACHE = new WeakMap();
 function cachedSet(cache, statement, overflowName, compute) {
     if (!statement || typeof statement !== "object") return new Set();
     const key = overflowName || "";
-    let byContext = cache.get(statement);
-    if (!byContext) {
-        byContext = new Map();
-        cache.set(statement, byContext);
+    let entry = cache.get(statement);
+    if (!entry) {
+        const value = compute();
+        cache.set(statement, { key, value, extra: null });
+        return value;
     }
-    if (byContext.has(key)) return byContext.get(key);
+    if (entry.key === key) return entry.value;
+    if (entry.extra?.has(key)) return entry.extra.get(key);
     const value = compute();
-    byContext.set(key, value);
+    if (!entry.extra) entry.extra = new Map();
+    entry.extra.set(key, value);
     return value;
 }
 

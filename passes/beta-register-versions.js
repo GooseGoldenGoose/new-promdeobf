@@ -232,9 +232,9 @@ function canonicalizeTerminalReturnOperations(operations) {
 function parseBetaSource(source) {
     return luaparse.parse(source, {
         luaVersion: "luau",
-        comments: true,
-        scope: true,
-        locations: true,
+        comments: false,
+        scope: false,
+        locations: false,
         ranges: true,
     });
 }
@@ -384,24 +384,48 @@ function mapOfSetsEquals(a, b) {
 }
 
 function cloneSetMap(map) {
-    const out = new Map();
-    for (const [key, value] of map) out.set(key, new Set(value));
-    return out;
+    // Definition sets are immutable after publication; writes replace an entry's
+    // whole Set, so reaching maps can use copy-on-write instead of deep cloning.
+    return new Map(map || []);
 }
 
 function mergeDefinitionMaps(maps, entryState, candidateNames) {
-    const merged = new Map();
-    for (const map of maps) {
-        for (const [name, defs] of map) {
-            let target = merged.get(name);
-            if (!target) merged.set(name, target = new Set());
+    const merged = maps.length ? new Map(maps[0] || []) : new Map();
+    const owned = new Set();
+    for (let mapIndex = 1; mapIndex < maps.length; mapIndex++) {
+        for (const [name, defs] of maps[mapIndex] || []) {
+            const existing = merged.get(name);
+            if (!existing) {
+                merged.set(name, defs);
+                continue;
+            }
+            if (existing === defs) continue;
+            let needsUnion = false;
+            for (const def of defs) {
+                if (!existing.has(def)) { needsUnion = true; break; }
+            }
+            if (!needsUnion) continue;
+            let target = existing;
+            if (!owned.has(name)) {
+                target = new Set(existing);
+                merged.set(name, target);
+                owned.add(name);
+            }
             for (const def of defs) target.add(def);
         }
     }
     if (entryState !== null) {
         for (const name of candidateNames) {
             let target = merged.get(name);
-            if (!target) merged.set(name, target = new Set());
+            if (!target) {
+                target = new Set();
+                merged.set(name, target);
+                owned.add(name);
+            } else if (!owned.has(name)) {
+                target = new Set(target);
+                merged.set(name, target);
+                owned.add(name);
+            }
             target.add(`u:entry:${entryState}:${name}`);
         }
     }

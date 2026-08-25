@@ -35,18 +35,16 @@ if /i "%mode%"=="2" set "mode=cf"
 echo.
 echo Input: "%inputPath%"
 
-node main.js "%inputPath%" "%normalPath%"
-if errorlevel 1 goto :failed
-
 if /i "%mode%"=="normal" (
+    node main.js "%inputPath%" "%normalPath%"
+    if errorlevel 1 goto :failed
     echo.
     echo Done: "%normalPath%"
     exit /b 0
 )
 
-
 if /i "%mode%"=="cf" (
-    node tools\beta-control-flow.js "%normalPath%" "%cfPath%"
+    node tools\deobfuscate-beta-control-flow.js "%inputPath%" "%normalPath%" "%cfPath%"
     if errorlevel 1 goto :failed
     echo.
     echo Done: "%cfPath%"

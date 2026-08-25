@@ -10,11 +10,13 @@ Repository:
 
 Authoritative branch: `main`.
 
-Current best verified solver checkpoint:
-`7c3678a Checkpoint optimized beta-CF workspace`
+Current best verified solver state:
+canonical promoted overflow-CF solver plus the verified post-promotion performance optimization batch.
 
-`main` and `origin/main` are aligned at that commit. Prior beta checkpoint:
-`485130e Checkpoint beta solver working tree`.
+The last pre-optimization promoted checkpoint is:
+`54964cf Promote overflow CF solver to default`.
+
+Git is authoritative for the exact newest commit; this file records the verified design/state rather than trying to name its own commit hash.
 
 Treat this file as the authoritative handoff. If Git is newer, Git wins.
 
@@ -114,7 +116,7 @@ node tools\beta-register-versions.js output\63.lua output\63.beta.lua
 node tools\beta-control-flow.js output\63.lua output\63.beta.cf.lua
 ```
 
-`deobf.bat <sample> normal|cf` is the user-facing runner. Standalone beta analysis remains available only through its development tool.
+`deobf.bat <sample> normal|cf` is the user-facing runner. `normal` still runs `main.js` directly. `cf` now calls `tools/deobfuscate-beta-control-flow.js` once, so normal deobfuscation and beta-CF run in one Node process with an in-memory handoff instead of launching `main.js` and then a second Node process that rereads/reparses the normal file. Standalone beta analysis remains available only through its development tool.
 
 Standalone `output/*.beta.lua` is solver/intermediate representation and does not need to execute. Correctness matters for normal semantics and especially final beta-CF source.
 
@@ -238,6 +240,7 @@ Default CF now uses scalar overflow recovery:
 - From that point onward they use the exact normal beta lifetime/version solver. There is no overflow-specific nil/reset/lifetime logic.
 - Final emitted beta names only are remapped to `o_vN_K`, where `K` is exactly the normal beta version number.
 - Analysis metadata keeps the original synthetic physical identity unchanged; do not rename `originalTarget`/`originalRegister` independently of `originalText`, because compiler duplicate-condition/lifetime proofs depend on identity consistency.
+- Overflow presentation remapping is now in-place on the fresh beta result to avoid cloning the whole large graph. Only emitted/presentation names are changed; `originalTarget`, `originalRegister`, and original synthetic physical identity remain untouched.
 - If aggressive overflow prevents normal pre-beta state recovery from producing exact normalized VM leaves, canonical CF scalarizes first, reruns the existing VM-state recovery and production register scheduler, then invokes unchanged beta versioning. This remains fail-closed and only retries after the specific `No exact normalized VM state leaves were found` condition.
 
 Forced WeAreDevs test compiler fork:
@@ -269,7 +272,7 @@ focused regression suites: 12/12 pass
 
 Final-CF scaffold scan found no surviving dispatcher/state loop, `createClosure*`, `upvalueValues[...]`, `allocUpvalue(...)`, or `ReturnVal =` scaffolding in the checked numeric outputs.
 
-During the performance optimization, every regenerated `output/N.beta.cf.lua` for 1-63 was byte-for-byte identical to its pre-optimization result.
+During the performance optimization, every regenerated normal and beta-CF output for 1-63 was compared against a frozen pre-optimization baseline. After the final cache/index/copy-on-write edits, all 63 normal outputs and all 63 CF outputs are still byte-for-byte identical. The final combined 1-63 sweep completed with `BAD=` empty.
 
 Runtime classification:
 
@@ -333,58 +336,120 @@ After that first fix, spacial6 exposed a separate nested shared-join case: a bra
 
 With that fix, the old closure-entry-2514 / state-2531 duplicate-emission error is gone. The former experimental solver that fully handles spacial6 is now the canonical/default CF solver. `deobf.bat spacial6 cf` succeeds and emits `output/spacial6.beta.cf.lua` with 3799 states, 554 closure regions, 0 `RegisterOverflow[...]`, and 0 residual VM/upvalue scaffold. The preserved legacy solver still has the separate root loop/backedge limitation, but it is no longer used by default.
 
+Latest post-optimization spacial6 verification: combined normal->CF completed in about 10.58 s, and both generated normal and CF files were byte-for-byte identical to the existing verified outputs. Final CF size in that run was 4,293,593 bytes.
+
 ## Performance
 
-Current optimized pipeline keeps proof/fail-closed behavior unchanged. Main speedups:
+The current optimization batch changes only execution strategy, parsing cost, indexing, caching, and allocation behavior. It does not intentionally change recovered source or proof rules.
 
-- early-terminating AST queries and cheaper `Object.keys` traversal in hot walkers
-- cached beta lifetime statement read/write analysis and sparse reaching snapshots
-- indexed VM lifetime lookup instead of repeated linear scans
-- one reusable numeric collator for beta epoch ordering
-- large beta-upvalue parse cache to avoid cache thrash on 6k+ operation files
-- structural parser mode for beta/beta-CF (`ranges` only; no comments/scope/locations)
-- one-pass captured storage-use indexing
-- optional fast normal->beta-CF handoff that skips diagnostic-only VM binding analysis and avoids rereading/reparsing the normal output
+### Current fast CF flow
 
-Sample 63 measured on the same machine after this pass:
+`deobf.bat <sample> cf` now does:
 
 ```text
-normal:  ~688 ms -> ~558 ms
-beta:    ~607 ms -> ~361-378 ms
-beta-CF: ~917 ms -> ~603-626 ms
+input .txt
+-> one Node process
+-> runDeobfuscator(..., analyzeBindings=false, structuralIntermediateAsts=true, structuralOutputAst=true)
+-> in-memory normal.outputSource + normal.outputAst
+-> beta register/version analysis
+-> beta upvalue recovery
+-> beta control-flow recovery
+-> final CF output
 ```
 
-The earlier unoptimized beta-CF baseline was ~2606 ms, so cumulative improvement is substantially larger.
+The old user-facing CF path launched `main.js`, wrote the normal file, launched a second Node process, reread the normal file, and reparsed it. That duplicate process/I/O/parse handoff is removed. Diagnostic VM binding analysis is skipped only in this immediate normal->CF handoff because beta rebuilds the proof it needs; standalone normal mode keeps the normal behavior.
 
-Safety validation:
+### Parser/cache optimizations
 
-- all 12 focused regression suites pass
-- all 63 numeric fixtures pass normal + beta + beta-CF generation
-- 189/189 normal/beta/CF outputs were byte-for-byte identical to the frozen pre-optimization baseline
-- combined `tools/deobfuscate-beta-control-flow.js` path passes all 63 numeric fixtures; both generated normal and beta-CF outputs match that frozen baseline byte-for-byte
-- sample 36 repeat-source regression is fixed; production and experimental beta-CF now match readable source, including the forced MAX_REGS=5 overflow path
+- After semantic naming, the combined CF handoff uses structural ASTs (`ranges` without scope/location/comment metadata) for assignment splitting, VM-state recovery, scheduling, register naming, and the returned normal AST.
+- Beta terminal-return reparsing also uses structural parser options.
+- Beta-upvalue expression/statement caches are 131072 entries and are cleared before/after each recovery, so a large solve does not thrash the old 32768 limit and cached trees do not leak into later stages.
+- Beta-CF transition-expression cache is 131072 entries and scoped to one solve, replacing the old 4096-entry thrashing behavior.
+- On spacial6, parser calls fell from roughly 654,718 to about 168,798 in the last parser-call profile.
+
+### Upvalue/index optimizations
+
+Beta upvalue recovery now builds reusable indexes once for:
+
+- positions by closure owner/state
+- writes by emitted target
+- reads by beta name
+- states by closure owner
+- captured storage uses
+
+This replaces repeated whole-graph scans for every captured cell. spacial6 has tens of thousands of operations and hundreds of recovered cells, so this removes a major quadratic cost while preserving the same dominance/escape checks.
+
+### Allocation / copy-on-write optimizations
+
+- RegisterOverflow beta presentation remapping works in-place on the fresh beta result instead of deep-copying every state, operation, epoch, and event. It indexes beta versions by synthetic physical register once instead of filtering the full version list for every overflow slot. Analysis identity fields remain unchanged.
+- Beta lifetime reaching-definition maps use copy-on-write: Maps are shallow-copied and immutable Sets are shared until a register actually needs a union/replacement.
+- Beta version reaching-definition maps use the same rule. One-predecessor flows share immutable Sets directly; multi-predecessor joins clone a Set only when a later predecessor contributes a new definition.
+- Statement-level lifetime reaching snapshots share immutable Sets instead of copying them again for every statement/read.
+- VM scheduler read/write caching stores the common one-context result directly and only allocates a context Map if the same AST statement is queried under another overflow context.
+
+Do not mutate a Set after publishing it into these reaching-definition maps. The copy-on-write optimization is safe specifically because transfer/replay writes replace the entire Set for that register.
+
+### Measured results
+
+Historical old user-facing two-process CF path:
+
+```text
+sample63:  ~1.20 s separate normal+CF in one benchmark
+spacial5:  ~3.72 s
+spacial6:  ~23.89 s
+```
+
+Before the deeper cache/allocation work, the already-existing in-process combined path measured about 21.59 s on spacial6.
+
+Current observed optimized results:
+
+```text
+1-63 combined sweep: ~2.57-2.94 s total (pre-batch frozen sweep ~3.53 s)
+spacial5 combined:    ~2.3-2.7 s in observed runs
+spacial6 combined:    ~10.0-10.6 s in final observed runs
+```
+
+So spacial6 is roughly 55-58% faster than the old user-facing two-process path while emitting the same files. Timing varies between runs; compare byte identity, not timing, for correctness.
+
+CPU profiling also showed garbage-collection sampled time fall from about 3.9 s to about 2.36 s after the allocation reductions.
+
+### Performance safety validation
+
+Final gate after every optimization in this batch:
+
+- 12/12 focused regression suites pass
+- all 63 numeric fixtures regenerate normal + beta-CF successfully
+- 63/63 normal outputs byte-for-byte match the frozen pre-optimization baseline
+- 63/63 beta-CF outputs byte-for-byte match the frozen pre-optimization baseline
+- spacial6 latest normal output matches its verified output byte-for-byte
+- spacial6 latest CF output matches its verified output byte-for-byte
+- no hardcoded fixture/state/register values were added
+
+Profile before adding new broad scans or parallel workers. Most pipeline stages are data-dependent; removing duplicate work and allocation has been more valuable and safer than trying to run dependent passes concurrently.
 
 ## Important Recent Commits
 
 ```text
-2a55d22 Optimize beta control-flow hot paths
-485130e Checkpoint beta solver working tree
-9f73593 Record full numeric sample sweep
-7138091 Document overflow CF normalization
-beda61f Normalize RegisterOverflow in beta CF
-0c10bb8 Recover captured reads in effect writes
-992a262 Recover sixzens control-flow variants
-272db25 Remove compiler POS preservation scaffolding
+54964cf Promote overflow CF solver to default
+f28771a Preserve terminal joins inside guard arms
+daf4e8e Remove dead residual upvalue releases
+97b285d Fix duplicated repeat short-circuit cleanup
+3961200 Handle early overflow scalar state recovery
+ca0dabc Treat overflow as normal beta registers
+f74f4e4 Add experimental overflow beta-CF fork
+7c3678a Checkpoint optimized beta-CF workspace
 ```
 
-Use `git log` for anything newer.
+The performance batch documented above is newer than `54964cf`; use `git log` for its exact commit hash after this context update is committed.
 
 ## Immediate Priorities
 
-1. Keep large-file beta-CF near current optimized performance; profile before adding expensive global scans.
-2. Preserve fail-closed behavior for unproven generic-for, POS/state-data, overflow, capture, lifetime, and repeat-duplicate shapes.
-3. Re-test numeric fixtures after meaningful CFG/upvalue/lifetime changes.
-4. Keep this file compact; replace stale sections instead of appending chronology.
+1. Keep the current byte-identical fast path; profile before adding new global scans, deep copies, parser passes, or worker-thread complexity.
+2. Preserve the immutable-Set/copy-on-write invariant in beta lifetime/version reaching-definition maps.
+3. Preserve fail-closed behavior for unproven generic-for, POS/state-data, overflow, capture, lifetime, and repeat-duplicate shapes.
+4. Re-run 12 focused suites plus 1-63 byte-identity checks after meaningful CFG/upvalue/lifetime/performance changes.
+5. Use spacial6 as the primary large performance/GC probe while remembering it is untracked and environment-scale, not a simple LuaJIT parity fixture.
+6. Keep this file compact; replace stale sections instead of appending chronology.
 
 ## New-Chat Resume
 

@@ -10,6 +10,8 @@ function isNilLiteral(node) {
     return node?.type === "NilLiteral";
 }
 
+const EMPTY_DEFINITION_SET = new Set();
+
 function setEquals(a, b) {
     if (a === b) return true;
     if (!a || !b || a.size !== b.size) return false;
@@ -27,17 +29,40 @@ function mapOfSetsEquals(a, b) {
 }
 
 function cloneSetMap(map) {
-    const out = new Map();
-    for (const [key, values] of map || []) out.set(key, new Set(values));
-    return out;
+    // Reaching-definition sets are immutable after they are stored. Transfer and
+    // statement replay replace a written register's whole Set instead of mutating
+    // inherited Sets, so a shallow Map copy is sufficient (copy-on-write).
+    return new Map(map || []);
 }
 
 function mergeSetMaps(maps) {
-    const out = new Map();
-    for (const map of maps) {
-        for (const [key, values] of map || []) {
-            let target = out.get(key);
-            if (!target) out.set(key, target = new Set());
+    if (!maps.length) return new Map();
+    if (maps.length === 1) return new Map(maps[0] || []);
+
+    // Sets stored in reaching maps are immutable. Start by sharing the first
+    // predecessor's Sets and clone only a name whose later predecessor actually
+    // contributes a different definition.
+    const out = new Map(maps[0] || []);
+    const owned = new Set();
+    for (let mapIndex = 1; mapIndex < maps.length; mapIndex++) {
+        for (const [key, values] of maps[mapIndex] || []) {
+            const existing = out.get(key);
+            if (!existing) {
+                out.set(key, values);
+                continue;
+            }
+            if (existing === values) continue;
+            let needsUnion = false;
+            for (const value of values) {
+                if (!existing.has(value)) { needsUnion = true; break; }
+            }
+            if (!needsUnion) continue;
+            let target = existing;
+            if (!owned.has(key)) {
+                target = new Set(existing);
+                out.set(key, target);
+                owned.add(key);
+            }
             for (const value of values) target.add(value);
         }
     }
@@ -283,8 +308,10 @@ function analyzeBetaRegisterLifetimes({
             const block = queue[cursor++];
             queued.delete(block.stateId);
             const predMaps = (predecessors.get(block.stateId) || []).map(pred => outDefinitions.get(pred.stateId));
-            const nextIn = mergeSetMaps(predMaps);
             const isEntry = closureEntries.has(block.stateId) || predMaps.length === 0;
+            const nextIn = !isEntry && predMaps.length === 1
+                ? new Map(predMaps[0] || [])
+                : mergeSetMaps(predMaps);
             if (isEntry) {
                 for (const name of valueNames) {
                     let defs = nextIn.get(name);
@@ -324,13 +351,18 @@ function analyzeBetaRegisterLifetimes({
             const reads = cachedStatementReadNames(statement, valueNames);
             const writes = cachedStatementWrittenNames(statement, valueNames);
             const before = new Map();
-            for (const name of new Set([...reads, ...writes])) {
+            for (const name of reads) {
                 const definitions = current.get(name);
-                if (definitions) before.set(name, new Set(definitions));
+                if (definitions) before.set(name, definitions);
+            }
+            for (const name of writes) {
+                if (before.has(name)) continue;
+                const definitions = current.get(name);
+                if (definitions) before.set(name, definitions);
             }
             reachingBeforeStatement.set(statement, before);
             for (const name of reads) {
-                const reaching = new Set(before.get(name) || []);
+                const reaching = before.get(name) || EMPTY_DEFINITION_SET;
                 const use = { blockState: block.stateId, statementIndex, statement, name, reachingDefinitionIds: reaching };
                 uses.push(use);
                 for (const defId of reaching) {
@@ -462,7 +494,7 @@ function analyzeBetaRegisterLifetimes({
     for (const definition of definitions) {
         if (!ordinaryNames.has(definition.name)) continue;
         if (!definition.supported || !definition.isNil || definition.useCount !== 0) continue;
-        const priorIds = new Set(reachingBeforeStatement.get(definition.statement)?.get(definition.name) || []);
+        const priorIds = reachingBeforeStatement.get(definition.statement)?.get(definition.name) || EMPTY_DEFINITION_SET;
         if (!priorIds.size) continue;
         let blocked = false;
         const priorDefinitions = [];
@@ -505,7 +537,7 @@ function analyzeBetaRegisterLifetimes({
         const deps = new Set();
         const before = reachingBeforeStatement.get(definition.statement) || new Map();
         for (const readName of cachedStatementReadNames(definition.statement, valueNames)) {
-            const reaching = new Set(before.get(readName) || []);
+            const reaching = before.get(readName) || EMPTY_DEFINITION_SET;
             if (!reaching.size) continue;
             if ([...reaching].some(id => unknownDefinitionIds.has(id))) continue;
             let valid = true;
@@ -602,7 +634,7 @@ function analyzeBetaRegisterLifetimes({
             // transitively depends on them. Only compiler write-back copies can
             // prove continuity with an earlier same-register definition.
             if (!isIdentifier(current.rhs)) continue;
-            const priorIds = new Set(reachingBeforeStatement.get(current.statement)?.get(current.name) || []);
+            const priorIds = reachingBeforeStatement.get(current.statement)?.get(current.name) || EMPTY_DEFINITION_SET;
             if (!priorIds.size || [...priorIds].some(id => unknownDefinitionIds.has(id))) continue;
             for (const priorId of priorIds) {
                 const prior = definitionById.get(priorId);
@@ -641,7 +673,7 @@ function analyzeBetaRegisterLifetimes({
             const before = reachingBeforeStatement.get(statement) || new Map();
             const returnedNames = new Set(cachedStatementReadNames(statement, ordinaryNames));
             for (const name of returnedNames) {
-                const ids = new Set(before.get(name) || []);
+                const ids = before.get(name) || EMPTY_DEFINITION_SET;
                 if (!ids.size || [...ids].some(id => unknownDefinitionIds.has(id))) continue;
                 const seeds = [];
                 let valid = true;

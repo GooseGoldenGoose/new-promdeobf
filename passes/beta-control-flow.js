@@ -364,7 +364,7 @@ function solveSingleState(originalAst, graph) {
     };
 }
 
-const TRANSITION_PARSE_CACHE_LIMIT = 4096;
+const TRANSITION_PARSE_CACHE_LIMIT = 131072;
 const transitionParseCache = new Map();
 
 function parseTransitionExpression(rhs) {
@@ -3998,7 +3998,7 @@ function solveClosureRegions(originalAst, graph) {
     };
 }
 
-function solveBetaControlFlow(originalAst, betaResult) {
+function solveBetaControlFlowImpl(originalAst, betaResult) {
     if (!betaResult?.graph || !betaResult.applied) {
         return { applied: false, reason: "Beta register analysis is unavailable" };
     }
@@ -4030,6 +4030,19 @@ function solveBetaControlFlow(originalAst, betaResult) {
         upvalueWriteRewriteCount: upvalues.stats?.writeRewriteCount || 0,
         upvalueReleaseRemovalCount: upvalues.stats?.releaseRemovalCount || 0,
     };
+}
+
+function solveBetaControlFlow(originalAst, betaResult) {
+    // Transition-expression parses are reused throughout one solve, including
+    // repeated loop/branch recognition passes. Large graphs can exceed the old
+    // 4k cache many times, so keep one large per-solve cache and release it when
+    // the solve finishes.
+    transitionParseCache.clear();
+    try {
+        return solveBetaControlFlowImpl(originalAst, betaResult);
+    } finally {
+        transitionParseCache.clear();
+    }
 }
 
 module.exports = {

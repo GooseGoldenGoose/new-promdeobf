@@ -93,12 +93,21 @@ function makeNameRewriter(map) {
 }
 
 function remapOverflowBetaVersions(beta, prepared) {
-    if (!prepared.applied) return { ...beta, overflow: { applied: false, slots: [] } };
+    if (!prepared.applied) {
+        beta.overflow = { applied: false, slots: [] };
+        return beta;
+    }
+
+    const versionsByPhysical = new Map(prepared.slots.map(info => [info.physical, []]));
+    for (const version of beta.versions || []) {
+        const list = versionsByPhysical.get(version.originalName);
+        if (list) list.push(version);
+    }
 
     const oldToNew = new Map();
     const rows = [];
     for (const info of prepared.slots) {
-        const versions = (beta.versions || []).filter(item => item.originalName === info.physical);
+        const versions = versionsByPhysical.get(info.physical) || [];
         if (!versions.length) throw new Error(`Overflow slot ${info.slot} produced no beta versions`);
         const seen = new Set();
         for (const version of versions) {
@@ -120,42 +129,58 @@ function remapOverflowBetaVersions(beta, prepared) {
     }
 
     const rewrite = makeNameRewriter(oldToNew);
-    const physicalNames = new Set(prepared.slots.map(item => item.physical));
-    function remapOperation(operation) {
-        const next = { ...operation };
-        if (typeof next.emittedTarget === "string") next.emittedTarget = oldToNew.get(next.emittedTarget) || next.emittedTarget;
-        if (Array.isArray(next.emittedTargets)) next.emittedTargets = next.emittedTargets.map(name => oldToNew.get(name) || name);
-        if (Array.isArray(next.reads)) next.reads = next.reads.map(name => oldToNew.get(name) || name);
-        if (typeof next.rhs === "string") next.rhs = rewrite(next.rhs);
-        if (typeof next.emittedText === "string") next.emittedText = rewrite(next.emittedText);
-        if (Array.isArray(next.returnExpressions)) next.returnExpressions = next.returnExpressions.map(rewrite);
-        return next;
+
+    // beta is a fresh analysis result and the caller never uses the pre-remap
+    // presentation again. Rewrite presentation fields in place instead of cloning
+    // the whole state/operation/epoch graph. Keep analysis identity metadata such
+    // as originalTarget/originalRegister unchanged: those still name the synthetic
+    // physical register and are required by later structural proofs.
+    for (const state of beta.graph.states || []) {
+        for (const operation of state.operations || []) {
+            if (typeof operation.emittedTarget === "string") operation.emittedTarget = oldToNew.get(operation.emittedTarget) || operation.emittedTarget;
+            if (Array.isArray(operation.emittedTargets)) {
+                for (let index = 0; index < operation.emittedTargets.length; index++) {
+                    const name = operation.emittedTargets[index];
+                    operation.emittedTargets[index] = oldToNew.get(name) || name;
+                }
+            }
+            if (Array.isArray(operation.reads)) {
+                for (let index = 0; index < operation.reads.length; index++) {
+                    const name = operation.reads[index];
+                    operation.reads[index] = oldToNew.get(name) || name;
+                }
+            }
+            if (typeof operation.rhs === "string") operation.rhs = rewrite(operation.rhs);
+            if (typeof operation.emittedText === "string") operation.emittedText = rewrite(operation.emittedText);
+            if (Array.isArray(operation.returnExpressions)) {
+                for (let index = 0; index < operation.returnExpressions.length; index++) {
+                    operation.returnExpressions[index] = rewrite(operation.returnExpressions[index]);
+                }
+            }
+        }
     }
 
-    const graph = {
-        ...beta.graph,
-        states: (beta.graph.states || []).map(state => ({ ...state, operations: (state.operations || []).map(remapOperation) })),
-        epochs: (beta.graph.epochs || []).map(epoch => ({
-            ...epoch,
-            name: oldToNew.get(epoch.name) || epoch.name,
-            originalRegister: epoch.originalRegister,
-            events: (epoch.events || []).map(event => ({ ...event, text: rewrite(event.text) })),
-        })),
-        overflowScalarVersions: true,
-        overflowSlots: Object.fromEntries(prepared.slots.map(item => [item.slot, item.dense])),
-    };
+    for (const epoch of beta.graph.epochs || []) {
+        epoch.name = oldToNew.get(epoch.name) || epoch.name;
+        for (const event of epoch.events || []) {
+            if (typeof event.text === "string") event.text = rewrite(event.text);
+        }
+    }
+    beta.graph.overflowScalarVersions = true;
+    beta.graph.overflowSlots = Object.fromEntries(prepared.slots.map(item => [item.slot, item.dense]));
 
-    return {
-        ...beta,
-        source: rewrite(beta.source),
-        graph,
-        versions: (beta.versions || []).map(version => ({ ...version, newName: oldToNew.get(version.newName) || version.newName })),
-        mapping: (beta.mapping || []).map(item => {
-            const info = prepared.byPhysical.get(item.originalName);
-            return info ? { ...item, originalName: `RegisterOverflow[${info.slot}]`, baseName: `o_v${info.dense}` } : item;
-        }),
-        overflow: { applied: true, slots: prepared.slots, rows },
-    };
+    beta.source = rewrite(beta.source);
+    for (const version of beta.versions || []) {
+        version.newName = oldToNew.get(version.newName) || version.newName;
+    }
+    for (const item of beta.mapping || []) {
+        const info = prepared.byPhysical.get(item.originalName);
+        if (!info) continue;
+        item.originalName = `RegisterOverflow[${info.slot}]`;
+        item.baseName = `o_v${info.dense}`;
+    }
+    beta.overflow = { applied: true, slots: prepared.slots, rows };
+    return beta;
 }
 
 module.exports = { prepareOverflowAsScalarRegisters, remapOverflowBetaVersions };
