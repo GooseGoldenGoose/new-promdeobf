@@ -391,12 +391,14 @@ The old user-facing CF path launched `main.js`, wrote the normal file, launched 
 
 ### Input formatter gate
 
-- `passes/input-formatter.js` runs `formater\luau-format.exe <input> --luraph --output=<temp>` before the first parse.
-- Exact byte comparison is the formatted-state check; already-formatted input keeps its original bytes, otherwise the formatted temp bytes become the pipeline source.
-- The original input file is never rewritten by the deobfuscator. Temporary formatter output is removed after the check.
-- `tools/test-input-formatter.js` proves an unformatted snippet is formatted before parse and that the formatted result is then detected as already formatted.
-- Current numeric fixtures 1-63 were all already formatted; formatter-on vs formatter-off with the same current solver produced 63/63 byte-identical normal and CF outputs.
-- Observed formatter-only cost was about 19 ms on sample 1 and about 658 ms on already-formatted spacial6; this cost is intentionally paid for the requested pre-parse canonicalization check.
+- `passes/input-formatter.js` runs `formater\luau-format.exe <input> --luraph --output=<temp>` before the first parse when there is no valid cache entry.
+- Formatter cache is persistent under `%LOCALAPPDATA%\promdeobf\formatter-cache-v1` (or the OS temp base when LOCALAPPDATA is unavailable).
+- Cache key is SHA-256 over the exact input bytes plus cache version and formatter signature (resolved formatter path, size, mtime, and `--luraph` mode), so changing input or formatter invalidates the entry.
+- Already-formatted input stores a small marker. Unformatted input stores the formatted result (up to 64 MiB), so an unchanged second run skips the formatter process in both cases.
+- On a miss, exact byte comparison remains the formatted-state proof. The original input file is never overwritten; temporary formatter output is removed after the check.
+- Cache writes are atomic. A cache hit returns the exact same source bytes the formatter gate previously proved.
+- `tools/test-input-formatter.js` proves raw->formatted recovery, cached raw reuse, already-formatted detection, and cached already-formatted reuse.
+- Current numeric fixtures 1-63 are already formatted; all formatter/cache changes were verified byte-identical at normal and final CF output.
 
 ### Parser/cache optimizations
 
@@ -405,6 +407,16 @@ The old user-facing CF path launched `main.js`, wrote the normal file, launched 
 - Beta-upvalue expression/statement caches are 131072 entries and are cleared before/after each recovery, so a large solve does not thrash the old 32768 limit and cached trees do not leak into later stages.
 - Beta-CF transition-expression cache is 131072 entries and scoped to one solve, replacing the old 4096-entry thrashing behavior.
 - On spacial6, parser calls fell from roughly 654,718 to about 168,798 in the last parser-call profile.
+
+### Scheduler index optimizations
+
+VM register scheduling now builds one per-leaf index containing:
+
+- current statement position
+- readers by register name
+- writers by register name
+
+Statement moves update only the affected position range. Nearest next touch / previous producer queries use the index instead of rescanning the full statement list, and repeated `indexOf` calls are removed from the scheduling phases. If generic scheduling performs zero moves, the expensive quadratic inversion validator is skipped because the list is provably still in original order; when anything moves, the full independent safety validator still runs.
 
 ### Upvalue/index optimizations
 
@@ -420,75 +432,85 @@ This replaces repeated whole-graph scans for every captured cell. spacial6 has t
 
 ### Allocation / copy-on-write optimizations
 
-- RegisterOverflow beta presentation remapping works in-place on the fresh beta result instead of deep-copying every state, operation, epoch, and event. It indexes beta versions by synthetic physical register once instead of filtering the full version list for every overflow slot. Analysis identity fields remain unchanged.
-- Beta lifetime reaching-definition maps use copy-on-write: Maps are shallow-copied and immutable Sets are shared until a register actually needs a union/replacement.
-- Beta version reaching-definition maps use the same rule. One-predecessor flows share immutable Sets directly; multi-predecessor joins clone a Set only when a later predecessor contributes a new definition.
-- Statement-level lifetime reaching snapshots share immutable Sets instead of copying them again for every statement/read.
+- RegisterOverflow beta presentation remapping works in-place on the fresh beta result instead of deep-copying every state, operation, epoch, and event. Analysis identity fields remain unchanged.
+- Beta lifetime reaching-definition maps use immutable Sets + copy-on-write. Linear CFG edges now share the predecessor Map directly; a new Map is allocated only when the block actually writes or a join needs a union.
+- Lifetime transfer precomputes each block's last reaching definition per register once. Worklist revisits reuse immutable singleton Sets instead of replaying every statement and reallocating one-element Sets.
+- Lifetime entry unknowns are prebuilt as one immutable Map per entry state. Revisited closure entries share that Map instead of rebuilding `u:entry:*` strings/Sets name-by-name.
+- Statement-level lifetime reaching snapshots are created only for write-bearing statements; read-only uses point directly at immutable reaching Sets.
+- Beta register versioning uses the same immutable/singleton strategy: cached singleton definition Sets, precomputed block transfer maps, shared linear predecessor maps, and prebuilt entry-definition maps.
+- Version replay caches the compact unique-version view by reaching-map identity, then clones only that small mutable view for each block.
 - VM scheduler read/write caching stores the common one-context result directly and only allocates a context Map if the same AST statement is queried under another overflow context.
 
-Do not mutate a Set after publishing it into these reaching-definition maps. The copy-on-write optimization is safe specifically because transfer/replay writes replace the entire Set for that register.
+Do not mutate a Set after publishing it into these reaching-definition maps. The optimization is safe because later writes replace the entire Set/Map entry instead of mutating inherited definitions.
 
 ### Measured results
 
-Historical old user-facing two-process CF path:
+Round-2 checkpoint before these three optimizations:
+`fae4496 Checkpoint before pipeline optimization round 2`.
+
+Checkpoint measurements (formatter check always executed, no persistent formatter cache yet):
 
 ```text
-sample63:  ~1.20 s separate normal+CF in one benchmark
-spacial5:  ~3.72 s
-spacial6:  ~23.89 s
+1-63 combined: 4939.2 ms
+spacial6:      11616.1 ms
 ```
 
-Before the deeper cache/allocation work, the already-existing in-process combined path measured about 21.59 s on spacial6.
-
-Current observed optimized results:
+Final round-2 measurements with formatter cache explicitly disabled (isolates scheduler + lifetime/version changes):
 
 ```text
-1-63 combined sweep: ~2.57-2.94 s total (pre-batch frozen sweep ~3.53 s)
-spacial5 combined:    ~2.3-2.7 s in observed runs
-spacial6 combined:    ~10.0-10.6 s in final observed runs
+1-63 combined: 4953.0 ms (small-suite timing noise; exact output)
+spacial6:       9922.2 ms (~14.6% faster)
 ```
 
-So spacial6 is roughly 55-58% faster than the old user-facing two-process path while emitting the same files. Timing varies between runs; compare byte identity, not timing, for correctness.
+Final warm-cache measurements:
 
-CPU profiling also showed garbage-collection sampled time fall from about 3.9 s to about 2.36 s after the allocation reductions.
+```text
+1-63 combined: 2646.5 ms (~46% faster than checkpoint)
+spacial6 warm runs: 9451.3 / 9405.8 / 9484.4 ms
+spacial6 median:    9451.3 ms (~18.6% faster than checkpoint)
+spacial5 warm:      ~2172 ms
+```
+
+Timing varies with GC/system load; exact-output comparison is the correctness gate. The formatter cache matters most across many small files, while scheduler/reaching-map changes give the larger cache-independent gain on large graphs.
 
 ### Performance safety validation
 
-Final gate after every optimization in this batch:
+Final gate after round 2:
 
 - 13/13 focused regression suites pass
 - all 63 numeric fixtures regenerate normal + beta-CF successfully
-- 63/63 normal outputs byte-for-byte match the frozen pre-optimization baseline
-- 63/63 beta-CF outputs byte-for-byte match the frozen pre-optimization baseline
-- spacial6 latest normal output matches its verified output byte-for-byte
-- spacial6 latest CF output matches its verified output byte-for-byte
-- no hardcoded fixture/state/register values were added
+- 63/63 normal outputs byte-for-byte match checkpoint `fae4496`
+- 63/63 beta-CF outputs byte-for-byte match checkpoint `fae4496`
+- spacial6 normal + final CF match checkpoint byte-for-byte
+- spacial5 final CF: 930 states, 116 closures, 0 `RegisterOverflow[...]`, 0 VM/upvalue scaffold
+- no hardcoded fixture/state/register values added
 
-Profile before adding new broad scans or parallel workers. Most pipeline stages are data-dependent; removing duplicate work and allocation has been more valuable and safer than trying to run dependent passes concurrently.
+Profile before adding new broad scans or parallel workers. Most pipeline stages are data-dependent; removing duplicate work and allocation remains safer and more useful than running dependent passes concurrently.
 
 ## Important Recent Commits
 
 ```text
+fae4496 Checkpoint before pipeline optimization round 2
+a80d14d Format input before Luau parsing
+7f119d8 Record commit-all and caveman workflow rules
+3a5b21c Optimize beta-CF pipeline performance
 54964cf Promote overflow CF solver to default
 f28771a Preserve terminal joins inside guard arms
 daf4e8e Remove dead residual upvalue releases
 97b285d Fix duplicated repeat short-circuit cleanup
-3961200 Handle early overflow scalar state recovery
-ca0dabc Treat overflow as normal beta registers
-f74f4e4 Add experimental overflow beta-CF fork
-7c3678a Checkpoint optimized beta-CF workspace
 ```
 
-The performance batch documented above is newer than `54964cf`; use `git log` for its exact commit hash after this context update is committed.
+Use `git log` for commits newer than this handoff text.
 
 ## Immediate Priorities
 
-1. Keep the current byte-identical fast path; profile before adding new global scans, deep copies, parser passes, or worker-thread complexity.
-2. Preserve the immutable-Set/copy-on-write invariant in beta lifetime/version reaching-definition maps.
-3. Preserve fail-closed behavior for unproven generic-for, POS/state-data, overflow, capture, lifetime, and repeat-duplicate shapes.
-4. Re-run 12 focused suites plus 1-63 byte-identity checks after meaningful CFG/upvalue/lifetime/performance changes.
-5. Use spacial6 as the primary large performance/GC probe while remembering it is untracked and environment-scale, not a simple LuaJIT parity fixture.
-6. Keep this file compact; replace stale sections instead of appending chronology.
+1. Round-2 requested targets 1-3 are complete: formatter hash cache, scheduler indexes, lifetime/version allocation reduction.
+2. Preserve formatter cache invalidation by exact input hash + formatter signature; never trust filename alone.
+3. Preserve immutable-Set / copy-on-write rules in lifetime/version reaching maps and entry maps.
+4. Preserve the scheduler's full safety validator whenever any generic scheduling move occurs.
+5. Re-run 13 focused suites plus 1-63 byte-identity checks after meaningful CFG/upvalue/lifetime/performance changes.
+6. If the user asks to continue optimization, next candidates are removing more duplicate full-file parses / AST rebuilds, then re-profile before any broader redesign.
+7. Keep this file compact; replace stale sections instead of appending chronology.
 
 ## New-Chat Resume
 
