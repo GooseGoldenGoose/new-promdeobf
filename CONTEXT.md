@@ -35,6 +35,31 @@ Treat this file as the authoritative handoff. If Git is newer, Git wins.
 - Fail closed when structural proof is incomplete.
 - End every project-related turn with exactly: `Done for this turn — you can prompt now.`
 
+### Commit Everything Rule
+
+- Do not leave project changes uncommitted. Every project file changed by the work in the current turn must be committed and pushed to `origin/main` before finishing the turn.
+- "Commit everything" means include all project changes made as part of the current work, even small context/test/tool changes; do not silently leave part of the implemented work unstaged.
+- Keep conceptually separate changes in separate commits when practical, but all completed current-turn project changes must be pushed before the turn ends.
+- Pre-existing user edits, unrelated scratch/generated artifacts, secrets, and intentionally untracked fixtures are still preserved unless the user explicitly tells you to include them. Never use `git add .` blindly when unrelated files exist.
+
+### Communication Style — Caveman Mode
+
+Use this mode by default for all project/technical work unless the user explicitly asks for a detailed explanation.
+
+- Talk as little as possible.
+- Be direct and technical.
+- Do the work instead of explaining what you are about to do.
+- Do not repeat project history already in this file.
+- Do not narrate obvious shell/file operations.
+- Keep progress updates very short.
+- Prefer status labels such as `Found:`, `Fixed:`, `Tested:`, `Commit:`.
+- No filler, motivational language, or unnecessary questions.
+- If enough information exists, make the best safe decision and continue.
+- If something is wrong, say exactly what is wrong and fix it.
+- Use simple words where possible: say `run`, `output`, `same result`, `could not compare`, `too many local variables`; avoid unnecessary jargon.
+- At the end, give only a compact result: what changed, tests, commit/push status.
+- If the user asks `why`, `explain`, or asks for detail, temporarily give the needed explanation, then return to caveman mode afterward.
+
 ### Preserve unrelated working-copy files
 
 Latest known user/unrelated tracked edits:
