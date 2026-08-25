@@ -389,7 +389,7 @@ function cloneSetMap(map) {
     return new Map(map || []);
 }
 
-function mergeDefinitionMaps(maps, entryState, candidateNames) {
+function mergeDefinitionMaps(maps, entryState, candidateNames, singletonDefinitionSet = null) {
     const merged = maps.length ? new Map(maps[0] || []) : new Map();
     const owned = new Set();
     for (let mapIndex = 1; mapIndex < maps.length; mapIndex++) {
@@ -416,17 +416,23 @@ function mergeDefinitionMaps(maps, entryState, candidateNames) {
     }
     if (entryState !== null) {
         for (const name of candidateNames) {
+            const entryDefinition = `u:entry:${entryState}:${name}`;
             let target = merged.get(name);
             if (!target) {
+                if (singletonDefinitionSet) {
+                    merged.set(name, singletonDefinitionSet(entryDefinition));
+                    continue;
+                }
                 target = new Set();
                 merged.set(name, target);
                 owned.add(name);
             } else if (!owned.has(name)) {
+                if (target.has(entryDefinition)) continue;
                 target = new Set(target);
                 merged.set(name, target);
                 owned.add(name);
             }
-            target.add(`u:entry:${entryState}:${name}`);
+            target.add(entryDefinition);
         }
     }
     return merged;
@@ -734,6 +740,41 @@ function versionVmBlockRegisters(source, ast) {
     const inDefinitions = new Map(blocks.map(block => [block.stateId, new Map()]));
     const outDefinitions = new Map(blocks.map(block => [block.stateId, new Map()]));
     const crossBlockUsedVersions = new Set();
+    const emptyDefinitions = new Map();
+
+    // Definition Sets are immutable once published. Cache every singleton once
+    // and precompute each block's final transfer map so worklist revisits do not
+    // allocate the same one-element Sets repeatedly.
+    const singletonDefinitionSets = new Map();
+    function singletonDefinitionSet(definition) {
+        let set = singletonDefinitionSets.get(definition);
+        if (!set) {
+            set = new Set([definition]);
+            singletonDefinitionSets.set(definition, set);
+        }
+        return set;
+    }
+    const transferDefinitionsByState = new Map();
+    for (const block of blocks) {
+        if (!block.lastDefinitions?.size) continue;
+        const transfer = new Map();
+        for (const [name, definition] of block.lastDefinitions) {
+            transfer.set(name, singletonDefinitionSet(definition));
+        }
+        transferDefinitionsByState.set(block.stateId, transfer);
+    }
+
+    const entryDefinitionMaps = new Map();
+    function entryDefinitionMap(stateId) {
+        let map = entryDefinitionMaps.get(stateId);
+        if (map) return map;
+        map = new Map();
+        for (const name of candidateNames) {
+            map.set(name, singletonDefinitionSet(`u:entry:${stateId}:${name}`));
+        }
+        entryDefinitionMaps.set(stateId, map);
+        return map;
+    }
 
     if (cfgComplete) {
         // Worklist reaching definitions. A version can cross a state boundary only
@@ -744,11 +785,24 @@ function versionVmBlockRegisters(source, ast) {
         while (cursor < queue.length) {
             const block = queue[cursor++];
             queued.delete(block.stateId);
-            const predMaps = (predecessors.get(block.stateId) || []).map(pred => outDefinitions.get(pred.stateId));
-            const isEntry = closureEntries.has(block.stateId) || predMaps.length === 0;
-            const nextIn = mergeDefinitionMaps(predMaps, isEntry ? block.stateId : null, candidateNames);
-            const nextOut = cloneSetMap(nextIn);
-            for (const [name, def] of block.lastDefinitions) nextOut.set(name, new Set([def]));
+            const predBlocks = predecessors.get(block.stateId) || [];
+            const isEntry = closureEntries.has(block.stateId) || predBlocks.length === 0;
+            let nextIn;
+            if (isEntry && predBlocks.length === 0) {
+                nextIn = entryDefinitionMap(block.stateId);
+            } else if (!isEntry && predBlocks.length === 1) {
+                nextIn = outDefinitions.get(predBlocks[0].stateId) || emptyDefinitions;
+            } else {
+                const predMaps = predBlocks.map(pred => outDefinitions.get(pred.stateId));
+                if (isEntry) predMaps.push(entryDefinitionMap(block.stateId));
+                nextIn = mergeDefinitionMaps(predMaps, null, candidateNames, singletonDefinitionSet);
+            }
+            const transfer = transferDefinitionsByState.get(block.stateId);
+            let nextOut = nextIn;
+            if (transfer?.size) {
+                nextOut = cloneSetMap(nextIn);
+                for (const [name, set] of transfer) nextOut.set(name, set);
+            }
 
             const inChanged = !mapOfSetsEquals(nextIn, inDefinitions.get(block.stateId));
             const outChanged = !mapOfSetsEquals(nextOut, outDefinitions.get(block.stateId));
@@ -770,10 +824,21 @@ function versionVmBlockRegisters(source, ast) {
     // metadata so developer tools can visualize CFG + register-epoch flow without re-deriving it.
     const edits = [];
     const graphStates = [];
+    const uniqueVersionBaseCache = new WeakMap();
+    function initialUniqueVersions(definitions) {
+        let base = uniqueVersionBaseCache.get(definitions);
+        if (!base) {
+            base = uniqueVersionMap(definitions);
+            uniqueVersionBaseCache.set(definitions, base);
+        }
+        // The per-block map is mutated while statements are replayed. Clone only
+        // the compact unique-version map, not the full reaching-definition map.
+        return new Map(base);
+    }
     for (const block of blocks) {
         const graphOperations = [];
         const latestVersions = cfgComplete
-            ? uniqueVersionMap(inDefinitions.get(block.stateId) || new Map())
+            ? initialUniqueVersions(inDefinitions.get(block.stateId) || emptyDefinitions)
             : new Map();
         const incomingVersionNames = new Set(latestVersions.values());
 

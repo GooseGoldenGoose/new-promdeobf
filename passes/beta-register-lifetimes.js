@@ -11,6 +11,7 @@ function isNilLiteral(node) {
 }
 
 const EMPTY_DEFINITION_SET = new Set();
+const EMPTY_DEFINITION_MAP = new Map();
 
 function setEquals(a, b) {
     if (a === b) return true;
@@ -265,6 +266,7 @@ function analyzeBetaRegisterLifetimes({
                     isNil: exactSingle && supported && isNilLiteral(init[0]),
                     sourceOffset: statement.range?.[0] ?? Number.MAX_SAFE_INTEGER,
                     useCount: 0,
+                    reachingSet: new Set([id]),
                 };
                 definitions.push(definition);
                 definitionById.set(id, definition);
@@ -274,29 +276,38 @@ function analyzeBetaRegisterLifetimes({
         }
     }
 
+    // Worklist transfer only needs the last definition of each register in a
+    // block. Precompute those immutable singleton sets once instead of replaying
+    // every statement and allocating a new Set on every worklist visit.
+    const transferDefinitionsByState = new Map();
+    for (const definition of definitions) {
+        let byName = transferDefinitionsByState.get(definition.blockState);
+        if (!byName) transferDefinitionsByState.set(definition.blockState, byName = new Map());
+        byName.set(definition.name, definition.reachingSet);
+    }
+
     const inDefinitions = new Map(blocks.map(block => [block.stateId, new Map()]));
     const outDefinitions = new Map(blocks.map(block => [block.stateId, new Map()]));
-    const entryUnknown = new Map();
+    const entryUnknownMaps = new Map();
 
-    function entryUnknownId(stateId, name) {
-        const key = `${stateId}\0${name}`;
-        let id = entryUnknown.get(key);
-        if (!id) {
-            id = `u:entry:${stateId}:${name}`;
-            entryUnknown.set(key, id);
+    function entryUnknownMap(stateId) {
+        let map = entryUnknownMaps.get(stateId);
+        if (map) return map;
+        map = new Map();
+        for (const name of valueNames) {
+            const id = `u:entry:${stateId}:${name}`;
             unknownDefinitionIds.add(id);
+            map.set(name, new Set([id]));
         }
-        return id;
+        entryUnknownMaps.set(stateId, map);
+        return map;
     }
 
     function transfer(block, incoming) {
+        const writes = transferDefinitionsByState.get(block.stateId);
+        if (!writes?.size) return incoming;
         const current = cloneSetMap(incoming);
-        for (const statement of block.statements) {
-            for (const name of cachedStatementWrittenNames(statement, valueNames)) {
-                const definition = definitionByStatementAndName.get(definitionKey(statement, name));
-                if (definition) current.set(name, new Set([definition.id]));
-            }
-        }
+        for (const [name, reachingSet] of writes) current.set(name, reachingSet);
         return current;
     }
 
@@ -307,17 +318,21 @@ function analyzeBetaRegisterLifetimes({
         while (cursor < queue.length) {
             const block = queue[cursor++];
             queued.delete(block.stateId);
-            const predMaps = (predecessors.get(block.stateId) || []).map(pred => outDefinitions.get(pred.stateId));
-            const isEntry = closureEntries.has(block.stateId) || predMaps.length === 0;
-            const nextIn = !isEntry && predMaps.length === 1
-                ? new Map(predMaps[0] || [])
-                : mergeSetMaps(predMaps);
-            if (isEntry) {
-                for (const name of valueNames) {
-                    let defs = nextIn.get(name);
-                    if (!defs) nextIn.set(name, defs = new Set());
-                    defs.add(entryUnknownId(block.stateId, name));
-                }
+            const predBlocks = predecessors.get(block.stateId) || [];
+            const isEntry = closureEntries.has(block.stateId) || predBlocks.length === 0;
+            let nextIn;
+            if (isEntry && predBlocks.length === 0) {
+                // Entry maps are immutable and identical on every revisit.
+                nextIn = entryUnknownMap(block.stateId);
+            } else if (!isEntry && predBlocks.length === 1) {
+                // Published reaching maps/Sets are immutable. A linear edge can
+                // share the predecessor map directly; transfer() copies only if
+                // this block actually writes a register.
+                nextIn = outDefinitions.get(predBlocks[0].stateId) || EMPTY_DEFINITION_MAP;
+            } else {
+                const predMaps = predBlocks.map(pred => outDefinitions.get(pred.stateId));
+                if (isEntry) predMaps.push(entryUnknownMap(block.stateId));
+                nextIn = mergeSetMaps(predMaps);
             }
             const nextOut = transfer(block, nextIn);
             const inChanged = !mapOfSetsEquals(nextIn, inDefinitions.get(block.stateId));
@@ -335,8 +350,7 @@ function analyzeBetaRegisterLifetimes({
         }
     } else {
         for (const block of blocks) {
-            const incoming = new Map();
-            for (const name of valueNames) incoming.set(name, new Set([entryUnknownId(block.stateId, name)]));
+            const incoming = entryUnknownMap(block.stateId);
             inDefinitions.set(block.stateId, incoming);
             outDefinitions.set(block.stateId, transfer(block, incoming));
         }
@@ -345,24 +359,19 @@ function analyzeBetaRegisterLifetimes({
     const reachingBeforeStatement = new Map();
     const uses = [];
     for (const block of blocks) {
-        const current = cloneSetMap(inDefinitions.get(block.stateId) || new Map());
+        const incoming = inDefinitions.get(block.stateId) || EMPTY_DEFINITION_MAP;
+        const current = cloneSetMap(incoming);
         for (let statementIndex = 0; statementIndex < block.statements.length; statementIndex++) {
             const statement = block.statements[statementIndex];
             const reads = cachedStatementReadNames(statement, valueNames);
             const writes = cachedStatementWrittenNames(statement, valueNames);
-            const before = new Map();
+            // Only write-bearing statements need a later reaching-before snapshot.
+            // Read-only statements can attach the immutable reaching Set directly
+            // to their use records.
+            const before = writes.length ? new Map() : null;
             for (const name of reads) {
-                const definitions = current.get(name);
-                if (definitions) before.set(name, definitions);
-            }
-            for (const name of writes) {
-                if (before.has(name)) continue;
-                const definitions = current.get(name);
-                if (definitions) before.set(name, definitions);
-            }
-            reachingBeforeStatement.set(statement, before);
-            for (const name of reads) {
-                const reaching = before.get(name) || EMPTY_DEFINITION_SET;
+                const reaching = current.get(name) || EMPTY_DEFINITION_SET;
+                if (before && reaching.size) before.set(name, reaching);
                 const use = { blockState: block.stateId, statementIndex, statement, name, reachingDefinitionIds: reaching };
                 uses.push(use);
                 for (const defId of reaching) {
@@ -370,9 +379,17 @@ function analyzeBetaRegisterLifetimes({
                     if (definition) definition.useCount++;
                 }
             }
+            if (before) {
+                for (const name of writes) {
+                    if (before.has(name)) continue;
+                    const reaching = current.get(name);
+                    if (reaching) before.set(name, reaching);
+                }
+                reachingBeforeStatement.set(statement, before);
+            }
             for (const name of writes) {
                 const definition = definitionByStatementAndName.get(definitionKey(statement, name));
-                if (definition) current.set(name, new Set([definition.id]));
+                if (definition) current.set(name, definition.reachingSet);
             }
         }
     }
