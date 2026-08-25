@@ -114,7 +114,7 @@ node tools\beta-register-versions.js output\63.lua output\63.beta.lua
 node tools\beta-control-flow.js output\63.lua output\63.beta.cf.lua
 ```
 
-`deobf.bat <sample> normal|beta|cf` may also be used when present.
+`deobf.bat <sample> normal|cf` is the user-facing runner. Standalone beta analysis remains available only through its development tool.
 
 Standalone `output/*.beta.lua` is solver/intermediate representation and does not need to execute. Correctness matters for normal semantics and especially final beta-CF source.
 
@@ -194,9 +194,30 @@ Generic-for currently proves the local compiler's two-variable shape including `
 
 Repeat recovery is intended to remove the local compiler's discarded first repeat-condition evaluation and restore readable-source semantics.
 
-## Experimental Overflow beta-CF Fork
+## Default CF Solver / Legacy Solver
 
-Isolated experimental files:
+The former experimental overflow beta-CF path is now the canonical/default CF implementation.
+
+Canonical files:
+
+```text
+passes/beta-control-flow.js
+passes/beta-overflow-register.js
+tools/beta-control-flow.js
+```
+
+`deobf.bat <sample> cf` and `tools/deobfuscate-beta-control-flow.js` both use this promoted path. When the user asks to "deobf cf", use the canonical `tools/beta-control-flow.js` path unless they explicitly request legacy behavior.
+
+The old pre-promotion production solver is preserved but not used by default:
+
+```text
+passes/beta-control-flow-legacy.js
+tools/beta-control-flow-legacy.js
+```
+
+The legacy CLI defaults to `*.beta.legacy.cf.lua` if manually invoked, so it cannot overwrite canonical CF output. No default project code references the legacy solver.
+
+Compatibility aliases remain at:
 
 ```text
 passes/beta-control-flow-overflow-experimental.js
@@ -204,46 +225,35 @@ passes/beta-overflow-register-experimental.js
 tools/beta-control-flow-overflow-experimental.js
 ```
 
-Production `passes/beta-control-flow.js` remains unchanged. The experimental CLI defaults to `*.beta.overflow-exp.cf.lua` so it cannot overwrite production beta-CF output.
+The pass/helper aliases point to the canonical implementation. The old experimental CLI remains only for compatibility; do not use it for normal CF work.
 
-Run example:
-
-```text
-node tools\beta-control-flow-overflow-experimental.js output\5.lua output\5.beta.overflow-exp.cf.lua
-```
+`deobf.bat` now exposes only `normal` and `cf`. Standalone beta analysis code (`tools/beta-register-versions.js`, beta passes) is retained for development/tests but is not a normal deobf mode.
 
 ## RegisterOverflow
 
-Production final CF still uses proven per-function table presentation:
-`RegisterOverflow[n] -> RegisterOverflow.vN`.
-
-Experimental scalar method:
-- `passes/beta-overflow-register-experimental.js` proves the RegisterOverflow binding and every static numeric slot structurally.
+Default CF now uses scalar overflow recovery:
+- `passes/beta-overflow-register.js` proves the RegisterOverflow binding and every static numeric slot structurally.
 - Sorted observed slots get dense synthetic physical scalar identities; e.g. slots 23/24 become synthetic overflow physical bases 1/2.
 - Synthetic overflow physicals are inserted into the ordinary VM scalar-register declaration before beta versioning.
 - From that point onward they use the exact normal beta lifetime/version solver. There is no overflow-specific nil/reset/lifetime logic.
 - Final emitted beta names only are remapped to `o_vN_K`, where `K` is exactly the normal beta version number.
 - Analysis metadata keeps the original synthetic physical identity unchanged; do not rename `originalTarget`/`originalRegister` independently of `originalText`, because compiler duplicate-condition/lifetime proofs depend on identity consistency.
-- If aggressive overflow prevents the normal pipeline from producing exact normalized VM leaves, the experimental CLI scalarizes first, reruns the existing Step 3 VM-state recovery and production register scheduler, then invokes unchanged beta versioning. This is fail-closed and only retries after the specific `No exact normalized VM state leaves were found` condition.
+- If aggressive overflow prevents normal pre-beta state recovery from producing exact normalized VM leaves, canonical CF scalarizes first, reruns the existing VM-state recovery and production register scheduler, then invokes unchanged beta versioning. This remains fail-closed and only retries after the specific `No exact normalized VM state leaves were found` condition.
 
 Forced WeAreDevs test compiler fork:
 `C:\Users\reala\Desktop\!workspaces\promdeobf ova\wearedev obf overflow-test`
 
 Current test setting: `MAX_REGS = 5`. The original WeAreDevs compiler is untouched.
 
-MAX_REGS=5 regenerated source fixtures 1-10 were tested through source -> obfuscation -> formatter -> normal -> experimental beta-CF:
-- beta-CF generation: 10/10
-- final experimental CF: zero `RegisterOverflow[...]` refs in all 10
-- runtime source/obfuscated/normal/experimental-CF parity: samples 1,2,3,4,6,7,8,9 pass; samples 2 and 7 were checked on both user `math.random(1,2)` branches with a targeted runtime shim
-- samples 5 and 10: source/obfuscated/normal runtime parity passes and experimental CF generates, but LuaJIT cannot compile final CF because scalarization exposes more than 200 locals
-- sample 4 initially exposed inconsistent experimental `originalTarget` presentation metadata; preserving the synthetic physical identity fixed repeat recognition, and sample 4 now recovers 35 states with 1 while + 3 repeats and matches source runtime
+Historical MAX_REGS=5 validation remains applicable to the promoted solver. Scalar overflow can expose more than 200 locals on some large final files; that is a practical execution/compiler limit, not a CF generation failure.
 
-Existing tracked normal outputs 1-63 still pass both solvers: production 63/63 and experimental 63/63. After the sample 36 repeat fix, only sample 36 changes versus the prior production beta-CF baseline; production vs experimental still differ only on true overflow fixtures 5/10.
-
-Saved MAX_REGS=5 regenerated normal outputs 1-63 also pass the experimental solver 63/63 after the repeat fix. Only sample 36 changes versus the prior forced-overflow results, and its runtime now matches readable source with zero `RegisterOverflow[...]` refs.
-
-Samples 5 and 10 can exceed the Lua/Luau/LuaJIT local-register limit after scalar overflow presentation. This is a real practical downside of the scalar experiment, separate from CFG generation correctness.
-
+Promotion verification:
+- canonical CF 1-63: 63/63 generated
+- focused regression suites: 12/12 pass
+- `deobf.bat spacial6 cf`: succeeds end-to-end
+- `output/spacial6.beta.cf.lua`: 0 `RegisterOverflow[...]` refs and 0 residual VM/upvalue scaffold
+- combined `tools/deobfuscate-beta-control-flow.js` smoke: pass
+- preserved legacy solver smoke on sample 1: pass
 ## Verification State
 
 All numeric fixtures currently present, sample 1 through 63, were tested.
@@ -321,7 +331,7 @@ Large untracked probe. Normal deobf succeeds. The first beta-CF blocker was a re
 
 After that first fix, spacial6 exposed a separate nested shared-join case: a branch had a unique immediate post-dominator that was itself a proven terminal return, but the acyclic solver discarded that local join only because it could not reach the surrounding partial continuation. Production and experimental beta-CF now preserve such a join only when `prepared[join].info.kind === "return"`; ordinary out-of-region joins are still rejected. A focused synthetic regression covers the exact outer-partial-continuation + inner-terminal-join shape in both solvers.
 
-With that fix, the old closure-entry-2514 / state-2531 duplicate-emission error is gone. Current spacial6 results: experimental overflow beta-CF fully succeeds (3799 states, 554 closure regions, 0 `RegisterOverflow[...]`, 0 residual VM/upvalue scaffold). Production beta-CF gets past the 2514 issue and now stops at a separate root closure loop/backedge case: `Closure entry 1: Beta CF acyclic stage detected a loop/backedge; loop structuring is not implemented yet`.
+With that fix, the old closure-entry-2514 / state-2531 duplicate-emission error is gone. The former experimental solver that fully handles spacial6 is now the canonical/default CF solver. `deobf.bat spacial6 cf` succeeds and emits `output/spacial6.beta.cf.lua` with 3799 states, 554 closure regions, 0 `RegisterOverflow[...]`, and 0 residual VM/upvalue scaffold. The preserved legacy solver still has the separate root loop/backedge limitation, but it is no longer used by default.
 
 ## Performance
 

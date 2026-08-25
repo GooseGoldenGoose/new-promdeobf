@@ -1,7 +1,3 @@
-// EXPERIMENTAL FORK: isolated beta-CF overflow-register experiments.
-// Keep passes/beta-control-flow.js as the verified production solver.
-// New RegisterOverflow strategies should be developed here first.
-
 const luaparse = require("../parser/luaparse");
 const { recoverBetaUpvalues } = require("./beta-upvalues");
 const { applyTextEdits } = require("./text-edits");
