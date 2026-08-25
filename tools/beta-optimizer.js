@@ -27,6 +27,10 @@ function main() {
     console.log(`Dead locals: ${result.stats.deadLocals}`);
     console.log(`Dead call results: ${result.stats.deadCallResults}`);
     console.log(`Bare returns removed: ${result.stats.bareReturnsRemoved}`);
+    console.log(`Multi-return tables collapsed: ${result.stats.multiReturnTableCollapses}`);
+    console.log(`Multi-return slots recovered: ${result.stats.multiReturnSlotsRecovered}`);
+    console.log(`Multi-return placeholders: ${result.stats.multiReturnPlaceholders}`);
+    console.log(`Multi-return unused targets: ${result.stats.multiReturnUnusedTargets}`);
     console.log(`Output: ${outputPath}`);
     return result;
 }

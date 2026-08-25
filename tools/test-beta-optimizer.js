@@ -52,4 +52,150 @@ const deadTable = optimize(`local args = { ... }\nprint("x")`);
 assert(!deadTable.source.includes("local args"));
 assert(deadTable.source.includes('print("x")'));
 
+const packedTwo = optimize(`local t = { f() }
+local a = t[1]
+local b = t[2]
+print(a, b)`);
+assert(packedTwo.source.includes("local a, b = f()"));
+assert(!packedTwo.source.includes("{ f() }"));
+assert(!packedTwo.source.includes("t[1]"));
+assert(!packedTwo.source.includes("t[2]"));
+assert.equal(packedTwo.stats.multiReturnTableCollapses, 1);
+assert.equal(packedTwo.stats.multiReturnSlotsRecovered, 2);
+assert.equal(packedTwo.stats.multiReturnPlaceholders, 0);
+
+const packedOnlySecond = optimize(`local t = { f() }
+local b = t[2]
+print(b)`);
+assert(/local __beta_unused_return_\d+, b = f\(\)/.test(packedOnlySecond.source));
+assert(!packedOnlySecond.source.includes("t[2]"));
+assert.equal(packedOnlySecond.stats.multiReturnTableCollapses, 1);
+assert.equal(packedOnlySecond.stats.multiReturnSlotsRecovered, 1);
+assert.equal(packedOnlySecond.stats.multiReturnPlaceholders, 1);
+
+const packedOnlyThird = optimize(`local t = { f() }
+local c = t[3]
+print(c)`);
+assert(/local __beta_unused_return_\d+, __beta_unused_return_\d+, c = f\(\)/.test(packedOnlyThird.source));
+assert.equal(packedOnlyThird.stats.multiReturnPlaceholders, 2);
+
+const packedSparse = optimize(`local t = { f() }
+local a = t[1]
+local c = t[3]
+print(a, c)`);
+assert(/local a, __beta_unused_return_\d+, c = f\(\)/.test(packedSparse.source));
+assert(!packedSparse.source.includes("t[1]"));
+assert(!packedSparse.source.includes("t[3]"));
+
+const packedOutOfOrder = optimize(`local t = { f() }
+local b = t[2]
+local a = t[1]
+print(a, b)`);
+assert(packedOutOfOrder.source.includes("local a, b = f()"));
+assert(!packedOutOfOrder.source.includes("local a = t[1]"));
+assert(!packedOutOfOrder.source.includes("local b = t[2]"));
+
+const packedAcrossEffect = optimize(`local t = { f() }
+g()
+local a = t[1]
+print(a)`);
+assert(packedAcrossEffect.source.includes("local a = f()"));
+assert(packedAcrossEffect.source.indexOf("f()") < packedAcrossEffect.source.indexOf("g()"));
+assert(packedAcrossEffect.source.indexOf("g()") < packedAcrossEffect.source.indexOf("print(a)"));
+
+const packedPcall = optimize(`local fn = function() return 1 / "hejsks" end
+local t = { pcall(fn) }
+local ok = t[1]
+local err = t[2]
+print(ok, err)`);
+assert(packedPcall.source.includes("local ok, err = pcall(fn)"));
+assert(!packedPcall.source.includes("{ pcall(fn) }"));
+assert(!packedPcall.source.includes("t[1]"));
+assert(!packedPcall.source.includes("t[2]"));
+
+const packedPcallOnlySecond = optimize(`local fn = function() return 1 / "hejsks" end
+local t = { pcall(fn) }
+local err = t[2]
+print(err)`);
+assert(/local __beta_unused_return_\d+, err = pcall\(fn\)/.test(packedPcallOnlySecond.source));
+assert(!packedPcallOnlySecond.source.includes("t[2]"));
+
+const packedMethodCall = optimize(`local t = { obj:run() }
+local second = t[2]
+print(second)`);
+assert(/local __beta_unused_return_\d+, second = obj:run\(\)/.test(packedMethodCall.source));
+
+const placeholderCollision = optimize(`local __beta_unused_return_1 = "keep"
+local t = { f() }
+local b = t[2]
+print(__beta_unused_return_1, b)`);
+assert(!placeholderCollision.source.includes("local __beta_unused_return_1, b = f()"));
+assert(/local __beta_unused_return_2, b = f\(\)/.test(placeholderCollision.source));
+
+const packedShadowBarrier = optimize(`local a = "outer"
+local t = { f() }
+print(a)
+local a = t[1]
+print(a)`);
+assert.equal(packedShadowBarrier.stats.multiReturnTableCollapses, 0);
+assert(packedShadowBarrier.source.includes("local t = { f() }"));
+assert(packedShadowBarrier.source.includes("local a = t[1]"));
+
+const packedCaptureBarrier = optimize(`local t = { f() }
+local g = function() return a end
+local a = t[1]
+print(g(), a)`);
+assert.equal(packedCaptureBarrier.stats.multiReturnTableCollapses, 0);
+assert(packedCaptureBarrier.source.includes("local a = t[1]"));
+
+const packedEscapeBarrier = optimize(`local t = { f() }
+use(t)
+local a = t[1]
+print(a)`);
+assert.equal(packedEscapeBarrier.stats.multiReturnTableCollapses, 0);
+assert(packedEscapeBarrier.source.includes("use(t)"));
+
+const packedDynamicBarrier = optimize(`local t = { f() }
+local a = t[i]
+print(a)`);
+assert.equal(packedDynamicBarrier.stats.multiReturnTableCollapses, 0);
+assert(packedDynamicBarrier.source.includes("t[i]"));
+
+const packedDuplicateSlotBarrier = optimize(`local t = { f() }
+local a = t[1]
+local b = t[1]
+print(a, b)`);
+assert.equal(packedDuplicateSlotBarrier.stats.multiReturnTableCollapses, 0);
+assert(packedDuplicateSlotBarrier.source.includes("t[1]"));
+
+const packedWriteBarrier = optimize(`local t = { f() }
+t[1] = 9
+local a = t[1]
+print(a)`);
+assert.equal(packedWriteBarrier.stats.multiReturnTableCollapses, 0);
+assert(packedWriteBarrier.source.includes("t[1] = 9"));
+
+const packedLengthBarrier = optimize(`local t = { f() }
+local n = #t
+local a = t[1]
+print(n, a)`);
+assert.equal(packedLengthBarrier.stats.multiReturnTableCollapses, 0);
+assert(packedLengthBarrier.source.includes("#t"));
+
+const packedExtractedButUnusedFirst = optimize(`local t = { f() }
+local a = t[1]
+local b = t[2]
+print(b)`);
+assert(/local __beta_unused_return_\d+, b = f\(\)/.test(packedExtractedButUnusedFirst.source));
+assert(!packedExtractedButUnusedFirst.source.includes("local a, b = f()"));
+assert.equal(packedExtractedButUnusedFirst.stats.multiReturnUnusedTargets, 1);
+
+const packedExtractedButUnusedFirstTwo = optimize(`local t = { f() }
+local a = t[1]
+local b = t[2]
+local c = t[3]
+print(c)`);
+assert(/local __beta_unused_return_\d+, __beta_unused_return_\d+, c = f\(\)/.test(packedExtractedButUnusedFirstTwo.source));
+assert.equal(packedExtractedButUnusedFirstTwo.stats.multiReturnUnusedTargets, 2);
+
 console.log("beta optimizer tests passed");

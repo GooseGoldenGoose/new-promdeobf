@@ -419,6 +419,10 @@ Current v1 behavior is conservative and iterative:
 - inlines single-use local aliases only when the source local is not changed before the use
 - proves the generated `local _env = getfenv()` header before folding static `_env["name"]` lookups to direct globals; any `setfenv` in that function blocks the fold
 - moves a direct global alias only across effect-free sibling statements and only into call-base position
+- collapses proven compiler multi-return table storage `local t = { call(...) }; local a = t[1]; local b = t[2]` back to one native multi-return assignment at the original call position
+- sparse used result slots are preserved with collision-free `__beta_unused_return_N` locals, so using only slot 2 becomes `local __beta_unused_return_1, b = call()` without relying on `_`
+- if Prometheus extracted a result into a beta local that later proves unused, that target is renamed to a collision-free throwaway placeholder instead of keeping a meaningless register name
+- multi-return collapse fails closed if the temporary table escapes, is written, is length-observed, uses dynamic/duplicate slots, is captured, or moving an extraction declaration earlier would change shadowing/capture behavior
 - removes a final bare `return`
 - repeats until no supported change remains and reparses the final source
 
@@ -432,7 +436,7 @@ print("hi")
 
 Current CF is one state / zero closures. Standalone beta optimizer reduces the live code to `print("hi")`; generated `--headers` / `--body` comments and blank formatting may remain. Stats for that probe: 9 rounds, 1 global fold, 1 global-alias inline, 2 other single-use inlines, 3 dead locals, 1 dead call-result lowering, 1 bare return removed.
 
-Safety regressions cover call-order preservation, dead call-result preservation, literal movement, mutable local aliases, effect barriers for global aliases, `setfenv` blocking, and dead table removal.
+Safety regressions cover call-order preservation, dead call-result preservation, literal movement, mutable local aliases, effect barriers for global aliases, `setfenv` blocking, dead table removal, full/sparse/out-of-order multi-return slots, only-second/only-third results, method calls, placeholder-name collisions, shadow/capture barriers, table escape, dynamic indexes, duplicate slots, table writes, and `#table` observation. LuaJIT parity probes for only-second, sparse 1+3, and side-effectful call ordering match before/after exactly. Four real local-Prometheus probes (only second, only third, sparse first+third, and error second) all deobfuscate through CF and collapse the compiler table; the error probe differs only in the expected file/line text inside the error string.
 ## Large / Special Probes
 
 ### Generic-for 53-59

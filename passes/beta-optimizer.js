@@ -227,6 +227,189 @@ function findEnvContext(block) {
     return { name: "_env", declarationIndex: envIndex };
 }
 
+function staticPositiveIndex(node) {
+    if (node?.type !== "NumericLiteral") return null;
+    const value = Number(node.value);
+    return Number.isSafeInteger(value) && value >= 1 ? value : null;
+}
+
+function packedCallFromTable(node) {
+    if (node?.type !== "TableConstructorExpression") return null;
+    const fields = node.fields || [];
+    if (fields.length !== 1 || fields[0]?.type !== "TableValue") return null;
+    const call = fields[0].value;
+    return isStandaloneCall(call) ? call : null;
+}
+
+function collectIdentifierNames(node, out = new Set()) {
+    function visit(value) {
+        if (!value) return;
+        if (Array.isArray(value)) {
+            for (const child of value) visit(child);
+            return;
+        }
+        if (!isNode(value)) return;
+        if (isIdentifier(value)) out.add(value.name);
+        for (const key of Object.keys(value)) {
+            if (key === "range" || key === "loc") continue;
+            visit(value[key]);
+        }
+    }
+    visit(node);
+    return out;
+}
+
+function directPackedSlotExtraction(statement, tempName) {
+    const info = directLocalInfo(statement);
+    if (!info || info.name === tempName) return null;
+    const index = info.init;
+    if (index?.type !== "IndexExpression" || !isIdentifier(index.base, tempName)) return null;
+    const slot = staticPositiveIndex(index.index);
+    if (slot === null) return null;
+    return { ...info, slot, index };
+}
+
+function nameIsObservedBeforeDeclaration(block, packIndex, extractionIndex, name) {
+    for (let index = packIndex + 1; index < extractionIndex; index++) {
+        const result = { reads: [], writes: [], captured: false, redeclared: false };
+        scanNameInNode(block[index], name, result, index, null, null, true);
+        if (result.reads.length || result.writes.length || result.captured || result.redeclared) return true;
+    }
+    return false;
+}
+
+function uniqueUnusedReturnName(usedNames, ordinal) {
+    let suffix = ordinal;
+    while (true) {
+        const name = `__beta_unused_return_${suffix}`;
+        if (!usedNames.has(name)) {
+            usedNames.add(name);
+            return name;
+        }
+        suffix++;
+    }
+}
+
+function isUnusedReturnPlaceholder(name) {
+    return /^__beta_unused_return_\d+$/.test(name || "");
+}
+
+function findUnusedMultiReturnTargetRename(source, block, stats) {
+    for (let statementIndex = 0; statementIndex < block.length; statementIndex++) {
+        const statement = block[statementIndex];
+        if (statement?.type !== "LocalStatement" || !Array.isArray(statement.range)) continue;
+        const variables = statement.variables || [];
+        const init = statement.init || [];
+        if (variables.length < 2 || init.length !== 1 || !isStandaloneCall(init[0])) continue;
+        if (!variables.every(variable => isIdentifier(variable) && Array.isArray(variable.range))) continue;
+
+        const seen = new Set();
+        if (variables.some(variable => seen.has(variable.name) || !seen.add(variable.name))) continue;
+
+        const usedNames = collectIdentifierNames({ type: "Chunk", body: block });
+        for (const variable of variables) {
+            if (isUnusedReturnPlaceholder(variable.name)) continue;
+            const refs = scanLaterReferences(block, statementIndex, variable.name);
+            if (refs.reads.length || refs.writes.length || refs.captured || refs.redeclared) continue;
+            const placeholder = uniqueUnusedReturnName(usedNames, 1);
+            stats.multiReturnUnusedTargets++;
+            return {
+                start: variable.range[0],
+                end: variable.range[1],
+                replacement: placeholder,
+                kind: "multi-return-unused-target",
+            };
+        }
+    }
+    return null;
+}
+
+function findMultiReturnTableCollapse(source, block, stats) {
+    for (let packIndex = 0; packIndex < block.length; packIndex++) {
+        const packStatement = block[packIndex];
+        const packInfo = directLocalInfo(packStatement);
+        if (!packInfo) continue;
+        const call = packedCallFromTable(packInfo.init);
+        if (!call || !Array.isArray(call.range)) continue;
+
+        const refs = scanLaterReferences(block, packIndex, packInfo.name);
+        if (refs.captured || refs.redeclared || refs.writes.length || refs.reads.length === 0) continue;
+
+        const bySlot = new Map();
+        let valid = true;
+
+        for (const read of refs.reads) {
+            const index = read.parent;
+            if (read.key !== "base" || index?.type !== "IndexExpression" || index.base !== read.node) {
+                valid = false;
+                break;
+            }
+            const slot = staticPositiveIndex(index.index);
+            if (slot === null || bySlot.has(slot)) {
+                valid = false;
+                break;
+            }
+            const statement = block[read.topIndex];
+            const extraction = directPackedSlotExtraction(statement, packInfo.name);
+            if (!extraction || extraction.index !== index || extraction.slot !== slot) {
+                valid = false;
+                break;
+            }
+            if (nameIsObservedBeforeDeclaration(block, packIndex, read.topIndex, extraction.name)) {
+                valid = false;
+                break;
+            }
+            bySlot.set(slot, { ...extraction, statement, statementIndex: read.topIndex });
+        }
+
+        if (!valid || bySlot.size !== refs.reads.length) continue;
+
+        const targetNames = new Set();
+        for (const extraction of bySlot.values()) {
+            if (targetNames.has(extraction.name)) {
+                valid = false;
+                break;
+            }
+            targetNames.add(extraction.name);
+        }
+        if (!valid) continue;
+
+        const maxSlot = Math.max(...bySlot.keys());
+        const usedNames = collectIdentifierNames({ type: "Chunk", body: block });
+        const targets = [];
+        let placeholderOrdinal = 1;
+        let placeholderCount = 0;
+        for (let slot = 1; slot <= maxSlot; slot++) {
+            const extraction = bySlot.get(slot);
+            if (extraction) {
+                targets.push(extraction.name);
+            } else {
+                targets.push(uniqueUnusedReturnName(usedNames, placeholderOrdinal));
+                placeholderOrdinal++;
+                placeholderCount++;
+            }
+        }
+
+        const replacement = `local ${targets.join(", ")} = ${sourceOf(source, call)}`;
+        const edits = [
+            { start: packStatement.range[0], end: packStatement.range[1], replacement },
+        ];
+        for (const extraction of [...bySlot.values()].sort((a, b) => a.statementIndex - b.statementIndex)) {
+            edits.push({ start: extraction.statement.range[0], end: extraction.statement.range[1], replacement: "" });
+        }
+
+        stats.multiReturnTableCollapses++;
+        stats.multiReturnSlotsRecovered += bySlot.size;
+        stats.multiReturnPlaceholders += placeholderCount;
+        return {
+            compound: true,
+            edits,
+            kind: "multi-return-table-collapse",
+        };
+    }
+    return null;
+}
+
 function findEnvFold(source, block) {
     const env = findEnvContext(block);
     if (!env) return null;
@@ -392,6 +575,12 @@ function allBlocksForFunction(functionBody) {
 function findOneEdit(source, ast, stats) {
     const functionRoots = findFunctionBlocks(ast);
     for (const functionBody of functionRoots) {
+        for (const block of allBlocksForFunction(functionBody)) {
+            const multiReturnEdit = findMultiReturnTableCollapse(source, block, stats);
+            if (multiReturnEdit) return multiReturnEdit;
+            const unusedReturnEdit = findUnusedMultiReturnTargetRename(source, block, stats);
+            if (unusedReturnEdit) return unusedReturnEdit;
+        }
         const envEdit = findEnvFold(source, functionBody);
         if (envEdit) {
             stats.globalFolds++;
@@ -422,6 +611,10 @@ function optimizeBetaSource(source, options = {}) {
         deadLocals: 0,
         deadCallResults: 0,
         bareReturnsRemoved: 0,
+        multiReturnTableCollapses: 0,
+        multiReturnSlotsRecovered: 0,
+        multiReturnPlaceholders: 0,
+        multiReturnUnusedTargets: 0,
     };
     let current = source;
     for (let round = 0; round < maxRounds; round++) {
