@@ -44,6 +44,7 @@ function main() {
     console.log(`Multi-return tables collapsed: ${result.stats.multiReturnTableCollapses}`);
     console.log(`Multi-return forwarders collapsed: ${result.stats.multiReturnForwardersCollapsed}`);
     console.log(`Packed return forwarders collapsed: ${result.stats.packedReturnForwardersCollapsed}`);
+    console.log(`Multi-return self-assignment forwarders collapsed: ${result.stats.multiReturnSelfAssignmentForwardersCollapsed}`);
     console.log(`Multi-return slots recovered: ${result.stats.multiReturnSlotsRecovered}`);
     console.log(`Multi-return placeholders: ${result.stats.multiReturnPlaceholders}`);
     console.log(`Multi-return unused targets: ${result.stats.multiReturnUnusedTargets}`);

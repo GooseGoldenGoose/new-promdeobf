@@ -590,6 +590,66 @@ function findPackedCallUnpackForwarding(source, block, functionBody, stats) {
     return null;
 }
 
+function sourceWithNestedReplacement(source, outerNode, innerNode, replacement) {
+    if (!Array.isArray(outerNode?.range) || !Array.isArray(innerNode?.range)) return null;
+    if (innerNode.range[0] < outerNode.range[0] || innerNode.range[1] > outerNode.range[1]) return null;
+    const outerSource = sourceOf(source, outerNode);
+    const start = innerNode.range[0] - outerNode.range[0];
+    const end = innerNode.range[1] - outerNode.range[0];
+    return `${outerSource.slice(0, start)}${replacement}${outerSource.slice(end)}`;
+}
+
+function findPackedCallUnpackSelfAssignment(source, block, functionBody, stats) {
+    for (let packIndex = 0; packIndex + 1 < block.length; packIndex++) {
+        const packStatement = block[packIndex];
+        const packInfo = directLocalInfo(packStatement);
+        if (!packInfo || !Array.isArray(packInfo.init?.range)) continue;
+        const call = packedCallFromTable(packInfo.init);
+        if (!call || !Array.isArray(call.range)) continue;
+
+        const assignment = block[packIndex + 1];
+        if (assignment?.type !== "AssignmentStatement" || !Array.isArray(assignment.range)) continue;
+        const variables = assignment.variables || [];
+        const init = assignment.init || [];
+        if (variables.length !== 1 || init.length !== 1) continue;
+        const target = variables[0];
+        const outerCall = init[0];
+        if (!isIdentifier(target, packInfo.name) || target.isLocal !== true) continue;
+        if (!isStandaloneCall(outerCall) || !Array.isArray(outerCall.range)) continue;
+        if (!isIdentifier(outerCall.base) || outerCall.base.isLocal !== true || outerCall.base.name === packInfo.name) continue;
+
+        const outerArgs = outerCall.arguments || [];
+        if (outerArgs.length !== 1) continue;
+        const unpackCall = outerArgs[0];
+        if (!isStandaloneCall(unpackCall) || !Array.isArray(unpackCall.range)) continue;
+        if (!isIdentifier(unpackCall.base, "unpack") || unpackCall.base.isLocal === true) continue;
+        const unpackArgs = unpackCall.arguments || [];
+        if (unpackArgs.length !== 1) continue;
+        const packUse = unpackArgs[0];
+        if (!isIdentifier(packUse, packInfo.name) || packUse.isLocal !== true) continue;
+
+        // Prometheus emits `{ inner() }` + `outer(unpack(tmp))` for a source call
+        // whose final argument may return multiple values. Recover that compiler
+        // lowering directly. Reading the lexical outer call target moves before the
+        // inner call, so retain the existing captured-target barrier.
+        if (functionNameIsCaptured(functionBody, outerCall.base.name)) continue;
+        const recoveredCall = sourceWithNestedReplacement(source, outerCall, unpackCall, sourceOf(source, call));
+        if (recoveredCall === null) continue;
+
+        stats.multiReturnTableCollapses++;
+        stats.multiReturnSelfAssignmentForwardersCollapsed++;
+        return {
+            compound: true,
+            edits: [
+                { start: packInfo.init.range[0], end: packInfo.init.range[1], replacement: recoveredCall },
+                { start: assignment.range[0], end: assignment.range[1], replacement: "" },
+            ],
+            kind: "multi-return-self-assignment-forwarding",
+        };
+    }
+    return null;
+}
+
 function findGenericForTupleInline(source, block, stats) {
     for (let declarationIndex = 0; declarationIndex + 1 < block.length; declarationIndex++) {
         const declaration = block[declarationIndex];
@@ -2624,6 +2684,8 @@ function findTransformEdit(source, ast, stats, budget = 1) {
             if (multiReturnForwardEdit) return multiReturnForwardEdit;
             const packedReturnForwardEdit = findZeroReturnPackedIifeForwarding(source, block, stats);
             if (packedReturnForwardEdit) return packedReturnForwardEdit;
+            const multiReturnSelfAssignmentEdit = findPackedCallUnpackSelfAssignment(source, block, functionBody, stats);
+            if (multiReturnSelfAssignmentEdit) return multiReturnSelfAssignmentEdit;
             const unusedReturnEdit = findUnusedMultiReturnTargetRename(source, block, stats);
             if (unusedReturnEdit) return unusedReturnEdit;
             const genericForEdit = findGenericForTupleInline(source, block, stats);
@@ -2755,6 +2817,7 @@ function optimizeBetaSource(source, options = {}) {
         multiReturnTableCollapses: 0,
         multiReturnForwardersCollapsed: 0,
         packedReturnForwardersCollapsed: 0,
+        multiReturnSelfAssignmentForwardersCollapsed: 0,
         multiReturnSlotsRecovered: 0,
         multiReturnPlaceholders: 0,
         multiReturnUnusedTargets: 0,

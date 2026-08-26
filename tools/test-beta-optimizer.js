@@ -276,6 +276,49 @@ assert(!packedUnpackDeadResultForward.source.includes("unpack(t)"));
 assert(packedUnpackDeadResultForward.source.includes("pcall(function()"));
 assert.equal(packedUnpackDeadResultForward.stats.multiReturnForwardersCollapsed, 1);
 
+const packedUnpackSelfAssignmentForward = optimize(`local outer = consume
+local inner = produce
+local t = { inner() }
+t = outer(unpack(t))
+print(t)`);
+assert(!packedUnpackSelfAssignmentForward.source.includes("{ inner() }"));
+assert(!packedUnpackSelfAssignmentForward.source.includes("unpack(t)"));
+assert(packedUnpackSelfAssignmentForward.source.includes("local t = consume(produce())"));
+assert.equal(packedUnpackSelfAssignmentForward.stats.multiReturnSelfAssignmentForwardersCollapsed, 1);
+
+const packedUnpackSelfAssignmentExtraArgBarrier = optimize(`local outer = consume
+local inner = produce
+local t = { inner() }
+t = outer(unpack(t), after())
+print(t)`);
+assert(packedUnpackSelfAssignmentExtraArgBarrier.source.includes("unpack(t)"));
+assert.equal(packedUnpackSelfAssignmentExtraArgBarrier.stats.multiReturnSelfAssignmentForwardersCollapsed, 0);
+
+const packedUnpackSelfAssignmentLocalUnpackBarrier = optimize(`local outer = consume
+local inner = produce
+local unpack = customUnpack
+local t = { inner() }
+t = outer(unpack(t))
+print(t)`);
+assert(packedUnpackSelfAssignmentLocalUnpackBarrier.source.includes("unpack(t)"));
+assert.equal(packedUnpackSelfAssignmentLocalUnpackBarrier.stats.multiReturnSelfAssignmentForwardersCollapsed, 0);
+
+const packedUnpackSelfAssignmentSelfTargetBarrier = optimize(`local inner = produce
+local t = { inner() }
+t = t(unpack(t))
+print(t)`);
+assert(packedUnpackSelfAssignmentSelfTargetBarrier.source.includes("t = t(unpack(t))"));
+assert.equal(packedUnpackSelfAssignmentSelfTargetBarrier.stats.multiReturnSelfAssignmentForwardersCollapsed, 0);
+
+const packedUnpackSelfAssignmentCapturedTargetBarrier = optimize(`local outer = consume
+local mutate = function() outer = other end
+local inner = function() mutate(); return 1 end
+local t = { inner() }
+t = outer(unpack(t))
+print(t)`);
+assert(packedUnpackSelfAssignmentCapturedTargetBarrier.source.includes("unpack(t)"));
+assert.equal(packedUnpackSelfAssignmentCapturedTargetBarrier.stats.multiReturnSelfAssignmentForwardersCollapsed, 0);
+
 const packedUnpackExtraArgumentBarrier = optimize(`local sink = print
 local t = { f() }
 sink(unpack(t), after())`);
