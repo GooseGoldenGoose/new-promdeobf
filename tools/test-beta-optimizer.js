@@ -524,4 +524,44 @@ assert(whileLongLogicalLadder.source.includes("B()"));
 assert(whileLongLogicalLadder.source.includes("F()"));
 assert.equal(whileLongLogicalLadder.stats.whileConditionsCollapsed, 1);
 
+const deadUninitializedRepeatLocal = optimize(`local x = 0
+repeat
+    local unused
+    local step = x + 1
+    x = step
+until x >= 2`);
+assert(!deadUninitializedRepeatLocal.source.includes("local unused"));
+assert(!deadUninitializedRepeatLocal.source.includes("local step"));
+assert(/x\s*=\s*\(?x \+ 1\)?/.test(deadUninitializedRepeatLocal.source));
+
+const nestedCapturedAliasCleanup = optimize(`local x = 1
+local f = function()
+    local snapshot = x
+    local result = snapshot + 1
+    return result
+end
+print(f())`);
+assert(!nestedCapturedAliasCleanup.source.includes("local snapshot"));
+assert(!nestedCapturedAliasCleanup.source.includes("local result"));
+assert(/return\s+\(.*x.*\+ 1.*\)/.test(nestedCapturedAliasCleanup.source));
+
+const scalarLoopSnapshotBarrier = optimize(`local x = 1
+local snapshot = x + 1
+while check(snapshot) do
+    x = x + 1
+end`);
+assert(scalarLoopSnapshotBarrier.source.includes("local snapshot = x + 1"));
+assert(scalarLoopSnapshotBarrier.source.includes("while check(snapshot) do"));
+
+const scalarNonLeadingReadBarrier = optimize(`local temp = x + 1
+local result = other + temp
+print(result)`);
+assert(scalarNonLeadingReadBarrier.source.includes("local temp = x + 1"));
+
+const scalarShortCircuitRightBarrier = optimize(`local temp = x + 1
+local result = false and temp
+print(result)`);
+assert(scalarShortCircuitRightBarrier.source.includes("local temp = x + 1"));
+assert(scalarShortCircuitRightBarrier.source.includes("false and temp"));
+
 console.log("beta optimizer tests passed");

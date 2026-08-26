@@ -1,4 +1,4 @@
-const { parseLuaStructural } = require("../main");
+const { parseLua, parseLuaStructural } = require("../main");
 const { applyTextEdits } = require("./text-edits");
 
 const LUA_KEYWORDS = new Set([
@@ -54,6 +54,16 @@ function directLocalInfo(statement) {
     const init = statement.init || [];
     if (variables.length !== 1 || init.length !== 1 || !isIdentifier(variables[0]) || !Array.isArray(statement.range)) return null;
     return { name: variables[0].name, variable: variables[0], init: init[0] };
+}
+
+function directLocalOrUninitializedInfo(statement) {
+    const initialized = directLocalInfo(statement);
+    if (initialized) return initialized;
+    if (statement?.type !== "LocalStatement") return null;
+    const variables = statement.variables || [];
+    const init = statement.init || [];
+    if (variables.length !== 1 || init.length !== 0 || !isIdentifier(variables[0]) || !Array.isArray(statement.range)) return null;
+    return { name: variables[0].name, variable: variables[0], init: null };
 }
 
 function isDirectWriteIdentifier(node, parent, key) {
@@ -654,7 +664,7 @@ function astShape(node) {
     if (!node || typeof node !== "object") return node;
     const out = {};
     for (const key of Object.keys(node).sort()) {
-        if (key === "range" || key === "loc") continue;
+        if (key === "range" || key === "loc" || key === "isLocal") continue;
         out[key] = astShape(node[key]);
     }
     return out;
@@ -828,9 +838,56 @@ function isRepeatedEvaluationStatement(statement) {
         statement?.type === "ForGenericStatement";
 }
 
+function isScalarTempExpression(node) {
+    if (isLiteral(node) || isIdentifier(node)) return true;
+    if (node?.type === "UnaryExpression") return isScalarTempExpression(node.argument);
+    if (node?.type === "BinaryExpression" || node?.type === "LogicalExpression") {
+        return isScalarTempExpression(node.left) && isScalarTempExpression(node.right);
+    }
+    return false;
+}
+
+function isLeadingScalarUse(node, target) {
+    if (node === target) return true;
+    if (!isNode(node)) return false;
+    if (node.type === "UnaryExpression") return isLeadingScalarUse(node.argument, target);
+    if (node.type === "LogicalExpression") {
+        // A temp evaluated before the statement cannot move into the conditional
+        // right arm of and/or: that arm may not execute at all.
+        return isLeadingScalarUse(node.left, target);
+    }
+    if (node.type === "BinaryExpression") {
+        if (isLeadingScalarUse(node.left, target)) return true;
+        return isLiteral(node.left) && isLeadingScalarUse(node.right, target);
+    }
+    return false;
+}
+
+function immediateScalarConsumerIsSafe(statement, readNode) {
+    if (statement?.type === "ReturnStatement") {
+        const args = statement.arguments || [];
+        return args.length === 1 && isLeadingScalarUse(args[0], readNode);
+    }
+    if (statement?.type === "LocalStatement") {
+        const variables = statement.variables || [];
+        const init = statement.init || [];
+        return variables.length === 1 && init.length === 1 && isLeadingScalarUse(init[0], readNode);
+    }
+    if (statement?.type === "AssignmentStatement") {
+        const variables = statement.variables || [];
+        const init = statement.init || [];
+        return variables.length === 1 && isIdentifier(variables[0]) && init.length === 1 && isLeadingScalarUse(init[0], readNode);
+    }
+    if (statement?.type === "IfStatement") {
+        const clauses = statement.clauses || [];
+        return clauses.length >= 1 && clauses[0]?.condition && isLeadingScalarUse(clauses[0].condition, readNode);
+    }
+    return false;
+}
+
 function tryOptimizeLocal(source, block, index, stats, mode = "inline") {
     const statement = block[index];
-    const info = directLocalInfo(statement);
+    const info = mode === "dead" ? directLocalOrUninitializedInfo(statement) : directLocalInfo(statement);
     if (!info) return null;
     const refs = scanLaterReferences(block, index, info.name);
     if (refs.captured || refs.redeclared || refs.writes.length) return null;
@@ -880,7 +937,8 @@ function tryOptimizeLocal(source, block, index, stats, mode = "inline") {
     }
 
     const directLocals = collectDirectLocalNames(block);
-    if (isIdentifier(info.init) && directLocals.has(info.init.name)) {
+    const sourceIsLexicalLocal = isIdentifier(info.init) && (info.init.isLocal === true || directLocals.has(info.init.name));
+    if (sourceIsLexicalLocal) {
         // A declaration outside a loop is a one-time snapshot. Replacing its one
         // AST read inside a loop would re-read the source value every iteration.
         if (isRepeatedEvaluationStatement(readTopStatement)) return null;
@@ -896,10 +954,27 @@ function tryOptimizeLocal(source, block, index, stats, mode = "inline") {
         };
     }
 
+    // Compiler scalar temporaries can be folded into the immediately following
+    // statement only when the use is in the leading evaluation position. This
+    // keeps arithmetic/comparison metamethod timing and mutable-read order intact.
+    if (!isIdentifier(info.init) && isScalarTempExpression(info.init) && read.topIndex === index + 1) {
+        if (isRepeatedEvaluationStatement(readTopStatement)) return null;
+        if (!immediateScalarConsumerIsSafe(readTopStatement, read.node)) return null;
+        stats.singleUseInlines++;
+        return {
+            compound: true,
+            edits: [
+                { start: statement.range[0], end: statement.range[1], replacement: "" },
+                { start: read.node.range[0], end: read.node.range[1], replacement: `(${sourceOf(source, info.init)})` }
+            ],
+            kind: "scalar-temp-inline"
+        };
+    }
+
     // A global lookup may have a metatable effect. Move it only across effect-free
     // sibling statements and only into call-base position, where it is evaluated
     // before call arguments just like the original declaration was.
-    if (isIdentifier(info.init) && !directLocals.has(info.init.name)) {
+    if (isIdentifier(info.init) && !sourceIsLexicalLocal) {
         const callBaseUse = read.parent?.type === "CallExpression" && read.key === "base";
         const immediateGenericIteratorUse = read.parent?.type === "ForGenericStatement" &&
             read.key === "iterators" && read.topIndex === index + 1;
@@ -1063,7 +1138,7 @@ function optimizeBetaSource(source, options = {}) {
 
     // Phase 1: structural recovery and safe inlining to a fixed point.
     for (; round < maxRounds; round++) {
-        const ast = parseLuaStructural(current, `<beta-optimizer-transform-${round + 1}>`);
+        const ast = parseLua(current, `<beta-optimizer-transform-${round + 1}>`);
         const edit = findTransformEdit(current, ast, stats);
         if (!edit) break;
         const edits = edit.compound ? edit.edits : [edit];
@@ -1074,7 +1149,7 @@ function optimizeBetaSource(source, options = {}) {
     // Phase 2: unused/dead cleanup only, bottom-to-top. Do not return to the
     // transform phase after cleanup; dead storage is intentionally the last pass.
     for (; round < maxRounds; round++) {
-        const ast = parseLuaStructural(current, `<beta-optimizer-dead-${round + 1}>`);
+        const ast = parseLua(current, `<beta-optimizer-dead-${round + 1}>`);
         const edit = findDeadCleanupEdit(current, ast, stats);
         if (!edit) break;
         const edits = edit.compound ? edit.edits : [edit];

@@ -413,10 +413,11 @@ node tools/beta-optimizer.js <final-cf.lua> [optimized.lua]
 ```
 
 Current v1 behavior is conservative and iterative:
-- removes dead single locals only when the initializer is proven effect-free
+- removes dead single locals only when the initializer is proven effect-free, and removes unused uninitialized single-local declarations
 - preserves an unused call's effect by changing `local x = f()` into `f()` instead of deleting the call
 - inlines single-use literals
-- inlines single-use local aliases only when the source local is not changed before the use
+- inlines single-use local aliases only when the source local is not changed before the use; scoped parsing distinguishes globals from lexically local/captured outer bindings inside nested functions
+- folds adjacent one-use scalar compiler temporaries (identifier/literal unary/binary/logical trees) only into a proven leading evaluation position of the immediately following statement; loop snapshot boundaries still block movement, and a temp is never moved into the conditional right arm of `and`/`or`
 - proves the generated `local _env = getfenv()` header before folding static `_env["name"]` lookups to direct globals; any `setfenv` in that function blocks the fold
 - moves a direct global alias only across effect-free sibling statements and only into call-base position
 - collapses proven compiler multi-return table storage `local t = { call(...) }; local a = t[1]; local b = t[2]` back to one native multi-return assignment at the original call position
@@ -479,7 +480,8 @@ final beta-CF source
 
 Important current behavior / proofs:
 
-- Basic cleanup: removes proven dead locals, preserves effects of unused calls, folds proven `_env["name"]` lookups to globals, safely inlines literals/aliases, and removes a final bare `return`.
+- Basic cleanup: removes proven dead locals including unused uninitialized declarations, preserves effects of unused calls, folds proven `_env["name"]` lookups to globals, safely inlines literals/aliases, and removes a final bare `return`.
+- Nested function bodies now use lexical `isLocal` provenance, so one-use aliases of captured outer locals are treated as local snapshots instead of being mistaken for globals. Adjacent scalar temp chains such as `local t = x + 1; x = t` and `local t = x < 3; return t` fold when the use is the immediate leading evaluation position. Right-side `and/or` uses and repeated-evaluation loop boundaries fail closed.
 - Multi-return recovery is call-agnostic. Compiler storage like `local t = { call() }; local a=t[1]; local b=t[2]` becomes native `local a,b = call()` only with structural proof.
 - Sparse result use is supported. If only result 2 or 3 is needed, collision-free `__beta_unused_return_N` locals consume earlier return positions instead of using `_` or changing semantics.
 - Packed-result recovery refuses table escape, writes, `#table`, dynamic/duplicate slot reads, capture/shadow changes, or other unproven shapes.
@@ -538,6 +540,8 @@ focused project suites: 14/14 PASS
 real iterator runtime probes: pairs/ipairs/next/custom-direct/custom-factory = equal
 multi-return runtime probes: equal for successful cases
 loop/repeat side-effect parity probes: equal
+nested-function/repeat/scalar-temp LuaJIT parity: equal, including arithmetic metamethod timing and right-side and/or refusal
+current loop-effects/loop-repeat/loop-while optimized probes: fixed point on second optimizer call
 optimizer imports from main/CF/deobf.bat: none
 ```
 
