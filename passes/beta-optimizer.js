@@ -470,6 +470,71 @@ function functionNameIsCaptured(functionBody, name) {
     return false;
 }
 
+function functionReturnsOnlyZeroValues(functionNode) {
+    if (functionNode?.type !== "FunctionDeclaration") return false;
+    let valid = true;
+    function visit(value, root = false) {
+        if (!valid || !value) return;
+        if (Array.isArray(value)) {
+            for (const child of value) visit(child, false);
+            return;
+        }
+        if (!isNode(value)) return;
+        if (!root && value.type === "FunctionDeclaration") return;
+        if (value.type === "ReturnStatement" && (value.arguments || []).length !== 0) {
+            valid = false;
+            return;
+        }
+        for (const key of Object.keys(value)) {
+            if (key === "range" || key === "loc") continue;
+            visit(value[key], false);
+        }
+    }
+    for (const statement of functionNode.body || []) visit(statement, false);
+    return valid;
+}
+
+function findZeroReturnPackedIifeForwarding(source, block, stats) {
+    for (let packIndex = 0; packIndex + 1 < block.length; packIndex++) {
+        const packStatement = block[packIndex];
+        const packInfo = directLocalInfo(packStatement);
+        if (!packInfo) continue;
+        const call = packedCallFromTable(packInfo.init);
+        if (!call || !Array.isArray(call.range) || call.base?.type !== "FunctionDeclaration") continue;
+        if (!functionReturnsOnlyZeroValues(call.base)) continue;
+
+        const returnStatement = block[packIndex + 1];
+        if (returnStatement?.type !== "ReturnStatement" || !Array.isArray(returnStatement.range)) continue;
+        const returnArgs = returnStatement.arguments || [];
+        if (returnArgs.length !== 1) continue;
+        const unpackCall = returnArgs[0];
+        if (!isStandaloneCall(unpackCall) || !isIdentifier(unpackCall.base, "unpack") || unpackCall.base.isLocal === true) continue;
+        const unpackArgs = unpackCall.arguments || [];
+        if (unpackArgs.length !== 1) continue;
+        const packUse = unpackArgs[0];
+        if (!isIdentifier(packUse, packInfo.name) || packUse.isLocal !== true) continue;
+
+        const refs = scanLaterReferences(block, packIndex, packInfo.name);
+        if (refs.captured || refs.redeclared || refs.writes.length || refs.reads.length !== 1) continue;
+        if (refs.reads[0].topIndex !== packIndex + 1 || refs.reads[0].node !== packUse) continue;
+
+        // The IIFE has no value-returning return path. A bare return or fallthrough
+        // produces zero values, so the compiler's { IIFE() } -> unpack(table)
+        // wrapper forwards the same zero-value result as a direct returned IIFE call.
+        stats.multiReturnTableCollapses++;
+        stats.packedReturnForwardersCollapsed++;
+        return {
+            compound: true,
+            edits: [
+                { start: packStatement.range[0], end: packStatement.range[1], replacement: "" },
+                { start: returnStatement.range[0], end: returnStatement.range[1], replacement: `return ${sourceOf(source, call)}` },
+            ],
+            kind: "zero-return-packed-iife-forwarding",
+        };
+    }
+    return null;
+}
+
 function findPackedCallUnpackForwarding(source, block, functionBody, stats) {
     for (let packIndex = 0; packIndex + 1 < block.length; packIndex++) {
         const packStatement = block[packIndex];
@@ -2557,6 +2622,8 @@ function findTransformEdit(source, ast, stats, budget = 1) {
             if (multiReturnEdit) return multiReturnEdit;
             const multiReturnForwardEdit = findPackedCallUnpackForwarding(source, block, functionBody, stats);
             if (multiReturnForwardEdit) return multiReturnForwardEdit;
+            const packedReturnForwardEdit = findZeroReturnPackedIifeForwarding(source, block, stats);
+            if (packedReturnForwardEdit) return packedReturnForwardEdit;
             const unusedReturnEdit = findUnusedMultiReturnTargetRename(source, block, stats);
             if (unusedReturnEdit) return unusedReturnEdit;
             const genericForEdit = findGenericForTupleInline(source, block, stats);
@@ -2687,6 +2754,7 @@ function optimizeBetaSource(source, options = {}) {
         bareReturnsRemoved: 0,
         multiReturnTableCollapses: 0,
         multiReturnForwardersCollapsed: 0,
+        packedReturnForwardersCollapsed: 0,
         multiReturnSlotsRecovered: 0,
         multiReturnPlaceholders: 0,
         multiReturnUnusedTargets: 0,

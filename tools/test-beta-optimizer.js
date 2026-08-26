@@ -222,6 +222,40 @@ consume(fn)`);
 assert(nonAdjacentGlobalBindingBarrier.source.includes("local fn = function"));
 assert.equal(nonAdjacentGlobalBindingBarrier.stats.smallFunctionInlines, 0);
 
+const zeroReturnPackedIifeForward = optimize(`local t = { (function()
+    while true do
+        if stop then break end
+        tick()
+    end
+end)() }
+return unpack(t)`);
+assert(!zeroReturnPackedIifeForward.source.includes("local t ="));
+assert(!zeroReturnPackedIifeForward.source.includes("unpack(t)"));
+assert(zeroReturnPackedIifeForward.source.includes("return (function()"));
+assert.equal(zeroReturnPackedIifeForward.stats.packedReturnForwardersCollapsed, 1);
+
+const bareReturnPackedIifeForward = optimize(`local t = { (function()
+    if flag then return end
+end)() }
+return unpack(t)`);
+assert(!bareReturnPackedIifeForward.source.includes("local t ="));
+assert.equal(bareReturnPackedIifeForward.stats.packedReturnForwardersCollapsed, 1);
+
+const nilReturnPackedIifeBarrier = optimize(`local t = { (function()
+    return nil
+end)() }
+return unpack(t)`);
+assert(nilReturnPackedIifeBarrier.source.includes("local t ="));
+assert(nilReturnPackedIifeBarrier.source.includes("return unpack(t)"));
+assert.equal(nilReturnPackedIifeBarrier.stats.packedReturnForwardersCollapsed, 0);
+
+const valueReturnPackedIifeBarrier = optimize(`local t = { (function()
+    return 1
+end)() }
+return unpack(t)`);
+assert(valueReturnPackedIifeBarrier.source.includes("local t ="));
+assert.equal(valueReturnPackedIifeBarrier.stats.packedReturnForwardersCollapsed, 0);
+
 const packedUnpackForward = optimize(`local sink = print
 local fn = function() return 1, 2, 3 end
 local t = { pcall(fn) }
