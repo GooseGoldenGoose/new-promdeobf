@@ -291,6 +291,42 @@ assert(!packedNestedLastArgumentForward.source.includes("unpack(t2)"));
 assert.equal(packedNestedLastArgumentForward.stats.multiReturnForwardersCollapsed, 2);
 assert.equal(packedNestedLastArgumentForward.stats.multiReturnTableCollapses, 2);
 
+const prometheusNamecallRecovery = optimize(`local obj = makeObject()
+local method = obj["SetAttribute"]
+local value = compute()
+method(obj, "Key", value)`);
+assert(!prometheusNamecallRecovery.source.includes("local method ="));
+assert(prometheusNamecallRecovery.source.includes('obj:SetAttribute("Key", value)'));
+assert.equal(prometheusNamecallRecovery.stats.namecallRecoveries, 1);
+
+const prometheusNamecallWrongSelfBarrier = optimize(`local obj = makeObject()
+local other = makeObject()
+local method = obj["SetAttribute"]
+method(other, "Key", 1)`);
+assert(prometheusNamecallWrongSelfBarrier.source.includes("local method ="));
+assert.equal(prometheusNamecallWrongSelfBarrier.stats.namecallRecoveries, 0);
+
+const prometheusNamecallBaseRebindBarrier = optimize(`local obj = makeObject()
+local method = obj["SetAttribute"]
+obj = other
+method(obj, "Key", 1)`);
+assert(prometheusNamecallBaseRebindBarrier.source.includes("local method ="));
+assert.equal(prometheusNamecallBaseRebindBarrier.stats.namecallRecoveries, 0);
+
+const prometheusNamecallInvalidMethodBarrier = optimize(`local obj = makeObject()
+local method = obj["not valid"]
+method(obj, 1)`);
+assert(prometheusNamecallInvalidMethodBarrier.source.includes("local method ="));
+assert.equal(prometheusNamecallInvalidMethodBarrier.stats.namecallRecoveries, 0);
+
+const prometheusNamecallCapturedBaseBarrier = optimize(`local obj = makeObject()
+local method = obj["SetAttribute"]
+local mutate = function() obj = other end
+mutate()
+method(obj, "Key", 1)`);
+assert(prometheusNamecallCapturedBaseBarrier.source.includes("local method ="));
+assert.equal(prometheusNamecallCapturedBaseBarrier.stats.namecallRecoveries, 0);
+
 const packedFinalArgumentEffectfulPrefixBarrier = optimize(`local sink = consume
 local t = { produce() }
 sink(before(), unpack(t))`);

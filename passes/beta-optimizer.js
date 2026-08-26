@@ -664,6 +664,65 @@ function findPackedCallUnpackSelfAssignment(source, block, functionBody, stats) 
     return null;
 }
 
+function namecallCaptureInfo(source, node) {
+    if (node?.type === "IndexExpression" && isIdentifier(node.base) && node.base.isLocal === true && node.index?.type === "StringLiteral") {
+        let methodName = typeof node.index.value === "string" ? node.index.value : null;
+        if (methodName === null) {
+            const raw = sourceOf(source, node.index).trim();
+            const match = raw.match(/^(?:"([A-Za-z_][A-Za-z0-9_]*)"|'([A-Za-z_][A-Za-z0-9_]*)')$/);
+            methodName = match?.[1] || match?.[2] || null;
+        }
+        if (!methodName || !/^[A-Za-z_][A-Za-z0-9_]*$/.test(methodName) || LUA_KEYWORDS.has(methodName)) return null;
+        return { base: node.base, methodName };
+    }
+    if (node?.type === "MemberExpression" && isIdentifier(node.base) && node.base.isLocal === true && isIdentifier(node.identifier)) {
+        const methodName = node.identifier.name;
+        if (!methodName || LUA_KEYWORDS.has(methodName)) return null;
+        return { base: node.base, methodName };
+    }
+    return null;
+}
+
+function findPrometheusNamecallRecovery(source, block, functionBody, stats) {
+    for (let methodIndex = 0; methodIndex < block.length; methodIndex++) {
+        const methodStatement = block[methodIndex];
+        const methodInfo = directLocalInfo(methodStatement);
+        if (!methodInfo || methodInfo.variable.typeAnnotation || !Array.isArray(methodStatement.range)) continue;
+        const capture = namecallCaptureInfo(source, methodInfo.init);
+        if (!capture) continue;
+
+        const refs = scanLaterReferences(block, methodIndex, methodInfo.name);
+        if (refs.captured || refs.redeclared || refs.writes.length || refs.reads.length !== 1) continue;
+        const read = refs.reads[0];
+        const call = read.parent;
+        if (read.key !== "base" || call?.type !== "CallExpression" || call.base !== read.node || !Array.isArray(call.range)) continue;
+        if (read.topIndex <= methodIndex) continue;
+
+        const args = call.arguments || [];
+        if (args.length < 1) continue;
+        const selfArg = args[0];
+        if (!isIdentifier(selfArg, capture.base.name) || selfArg.isLocal !== true) continue;
+
+        // Prometheus lowers `base:Method(args...)` to a captured method function
+        // followed by `method(base, args...)`. Recover the original namecall only
+        // when the lexical base binding cannot change before that sole call use.
+        if (scanWritesInStatements(block, methodIndex, read.topIndex, capture.base.name)) continue;
+        if (nestedFunctionWritesName(functionBody, capture.base.name)) continue;
+
+        const restArgs = args.slice(1).map(argument => sourceOf(source, argument)).join(", ");
+        stats.namecallRecoveries++;
+        return {
+            compound: true,
+            edits: [
+                { start: methodStatement.range[0], end: methodStatement.range[1], replacement: "" },
+                { start: call.range[0], end: call.range[1], replacement: `${sourceOf(source, capture.base)}:${capture.methodName}(${restArgs})` },
+            ],
+            kind: "prometheus-namecall-recovery",
+        };
+    }
+    return null;
+}
+
 function findGenericForTupleInline(source, block, stats) {
     for (let declarationIndex = 0; declarationIndex + 1 < block.length; declarationIndex++) {
         const declaration = block[declarationIndex];
@@ -2700,6 +2759,8 @@ function findTransformEdit(source, ast, stats, budget = 1) {
             if (packedReturnForwardEdit) return packedReturnForwardEdit;
             const multiReturnSelfAssignmentEdit = findPackedCallUnpackSelfAssignment(source, block, functionBody, stats);
             if (multiReturnSelfAssignmentEdit) return multiReturnSelfAssignmentEdit;
+            const namecallEdit = findPrometheusNamecallRecovery(source, block, functionBody, stats);
+            if (namecallEdit) return namecallEdit;
             const unusedReturnEdit = findUnusedMultiReturnTargetRename(source, block, stats);
             if (unusedReturnEdit) return unusedReturnEdit;
             const genericForEdit = findGenericForTupleInline(source, block, stats);
@@ -2832,6 +2893,7 @@ function optimizeBetaSource(source, options = {}) {
         multiReturnForwardersCollapsed: 0,
         packedReturnForwardersCollapsed: 0,
         multiReturnSelfAssignmentForwardersCollapsed: 0,
+        namecallRecoveries: 0,
         multiReturnSlotsRecovered: 0,
         multiReturnPlaceholders: 0,
         multiReturnUnusedTargets: 0,
