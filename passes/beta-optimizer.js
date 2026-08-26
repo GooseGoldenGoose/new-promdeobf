@@ -806,8 +806,28 @@ function findLoopConditionCollapse(source, block, stats) {
     return null;
 }
 
-function findEnvFold(source, block) {
-    const env = findEnvContext(block);
+function inheritedEnvContext(block, envName) {
+    if (!envName) return null;
+    const refs = { reads: [], writes: [], captured: false, redeclared: false };
+    for (let index = 0; index < block.length; index++) {
+        scanNameInNode(block[index], envName, refs, index, null, null, true);
+    }
+    // Any binding/write in this function can shadow or mutate the captured env.
+    // Captures by deeper closures are fine; those closures are checked separately.
+    if (refs.writes.length || refs.redeclared) return null;
+    const fakeFunction = { type: "Chunk", body: block };
+    if (functionHasSetfenv(fakeFunction)) return null;
+    return { name: envName, declarationIndex: -1, inherited: true };
+}
+
+function resolveEnvContext(block, inheritedEnvName = null) {
+    const own = findEnvContext(block);
+    if (own) return own;
+    return inheritedEnvContext(block, inheritedEnvName);
+}
+
+function findEnvFold(source, block, inheritedEnvName = null) {
+    const env = resolveEnvContext(block, inheritedEnvName);
     if (!env) return null;
     let found = null;
     function visit(node, parent = null, key = null) {
@@ -1210,27 +1230,33 @@ function childStatementBlocks(node) {
     return blocks;
 }
 
-function findFunctionBlocks(ast) {
-    const roots = [ast.body || []];
-    function visit(node) {
+function findFunctionRecords(ast) {
+    const root = { body: ast.body || [], parent: null };
+    const records = [root];
+    function visit(node, owner) {
         if (!node) return;
         if (Array.isArray(node)) {
-            for (const child of node) visit(child);
+            for (const child of node) visit(child, owner);
             return;
         }
         if (!isNode(node)) return;
         if (node.type === "FunctionDeclaration") {
-            if (Array.isArray(node.body)) roots.push(node.body);
-            for (const statement of node.body || []) visit(statement);
+            const record = { body: node.body || [], parent: owner };
+            records.push(record);
+            for (const statement of node.body || []) visit(statement, record);
             return;
         }
         for (const key of Object.keys(node)) {
             if (key === "range" || key === "loc") continue;
-            visit(node[key]);
+            visit(node[key], owner);
         }
     }
-    visit(ast.body || []);
-    return roots;
+    for (const statement of root.body) visit(statement, root);
+    return records;
+}
+
+function findFunctionBlocks(ast) {
+    return findFunctionRecords(ast).map(record => record.body);
 }
 
 function repeatConditionByBody(functionBody) {
@@ -1272,8 +1298,13 @@ function allBlocksForFunction(functionBody) {
 }
 
 function findTransformEdit(source, ast, stats) {
-    const functionRoots = findFunctionBlocks(ast);
-    for (const functionBody of functionRoots) {
+    const functionRecords = findFunctionRecords(ast);
+    const effectiveEnvNames = new Map();
+    for (const record of functionRecords) {
+        const functionBody = record.body;
+        const inheritedEnvName = record.parent ? (effectiveEnvNames.get(record.parent) || null) : null;
+        const envContext = resolveEnvContext(functionBody, inheritedEnvName);
+        effectiveEnvNames.set(record, envContext?.name || null);
         for (const block of allBlocksForFunction(functionBody)) {
             const repeatPrecheckEdit = findDiscardedRepeatPrecheck(source, block, stats);
             if (repeatPrecheckEdit) return repeatPrecheckEdit;
@@ -1290,7 +1321,7 @@ function findTransformEdit(source, ast, stats) {
             const copyChainEdit = findAdjacentCopyChainFold(source, block, stats);
             if (copyChainEdit) return copyChainEdit;
         }
-        const envEdit = findEnvFold(source, functionBody);
+        const envEdit = findEnvFold(source, functionBody, inheritedEnvName);
         if (envEdit) {
             stats.globalFolds++;
             return envEdit;

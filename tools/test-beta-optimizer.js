@@ -55,10 +55,50 @@ end
 local p = _env["print"]
 p("x")
 print(f ~= nil)`);
-assert(envCapturedButOuterFold.source.includes('local _env = getfenv()'));
-assert(envCapturedButOuterFold.source.includes('_env["warn"]'));
+assert(!envCapturedButOuterFold.source.includes('local _env = getfenv()'));
+assert(!envCapturedButOuterFold.source.includes('_env["warn"]'));
+assert(envCapturedButOuterFold.source.includes('return warn'));
 assert(envCapturedButOuterFold.source.includes('print("x")'));
 assert(!envCapturedButOuterFold.source.includes('local p = _env["print"]'));
+
+const envCapturedNestedSetfenvBarrier = optimize(`local _env = getfenv()
+local f = function()
+    setfenv(1, other)
+    return _env["print"]
+end
+return f`);
+assert(envCapturedNestedSetfenvBarrier.source.includes('local _env = getfenv()'));
+assert(envCapturedNestedSetfenvBarrier.source.includes('_env["print"]'));
+
+const envCapturedNestedWriteBarrier = optimize(`local _env = getfenv()
+local f = function()
+    _env = other
+    return _env["print"]
+end
+return f`);
+assert(envCapturedNestedWriteBarrier.source.includes('local _env = getfenv()'));
+assert(envCapturedNestedWriteBarrier.source.includes('_env["print"]'));
+
+const envCapturedNestedShadowBarrier = optimize(`local _env = getfenv()
+local f = function()
+    local _env = other
+    return _env["print"]
+end
+return f`);
+assert(envCapturedNestedShadowBarrier.source.includes('local _env = other'));
+assert(envCapturedNestedShadowBarrier.source.includes('_env["print"]'));
+
+const envCapturedDeepFold = optimize(`local _env = getfenv()
+local f = function()
+    local g = function()
+        return _env["warn"]
+    end
+    return g
+end
+return f`);
+assert(!envCapturedDeepFold.source.includes('local _env = getfenv()'));
+assert(!envCapturedDeepFold.source.includes('_env["warn"]'));
+assert(envCapturedDeepFold.source.includes('return warn'));
 const deadTable = optimize(`local args = { ... }\nprint("x")`);
 assert(!deadTable.source.includes("local args"));
 assert(deadTable.source.includes('print("x")'));

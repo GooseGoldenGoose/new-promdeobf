@@ -421,7 +421,7 @@ Current v1 behavior is conservative and iterative:
 - inlines single-use literals
 - inlines single-use local aliases only when the source local is not changed before the use; scoped parsing distinguishes globals from lexically local/captured outer bindings inside nested functions
 - folds adjacent one-use scalar compiler temporaries (identifier/literal unary/binary/logical trees) only into a proven leading evaluation position of the immediately following statement; loop snapshot boundaries still block movement, and a temp is never moved into the conditional right arm of `and`/`or`
-- proves the generated `local _env = getfenv()` header before folding static `_env["name"]` lookups to direct globals; captured uses no longer block other proven same-function `_env` folds, while writes/redeclarations and any `setfenv` in that function still block the fold
+- proves the generated `local _env = getfenv()` header before folding static `_env["name"]` lookups to direct globals; a proven `_env` binding now propagates down the actual nested-function parent chain so captured static lookups inside closures fold too. Each nested function independently fails closed on `_env` writes/redeclarations/shadowing or `setfenv`, while deeper read-only captures remain eligible
 - moves a direct global alias only across effect-free sibling statements and only into call-base position
 - collapses proven compiler multi-return table storage `local t = { call(...) }; local a = t[1]; local b = t[2]` back to one native multi-return assignment at the original call position
 - sparse used result slots are preserved with collision-free `__beta_unused_return_N` locals, so using only slot 2 becomes `local __beta_unused_return_1, b = call()` without relying on `_`
@@ -546,6 +546,7 @@ multi-return runtime probes: equal for successful cases
 loop/repeat side-effect parity probes: equal
 nested-function/repeat/scalar-temp LuaJIT parity: equal, including arithmetic metamethod timing and right-side and/or refusal
 current loop-effects/loop-repeat/loop-while optimized probes: fixed point on second optimizer call
+loop-effects nested captured `_env["print"]` lookups now fold through the proven outer env to direct `print(...)`; the dead `_env` header and one-use print aliases disappear. LuaJIT before/after output matches, and all three kept loop probes are fixed point
 fresh local-Prometheus loop-effects re-obfuscate -> beta-CF -> optimizer: 6 dead direct-nil cleanup writes removed, 4 adjacent opaque copy chains folded, and LuaJIT output matches readable source; current loop-effects/repeat/while probes also match readable source and are fixed point
 optimizer imports from main/CF/deobf.bat: none
 ```
