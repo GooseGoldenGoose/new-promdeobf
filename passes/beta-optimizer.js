@@ -1518,6 +1518,68 @@ function functionInlineReplacement(source, functionNode, read) {
     return `(${text})`;
 }
 
+function functionRuntimeBindingSummary(functionNode) {
+    const names = new Set();
+    let hasGlobalBinding = false;
+
+    function visit(value, parent = null, key = null) {
+        if (!value) return;
+        if (Array.isArray(value)) {
+            for (const child of value) visit(child, parent, key);
+            return;
+        }
+        if (!isNode(value)) return;
+
+        if (isIdentifier(value)) {
+            const declaration =
+                ((parent?.type === "LocalStatement" || parent?.type === "FunctionDeclaration") && (key === "variables" || key === "identifier" || key === "parameters")) ||
+                ((parent?.type === "ForNumericStatement" || parent?.type === "ForGenericStatement") && (key === "variable" || key === "variables"));
+            const syntaxOnly =
+                (parent?.type === "MemberExpression" && key === "identifier") ||
+                (parent?.type === "TableKeyString" && key === "key");
+            if (!declaration && !syntaxOnly) {
+                names.add(value.name);
+                if (value.isLocal !== true) hasGlobalBinding = true;
+            }
+            return;
+        }
+
+        for (const childKey of Object.keys(value)) {
+            if (childKey === "range" || childKey === "loc") continue;
+            visit(value[childKey], value, childKey);
+        }
+    }
+
+    visit(functionNode);
+    return { names, hasGlobalBinding };
+}
+
+function functionCanMoveToLaterSameBlockUse(block, declarationIndex, useIndex, functionNode) {
+    if (useIndex === declarationIndex + 1) return true;
+    if (useIndex <= declarationIndex) return false;
+
+    const bindings = functionRuntimeBindingSummary(functionNode);
+    // A later-created closure can inherit a different Lua 5.1/Luau environment if
+    // arbitrary intervening code changes the caller environment. Refuse movement
+    // whenever the closure actually depends on global/environment-backed names.
+    if (bindings.hasGlobalBinding) return false;
+
+    // Moving the function text past a direct same-block local declaration can
+    // silently rebind an upvalue reference to the newer shadowing local. Only
+    // declarations whose names are referenced by the function are barriers.
+    for (let index = declarationIndex + 1; index < useIndex; index++) {
+        const statement = block[index];
+        if (statement?.type === "LocalStatement") {
+            for (const variable of statement.variables || []) {
+                if (isIdentifier(variable) && bindings.names.has(variable.name)) return false;
+            }
+        } else if (statement?.type === "FunctionDeclaration" && isIdentifier(statement.identifier)) {
+            if (bindings.names.has(statement.identifier.name)) return false;
+        }
+    }
+    return true;
+}
+
 function isScalarTempExpression(node) {
     if (isLiteral(node) || isIdentifier(node)) return true;
     if (node?.type === "UnaryExpression") return isScalarTempExpression(node.argument);
@@ -1605,11 +1667,13 @@ function tryOptimizeLocal(source, block, index, stats, mode = "inline", tailNode
 
     if (info.init?.type === "FunctionDeclaration" && !info.init.identifier) {
         if (effectiveFunctionCodeLines(source, info.init) > MAX_INLINE_FUNCTION_CODE_LINES) return null;
-        // Keep closure creation in the same statement boundary. This avoids moving
-        // the function across declarations/effects that could change lexical name
-        // resolution or allocation timing. A loop header would recreate it per
-        // iteration, so repeated-evaluation statements remain a hard barrier.
-        if (read.topIndex !== index + 1) return null;
+        // Adjacent use is always preferred. Non-adjacent same-block movement is
+        // allowed only when every runtime name in the closure is lexical/local and
+        // no intervening direct local declaration can shadow one of those names.
+        // This covers compiler scaffolding such as a captured flag initialized
+        // between closure creation and its sole pcall use without changing binding
+        // identity. Loop headers remain a repeated-evaluation barrier.
+        if (!functionCanMoveToLaterSameBlockUse(block, index, read.topIndex, info.init)) return null;
         if (isRepeatedEvaluationStatement(readTopStatement)) return null;
         stats.singleUseInlines++;
         stats.smallFunctionInlines++;

@@ -188,8 +188,39 @@ const nonAdjacentFunction = optimize(`local fn = function()
 end
 sideEffect()
 consume(fn)`);
-assert(nonAdjacentFunction.source.includes("local fn = function"));
-assert.equal(nonAdjacentFunction.stats.smallFunctionInlines, 0);
+assert(!nonAdjacentFunction.source.includes("local fn = function"));
+assert(nonAdjacentFunction.source.includes("function()"));
+assert.equal(nonAdjacentFunction.stats.smallFunctionInlines, 1);
+
+const nonAdjacentCapturedLocalFunction = optimize(`local flag = true
+local fn = function()
+    flag = true
+end
+local unrelated = 1
+flag = false
+local ok = pcall(fn)
+print(ok, flag, unrelated)`);
+assert(!nonAdjacentCapturedLocalFunction.source.includes("local fn = function"));
+assert(nonAdjacentCapturedLocalFunction.source.includes("pcall(function()"));
+assert.equal(nonAdjacentCapturedLocalFunction.stats.smallFunctionInlines, 1);
+
+const nonAdjacentLocalShadowBarrier = optimize(`local value = 1
+local fn = function()
+    return value
+end
+local value = 2
+print(value)
+consume(fn, value)`);
+assert(nonAdjacentLocalShadowBarrier.source.includes("local fn = function"));
+assert.equal(nonAdjacentLocalShadowBarrier.stats.smallFunctionInlines, 0);
+
+const nonAdjacentGlobalBindingBarrier = optimize(`local fn = function()
+    return globalValue
+end
+sideEffect()
+consume(fn)`);
+assert(nonAdjacentGlobalBindingBarrier.source.includes("local fn = function"));
+assert.equal(nonAdjacentGlobalBindingBarrier.stats.smallFunctionInlines, 0);
 
 const packedUnpackForward = optimize(`local sink = print
 local fn = function() return 1, 2, 3 end
@@ -731,8 +762,11 @@ const deferredLocalCaptureBarrier = optimize(`local x
 local f = function() return x end
 x = value
 print(f())`);
-assert(/^local x\s*$/m.test(deferredLocalCaptureBarrier.source));
-assert(deferredLocalCaptureBarrier.source.includes("x = value"));
+assert(!/^local x\s*$/m.test(deferredLocalCaptureBarrier.source));
+assert(deferredLocalCaptureBarrier.source.includes("local x = value"));
+assert(deferredLocalCaptureBarrier.source.includes("function() return x end"));
+assert.equal(deferredLocalCaptureBarrier.stats.smallFunctionInlines, 1);
+assert.equal(deferredLocalCaptureBarrier.stats.deferredLocalInitializersFolded, 1);
 
 const deferredLocalSelfReadBarrier = optimize(`local x
 x = x or fallback
