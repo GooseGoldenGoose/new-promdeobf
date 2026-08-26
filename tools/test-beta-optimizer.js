@@ -154,14 +154,51 @@ assert(packedAcrossEffect.source.includes("local a = f()"));
 assert(packedAcrossEffect.source.indexOf("f()") < packedAcrossEffect.source.indexOf("g()"));
 assert(packedAcrossEffect.source.indexOf("g()") < packedAcrossEffect.source.indexOf("print(a)"));
 
+const tinyFunctionWithNoise = optimize(`local fn = function(...)
+${Array.from({ length: 140 }, (_, index) => index % 2 === 0 ? "    -- generated comment" : "").join("\n")}
+    return 1, 2, 3
+end
+print(pcall(fn))`);
+assert(!tinyFunctionWithNoise.source.includes("local fn = function"));
+assert(tinyFunctionWithNoise.source.includes("pcall(function(...)"));
+assert(tinyFunctionWithNoise.source.includes("return 1, 2, 3"));
+assert.equal(tinyFunctionWithNoise.stats.smallFunctionInlines, 1);
+
+const exactLimitFunctionBody = Array.from({ length: 97 }, (_, index) => `    touch(${index})`).join("\n");
+const exactLimitFunction = optimize(`local fn = function()
+${exactLimitFunctionBody}
+    return 1
+end
+consume(fn)`);
+assert(!exactLimitFunction.source.includes("local fn = function"));
+assert(exactLimitFunction.source.includes("function()"));
+assert.equal(exactLimitFunction.stats.smallFunctionInlines, 1);
+
+const oversizedFunctionBody = Array.from({ length: 100 }, (_, index) => `    touch(${index})`).join("\n");
+const oversizedFunction = optimize(`local fn = function()
+${oversizedFunctionBody}
+    return 1
+end
+consume(fn)`);
+assert(oversizedFunction.source.includes("local fn = function"));
+assert.equal(oversizedFunction.stats.smallFunctionInlines, 0);
+
+const nonAdjacentFunction = optimize(`local fn = function()
+    return 1
+end
+sideEffect()
+consume(fn)`);
+assert(nonAdjacentFunction.source.includes("local fn = function"));
+assert.equal(nonAdjacentFunction.stats.smallFunctionInlines, 0);
+
 const packedUnpackForward = optimize(`local sink = print
 local fn = function() return 1, 2, 3 end
 local t = { pcall(fn) }
 sink(unpack(t))`);
 assert(!packedUnpackForward.source.includes("local t ="));
 assert(!packedUnpackForward.source.includes("unpack(t)"));
-assert(packedUnpackForward.source.includes("pcall(fn)"));
-assert(!packedUnpackForward.source.includes("{ pcall(fn) }"));
+assert(packedUnpackForward.source.includes("pcall(function()"));
+assert(!packedUnpackForward.source.includes("{ pcall("));
 assert.equal(packedUnpackForward.stats.multiReturnForwardersCollapsed, 1);
 assert.equal(packedUnpackForward.stats.multiReturnTableCollapses, 1);
 
@@ -171,7 +208,7 @@ local t = { pcall(fn) }
 local dead = sink(unpack(t))`);
 assert(!packedUnpackDeadResultForward.source.includes("local t ="));
 assert(!packedUnpackDeadResultForward.source.includes("unpack(t)"));
-assert(packedUnpackDeadResultForward.source.includes("pcall(fn)"));
+assert(packedUnpackDeadResultForward.source.includes("pcall(function()"));
 assert.equal(packedUnpackDeadResultForward.stats.multiReturnForwardersCollapsed, 1);
 
 const packedUnpackExtraArgumentBarrier = optimize(`local sink = print
@@ -207,8 +244,8 @@ local t = { pcall(fn) }
 local ok = t[1]
 local err = t[2]
 print(ok, err)`);
-assert(packedPcall.source.includes("local ok, err = pcall(fn)"));
-assert(!packedPcall.source.includes("{ pcall(fn) }"));
+assert(packedPcall.source.includes("local ok, err = pcall(function()"));
+assert(!packedPcall.source.includes("{ pcall("));
 assert(!packedPcall.source.includes("t[1]"));
 assert(!packedPcall.source.includes("t[2]"));
 
@@ -216,7 +253,7 @@ const packedPcallOnlySecond = optimize(`local fn = function() return 1 / "hejsks
 local t = { pcall(fn) }
 local err = t[2]
 print(err)`);
-assert(/local __beta_unused_return_\d+, err = pcall\(fn\)/.test(packedPcallOnlySecond.source));
+assert(/local __beta_unused_return_\d+, err = pcall\(function\(\)/.test(packedPcallOnlySecond.source));
 assert(!packedPcallOnlySecond.source.includes("t[2]"));
 
 const packedMethodCall = optimize(`local t = { obj:run() }
@@ -794,9 +831,11 @@ assert.equal(adjacentCallCopyChain.stats.adjacentCopyChainsFolded, 1);
 const adjacentClosureCopyChain = optimize(`local temp = function() return 7 end
 local real = temp
 print(real())`);
-assert(adjacentClosureCopyChain.source.includes("local real = function() return 7 end"));
+assert(!adjacentClosureCopyChain.source.includes("local real = function() return 7 end"));
 assert(!adjacentClosureCopyChain.source.includes("local temp"));
+assert(adjacentClosureCopyChain.source.includes("function() return 7 end"));
 assert.equal(adjacentClosureCopyChain.stats.adjacentCopyChainsFolded, 1);
+assert.equal(adjacentClosureCopyChain.stats.smallFunctionInlines, 1);
 
 const copyChainLaterTempUseBarrier = optimize(`local temp = thing
 local real = temp
@@ -810,7 +849,8 @@ local real = temp
 local f = function() return temp end
 print(real, f())`);
 assert(copyChainCaptureBarrier.source.includes("local temp = thing"));
-assert(copyChainCaptureBarrier.source.includes("local real = temp"));
+assert(copyChainCaptureBarrier.source.includes("function() return temp end"));
+assert.equal(copyChainCaptureBarrier.stats.adjacentCopyChainsFolded, 0);
 
 const nestedBareReturnMustStay = optimize(`local x = 1
 if cond then

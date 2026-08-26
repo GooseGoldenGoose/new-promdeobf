@@ -1418,6 +1418,48 @@ function findDeferredLocalInitializationBatch(source, block, stats, limit = 128)
     return { compound: true, edits, transformCount, kind: transformCount === 1 ? "deferred-local-initialization" : "deferred-local-initialization-batch" };
 }
 
+const MAX_INLINE_FUNCTION_CODE_LINES = 100;
+
+function collectCommentRanges(node, out = []) {
+    if (!node) return out;
+    if (Array.isArray(node)) {
+        for (const child of node) collectCommentRanges(child, out);
+        return out;
+    }
+    if (!isNode(node)) return out;
+    if (node.type === "CommentStatement") {
+        if (Array.isArray(node.range)) out.push(node.range);
+        return out;
+    }
+    for (const key of Object.keys(node)) {
+        if (key === "range" || key === "loc") continue;
+        collectCommentRanges(node[key], out);
+    }
+    return out;
+}
+
+function effectiveFunctionCodeLines(source, functionNode) {
+    if (functionNode?.type !== "FunctionDeclaration" || !Array.isArray(functionNode.range)) return Infinity;
+    const [start, end] = functionNode.range;
+    const chars = [...source.slice(start, end)];
+    for (const range of collectCommentRanges(functionNode)) {
+        const from = Math.max(start, range[0]) - start;
+        const to = Math.min(end, range[1]) - start;
+        for (let index = from; index < to; index++) {
+            if (chars[index] !== "\n" && chars[index] !== "\r") chars[index] = " ";
+        }
+    }
+    return chars.join("").split(/\r?\n/).reduce((count, line) => count + (line.trim() ? 1 : 0), 0);
+}
+
+function functionInlineReplacement(source, functionNode, read) {
+    const text = sourceOf(source, functionNode);
+    // Anonymous functions are already valid as ordinary call arguments. Keep that
+    // common recovered-source form clean: pcall(function(...) ... end).
+    if (read.parent?.type === "CallExpression" && read.key === "arguments") return text;
+    return `(${text})`;
+}
+
 function isScalarTempExpression(node) {
     if (isLiteral(node) || isIdentifier(node)) return true;
     if (node?.type === "UnaryExpression") return isScalarTempExpression(node.argument);
@@ -1471,8 +1513,9 @@ function tryOptimizeLocal(source, block, index, stats, mode = "inline", tailNode
     if (!info) return null;
     const refs = scanLaterReferences(block, index, info.name, tailNode);
     if (refs.captured || refs.redeclared || refs.writes.length) return null;
-    const sameBlockRefs = mode === "inline" ? scanLaterReferencesSameBlock(block, index, info.name) : refs;
-    if (mode === "inline" && sameBlockRefs.reads.length !== refs.reads.length) return null;
+    const inlineMode = mode === "inline" || mode === "function-inline";
+    const sameBlockRefs = inlineMode ? scanLaterReferencesSameBlock(block, index, info.name) : refs;
+    if (inlineMode && sameBlockRefs.reads.length !== refs.reads.length) return null;
 
     if (refs.reads.length === 0) {
         if (mode !== "dead") return null;
@@ -1501,6 +1544,27 @@ function tryOptimizeLocal(source, block, index, stats, mode = "inline", tailNode
     const read = sameBlockRefs.reads[0];
     if (!Array.isArray(read.node.range)) return null;
     const readTopStatement = block[read.topIndex];
+
+    if (info.init?.type === "FunctionDeclaration" && !info.init.identifier) {
+        if (effectiveFunctionCodeLines(source, info.init) > MAX_INLINE_FUNCTION_CODE_LINES) return null;
+        // Keep closure creation in the same statement boundary. This avoids moving
+        // the function across declarations/effects that could change lexical name
+        // resolution or allocation timing. A loop header would recreate it per
+        // iteration, so repeated-evaluation statements remain a hard barrier.
+        if (read.topIndex !== index + 1) return null;
+        if (isRepeatedEvaluationStatement(readTopStatement)) return null;
+        stats.singleUseInlines++;
+        stats.smallFunctionInlines++;
+        return {
+            compound: true,
+            edits: [
+                { start: statement.range[0], end: statement.range[1], replacement: "" },
+                { start: read.node.range[0], end: read.node.range[1], replacement: functionInlineReplacement(source, info.init, read) }
+            ],
+            kind: "small-function-inline"
+        };
+    }
+    if (mode === "function-inline") return null;
 
     // A source local declared outside a loop is a one-time snapshot even when the
     // value is literal. Keep that source shape instead of moving it into repeated
@@ -1671,6 +1735,7 @@ function localOptimizationDeltaStats() {
     return {
         globalAliasInlines: 0,
         singleUseInlines: 0,
+        smallFunctionInlines: 0,
         deadLocals: 0,
         deadCallResults: 0,
     };
@@ -1679,6 +1744,7 @@ function localOptimizationDeltaStats() {
 function mergeLocalOptimizationStats(stats, delta) {
     stats.globalAliasInlines += delta.globalAliasInlines;
     stats.singleUseInlines += delta.singleUseInlines;
+    stats.smallFunctionInlines += delta.smallFunctionInlines;
     stats.deadLocals += delta.deadLocals;
     stats.deadCallResults += delta.deadCallResults;
 }
@@ -1736,6 +1802,41 @@ function findLocalOptimizationBatchAcrossBlocks(source, blocks, stats, limit = 1
     }
     if (!transformCount) return null;
     return { compound: true, edits, transformCount, kind: transformCount === 1 ? "local-inline" : "local-inline-cross-block-batch" };
+}
+
+function findSmallFunctionInlineBatch(source, block, stats, limit = 128) {
+    if (limit <= 0) return null;
+    const selectedEdits = [];
+    let transformCount = 0;
+    for (let index = 0; index < block.length && transformCount < limit; index++) {
+        const trialStats = localOptimizationDeltaStats();
+        const candidate = tryOptimizeLocal(source, block, index, trialStats, "function-inline");
+        if (!candidate) continue;
+        const parts = editParts(candidate);
+        if (!parts.length || parts.some(part => selectedEdits.some(selected => textEditRangesOverlap(part, selected)))) continue;
+        selectedEdits.push(...parts);
+        mergeLocalOptimizationStats(stats, trialStats);
+        transformCount++;
+    }
+    if (!transformCount) return null;
+    return { compound: true, edits: selectedEdits, transformCount, kind: transformCount === 1 ? "small-function-inline" : "small-function-inline-batch" };
+}
+
+function findSmallFunctionInlineBatchAcrossBlocks(source, ast, stats, limit = 128) {
+    const edits = [];
+    let transformCount = 0;
+    for (const functionBody of findFunctionBlocks(ast)) {
+        for (const block of allBlocksForFunction(functionBody)) {
+            if (transformCount >= limit) break;
+            const batch = findSmallFunctionInlineBatch(source, block, stats, limit - transformCount);
+            if (!batch) continue;
+            edits.push(...editParts(batch));
+            transformCount += batch.transformCount || 1;
+        }
+        if (transformCount >= limit) break;
+    }
+    if (!transformCount) return null;
+    return { compound: true, edits, transformCount, kind: transformCount === 1 ? "small-function-inline-final" : "small-function-inline-final-batch" };
 }
 
 function findTransformEdit(source, ast, stats, budget = 1) {
@@ -1833,7 +1934,12 @@ function findDeadCleanupBatch(source, ast, stats, limit = 128) {
             }
         }
     }
-    if (!transformCount) return null;
+    if (!transformCount) {
+        // Dead cleanup may remove compiler storage between a tiny closure and its
+        // sole use. Once no dead edit remains in this AST, allow only the dedicated
+        // adjacent tiny-function inline; do not return to general transforms.
+        return findSmallFunctionInlineBatchAcrossBlocks(source, ast, stats, limit);
+    }
     return { compound: true, edits, transformCount, kind: transformCount === 1 ? "dead-cleanup" : "dead-cleanup-batch" };
 }
 
@@ -1853,6 +1959,7 @@ function optimizeBetaSource(source, options = {}) {
         globalFolds: 0,
         globalAliasInlines: 0,
         singleUseInlines: 0,
+        smallFunctionInlines: 0,
         directNilCleanupWritesRemoved: 0,
         adjacentCopyChainsFolded: 0,
         adjacentIndexBaseAliasesFolded: 0,

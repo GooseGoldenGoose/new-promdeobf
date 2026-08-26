@@ -26,6 +26,7 @@ function main() {
     console.log(`Global folds: ${result.stats.globalFolds}`);
     console.log(`Global alias inlines: ${result.stats.globalAliasInlines}`);
     console.log(`Single-use inlines: ${result.stats.singleUseInlines}`);
+    console.log(`Small function inlines: ${result.stats.smallFunctionInlines}`);
     console.log(`Direct nil cleanup writes removed: ${result.stats.directNilCleanupWritesRemoved}`);
     console.log(`Adjacent copy chains folded: ${result.stats.adjacentCopyChainsFolded}`);
     console.log(`Adjacent index base aliases folded: ${result.stats.adjacentIndexBaseAliasesFolded}`);
