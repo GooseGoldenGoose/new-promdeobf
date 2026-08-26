@@ -847,8 +847,141 @@ function directAssignmentInfo(statement) {
     return { name: variables[0].name, variable: variables[0], init: init[0] };
 }
 
+function directNilAssignmentInfo(statement) {
+    const info = directAssignmentInfo(statement);
+    if (!info || info.init?.type !== "NilLiteral" || info.variable.isLocal !== true) return null;
+    return info;
+}
+
 function isScopeTransferBarrier(statement) {
     return statement?.type === "GotoStatement" || statement?.type === "LabelStatement";
+}
+
+function functionHasScopeTransfer(functionBody) {
+    let found = false;
+    function visit(value) {
+        if (found || !value) return;
+        if (Array.isArray(value)) {
+            for (const child of value) visit(child);
+            return;
+        }
+        if (!isNode(value)) return;
+        if (value.type === "FunctionDeclaration") return;
+        if (isScopeTransferBarrier(value)) {
+            found = true;
+            return;
+        }
+        for (const key of Object.keys(value)) {
+            if (key === "range" || key === "loc") continue;
+            visit(value[key]);
+        }
+    }
+    for (const statement of functionBody) visit(statement);
+    return found;
+}
+
+function functionCapturesName(functionBody, name) {
+    let captured = false;
+    function visit(value) {
+        if (captured || !value) return;
+        if (Array.isArray(value)) {
+            for (const child of value) visit(child);
+            return;
+        }
+        if (!isNode(value)) return;
+        if (value.type === "FunctionDeclaration") {
+            if (containsNameRaw(value, name)) captured = true;
+            return;
+        }
+        for (const key of Object.keys(value)) {
+            if (key === "range" || key === "loc") continue;
+            visit(value[key]);
+        }
+    }
+    for (const statement of functionBody) visit(statement);
+    return captured;
+}
+
+function hasPriorDirectLocalDeclaration(functionBody, beforeIndex, name) {
+    for (let index = 0; index < beforeIndex; index++) {
+        const statement = functionBody[index];
+        if (statement?.type !== "LocalStatement") continue;
+        for (const variable of statement.variables || []) {
+            if (isIdentifier(variable, name)) return true;
+        }
+    }
+    return false;
+}
+
+function findPreFoldDeadNilAssignment(source, functionBody, stats) {
+    // This is intentionally a pre-fold-only cleanup. A direct final `x = nil`
+    // emitted as lifetime cleanup can be deleted when its value is never observed.
+    // Restrict it to a function's root block; nested control-flow liveness needs CFG
+    // proof and therefore fails closed here.
+    if (functionHasScopeTransfer(functionBody)) return null;
+
+    for (let index = functionBody.length - 1; index >= 0; index--) {
+        const statement = functionBody[index];
+        const info = directNilAssignmentInfo(statement);
+        if (!info) continue;
+        // `isLocal` also covers an upvalue in the parser. Require an actual prior
+        // declaration in this function root so an outer captured binding can never
+        // be mistaken for disposable local lifetime cleanup.
+        if (!hasPriorDirectLocalDeclaration(functionBody, index, info.name)) continue;
+        if (functionCapturesName(functionBody, info.name)) continue;
+
+        const refs = scanLaterReferences(functionBody, index, info.name);
+        if (refs.reads.length || refs.captured || refs.redeclared) continue;
+
+        stats.directNilCleanupWritesRemoved++;
+        return {
+            start: statement.range[0],
+            end: statement.range[1],
+            replacement: "",
+            kind: "dead-direct-nil-cleanup",
+        };
+    }
+    return null;
+}
+
+function findAdjacentCopyChainFold(source, block, stats) {
+    for (let index = 0; index + 1 < block.length; index++) {
+        const producerStatement = block[index];
+        const consumerStatement = block[index + 1];
+        const producer = directLocalInfo(producerStatement);
+        const consumer = directLocalInfo(consumerStatement);
+        if (!producer || !consumer || !isIdentifier(consumer.init, producer.name)) continue;
+        // Let the existing literal/identifier alias rules keep their established
+        // loop-snapshot behavior. This copy-chain pass is for opaque producer
+        // values (calls/tables/closures/indexing/etc.) that cannot otherwise inline.
+        if (isLiteral(producer.init) || isIdentifier(producer.init)) continue;
+        if (consumer.init.isLocal !== true) continue;
+        if (producer.variable.typeAnnotation || consumer.variable.typeAnnotation) continue;
+        if (!Array.isArray(producer.variable.range) || !Array.isArray(consumerStatement.range)) continue;
+
+        // The temporary must exist only to transfer this exact value into the next
+        // local. Renaming the producer binding keeps arbitrary RHS evaluation at the
+        // original position, so calls/tables/closures retain timing and identity.
+        const refs = scanLaterReferences(block, index, producer.name);
+        if (refs.captured || refs.redeclared || refs.writes.length || refs.reads.length !== 1) continue;
+        const read = refs.reads[0];
+        if (read.topIndex !== index + 1 || read.node !== consumer.init) continue;
+
+        stats.adjacentCopyChainsFolded++;
+        return {
+            compound: true,
+            edits: [
+                {
+                    start: producer.variable.range[0],
+                    end: producer.variable.range[1],
+                    replacement: consumer.name,
+                },
+                { start: consumerStatement.range[0], end: consumerStatement.range[1], replacement: "" },
+            ],
+            kind: "adjacent-copy-chain",
+        };
+    }
+    return null;
 }
 
 function findDeferredLocalInitialization(source, block, stats) {
@@ -1154,6 +1287,8 @@ function findTransformEdit(source, ast, stats) {
             if (genericForEdit) return genericForEdit;
             const deferredLocalEdit = findDeferredLocalInitialization(source, block, stats);
             if (deferredLocalEdit) return deferredLocalEdit;
+            const copyChainEdit = findAdjacentCopyChainFold(source, block, stats);
+            if (copyChainEdit) return copyChainEdit;
         }
         const envEdit = findEnvFold(source, functionBody);
         if (envEdit) {
@@ -1166,6 +1301,15 @@ function findTransformEdit(source, ast, stats) {
                 if (edit) return edit;
             }
         }
+    }
+    return null;
+}
+
+function findPreFoldCleanupEdit(source, ast, stats) {
+    const functionRoots = findFunctionBlocks(ast);
+    for (const functionBody of functionRoots) {
+        const edit = findPreFoldDeadNilAssignment(source, functionBody, stats);
+        if (edit) return edit;
     }
     return null;
 }
@@ -1204,6 +1348,8 @@ function optimizeBetaSource(source, options = {}) {
         globalFolds: 0,
         globalAliasInlines: 0,
         singleUseInlines: 0,
+        directNilCleanupWritesRemoved: 0,
+        adjacentCopyChainsFolded: 0,
         deferredLocalInitializersFolded: 0,
         deadLocals: 0,
         deadCallResults: 0,
@@ -1221,6 +1367,17 @@ function optimizeBetaSource(source, options = {}) {
     };
     let current = source;
     let round = 0;
+
+    // Phase 0: remove only proven dead direct-nil lifetime cleanup before any
+    // folding. Do not revisit this phase later: a source-style `local t = nil;
+    // local x = t` may legitimately fold to `local x = nil` and must remain.
+    for (; round < maxRounds; round++) {
+        const ast = parseLua(current, `<beta-optimizer-pre-cleanup-${round + 1}>`);
+        const edit = findPreFoldCleanupEdit(current, ast, stats);
+        if (!edit) break;
+        current = applyTextEdits(current, [edit]);
+        stats.rounds++;
+    }
 
     // Phase 1: structural recovery and safe inlining to a fixed point.
     for (; round < maxRounds; round++) {

@@ -413,7 +413,9 @@ node tools/beta-optimizer.js <final-cf.lua> [optimized.lua]
 ```
 
 Current v1 behavior is conservative and iterative:
+- before any folding, removes only direct `x = nil` lifetime-cleanup writes in a function root block when `x` has a prior local declaration in that same function root, the nil value is never read later, the binding is not captured, and no goto/label exists in that function; parser-local upvalue writes therefore fail closed. This pre-cleanup phase is never rerun after folding, so source-style `local temp = nil; local real = temp` can still fold normally without being mistaken for pre-fold cleanup
 - removes dead single locals only when the initializer is proven effect-free, and removes unused uninitialized single-local declarations
+- folds an adjacent compiler copy chain `local temp = thing; local real = temp` to `local real = thing` by renaming the producer binding at its original evaluation point and deleting the transfer local; arbitrary calls/tables/closures are allowed because timing and identity stay unchanged, but any extra temp read/write/capture/redeclaration fails closed
 - folds a plain deferred local initialization `local x; ...; x = value` to `...; local x = value` only in the same block when no read/write/capture/redeclaration of `x` occurs before that first assignment, the assignment target is parser-confirmed as the same lexical local, the RHS does not reference `x`, and no goto/label scope-transfer boundary is crossed
 - preserves an unused call's effect by changing `local x = f()` into `f()` instead of deleting the call
 - inlines single-use literals
@@ -544,7 +546,7 @@ multi-return runtime probes: equal for successful cases
 loop/repeat side-effect parity probes: equal
 nested-function/repeat/scalar-temp LuaJIT parity: equal, including arithmetic metamethod timing and right-side and/or refusal
 current loop-effects/loop-repeat/loop-while optimized probes: fixed point on second optimizer call
-fresh local-Prometheus loop-effects re-obfuscate -> beta-CF -> optimizer: 12 deferred local initializers folded; LuaJIT output matches readable source after repeat-condition liveness fix
+fresh local-Prometheus loop-effects re-obfuscate -> beta-CF -> optimizer: 6 dead direct-nil cleanup writes removed, 4 adjacent opaque copy chains folded, and LuaJIT output matches readable source; current loop-effects/repeat/while probes also match readable source and are fixed point
 optimizer imports from main/CF/deobf.bat: none
 ```
 

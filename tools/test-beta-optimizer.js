@@ -624,4 +624,77 @@ assert(repeatConditionLocalUse.source.includes("local done = x >= 2"));
 assert(repeatConditionLocalUse.source.includes("until done"));
 assert.equal(repeatConditionLocalUse.stats.deferredLocalInitializersFolded >= 1, true);
 
+
+const directNilCleanupBeforeFold = optimize(`local temp = makeValue()
+local real = temp
+use(real)
+real = nil`);
+assert(!directNilCleanupBeforeFold.source.includes("real = nil"));
+assert(directNilCleanupBeforeFold.source.includes("local real = makeValue()"));
+assert(!directNilCleanupBeforeFold.source.includes("local temp"));
+assert.equal(directNilCleanupBeforeFold.stats.directNilCleanupWritesRemoved, 1);
+assert.equal(directNilCleanupBeforeFold.stats.adjacentCopyChainsFolded, 1);
+
+const observedDirectNilMustStay = optimize(`local x = 1
+x = nil
+print(x)`);
+assert(observedDirectNilMustStay.source.includes("x = nil"));
+
+const capturedDirectNilMustStay = optimize(`local x = 1
+local f = function() return x end
+x = nil
+return f`);
+assert(capturedDirectNilMustStay.source.includes("x = nil"));
+
+const nestedDirectNilFailsClosed = optimize(`local x = 1
+if cond then
+    x = nil
+end
+print(x)`);
+assert(nestedDirectNilFailsClosed.source.includes("x = nil"));
+
+const upvalueDirectNilMustStay = optimize(`local x = 1
+local f = function()
+    x = nil
+end
+f()
+print(x)`);
+assert(upvalueDirectNilMustStay.source.includes("x = nil"));
+assert.equal(upvalueDirectNilMustStay.stats.directNilCleanupWritesRemoved, 0);
+
+const sourceStyleNilTransferStaysNil = optimize(`local temp = nil
+local real = temp
+print(real)`);
+assert(sourceStyleNilTransferStaysNil.source.includes("print(nil)"));
+assert(!sourceStyleNilTransferStaysNil.source.includes("local temp"));
+assert.equal(sourceStyleNilTransferStaysNil.stats.directNilCleanupWritesRemoved, 0);
+
+const adjacentCallCopyChain = optimize(`local temp = makeValue()
+local real = temp
+consume(real)`);
+assert(adjacentCallCopyChain.source.includes("local real = makeValue()"));
+assert(!adjacentCallCopyChain.source.includes("local temp"));
+assert.equal(adjacentCallCopyChain.stats.adjacentCopyChainsFolded, 1);
+
+const adjacentClosureCopyChain = optimize(`local temp = function() return 7 end
+local real = temp
+print(real())`);
+assert(adjacentClosureCopyChain.source.includes("local real = function() return 7 end"));
+assert(!adjacentClosureCopyChain.source.includes("local temp"));
+assert.equal(adjacentClosureCopyChain.stats.adjacentCopyChainsFolded, 1);
+
+const copyChainLaterTempUseBarrier = optimize(`local temp = thing
+local real = temp
+print(temp, real)`);
+assert(copyChainLaterTempUseBarrier.source.includes("local temp = thing"));
+assert(copyChainLaterTempUseBarrier.source.includes("print(temp, temp)"));
+assert.equal(copyChainLaterTempUseBarrier.stats.adjacentCopyChainsFolded, 0);
+
+const copyChainCaptureBarrier = optimize(`local temp = thing
+local real = temp
+local f = function() return temp end
+print(real, f())`);
+assert(copyChainCaptureBarrier.source.includes("local temp = thing"));
+assert(copyChainCaptureBarrier.source.includes("local real = temp"));
+
 console.log("beta optimizer tests passed");
