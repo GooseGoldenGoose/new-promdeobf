@@ -316,6 +316,136 @@ assert(!packedNestedLastArgumentForward.source.includes("unpack(t2)"));
 assert.equal(packedNestedLastArgumentForward.stats.multiReturnForwardersCollapsed, 2);
 assert.equal(packedNestedLastArgumentForward.stats.multiReturnTableCollapses, 2);
 
+
+const packedExpressionIfForward = optimize(`local outer = consume
+local inner = produce
+local t = { inner() }
+if outer(unpack(t)) == 1 then
+    print("yes")
+end`);
+assert(!packedExpressionIfForward.source.includes("local t ="));
+assert(!packedExpressionIfForward.source.includes("unpack(t)"));
+assert(packedExpressionIfForward.source.includes("if consume(produce()) == 1 then"));
+assert.equal(packedExpressionIfForward.stats.multiReturnForwardersCollapsed, 1);
+
+const packedExpressionOrderBarrier = optimize(`local outer = consume
+local inner = produce
+local t = { inner() }
+if other() == outer(unpack(t)) then
+    print("yes")
+end`);
+assert(packedExpressionOrderBarrier.source.includes("local t ="));
+assert(packedExpressionOrderBarrier.source.includes("unpack(t)"));
+assert.equal(packedExpressionOrderBarrier.stats.multiReturnForwardersCollapsed, 0);
+
+const compilerVarargPackedExpressionForward = optimize(`function probe(...)
+-- generated header
+local internalArgs = { ... }
+-- generated body
+local tail = { select(2, unpack(internalArgs)) }
+local head = internalArgs[1]
+if select("#", unpack(tail)) == 0 then
+    print(head)
+    return
+end
+consume(unpack(tail))
+end`);
+assert(!compilerVarargPackedExpressionForward.source.includes("local internalArgs ="));
+assert(!compilerVarargPackedExpressionForward.source.includes("local tail ="));
+assert(!compilerVarargPackedExpressionForward.source.includes("unpack(tail)"));
+assert(!compilerVarargPackedExpressionForward.source.includes("unpack(internalArgs)"));
+assert(compilerVarargPackedExpressionForward.source.includes('local head = (select(1, ...))'));
+assert(compilerVarargPackedExpressionForward.source.includes('if select("#", select(2, ...)) == 0 then'));
+assert(compilerVarargPackedExpressionForward.source.includes('consume(select(2, ...))'));
+assert.equal(compilerVarargPackedExpressionForward.stats.compilerVarargForwardersCollapsed, 2);
+assert.equal(compilerVarargPackedExpressionForward.stats.multiReturnForwardersCollapsed, 2);
+assert.equal(compilerVarargPackedExpressionForward.stats.generatedVarargCapturesEliminated, 1);
+assert.equal(compilerVarargPackedExpressionForward.stats.generatedVarargReadsRecovered, 3);
+
+const compilerVarargDirectRecovery = optimize(`function probe(...)
+-- alpha
+local captured = { ... }
+-- omega
+local first = captured[1]
+local third = captured[3]
+return first, third, unpack(captured)
+end`);
+assert(!compilerVarargDirectRecovery.source.includes("local captured ="));
+assert(compilerVarargDirectRecovery.source.includes("local first = (select(1, ...))"));
+assert(compilerVarargDirectRecovery.source.includes("local third = (select(3, ...))"));
+assert(compilerVarargDirectRecovery.source.includes("return first, third, ..."));
+assert.equal(compilerVarargDirectRecovery.stats.generatedVarargCapturesEliminated, 1);
+assert.equal(compilerVarargDirectRecovery.stats.generatedVarargReadsRecovered, 3);
+
+const compilerVarargDynamicIndexBarrier = optimize(`function probe(...)
+-- alpha
+local captured = { ... }
+-- omega
+local index = choose()
+return captured[index]
+end`);
+assert(compilerVarargDynamicIndexBarrier.source.includes("local captured = { ... }"));
+assert(compilerVarargDynamicIndexBarrier.source.includes("captured[index]"));
+assert.equal(compilerVarargDynamicIndexBarrier.stats.generatedVarargCapturesEliminated, 0);
+
+const compilerVarargNestedCaptureBarrier = optimize(`function probe(...)
+-- alpha
+local captured = { ... }
+-- omega
+local function read()
+    return captured[1]
+end
+return read()
+end`);
+assert(compilerVarargNestedCaptureBarrier.source.includes("local captured = { ... }"));
+assert.equal(compilerVarargNestedCaptureBarrier.stats.generatedVarargCapturesEliminated, 0);
+
+const compilerVarargBodyCopyPreserved = optimize(`function probe(...)
+-- alpha
+local generated = { ... }
+-- omega
+local sourceCopy = { ... }
+local a = generated[1]
+local b = sourceCopy[1]
+return a, b
+end`);
+assert(!compilerVarargBodyCopyPreserved.source.includes("local generated ="));
+assert(compilerVarargBodyCopyPreserved.source.includes("local sourceCopy = { ... }"));
+assert(compilerVarargBodyCopyPreserved.source.includes("sourceCopy[1]"));
+
+const compilerVarargPackedExpressionMutationBarrier = optimize(`function probe(...)
+-- generated header
+local internalArgs = { ... }
+-- generated body
+local tail = { select(3, unpack(internalArgs)) }
+internalArgs[2] = mutate()
+if select("#", unpack(tail)) == 0 then
+    return
+end
+end`);
+assert(compilerVarargPackedExpressionMutationBarrier.source.includes("local internalArgs = { ... }"));
+assert(compilerVarargPackedExpressionMutationBarrier.source.includes("local tail ="));
+assert(compilerVarargPackedExpressionMutationBarrier.source.includes("unpack(tail)"));
+assert.equal(compilerVarargPackedExpressionMutationBarrier.stats.compilerVarargForwardersCollapsed, 0);
+assert.equal(compilerVarargPackedExpressionMutationBarrier.stats.generatedVarargCapturesEliminated, 0);
+
+const compilerVarargPackedExpressionEscapeBarrier = optimize(`function probe(...)
+-- generated header
+local internalArgs = { ... }
+-- generated body
+leak(internalArgs)
+local tail = { select(2, unpack(internalArgs)) }
+sideEffect()
+if select("#", unpack(tail)) == 0 then
+    return
+end
+end`);
+assert(compilerVarargPackedExpressionEscapeBarrier.source.includes("local internalArgs = { ... }"));
+assert(compilerVarargPackedExpressionEscapeBarrier.source.includes("local tail ="));
+assert(compilerVarargPackedExpressionEscapeBarrier.source.includes("unpack(tail)"));
+assert.equal(compilerVarargPackedExpressionEscapeBarrier.stats.compilerVarargForwardersCollapsed, 0);
+assert.equal(compilerVarargPackedExpressionEscapeBarrier.stats.generatedVarargCapturesEliminated, 0);
+
 const prometheusNamecallRecovery = optimize(`local obj = makeObject()
 local method = obj["SetAttribute"]
 local value = compute()

@@ -43,6 +43,9 @@ function main() {
     console.log(`Bare returns removed: ${result.stats.bareReturnsRemoved}`);
     console.log(`Multi-return tables collapsed: ${result.stats.multiReturnTableCollapses}`);
     console.log(`Multi-return forwarders collapsed: ${result.stats.multiReturnForwardersCollapsed}`);
+    console.log(`Compiler vararg forwarders collapsed: ${result.stats.compilerVarargForwardersCollapsed}`);
+    console.log(`Generated vararg captures eliminated: ${result.stats.generatedVarargCapturesEliminated}`);
+    console.log(`Generated vararg reads recovered: ${result.stats.generatedVarargReadsRecovered}`);
     console.log(`Packed return forwarders collapsed: ${result.stats.packedReturnForwardersCollapsed}`);
     console.log(`Returned call bases inlined: ${result.stats.returnedCallBaseInlines}`);
     console.log(`Multi-return self-assignment forwarders collapsed: ${result.stats.multiReturnSelfAssignmentForwardersCollapsed}`);

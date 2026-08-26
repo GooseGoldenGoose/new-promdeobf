@@ -292,6 +292,272 @@ function packedCallFromTable(node) {
     return isStandaloneCall(call) ? call : null;
 }
 
+
+function directVarargCaptureInfo(statement) {
+    const info = directLocalInfo(statement);
+    if (!info || info.init?.type !== "TableConstructorExpression") return null;
+    const fields = info.init.fields || [];
+    if (fields.length !== 1 || fields[0]?.type !== "TableValue" || fields[0].value?.type !== "VarargLiteral") return null;
+    return { ...info, statement };
+}
+
+function generatedVarargHeaderCapture(block) {
+    let openingComment = -1;
+    let bodyBoundary = -1;
+    for (let index = 0; index < block.length; index++) {
+        if (block[index]?.type !== "CommentStatement") continue;
+        if (openingComment < 0) {
+            openingComment = index;
+            continue;
+        }
+        bodyBoundary = index;
+        break;
+    }
+    if (openingComment < 0 || bodyBoundary < 0) return null;
+
+    let capture = null;
+    for (let index = openingComment + 1; index < bodyBoundary; index++) {
+        const info = directVarargCaptureInfo(block[index]);
+        if (!info) continue;
+        if (capture) return null;
+        capture = { ...info, index };
+    }
+    return capture;
+}
+
+function compilerVarargTailCallInfo(call, block, packIndex) {
+    if (call?.type !== "CallExpression" || !isIdentifier(call.base, "select") || call.base.isLocal === true) return null;
+    const args = call.arguments || [];
+    if (args.length !== 2 || args[0]?.type !== "NumericLiteral") return null;
+    const offset = Number(args[0].value);
+    if (!Number.isSafeInteger(offset) || offset < 1) return null;
+
+    const unpackCall = args[1];
+    if (unpackCall?.type !== "CallExpression" || !isIdentifier(unpackCall.base, "unpack") || unpackCall.base.isLocal === true) return null;
+    const unpackArgs = unpackCall.arguments || [];
+    if (unpackArgs.length !== 1 || !isIdentifier(unpackArgs[0])) return null;
+    const argsName = unpackArgs[0].name;
+
+    const capture = generatedVarargHeaderCapture(block);
+    if (!capture || capture.index >= packIndex || capture.name !== argsName) return null;
+    return { argsName, capture, offset, unpackCall };
+}
+
+function compilerArgsTableSafeThrough(block, captureIndex, consumerIndex, argsName) {
+    let safe = true;
+
+    function assignmentMutatesArgs(target) {
+        if (isIdentifier(target, argsName)) return true;
+        return (target?.type === "IndexExpression" || target?.type === "MemberExpression") &&
+            isIdentifier(target.base, argsName);
+    }
+
+    function visit(value, parent = null, key = null, root = false) {
+        if (!safe || !value) return;
+        if (Array.isArray(value)) {
+            for (const child of value) visit(child, parent, key, false);
+            return;
+        }
+        if (!isNode(value)) return;
+
+        if (value.type === "FunctionDeclaration") {
+            if (containsNameRaw(value, argsName)) safe = false;
+            return;
+        }
+        if (value.type === "AssignmentStatement") {
+            if ((value.variables || []).some(assignmentMutatesArgs)) {
+                safe = false;
+                return;
+            }
+        } else if (value.type === "CompoundAssignmentStatement" && assignmentMutatesArgs(value.variable)) {
+            safe = false;
+            return;
+        }
+
+        if (isIdentifier(value, argsName)) {
+            if (parent?.type === "IndexExpression" && key === "base") return;
+            if (parent?.type === "CallExpression" && key === "arguments" &&
+                isIdentifier(parent.base, "unpack") && parent.base.isLocal !== true &&
+                (parent.arguments || []).length === 1 && parent.arguments[0] === value) return;
+            // Generated args tables are internal. Any alias, direct pass/store,
+            // capture, rebind, or other observation makes delayed vararg retrieval
+            // unsafe and therefore blocks this structural recovery.
+            safe = false;
+            return;
+        }
+
+        for (const childKey of Object.keys(value)) {
+            if (childKey === "range" || childKey === "loc") continue;
+            const child = value[childKey];
+            if (Array.isArray(child)) {
+                for (const item of child) visit(item, value, childKey, false);
+            } else if (isNode(child)) {
+                visit(child, value, childKey, false);
+            }
+        }
+    }
+
+    for (let index = captureIndex + 1; safe && index <= consumerIndex; index++) {
+        visit(block[index], null, null, true);
+    }
+    return safe;
+}
+
+function generatedVarargReadRecovery(source, functionBody, capture, stats) {
+    if (!capture || !Array.isArray(capture.statement?.range)) return null;
+
+    const edits = [];
+    let recoveredReads = 0;
+    let safe = true;
+
+    function mutatesCapture(target) {
+        if (isIdentifier(target, capture.name)) return true;
+        return (target?.type === "IndexExpression" || target?.type === "MemberExpression") &&
+            isIdentifier(target.base, capture.name);
+    }
+
+    function visit(value, parent = null, key = null, root = false) {
+        if (!safe || !value) return;
+        if (Array.isArray(value)) {
+            for (const child of value) visit(child, parent, key, false);
+            return;
+        }
+        if (!isNode(value)) return;
+
+        if (value.type === "FunctionDeclaration") {
+            if (containsNameRaw(value, capture.name)) safe = false;
+            return;
+        }
+
+        if (value.type === "LocalStatement" && value !== capture.statement &&
+            (value.variables || []).some(variable => isIdentifier(variable, capture.name))) {
+            safe = false;
+            return;
+        }
+        if (value.type === "AssignmentStatement" && (value.variables || []).some(mutatesCapture)) {
+            safe = false;
+            return;
+        }
+        if (value.type === "CompoundAssignmentStatement" && mutatesCapture(value.variable)) {
+            safe = false;
+            return;
+        }
+        if ((value.type === "ForNumericStatement" || value.type === "ForGenericStatement") &&
+            ([value.variable, ...(value.variables || [])]).some(variable => isIdentifier(variable, capture.name))) {
+            safe = false;
+            return;
+        }
+
+        if (value.type === "CallExpression" && isIdentifier(value.base, "unpack") && value.base.isLocal !== true) {
+            const args = value.arguments || [];
+            if (args.length === 1 && isIdentifier(args[0], capture.name)) {
+                if (!Array.isArray(value.range)) { safe = false; return; }
+                edits.push({ start: value.range[0], end: value.range[1], replacement: "..." });
+                recoveredReads++;
+                return;
+            }
+        }
+
+        if (value.type === "IndexExpression" && isIdentifier(value.base, capture.name)) {
+            const slot = staticPositiveIndex(value.index);
+            if (slot === null || !Array.isArray(value.range)) { safe = false; return; }
+            edits.push({ start: value.range[0], end: value.range[1], replacement: `(select(${slot}, ...))` });
+            recoveredReads++;
+            return;
+        }
+
+        if (isIdentifier(value, capture.name)) {
+            if (parent === capture.statement && key === "variables") return;
+            safe = false;
+            return;
+        }
+
+        for (const childKey of Object.keys(value)) {
+            if (childKey === "range" || childKey === "loc") continue;
+            const child = value[childKey];
+            if (Array.isArray(child)) {
+                for (const item of child) visit(item, value, childKey, false);
+            } else if (isNode(child)) {
+                visit(child, value, childKey, false);
+            }
+        }
+    }
+
+    for (let index = capture.index + 1; safe && index < functionBody.length; index++) {
+        visit(functionBody[index], null, null, true);
+    }
+    if (!safe || !recoveredReads) return null;
+
+    stats.generatedVarargCapturesEliminated++;
+    stats.generatedVarargReadsRecovered += recoveredReads;
+    return {
+        compound: true,
+        edits: [
+            { start: capture.statement.range[0], end: capture.statement.range[1], replacement: "" },
+            ...edits,
+        ],
+        transformCount: recoveredReads + 1,
+        kind: "generated-vararg-capture-elimination",
+    };
+}
+
+function findGeneratedVarargCaptureElimination(source, functionBody, stats) {
+    const capture = generatedVarargHeaderCapture(functionBody);
+    if (!capture) return null;
+    return generatedVarargReadRecovery(source, functionBody, capture, stats);
+}
+
+function findNodeParentInfo(root, target) {
+    let found = null;
+    function visit(value, parent = null, key = null, arrayIndex = null) {
+        if (found || !value) return;
+        if (value === target) {
+            found = { parent, key, arrayIndex };
+            return;
+        }
+        if (Array.isArray(value)) {
+            for (let index = 0; index < value.length; index++) visit(value[index], parent, key, index);
+            return;
+        }
+        if (!isNode(value)) return;
+        for (const childKey of Object.keys(value)) {
+            if (childKey === "range" || childKey === "loc") continue;
+            const child = value[childKey];
+            if (Array.isArray(child)) {
+                for (let index = 0; index < child.length; index++) visit(child[index], value, childKey, index);
+            } else if (isNode(child)) {
+                visit(child, value, childKey, null);
+            }
+        }
+    }
+    visit(root);
+    return found;
+}
+
+function packedUnpackLastArgumentUse(statement, packUse, packName) {
+    // The pack read itself must be the sole argument of the compiler/global unpack.
+    const readParentInfo = findNodeParentInfo(statement, packUse);
+    const parent = readParentInfo?.parent;
+    if (parent?.type !== "CallExpression" || readParentInfo.key !== "arguments" ||
+        !isIdentifier(parent.base, "unpack") || parent.base.isLocal === true ||
+        (parent.arguments || []).length !== 1 || parent.arguments[0] !== packUse) return null;
+    if (!isIdentifier(packUse, packName)) return null;
+
+    const outerInfo = findNodeParentInfo(statement, parent);
+    const outerCall = outerInfo?.parent;
+    if (outerCall?.type !== "CallExpression" || outerInfo.key !== "arguments") return null;
+    const outerArgs = outerCall.arguments || [];
+    if (outerInfo.arrayIndex !== outerArgs.length - 1) return null;
+    return { unpackCall: parent, outerCall, outerArgIndex: outerInfo.arrayIndex };
+}
+
+function packedOuterCallIsLeading(statement, outerCall) {
+    if (statement?.type === "CallStatement" && statement.expression === outerCall) return true;
+    const local = directLocalInfo(statement);
+    if (local && packedCallFromTable(local.init) === outerCall) return true;
+    return immediateScalarConsumerIsSafe(statement, outerCall);
+}
+
 function collectIdentifierNames(node, out = new Set()) {
     function visit(value) {
         if (!value) return;
@@ -611,59 +877,65 @@ function findZeroReturnPackedIifeForwarding(source, block, stats) {
 }
 
 function findPackedCallUnpackForwarding(source, block, functionBody, stats) {
-    for (let packIndex = 0; packIndex + 1 < block.length; packIndex++) {
+    for (let packIndex = 0; packIndex < block.length; packIndex++) {
         const packStatement = block[packIndex];
         const packInfo = directLocalInfo(packStatement);
-        if (!packInfo) continue;
+        if (!packInfo || !Array.isArray(packStatement.range)) continue;
         const call = packedCallFromTable(packInfo.init);
         if (!call || !Array.isArray(call.range)) continue;
 
-        const nextStatement = block[packIndex + 1];
-        if (!Array.isArray(nextStatement?.range)) continue;
-        let outerCall = null;
-        if (nextStatement.type === "CallStatement") {
-            outerCall = nextStatement.expression;
-        } else {
-            const nextLocal = directLocalInfo(nextStatement);
-            if (nextLocal) {
-                if (isStandaloneCall(nextLocal.init)) {
-                    outerCall = nextLocal.init;
-                } else {
-                    outerCall = packedCallFromTable(nextLocal.init);
-                }
-            }
-        }
-        if (!isStandaloneCall(outerCall) || !Array.isArray(outerCall.range)) continue;
-        if (!isIdentifier(outerCall.base) || outerCall.base.isLocal !== true) continue;
-        const outerArgs = outerCall.arguments || [];
-        if (outerArgs.length < 1) continue;
-
-        const unpackCall = outerArgs[outerArgs.length - 1];
-        if (!isStandaloneCall(unpackCall) || !Array.isArray(unpackCall.range)) continue;
-        if (!isIdentifier(unpackCall.base, "unpack") || unpackCall.base.isLocal === true) continue;
-        const unpackArgs = unpackCall.arguments || [];
-        if (unpackArgs.length !== 1) continue;
-        const packUse = unpackArgs[0];
-        if (!isIdentifier(packUse, packInfo.name) || packUse.isLocal !== true) continue;
-
         const refs = scanLaterReferences(block, packIndex, packInfo.name);
-        if (refs.captured || refs.redeclared || refs.writes.length || refs.reads.length !== 1) continue;
-        const onlyRead = refs.reads[0];
-        if (onlyRead.topIndex !== packIndex + 1 || onlyRead.node !== packUse) continue;
+        const sameBlockRefs = scanLaterReferencesSameBlock(block, packIndex, packInfo.name);
+        if (refs.captured || refs.redeclared || refs.writes.length || refs.reads.length === 0) continue;
+        if (sameBlockRefs.reads.length !== refs.reads.length) continue;
 
-        // Moving the packed call into the outer call makes the local call target
-        // get read before the inner call instead of after it. That is equivalent
-        // only when the target binding cannot be mutated through a closure called
-        // by the inner expression.
-        if (functionNameIsCaptured(functionBody, outerCall.base.name)) continue;
-        let prefixStable = true;
-        for (let prior = 0; prior < outerArgs.length - 1; prior++) {
-            if (!stableMovedCallPrefixExpression(outerArgs[prior], functionBody)) {
-                prefixStable = false;
-                break;
+        const varargTail = compilerVarargTailCallInfo(call, block, packIndex);
+        if (varargTail) {
+            const orderedReads = [...sameBlockRefs.reads].sort((x, y) => x.topIndex - y.topIndex || x.node.range[0] - y.node.range[0]);
+            const lastRead = orderedReads[orderedReads.length - 1];
+            if (!compilerArgsTableSafeThrough(block, varargTail.capture.index, lastRead.topIndex, varargTail.argsName)) continue;
+
+            const uses = [];
+            let valid = true;
+            for (const read of orderedReads) {
+                if (read.topIndex <= packIndex || !Array.isArray(read.node?.range)) { valid = false; break; }
+                const use = packedUnpackLastArgumentUse(block[read.topIndex], read.node, packInfo.name);
+                if (!use || !Array.isArray(use.unpackCall.range)) { valid = false; break; }
+                uses.push(use);
             }
+            if (!valid || !uses.length) continue;
+
+            // beta-CF's fresh `{ ... }` header plus `{ select(N, unpack(args)) }`
+            // tail pack is a representation of source varargs, not a user-visible
+            // table snapshot. Once the generated args table is proven internal and
+            // immutable, every expanding `unpack(temp)` use may independently
+            // recover the same vararg-tail expression. This handles repeated `...`
+            // uses instead of requiring the materialized pack to be single-use.
+            stats.multiReturnTableCollapses++;
+            stats.multiReturnForwardersCollapsed += uses.length;
+            stats.compilerVarargForwardersCollapsed += uses.length;
+            return {
+                compound: true,
+                edits: [
+                    { start: packStatement.range[0], end: packStatement.range[1], replacement: "" },
+                    ...uses.map(use => ({ start: use.unpackCall.range[0], end: use.unpackCall.range[1], replacement: sourceOf(source, call) })),
+                ],
+                kind: "compiler-vararg-unpack-forwarding",
+            };
         }
-        if (!prefixStable) continue;
+
+        // Generic packed calls remain conservative: exactly one adjacent expanding
+        // use, with a leading outer call whose lexical callee and earlier arguments
+        // are stable across re-nesting.
+        if (refs.reads.length !== 1 || sameBlockRefs.reads.length !== 1) continue;
+        const onlyRead = sameBlockRefs.reads[0];
+        if (onlyRead.topIndex !== packIndex + 1 || !Array.isArray(onlyRead.node?.range)) continue;
+        const consumerStatement = block[onlyRead.topIndex];
+        if (!Array.isArray(consumerStatement?.range)) continue;
+        const use = packedUnpackLastArgumentUse(consumerStatement, onlyRead.node, packInfo.name);
+        if (!use || !Array.isArray(use.unpackCall.range) || !packedOuterCallIsLeading(consumerStatement, use.outerCall)) continue;
+        if (!isIdentifier(use.outerCall.base) || use.outerCall.base.isLocal !== true || functionNameIsCaptured(functionBody, use.outerCall.base.name)) continue;
+        if (!(use.outerCall.arguments || []).slice(0, -1).every(argument => stableMovedCallPrefixExpression(argument, functionBody))) continue;
 
         stats.multiReturnTableCollapses++;
         stats.multiReturnForwardersCollapsed++;
@@ -671,9 +943,9 @@ function findPackedCallUnpackForwarding(source, block, functionBody, stats) {
             compound: true,
             edits: [
                 { start: packStatement.range[0], end: packStatement.range[1], replacement: "" },
-                { start: unpackCall.range[0], end: unpackCall.range[1], replacement: sourceOf(source, call) },
+                { start: use.unpackCall.range[0], end: use.unpackCall.range[1], replacement: sourceOf(source, call) },
             ],
-            kind: "multi-return-unpack-forwarding",
+            kind: "multi-return-unpack-expression-forwarding",
         };
     }
     return null;
@@ -3082,6 +3354,8 @@ function findTransformEdit(source, ast, stats, budget = 1) {
             const assignmentValueEdit = findAdjacentAssignmentValueBatch(source, block, stats, Math.min(128, budget));
             if (assignmentValueEdit) return assignmentValueEdit;
         }
+        const generatedVarargEdit = findGeneratedVarargCaptureElimination(source, functionBody, stats);
+        if (generatedVarargEdit) return generatedVarargEdit;
         const envEdit = findEnvFold(source, functionBody, inheritedEnvName, Math.min(128, budget));
         if (envEdit) {
             stats.globalFolds += envEdit.transformCount || 1;
@@ -3188,6 +3462,9 @@ function optimizeBetaSource(source, options = {}) {
         bareReturnsRemoved: 0,
         multiReturnTableCollapses: 0,
         multiReturnForwardersCollapsed: 0,
+        compilerVarargForwardersCollapsed: 0,
+        generatedVarargCapturesEliminated: 0,
+        generatedVarargReadsRecovered: 0,
         packedReturnForwardersCollapsed: 0,
         returnedCallBaseInlines: 0,
         multiReturnSelfAssignmentForwardersCollapsed: 0,
