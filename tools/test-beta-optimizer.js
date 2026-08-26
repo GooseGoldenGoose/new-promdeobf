@@ -276,6 +276,27 @@ assert(!packedUnpackDeadResultForward.source.includes("unpack(t)"));
 assert(packedUnpackDeadResultForward.source.includes("pcall(function()"));
 assert.equal(packedUnpackDeadResultForward.stats.multiReturnForwardersCollapsed, 1);
 
+const packedNestedLastArgumentForward = optimize(`local sink = consume
+local middle = wrap
+local inner = produce
+local a = first
+local b = second
+local t1 = { inner() }
+local t2 = { middle(unpack(t1)) }
+sink(a, b, unpack(t2))`);
+assert(!packedNestedLastArgumentForward.source.includes("local t1 ="));
+assert(!packedNestedLastArgumentForward.source.includes("local t2 ="));
+assert(!packedNestedLastArgumentForward.source.includes("unpack(t1)"));
+assert(!packedNestedLastArgumentForward.source.includes("unpack(t2)"));
+assert.equal(packedNestedLastArgumentForward.stats.multiReturnForwardersCollapsed, 2);
+assert.equal(packedNestedLastArgumentForward.stats.multiReturnTableCollapses, 2);
+
+const packedFinalArgumentEffectfulPrefixBarrier = optimize(`local sink = consume
+local t = { produce() }
+sink(before(), unpack(t))`);
+assert(packedFinalArgumentEffectfulPrefixBarrier.source.includes("unpack(t)"));
+assert.equal(packedFinalArgumentEffectfulPrefixBarrier.stats.multiReturnForwardersCollapsed, 0);
+
 const packedUnpackSelfAssignmentForward = optimize(`local outer = consume
 local inner = produce
 local t = { inner() }

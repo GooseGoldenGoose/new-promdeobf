@@ -550,14 +550,20 @@ function findPackedCallUnpackForwarding(source, block, functionBody, stats) {
             outerCall = nextStatement.expression;
         } else {
             const nextLocal = directLocalInfo(nextStatement);
-            if (nextLocal && isStandaloneCall(nextLocal.init)) outerCall = nextLocal.init;
+            if (nextLocal) {
+                if (isStandaloneCall(nextLocal.init)) {
+                    outerCall = nextLocal.init;
+                } else {
+                    outerCall = packedCallFromTable(nextLocal.init);
+                }
+            }
         }
         if (!isStandaloneCall(outerCall) || !Array.isArray(outerCall.range)) continue;
         if (!isIdentifier(outerCall.base) || outerCall.base.isLocal !== true) continue;
         const outerArgs = outerCall.arguments || [];
-        if (outerArgs.length !== 1) continue;
+        if (outerArgs.length < 1) continue;
 
-        const unpackCall = outerArgs[0];
+        const unpackCall = outerArgs[outerArgs.length - 1];
         if (!isStandaloneCall(unpackCall) || !Array.isArray(unpackCall.range)) continue;
         if (!isIdentifier(unpackCall.base, "unpack") || unpackCall.base.isLocal === true) continue;
         const unpackArgs = unpackCall.arguments || [];
@@ -575,6 +581,14 @@ function findPackedCallUnpackForwarding(source, block, functionBody, stats) {
         // only when the target binding cannot be mutated through a closure called
         // by the inner expression.
         if (functionNameIsCaptured(functionBody, outerCall.base.name)) continue;
+        let prefixStable = true;
+        for (let prior = 0; prior < outerArgs.length - 1; prior++) {
+            if (!stableMovedCallPrefixExpression(outerArgs[prior], functionBody)) {
+                prefixStable = false;
+                break;
+            }
+        }
+        if (!prefixStable) continue;
 
         stats.multiReturnTableCollapses++;
         stats.multiReturnForwardersCollapsed++;
