@@ -491,6 +491,7 @@ Important current behavior / proofs:
 - Adjacent index-base aliases also fold only with exact one-use same-block proof: `local t = math; local f = t["random"]` -> `local f = math["random"]`. This applies equally to source globals such as `table` and lexical identifier sources, but never crosses a statement/block boundary or a capture/write/redeclaration of the temporary.
 - Bare `return` cleanup is restricted to the actual function root block. A bare return ending an `if`/loop/other nested block is semantic control flow and must remain. Numeric sample 14 exposed and now covers this regression.
 - Multi-return recovery is call-agnostic. Compiler storage like `local t = { call() }; local a=t[1]; local b=t[2]` becomes native `local a,b = call()` only with structural proof.
+- Exact adjacent packed-call forwarding is also recovered when Prometheus emits `local t = { call() }; local dead = sink(unpack(t))`: with one pack use, one `unpack` argument, one outer call argument, a lexical local call target, no target capture, and no pack escape/write/redeclare, the optimizer removes the pack/unpack layer and restores `sink(call())`. Local/shadowed `unpack`, extra outer arguments, target capture, and pack escape fail closed.
 - Sparse result use is supported. If only result 2 or 3 is needed, collision-free `__beta_unused_return_N` locals consume earlier return positions instead of using `_` or changing semantics.
 - Packed-result recovery refuses table escape, writes, `#table`, dynamic/duplicate slot reads, capture/shadow changes, or other unproven shapes.
 - Generic-for iterator recovery is also call-agnostic. Proven adjacent iterator tuples become direct source-like loops, e.g. `local f,s,c = pairs(t); for k,v in f,s,c do` -> `for k,v in pairs(t) do`.
@@ -550,6 +551,7 @@ Current verification state for the standalone optimizer work:
 focused project suites: 14/14 PASS
 real iterator runtime probes: pairs/ipairs/next/custom-direct/custom-factory = equal
 multi-return runtime probes: equal for successful cases
+direct forwarding runtime probe: local WeAreDevs Medium obfuscation of `print(pcall(function() return 1,2,3 end))` -> normal -> beta-CF -> optimizer now emits `print(pcall(r_v11_3))`; source/obfuscated/CF/optimized LuaJIT output is `true 1 2 3`, the forwarder count is 1, and a second optimizer pass applies 0 transforms
 loop/repeat side-effect parity probes: equal
 nested-function/repeat/scalar-temp LuaJIT parity: equal, including arithmetic metamethod timing and right-side and/or refusal
 current loop-effects/loop-repeat/loop-while optimized probes: fixed point on second optimizer call

@@ -154,6 +154,54 @@ assert(packedAcrossEffect.source.includes("local a = f()"));
 assert(packedAcrossEffect.source.indexOf("f()") < packedAcrossEffect.source.indexOf("g()"));
 assert(packedAcrossEffect.source.indexOf("g()") < packedAcrossEffect.source.indexOf("print(a)"));
 
+const packedUnpackForward = optimize(`local sink = print
+local fn = function() return 1, 2, 3 end
+local t = { pcall(fn) }
+sink(unpack(t))`);
+assert(!packedUnpackForward.source.includes("local t ="));
+assert(!packedUnpackForward.source.includes("unpack(t)"));
+assert(packedUnpackForward.source.includes("pcall(fn)"));
+assert(!packedUnpackForward.source.includes("{ pcall(fn) }"));
+assert.equal(packedUnpackForward.stats.multiReturnForwardersCollapsed, 1);
+assert.equal(packedUnpackForward.stats.multiReturnTableCollapses, 1);
+
+const packedUnpackDeadResultForward = optimize(`local sink = print
+local fn = function() return 1, 2, 3 end
+local t = { pcall(fn) }
+local dead = sink(unpack(t))`);
+assert(!packedUnpackDeadResultForward.source.includes("local t ="));
+assert(!packedUnpackDeadResultForward.source.includes("unpack(t)"));
+assert(packedUnpackDeadResultForward.source.includes("pcall(fn)"));
+assert.equal(packedUnpackDeadResultForward.stats.multiReturnForwardersCollapsed, 1);
+
+const packedUnpackExtraArgumentBarrier = optimize(`local sink = print
+local t = { f() }
+sink(unpack(t), after())`);
+assert(packedUnpackExtraArgumentBarrier.source.includes("unpack(t)"));
+assert.equal(packedUnpackExtraArgumentBarrier.stats.multiReturnForwardersCollapsed, 0);
+
+const packedUnpackEscapeBarrier = optimize(`local sink = print
+local t = { f() }
+use(t)
+sink(unpack(t))`);
+assert(packedUnpackEscapeBarrier.source.includes("use(t)"));
+assert(packedUnpackEscapeBarrier.source.includes("unpack(t)"));
+assert.equal(packedUnpackEscapeBarrier.stats.multiReturnForwardersCollapsed, 0);
+
+const packedUnpackCapturedTargetBarrier = optimize(`local sink = print
+local mutate = function() sink = warn end
+local t = { f(mutate) }
+sink(unpack(t))`);
+assert(packedUnpackCapturedTargetBarrier.source.includes("unpack(t)"));
+assert.equal(packedUnpackCapturedTargetBarrier.stats.multiReturnForwardersCollapsed, 0);
+
+const packedUnpackLocalHelperBarrier = optimize(`local sink = print
+local unpack = customUnpack
+local t = { f() }
+sink(unpack(t))`);
+assert(packedUnpackLocalHelperBarrier.source.includes("unpack(t)"));
+assert.equal(packedUnpackLocalHelperBarrier.stats.multiReturnForwardersCollapsed, 0);
+
 const packedPcall = optimize(`local fn = function() return 1 / "hejsks" end
 local t = { pcall(fn) }
 local ok = t[1]

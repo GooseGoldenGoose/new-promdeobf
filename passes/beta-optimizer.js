@@ -461,6 +461,70 @@ function findMultiReturnTableCollapse(source, block, stats) {
     return null;
 }
 
+function functionNameIsCaptured(functionBody, name) {
+    const refs = { reads: [], writes: [], captured: false, redeclared: false };
+    for (let index = 0; index < functionBody.length; index++) {
+        scanNameInNode(functionBody[index], name, refs, index, null, null, true);
+        if (refs.captured) return true;
+    }
+    return false;
+}
+
+function findPackedCallUnpackForwarding(source, block, functionBody, stats) {
+    for (let packIndex = 0; packIndex + 1 < block.length; packIndex++) {
+        const packStatement = block[packIndex];
+        const packInfo = directLocalInfo(packStatement);
+        if (!packInfo) continue;
+        const call = packedCallFromTable(packInfo.init);
+        if (!call || !Array.isArray(call.range)) continue;
+
+        const nextStatement = block[packIndex + 1];
+        if (!Array.isArray(nextStatement?.range)) continue;
+        let outerCall = null;
+        if (nextStatement.type === "CallStatement") {
+            outerCall = nextStatement.expression;
+        } else {
+            const nextLocal = directLocalInfo(nextStatement);
+            if (nextLocal && isStandaloneCall(nextLocal.init)) outerCall = nextLocal.init;
+        }
+        if (!isStandaloneCall(outerCall) || !Array.isArray(outerCall.range)) continue;
+        if (!isIdentifier(outerCall.base) || outerCall.base.isLocal !== true) continue;
+        const outerArgs = outerCall.arguments || [];
+        if (outerArgs.length !== 1) continue;
+
+        const unpackCall = outerArgs[0];
+        if (!isStandaloneCall(unpackCall) || !Array.isArray(unpackCall.range)) continue;
+        if (!isIdentifier(unpackCall.base, "unpack") || unpackCall.base.isLocal === true) continue;
+        const unpackArgs = unpackCall.arguments || [];
+        if (unpackArgs.length !== 1) continue;
+        const packUse = unpackArgs[0];
+        if (!isIdentifier(packUse, packInfo.name) || packUse.isLocal !== true) continue;
+
+        const refs = scanLaterReferences(block, packIndex, packInfo.name);
+        if (refs.captured || refs.redeclared || refs.writes.length || refs.reads.length !== 1) continue;
+        const onlyRead = refs.reads[0];
+        if (onlyRead.topIndex !== packIndex + 1 || onlyRead.node !== packUse) continue;
+
+        // Moving the packed call into the outer call makes the local call target
+        // get read before the inner call instead of after it. That is equivalent
+        // only when the target binding cannot be mutated through a closure called
+        // by the inner expression.
+        if (functionNameIsCaptured(functionBody, outerCall.base.name)) continue;
+
+        stats.multiReturnTableCollapses++;
+        stats.multiReturnForwardersCollapsed++;
+        return {
+            compound: true,
+            edits: [
+                { start: packStatement.range[0], end: packStatement.range[1], replacement: "" },
+                { start: unpackCall.range[0], end: unpackCall.range[1], replacement: sourceOf(source, call) },
+            ],
+            kind: "multi-return-unpack-forwarding",
+        };
+    }
+    return null;
+}
+
 function findGenericForTupleInline(source, block, stats) {
     for (let declarationIndex = 0; declarationIndex + 1 < block.length; declarationIndex++) {
         const declaration = block[declarationIndex];
@@ -1691,6 +1755,8 @@ function findTransformEdit(source, ast, stats, budget = 1) {
             if (valueShortCircuitEdit) return valueShortCircuitEdit;
             const multiReturnEdit = findMultiReturnTableCollapse(source, block, stats);
             if (multiReturnEdit) return multiReturnEdit;
+            const multiReturnForwardEdit = findPackedCallUnpackForwarding(source, block, functionBody, stats);
+            if (multiReturnForwardEdit) return multiReturnForwardEdit;
             const unusedReturnEdit = findUnusedMultiReturnTargetRename(source, block, stats);
             if (unusedReturnEdit) return unusedReturnEdit;
             const genericForEdit = findGenericForTupleInline(source, block, stats);
@@ -1796,6 +1862,7 @@ function optimizeBetaSource(source, options = {}) {
         deadCallResults: 0,
         bareReturnsRemoved: 0,
         multiReturnTableCollapses: 0,
+        multiReturnForwardersCollapsed: 0,
         multiReturnSlotsRecovered: 0,
         multiReturnPlaceholders: 0,
         multiReturnUnusedTargets: 0,
