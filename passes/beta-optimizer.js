@@ -143,11 +143,12 @@ function scanNameInNode(node, name, result, topIndex, parent = null, key = null,
     }
 }
 
-function scanLaterReferences(block, declarationIndex, name) {
+function scanLaterReferences(block, declarationIndex, name, tailNode = null) {
     const result = { reads: [], writes: [], captured: false, redeclared: false };
     for (let index = declarationIndex + 1; index < block.length; index++) {
         scanNameInNode(block[index], name, result, index, null, null, true);
     }
+    if (tailNode) scanNameInNode(tailNode, name, result, block.length, null, null, true);
     return result;
 }
 
@@ -838,6 +839,64 @@ function isRepeatedEvaluationStatement(statement) {
         statement?.type === "ForGenericStatement";
 }
 
+function directAssignmentInfo(statement) {
+    if (statement?.type !== "AssignmentStatement" || !Array.isArray(statement.range)) return null;
+    const variables = statement.variables || [];
+    const init = statement.init || [];
+    if (variables.length !== 1 || init.length !== 1 || !isIdentifier(variables[0])) return null;
+    return { name: variables[0].name, variable: variables[0], init: init[0] };
+}
+
+function isScopeTransferBarrier(statement) {
+    return statement?.type === "GotoStatement" || statement?.type === "LabelStatement";
+}
+
+function findDeferredLocalInitialization(source, block, stats) {
+    for (let declarationIndex = 0; declarationIndex < block.length; declarationIndex++) {
+        const declaration = block[declarationIndex];
+        const info = directLocalOrUninitializedInfo(declaration);
+        if (!info || info.init !== null) continue;
+
+        const declarationText = sourceOf(source, declaration).trim();
+        const escapedName = info.name.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+        if (!new RegExp(`^local\\s+${escapedName}\\s*;?$`).test(declarationText)) continue;
+
+        for (let index = declarationIndex + 1; index < block.length; index++) {
+            const statement = block[index];
+            if (isScopeTransferBarrier(statement)) break;
+
+            const assignment = directAssignmentInfo(statement);
+            if (assignment && assignment.name === info.name) {
+                if (assignment.variable.isLocal !== true || !Array.isArray(assignment.init?.range)) break;
+                // `local x; x = x or y` cannot become `local x = x or y`: the
+                // initializer would resolve `x` to an outer/global binding instead
+                // of the already-declared nil local. Recursive closure RHS has the
+                // same problem, so reject any RHS reference to the moved local.
+                if (containsNameRaw(assignment.init, info.name)) break;
+
+                stats.deferredLocalInitializersFolded++;
+                return {
+                    compound: true,
+                    edits: [
+                        { start: declaration.range[0], end: declaration.range[1], replacement: "" },
+                        {
+                            start: statement.range[0],
+                            end: statement.range[1],
+                            replacement: `local ${info.name} = ${sourceOf(source, assignment.init)}`
+                        }
+                    ],
+                    kind: "deferred-local-initialization",
+                };
+            }
+
+            const refs = { reads: [], writes: [], captured: false, redeclared: false };
+            scanNameInNode(statement, info.name, refs, index, null, null, true);
+            if (refs.reads.length || refs.writes.length || refs.captured || refs.redeclared) break;
+        }
+    }
+    return null;
+}
+
 function isScalarTempExpression(node) {
     if (isLiteral(node) || isIdentifier(node)) return true;
     if (node?.type === "UnaryExpression") return isScalarTempExpression(node.argument);
@@ -885,11 +944,11 @@ function immediateScalarConsumerIsSafe(statement, readNode) {
     return false;
 }
 
-function tryOptimizeLocal(source, block, index, stats, mode = "inline") {
+function tryOptimizeLocal(source, block, index, stats, mode = "inline", tailNode = null) {
     const statement = block[index];
     const info = mode === "dead" ? directLocalOrUninitializedInfo(statement) : directLocalInfo(statement);
     if (!info) return null;
-    const refs = scanLaterReferences(block, index, info.name);
+    const refs = scanLaterReferences(block, index, info.name, tailNode);
     if (refs.captured || refs.redeclared || refs.writes.length) return null;
 
     if (refs.reads.length === 0) {
@@ -1041,6 +1100,27 @@ function findFunctionBlocks(ast) {
     return roots;
 }
 
+function repeatConditionByBody(functionBody) {
+    const conditions = new Map();
+    function visit(node) {
+        if (!node) return;
+        if (Array.isArray(node)) {
+            for (const child of node) visit(child);
+            return;
+        }
+        if (!isNode(node) || node.type === "FunctionDeclaration") return;
+        if (node.type === "RepeatStatement" && Array.isArray(node.body) && node.condition) {
+            conditions.set(node.body, node.condition);
+        }
+        for (const key of Object.keys(node)) {
+            if (key === "range" || key === "loc") continue;
+            visit(node[key]);
+        }
+    }
+    visit(functionBody);
+    return conditions;
+}
+
 function allBlocksForFunction(functionBody) {
     const out = [functionBody];
     const seen = new Set([functionBody]);
@@ -1072,6 +1152,8 @@ function findTransformEdit(source, ast, stats) {
             if (unusedReturnEdit) return unusedReturnEdit;
             const genericForEdit = findGenericForTupleInline(source, block, stats);
             if (genericForEdit) return genericForEdit;
+            const deferredLocalEdit = findDeferredLocalInitialization(source, block, stats);
+            if (deferredLocalEdit) return deferredLocalEdit;
         }
         const envEdit = findEnvFold(source, functionBody);
         if (envEdit) {
@@ -1095,11 +1177,14 @@ function findDeadCleanupEdit(source, ast, stats) {
     // that an earlier recovery pass still needs.
     const functionRoots = findFunctionBlocks(ast);
     for (let rootIndex = functionRoots.length - 1; rootIndex >= 0; rootIndex--) {
-        const blocks = allBlocksForFunction(functionRoots[rootIndex]);
+        const functionBody = functionRoots[rootIndex];
+        const repeatConditions = repeatConditionByBody(functionBody);
+        const blocks = allBlocksForFunction(functionBody);
         for (let blockIndex = blocks.length - 1; blockIndex >= 0; blockIndex--) {
             const block = blocks[blockIndex];
+            const tailNode = repeatConditions.get(block) || null;
             for (let index = block.length - 1; index >= 0; index--) {
-                const edit = tryOptimizeLocal(source, block, index, stats, "dead");
+                const edit = tryOptimizeLocal(source, block, index, stats, "dead", tailNode);
                 if (edit) return edit;
             }
             const last = block[block.length - 1];
@@ -1119,6 +1204,7 @@ function optimizeBetaSource(source, options = {}) {
         globalFolds: 0,
         globalAliasInlines: 0,
         singleUseInlines: 0,
+        deferredLocalInitializersFolded: 0,
         deadLocals: 0,
         deadCallResults: 0,
         bareReturnsRemoved: 0,

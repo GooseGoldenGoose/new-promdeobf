@@ -24,6 +24,7 @@ function main() {
     console.log(`Global folds: ${result.stats.globalFolds}`);
     console.log(`Global alias inlines: ${result.stats.globalAliasInlines}`);
     console.log(`Single-use inlines: ${result.stats.singleUseInlines}`);
+    console.log(`Deferred local initializers folded: ${result.stats.deferredLocalInitializersFolded}`);
     console.log(`Dead locals: ${result.stats.deadLocals}`);
     console.log(`Dead call results: ${result.stats.deadCallResults}`);
     console.log(`Bare returns removed: ${result.stats.bareReturnsRemoved}`);

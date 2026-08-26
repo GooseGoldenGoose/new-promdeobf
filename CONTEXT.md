@@ -414,6 +414,7 @@ node tools/beta-optimizer.js <final-cf.lua> [optimized.lua]
 
 Current v1 behavior is conservative and iterative:
 - removes dead single locals only when the initializer is proven effect-free, and removes unused uninitialized single-local declarations
+- folds a plain deferred local initialization `local x; ...; x = value` to `...; local x = value` only in the same block when no read/write/capture/redeclaration of `x` occurs before that first assignment, the assignment target is parser-confirmed as the same lexical local, the RHS does not reference `x`, and no goto/label scope-transfer boundary is crossed
 - preserves an unused call's effect by changing `local x = f()` into `f()` instead of deleting the call
 - inlines single-use literals
 - inlines single-use local aliases only when the source local is not changed before the use; scoped parsing distinguishes globals from lexically local/captured outer bindings inside nested functions
@@ -433,6 +434,7 @@ Current v1 behavior is conservative and iterative:
 - a discarded pre-repeat condition evaluation is removed only when its left/right expression tree exactly matches the already-recovered logical `until` condition; mismatches fail closed. This fixes the observed extra condition call before the first repeat body without broad dead-effect deletion
 - optimizer ordering is structural recovery / compiler-pattern collapse first, then safe inlining; unused/dead local cleanup is a separate final phase only after earlier transforms reach a fixed point
 - final dead-local cleanup scans nested/later blocks and statements bottom-to-top; it never runs early enough to destroy a compiler structure another recovery pass still needs
+- `repeat ... until` body locals treat the `until` expression as a real trailing use in dead-liveness analysis. This prevents deletion of locals such as `local done = ...; until done`, whose only read is the repeat condition outside the body-array representation
 - one-use locals declared outside a `while`, `repeat`, numeric-for, or generic-for are treated as one-time snapshots and are not generically inlined into repeated loop evaluation, even for literals; dedicated proven loop/compiler patterns are handled separately
 - natural source conditions already written as `while A and (B or C)` / `repeat ... until A or (B and C)` are left alone; short-circuit collapse only targets the proven compiler temp/assignment ladder shapes
 - removes a final bare `return` during the final cleanup phase
@@ -542,6 +544,7 @@ multi-return runtime probes: equal for successful cases
 loop/repeat side-effect parity probes: equal
 nested-function/repeat/scalar-temp LuaJIT parity: equal, including arithmetic metamethod timing and right-side and/or refusal
 current loop-effects/loop-repeat/loop-while optimized probes: fixed point on second optimizer call
+fresh local-Prometheus loop-effects re-obfuscate -> beta-CF -> optimizer: 12 deferred local initializers folded; LuaJIT output matches readable source after repeat-condition liveness fix
 optimizer imports from main/CF/deobf.bat: none
 ```
 

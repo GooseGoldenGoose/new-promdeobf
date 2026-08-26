@@ -575,4 +575,53 @@ print(result)`);
 assert(scalarShortCircuitRightBarrier.source.includes("local temp = x + 1"));
 assert(scalarShortCircuitRightBarrier.source.includes("false and temp"));
 
+const deferredLocalBasic = optimize(`local value = makeValue()
+local x
+sideEffect()
+x = value
+use(x, x)`);
+assert(!/^local x\s*$/m.test(deferredLocalBasic.source));
+assert(deferredLocalBasic.source.includes("local x = value"));
+assert(deferredLocalBasic.source.indexOf("sideEffect()") < deferredLocalBasic.source.indexOf("local x = value"));
+assert.equal(deferredLocalBasic.stats.deferredLocalInitializersFolded, 1);
+
+const deferredLocalReadBarrier = optimize(`local x
+print(x)
+x = value
+use(x)`);
+assert(/^local x\s*$/m.test(deferredLocalReadBarrier.source));
+assert(deferredLocalReadBarrier.source.includes("x = value"));
+
+const deferredLocalCaptureBarrier = optimize(`local x
+local f = function() return x end
+x = value
+print(f())`);
+assert(/^local x\s*$/m.test(deferredLocalCaptureBarrier.source));
+assert(deferredLocalCaptureBarrier.source.includes("x = value"));
+
+const deferredLocalSelfReadBarrier = optimize(`local x
+x = x or fallback
+print(x)`);
+assert(/^local x\s*$/m.test(deferredLocalSelfReadBarrier.source));
+assert(deferredLocalSelfReadBarrier.source.includes("x = x or fallback"));
+
+const deferredLocalGotoBarrier = optimize(`local x
+goto ready
+::ready::
+x = value
+print(x)`);
+assert(/^local x\s*$/m.test(deferredLocalGotoBarrier.source));
+assert(deferredLocalGotoBarrier.source.includes("x = value"));
+
+const repeatConditionLocalUse = optimize(`local x = 0
+repeat
+    x = x + 1
+    local done
+    done = x >= 2
+until done
+print(x)`);
+assert(repeatConditionLocalUse.source.includes("local done = x >= 2"));
+assert(repeatConditionLocalUse.source.includes("until done"));
+assert.equal(repeatConditionLocalUse.stats.deferredLocalInitializersFolded >= 1, true);
+
 console.log("beta optimizer tests passed");
