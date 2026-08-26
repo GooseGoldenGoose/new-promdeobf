@@ -840,6 +840,42 @@ end`);
 assert(terminalNestedCapturedNilMustStay.source.includes("x = nil"));
 assert.equal(terminalNestedCapturedNilMustStay.stats.directNilCleanupWritesRemoved, 0);
 
+const ancestorTerminalRegisterRelease = optimize(`local x = makeValue()
+if cond then
+    use(x)
+    x = nil
+    return
+end`);
+assert(!ancestorTerminalRegisterRelease.source.includes("x = nil"));
+assert.equal(ancestorTerminalRegisterRelease.stats.directNilCleanupWritesRemoved, 1);
+
+const ancestorAcyclicRegisterRelease = optimize(`local x = makeValue()
+if cond then
+    use(x)
+    x = nil
+    sideEffect()
+end`);
+assert(!ancestorAcyclicRegisterRelease.source.includes("x = nil"));
+assert.equal(ancestorAcyclicRegisterRelease.stats.directNilCleanupWritesRemoved, 1);
+
+const ancestorRegisterReleaseLaterReadMustStay = optimize(`local x = makeValue()
+if cond then
+    x = nil
+end
+print(x)`);
+assert(ancestorRegisterReleaseLaterReadMustStay.source.includes("x = nil"));
+assert.equal(ancestorRegisterReleaseLaterReadMustStay.stats.directNilCleanupWritesRemoved, 0);
+
+const loopRegisterReleaseMustStay = optimize(`local x = makeValue()
+while cond do
+    use(x)
+    if again then
+        x = nil
+    end
+end`);
+assert(loopRegisterReleaseMustStay.source.includes("x = nil"));
+assert.equal(loopRegisterReleaseMustStay.stats.directNilCleanupWritesRemoved, 0);
+
 const upvalueDirectNilMustStay = optimize(`local x = 1
 local f = function()
     x = nil

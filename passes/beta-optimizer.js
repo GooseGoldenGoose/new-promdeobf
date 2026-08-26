@@ -1188,6 +1188,69 @@ function hasPriorDirectLocalDeclaration(functionBody, beforeIndex, name) {
     return false;
 }
 
+function nestedBlockRepeatedContext(functionBody) {
+    const repeated = new Map([[functionBody, false]]);
+    const seen = new Set([functionBody]);
+
+    function visitBlock(block, insideRepeated) {
+        for (const statement of block) {
+            const childRepeated = insideRepeated || isRepeatedEvaluationStatement(statement);
+            for (const child of childStatementBlocks(statement)) {
+                if (seen.has(child)) continue;
+                seen.add(child);
+                repeated.set(child, childRepeated);
+                visitBlock(child, childRepeated);
+            }
+        }
+    }
+
+    visitBlock(functionBody, false);
+    return repeated;
+}
+
+function localDeclarationCountBeforeOffset(functionBody, name, offset) {
+    let count = 0;
+
+    function visit(value) {
+        if (!value) return;
+        if (Array.isArray(value)) {
+            for (const child of value) visit(child);
+            return;
+        }
+        if (!isNode(value)) return;
+        if (value.type === "FunctionDeclaration") return;
+
+        if (value.type === "LocalStatement") {
+            for (const variable of value.variables || []) {
+                if (isIdentifier(variable, name) && Array.isArray(variable.range) && variable.range[0] < offset) count++;
+            }
+        } else if (value.type === "ForNumericStatement") {
+            if (isIdentifier(value.variable, name) && Array.isArray(value.variable.range) && value.variable.range[0] < offset) count++;
+        } else if (value.type === "ForGenericStatement") {
+            for (const variable of value.variables || []) {
+                if (isIdentifier(variable, name) && Array.isArray(variable.range) && variable.range[0] < offset) count++;
+            }
+        }
+
+        for (const key of Object.keys(value)) {
+            if (key === "range" || key === "loc" || key === "variables" || key === "variable") continue;
+            visit(value[key]);
+        }
+    }
+
+    for (const statement of functionBody) visit(statement);
+    return count;
+}
+
+function functionHasNameActivityAfterOffset(functionBody, name, offset) {
+    const refs = { reads: [], writes: [], captured: false, redeclared: false };
+    for (let index = 0; index < functionBody.length; index++) {
+        scanNameInNode(functionBody[index], name, refs, index, null, null, true);
+    }
+    if (refs.captured) return true;
+    return [...refs.reads, ...refs.writes].some(ref => Array.isArray(ref.node?.range) && ref.node.range[0] >= offset);
+}
+
 function findPreFoldDeadNilAssignment(source, functionBody, stats, limit = 128) {
     // This is intentionally a pre-fold-only cleanup. A direct `x = nil` emitted
     // as compiler lifetime cleanup can be deleted when its value is never observed.
@@ -1199,6 +1262,7 @@ function findPreFoldDeadNilAssignment(source, functionBody, stats, limit = 128) 
 
     const edits = [];
     const repeatConditions = repeatConditionByBody(functionBody);
+    const repeatedContext = nestedBlockRepeatedContext(functionBody);
     const blocks = allBlocksForFunction(functionBody);
     for (const block of blocks) {
         if (edits.length >= limit) break;
@@ -1207,21 +1271,36 @@ function findPreFoldDeadNilAssignment(source, functionBody, stats, limit = 128) 
         const isTerminalNestedBlock = !isFunctionRoot && last?.type === "ReturnStatement";
         const repeatTailCondition = repeatConditions.get(block) || null;
         const isRepeatBody = repeatTailCondition !== null;
-        if (!isFunctionRoot && !isTerminalNestedBlock && !isRepeatBody) continue;
+        // Prometheus emits direct local = nil writes to release a dead register
+        // lifetime. Any nested block outside a loop backedge may release a local
+        // declared in an ancestor block; repeat bodies keep their separate
+        // iteration-aware proof.
+        const usesAncestorReleaseProof = !isFunctionRoot && !isRepeatBody && repeatedContext.get(block) === false;
+        if (!isFunctionRoot && !isTerminalNestedBlock && !isRepeatBody && !usesAncestorReleaseProof) continue;
 
         for (let index = block.length - 1; index >= 0 && edits.length < limit; index--) {
             const statement = block[index];
             const info = directNilAssignmentInfo(statement);
             if (!info) continue;
 
-            // `isLocal` also covers upvalues. Require a prior declaration in this
-            // exact lexical block. This proves same-function ownership without
-            // treating an outer captured binding as disposable cleanup.
-            if (!hasPriorDirectLocalDeclaration(block, index, info.name)) continue;
-            if (functionCapturesName(functionBody, info.name)) continue;
+            if (usesAncestorReleaseProof) {
+                // A compiler release inside an if/do child may target a local
+                // declared in an ancestor block. Require one unambiguous prior
+                // declaration for this beta name, no closure capture, and no
+                // later activity anywhere in the function. This is dead-register
+                // release elimination, not a general nested assignment rewrite.
+                if (localDeclarationCountBeforeOffset(functionBody, info.name, statement.range[0]) !== 1) continue;
+                if (functionCapturesName(functionBody, info.name)) continue;
+                if (functionHasNameActivityAfterOffset(functionBody, info.name, statement.range[1])) continue;
+            } else {
+                // Root / repeat cleanup keeps the original
+                // exact-block ownership proof.
+                if (!hasPriorDirectLocalDeclaration(block, index, info.name)) continue;
+                if (functionCapturesName(functionBody, info.name)) continue;
 
-            const refs = scanLaterReferences(block, index, info.name, isRepeatBody ? repeatTailCondition : null);
-            if (refs.reads.length || refs.captured || refs.redeclared) continue;
+                const refs = scanLaterReferences(block, index, info.name, isRepeatBody ? repeatTailCondition : null);
+                if (refs.reads.length || refs.captured || refs.redeclared) continue;
+            }
 
             edits.push({ start: statement.range[0], end: statement.range[1], replacement: "", kind: "dead-direct-nil-cleanup" });
         }
