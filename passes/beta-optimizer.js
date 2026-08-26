@@ -94,7 +94,7 @@ function containsNameRaw(node, name) {
             return;
         }
         if (!isNode(value)) return;
-        if (isIdentifier(value, name) && !isNonReadIdentifier(value, parent, key)) {
+        if (isIdentifier(value, name) && (!isNonReadIdentifier(value, parent, key) || (parent?.type === "AssignmentStatement" && key === "variables"))) {
             found = true;
             return;
         }
@@ -1363,7 +1363,7 @@ function findDeadCleanupEdit(source, ast, stats) {
                 if (edit) return edit;
             }
             const last = block[block.length - 1];
-            if (last?.type === "ReturnStatement" && (last.arguments || []).length === 0 && Array.isArray(last.range)) {
+            if (block === functionBody && last?.type === "ReturnStatement" && (last.arguments || []).length === 0 && Array.isArray(last.range)) {
                 stats.bareReturnsRemoved++;
                 return { start: last.range[0], end: last.range[1], replacement: "", kind: "bare-return" };
             }

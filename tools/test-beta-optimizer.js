@@ -596,6 +596,16 @@ assert(!nestedCapturedAliasCleanup.source.includes("local snapshot"));
 assert(!nestedCapturedAliasCleanup.source.includes("local result"));
 assert(/return\s+\(.*x.*\+ 1.*\)/.test(nestedCapturedAliasCleanup.source));
 
+const nestedWriteOnlyCaptureBarrier = optimize(`local x = 1
+local f = function()
+    x = 2
+end
+f()
+return x`);
+assert(nestedWriteOnlyCaptureBarrier.source.includes("local x = 1"));
+assert(nestedWriteOnlyCaptureBarrier.source.includes("x = 2"));
+assert(!nestedWriteOnlyCaptureBarrier.source.includes("return 1"));
+
 const scalarLoopSnapshotBarrier = optimize(`local x = 1
 local snapshot = x + 1
 while check(snapshot) do
@@ -736,5 +746,15 @@ local f = function() return temp end
 print(real, f())`);
 assert(copyChainCaptureBarrier.source.includes("local temp = thing"));
 assert(copyChainCaptureBarrier.source.includes("local real = temp"));
+
+const nestedBareReturnMustStay = optimize(`local x = 1
+if cond then
+    print(x)
+    return
+end
+x = 3
+print(x)`);
+assert(nestedBareReturnMustStay.source.includes("return"));
+assert.equal(nestedBareReturnMustStay.stats.bareReturnsRemoved, 0);
 
 console.log("beta optimizer tests passed");

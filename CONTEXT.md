@@ -485,7 +485,8 @@ final beta-CF source
 Important current behavior / proofs:
 
 - Basic cleanup: removes proven dead locals including unused uninitialized declarations, preserves effects of unused calls, folds proven `_env["name"]` lookups to globals, safely inlines literals/aliases, and removes a final bare `return`.
-- Nested function bodies now use lexical `isLocal` provenance, so one-use aliases of captured outer locals are treated as local snapshots instead of being mistaken for globals. Adjacent scalar temp chains such as `local t = x + 1; x = t` and `local t = x < 3; return t` fold when the use is the immediate leading evaluation position. Right-side `and/or` uses and repeated-evaluation loop boundaries fail closed.
+- Nested function bodies now use lexical `isLocal` provenance. Any nested-closure reference to an outer local, including write-only assignment, is treated conservatively as a capture/upvalue and blocks generic inline/fold/dead removal of that local. Adjacent scalar temp chains such as `local t = x + 1; x = t` and `local t = x < 3; return t` fold only when the use is the immediate leading evaluation position. Right-side `and/or` uses and repeated-evaluation loop boundaries fail closed.
+- Bare `return` cleanup is restricted to the actual function root block. A bare return ending an `if`/loop/other nested block is semantic control flow and must remain. Numeric sample 14 exposed and now covers this regression.
 - Multi-return recovery is call-agnostic. Compiler storage like `local t = { call() }; local a=t[1]; local b=t[2]` becomes native `local a,b = call()` only with structural proof.
 - Sparse result use is supported. If only result 2 or 3 is needed, collision-free `__beta_unused_return_N` locals consume earlier return positions instead of using `_` or changing semantics.
 - Packed-result recovery refuses table escape, writes, `#table`, dynamic/duplicate slot reads, capture/shadow changes, or other unproven shapes.
@@ -546,6 +547,8 @@ multi-return runtime probes: equal for successful cases
 loop/repeat side-effect parity probes: equal
 nested-function/repeat/scalar-temp LuaJIT parity: equal, including arithmetic metamethod timing and right-side and/or refusal
 current loop-effects/loop-repeat/loop-while optimized probes: fixed point on second optimizer call
+numeric 1-63 fresh-CF sweep after capture/bare-return fixes: CF generation 63/63; optimizer emitted parseable output for 63/63. For 1-62, 46 LuaJIT cases matched CF exactly, 21/22 differed only by pointer addresses, sample 10 optimized output matched readable source while raw CF exceeded LuaJIT local limits, and no confirmed optimizer-caused runtime regression remained. Thirteen cases are runtime-unvalidated because CF/source require Luau/Roblox/anti-tamper support or exceed LuaJIT local limits. Sample 63 also exceeds LuaJIT limits and hit the optimizer default `maxRounds=1000`, so its emitted output is parseable but not claimed fixed-point.
+write-only captured-upvalue regression from numeric sample 20/23 is fixed: nested `x = ...` now counts as capture, preventing unsafe outer-local inline/dead cleanup
 loop-effects nested captured `_env["print"]` lookups now fold through the proven outer env to direct `print(...)`; the dead `_env` header and one-use print aliases disappear. LuaJIT before/after output matches, and all three kept loop probes are fixed point
 fresh local-Prometheus loop-effects re-obfuscate -> beta-CF -> optimizer: 6 dead direct-nil cleanup writes removed, 4 adjacent opaque copy chains folded, and LuaJIT output matches readable source; current loop-effects/repeat/while probes also match readable source and are fixed point
 optimizer imports from main/CF/deobf.bat: none
