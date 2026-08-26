@@ -682,6 +682,81 @@ function parseShortCircuitProgram(source, statements, expectedResultName = null)
     };
 }
 
+function buildAssignedBranchExpression(source, body, resultName) {
+    if (!Array.isArray(body) || body.length === 0) return null;
+    const assignment = singleAssignmentInfo(body[body.length - 1], resultName);
+    if (!assignment || !Array.isArray(assignment.value?.range)) return null;
+    if (containsNameRaw(assignment.value, resultName)) return null;
+
+    if (body.length === 1) {
+        return { expression: sourceOf(source, assignment.value), names: new Set() };
+    }
+
+    const prefix = body.slice(0, -1);
+    for (const statement of prefix) {
+        if (statementMentionsName(statement, resultName)) return null;
+    }
+    if (!isIdentifier(assignment.value)) return null;
+    return buildLeafExpression(source, prefix, assignment.value.name);
+}
+
+function findValueShortCircuitCollapse(source, block, stats) {
+    const directLocals = collectDirectLocalNames(block);
+    for (let resultIndex = 0; resultIndex + 1 < block.length; resultIndex++) {
+        const resultStatement = block[resultIndex];
+        const result = directLocalInfo(resultStatement);
+        if (!result || !isIdentifier(result.init) || result.variable.typeAnnotation) continue;
+        const seedName = result.init.name;
+        if (result.init.isLocal !== true || !directLocals.has(seedName)) continue;
+
+        const clause = singleIfClause(block[resultIndex + 1]);
+        if (!clause) continue;
+
+        let operator = null;
+        let conditionIdentifier = null;
+        if (isIdentifier(clause.condition, seedName)) {
+            operator = "and";
+            conditionIdentifier = clause.condition;
+        } else if (isNotIdentifier(clause.condition, seedName)) {
+            operator = "or";
+            conditionIdentifier = clause.condition.argument;
+        } else {
+            continue;
+        }
+        if (conditionIdentifier.isLocal !== true) continue;
+
+        const right = buildAssignedBranchExpression(source, clause.body || [], result.name);
+        if (!right) continue;
+
+        let startStatement = resultStatement;
+        let leftExpression = seedName;
+        if (resultIndex > 0) {
+            const producerStatement = block[resultIndex - 1];
+            const producer = directLocalInfo(producerStatement);
+            if (producer && producer.name === seedName && !producer.variable.typeAnnotation && Array.isArray(producer.init?.range)) {
+                const refs = scanLaterReferences(block, resultIndex - 1, seedName);
+                const expectedReads = new Set([result.init, conditionIdentifier]);
+                const exactProducerUse = !refs.captured && !refs.redeclared && refs.writes.length === 0 &&
+                    refs.reads.length === 2 && refs.reads.every(read => expectedReads.has(read.node));
+                if (exactProducerUse) {
+                    startStatement = producerStatement;
+                    leftExpression = sourceOf(source, producer.init);
+                }
+            }
+        }
+
+        stats.shortCircuitLaddersCollapsed++;
+        stats.valueShortCircuitLaddersCollapsed++;
+        return {
+            start: startStatement.range[0],
+            end: block[resultIndex + 1].range[1],
+            replacement: `local ${result.name} = (${leftExpression}) ${operator} (${right.expression})`,
+            kind: "value-short-circuit-collapse",
+        };
+    }
+    return null;
+}
+
 function namesUsedInStatements(statements, names) {
     for (let index = 0; index < statements.length; index++) {
         for (const name of names) {
@@ -1612,6 +1687,8 @@ function findTransformEdit(source, ast, stats, budget = 1) {
             if (repeatPrecheckEdit) return repeatPrecheckEdit;
             const loopConditionEdit = findLoopConditionCollapse(source, block, stats);
             if (loopConditionEdit) return loopConditionEdit;
+            const valueShortCircuitEdit = findValueShortCircuitCollapse(source, block, stats);
+            if (valueShortCircuitEdit) return valueShortCircuitEdit;
             const multiReturnEdit = findMultiReturnTableCollapse(source, block, stats);
             if (multiReturnEdit) return multiReturnEdit;
             const unusedReturnEdit = findUnusedMultiReturnTargetRename(source, block, stats);
@@ -1725,6 +1802,7 @@ function optimizeBetaSource(source, options = {}) {
         genericForTupleInlines: 0,
         genericForTupleLocalsRemoved: 0,
         shortCircuitLaddersCollapsed: 0,
+        valueShortCircuitLaddersCollapsed: 0,
         whileConditionsCollapsed: 0,
         repeatConditionsCollapsed: 0,
         repeatPrechecksRemoved: 0,

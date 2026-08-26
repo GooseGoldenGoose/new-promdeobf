@@ -792,6 +792,55 @@ assert(/local snapshot = /.test(genericDoBlockReadBarrier.source));
 assert(genericDoBlockReadBarrier.source.includes("print(snapshot)"));
 assert(!genericDoBlockReadBarrier.source.includes("print(x)"));
 
+const valueShortCircuitFallback = optimize(`local seed = table
+local first = seed
+if seed then
+    local member = table["unpack"]
+    first = member
+end
+local chosen = first
+if not first then
+    local fallback = unpack
+    chosen = fallback
+end
+consume(chosen)`);
+assert(!valueShortCircuitFallback.source.includes("if seed"));
+assert(!valueShortCircuitFallback.source.includes("if not first"));
+assert(!valueShortCircuitFallback.source.includes("local seed ="));
+assert(!valueShortCircuitFallback.source.includes("local first ="));
+assert(valueShortCircuitFallback.source.includes('table["unpack"]'));
+assert(valueShortCircuitFallback.source.includes(" and "));
+assert(valueShortCircuitFallback.source.includes(" or "));
+assert.equal(valueShortCircuitFallback.stats.valueShortCircuitLaddersCollapsed, 2);
+
+const valueShortCircuitGlobalSeedBarrier = optimize(`local chosen = globalValue
+if globalValue then
+    chosen = rhs()
+end
+consume(chosen)`);
+assert(valueShortCircuitGlobalSeedBarrier.source.includes("if globalValue then"));
+assert.equal(valueShortCircuitGlobalSeedBarrier.stats.valueShortCircuitLaddersCollapsed, 0);
+
+const valueShortCircuitSelfReferenceBarrier = optimize(`local seed = left()
+local chosen = seed
+if seed then
+    chosen = combine(chosen)
+end
+consume(chosen)`);
+assert(valueShortCircuitSelfReferenceBarrier.source.includes("if seed then"));
+assert.equal(valueShortCircuitSelfReferenceBarrier.stats.valueShortCircuitLaddersCollapsed, 0);
+
+const valueShortCircuitSeedUseKeepsSnapshot = optimize(`local seed = left()
+local chosen = seed
+if seed then
+    chosen = combine(seed)
+end
+consume(chosen)`);
+assert(valueShortCircuitSeedUseKeepsSnapshot.source.includes("local seed = left()"));
+assert(!valueShortCircuitSeedUseKeepsSnapshot.source.includes("if seed then"));
+assert(valueShortCircuitSeedUseKeepsSnapshot.source.includes("seed) and (combine(seed))"));
+assert.equal(valueShortCircuitSeedUseKeepsSnapshot.stats.valueShortCircuitLaddersCollapsed, 1);
+
 const adjacentIndexBaseAliasInline = optimize(`local temp = math
 local real = temp["random"]
 consume(real)`);
