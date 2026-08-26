@@ -46,6 +46,8 @@ function main() {
     console.log(`Multi-return unused targets: ${result.stats.multiReturnUnusedTargets}`);
     console.log(`Generic-for tuples inlined: ${result.stats.genericForTupleInlines}`);
     console.log(`Generic-for tuple locals removed: ${result.stats.genericForTupleLocalsRemoved}`);
+    console.log(`Numeric-for constants inlined: ${result.stats.numericForConstantInlines}`);
+    console.log(`Numeric-for default steps removed: ${result.stats.numericForDefaultStepsRemoved}`);
     console.log(`Short-circuit ladders collapsed: ${result.stats.shortCircuitLaddersCollapsed}`);
     console.log(`Value short-circuit ladders collapsed: ${result.stats.valueShortCircuitLaddersCollapsed}`);
     console.log(`While conditions collapsed: ${result.stats.whileConditionsCollapsed}`);

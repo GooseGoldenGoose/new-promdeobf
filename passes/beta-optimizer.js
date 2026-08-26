@@ -577,6 +577,77 @@ function findGenericForTupleInline(source, block, stats) {
     return null;
 }
 
+function findNumericForConstantHeaderInline(source, block, stats) {
+    for (let loopIndex = 0; loopIndex < block.length; loopIndex++) {
+        const loop = block[loopIndex];
+        if (loop?.type !== "ForNumericStatement" || !Array.isArray(loop.range)) continue;
+
+        const slots = [
+            { key: "start", node: loop.start },
+            { key: "end", node: loop.end },
+        ];
+        if (loop.step) slots.push({ key: "step", node: loop.step });
+
+        const edits = [];
+        const deletedDeclarations = new Set();
+        let inlined = 0;
+        let defaultStepsRemoved = 0;
+
+        for (const slot of slots) {
+            const useNode = slot.node;
+            if (!isIdentifier(useNode) || useNode.isLocal !== true || !Array.isArray(useNode.range)) continue;
+
+            let declarationIndex = -1;
+            let declaration = null;
+            let info = null;
+            for (let index = loopIndex - 1; index >= 0; index--) {
+                const candidate = directLocalInfo(block[index]);
+                if (!candidate || candidate.name !== useNode.name) continue;
+                declarationIndex = index;
+                declaration = block[index];
+                info = candidate;
+                break;
+            }
+            if (declarationIndex < 0 || !declaration || !info || info.init?.type !== "NumericLiteral") continue;
+            if (!Array.isArray(declaration.range) || !Array.isArray(info.init.range)) continue;
+
+            const refs = scanLaterReferences(block, declarationIndex, info.name);
+            if (refs.captured || refs.redeclared || refs.writes.length || refs.reads.length !== 1) continue;
+            const read = refs.reads[0];
+            if (read.topIndex !== loopIndex || read.node !== useNode) continue;
+
+            if (!deletedDeclarations.has(declarationIndex)) {
+                edits.push({ start: declaration.range[0], end: declaration.range[1], replacement: "" });
+                deletedDeclarations.add(declarationIndex);
+            }
+
+            if (slot.key === "step" && info.init.value === 1 && Array.isArray(loop.end?.range)) {
+                const separator = source.slice(loop.end.range[1], useNode.range[0]);
+                if (/^\s*,\s*$/.test(separator)) {
+                    edits.push({ start: loop.end.range[1], end: useNode.range[1], replacement: "" });
+                    inlined++;
+                    defaultStepsRemoved++;
+                    continue;
+                }
+            }
+
+            edits.push({ start: useNode.range[0], end: useNode.range[1], replacement: sourceOf(source, info.init) });
+            inlined++;
+        }
+
+        if (!inlined) continue;
+        stats.numericForConstantInlines += inlined;
+        stats.numericForDefaultStepsRemoved += defaultStepsRemoved;
+        return {
+            compound: true,
+            edits,
+            transformCount: inlined,
+            kind: "numeric-for-constant-header-inline",
+        };
+    }
+    return null;
+}
+
 function singleAssignmentInfo(statement, targetName = null) {
     if (statement?.type !== "AssignmentStatement") return null;
     const variables = statement.variables || [];
@@ -2161,6 +2232,8 @@ function findTransformEdit(source, ast, stats, budget = 1) {
             if (unusedReturnEdit) return unusedReturnEdit;
             const genericForEdit = findGenericForTupleInline(source, block, stats);
             if (genericForEdit) return genericForEdit;
+            const numericForConstantEdit = findNumericForConstantHeaderInline(source, block, stats);
+            if (numericForConstantEdit) return numericForConstantEdit;
             const deferredLocalEdit = findDeferredLocalInitializationBatch(source, block, stats, Math.min(128, budget));
             if (deferredLocalEdit) return deferredLocalEdit;
             const copyChainEdit = findAdjacentCopyChainBatch(source, block, stats, Math.min(128, budget));
@@ -2284,6 +2357,8 @@ function optimizeBetaSource(source, options = {}) {
         multiReturnUnusedTargets: 0,
         genericForTupleInlines: 0,
         genericForTupleLocalsRemoved: 0,
+        numericForConstantInlines: 0,
+        numericForDefaultStepsRemoved: 0,
         shortCircuitLaddersCollapsed: 0,
         valueShortCircuitLaddersCollapsed: 0,
         whileConditionsCollapsed: 0,

@@ -964,6 +964,41 @@ assert(!valueShortCircuitSeedUseKeepsSnapshot.source.includes("if seed then"));
 assert(valueShortCircuitSeedUseKeepsSnapshot.source.includes("seed) and (combine(seed))"));
 assert.equal(valueShortCircuitSeedUseKeepsSnapshot.stats.valueShortCircuitLaddersCollapsed, 1);
 
+const numericForConstantHeader = optimize(`local limit = getLimit()
+local step = 1
+local start = 1
+for i = start, limit, step do
+    consume(i)
+end`);
+assert(!numericForConstantHeader.source.includes("local step ="));
+assert(!numericForConstantHeader.source.includes("local start ="));
+assert(numericForConstantHeader.source.includes("for i = 1, limit do"));
+assert.equal(numericForConstantHeader.stats.numericForConstantInlines, 2);
+assert.equal(numericForConstantHeader.stats.numericForDefaultStepsRemoved, 1);
+
+const numericForNonDefaultStep = optimize(`local limit = getLimit()
+local step = 2
+local start = 1
+for i = start, limit, step do
+    consume(i)
+end`);
+assert(!numericForNonDefaultStep.source.includes("local step ="));
+assert(!numericForNonDefaultStep.source.includes("local start ="));
+assert(numericForNonDefaultStep.source.includes("for i = 1, limit, 2 do"));
+assert.equal(numericForNonDefaultStep.stats.numericForConstantInlines, 2);
+assert.equal(numericForNonDefaultStep.stats.numericForDefaultStepsRemoved, 0);
+
+const numericForConstantUseBarrier = optimize(`local limit = getLimit()
+local step = 1
+local start = 1
+print(step)
+for i = start, limit, step do
+    consume(i)
+end`);
+assert(numericForConstantUseBarrier.source.includes("local step = 1"));
+assert(numericForConstantUseBarrier.source.includes("for i = 1, limit, step do"));
+assert.equal(numericForConstantUseBarrier.stats.numericForDefaultStepsRemoved, 0);
+
 const adjacentIndexBaseAliasInline = optimize(`local temp = math
 local real = temp["random"]
 consume(real)`);
