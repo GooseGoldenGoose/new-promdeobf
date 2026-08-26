@@ -3758,14 +3758,220 @@ function presentedBody(source) {
     return String(source).slice(index + marker.length).trimEnd();
 }
 
+function parseNestedBody(bodyText) {
+    try {
+        return luaparse.parse(String(bodyText || ""), {
+            luaVersion: "luau",
+            comments: false,
+            scope: false,
+            locations: false,
+            ranges: true,
+        });
+    } catch {
+        return null;
+    }
+}
+
+function directBindingInfo(statement) {
+    if (statement?.type !== "LocalStatement" && statement?.type !== "AssignmentStatement") return null;
+    const variables = statement.variables || [];
+    const init = statement.init || [];
+    if (variables.length !== 1 || init.length !== 1 || !isIdentifier(variables[0])) return null;
+    return { statement, target: variables[0], init: init[0], declares: statement.type === "LocalStatement" };
+}
+
+function staticArgsIndex(node) {
+    if (node?.type !== "IndexExpression" || !isIdentifier(node.base, "args")) return null;
+    const index = numericValue(node.index);
+    return Number.isInteger(index) && index >= 1 ? index : null;
+}
+
+function varargTailInfo(node) {
+    if (node?.type !== "TableConstructorExpression") return null;
+    const fields = node.fields || [];
+    if (fields.length !== 1 || fields[0]?.type !== "TableValue") return null;
+    const call = fields[0].value;
+    if (call?.type !== "CallExpression" || !isIdentifier(call.base, "select")) return null;
+    const args = call.arguments || [];
+    if (args.length !== 2) return null;
+    const offset = numericValue(args[0]);
+    if (offset === null || offset < 1) return null;
+    const unpackCall = args[1];
+    if (unpackCall?.type !== "CallExpression" || !isIdentifier(unpackCall.base, "unpack")) return null;
+    const unpackArgs = unpackCall.arguments || [];
+    if (unpackArgs.length !== 1 || !isIdentifier(unpackArgs[0], "args")) return null;
+    return { offset, call, unpackCall };
+}
+
+function singleUninitializedLocalFor(body, name, excludedStatements = new Set()) {
+    let found = null;
+    for (const statement of body) {
+        if (excludedStatements.has(statement) || statement?.type !== "LocalStatement") continue;
+        const variables = statement.variables || [];
+        const init = statement.init || [];
+        if (!variables.some(variable => isIdentifier(variable, name))) continue;
+        if (variables.length !== 1 || init.length !== 0 || !isIdentifier(variables[0], name)) return { ambiguous: true };
+        if (found) return { ambiguous: true };
+        found = statement;
+    }
+    return { statement: found };
+}
+
+function recoverNestedFunctionSignature(bodyText, factoryName) {
+    const ast = parseNestedBody(bodyText);
+    if (!ast) return { recovered: false, bodyText };
+    const body = ast.body || [];
+    const varargFactory = factoryName === "createClosure";
+    const fixedMatch = /^createClosure(\d+)$/.exec(String(factoryName || ""));
+    if (!varargFactory && !fixedMatch) return { recovered: false, bodyText };
+    const fixedFactoryArity = fixedMatch ? Number(fixedMatch[1]) : null;
+
+    const parameterLoads = new Map();
+    const tailCandidates = [];
+    for (const statement of body) {
+        const binding = directBindingInfo(statement);
+        if (!binding || !Array.isArray(statement.range)) continue;
+        const index = staticArgsIndex(binding.init);
+        if (index !== null) {
+            if (parameterLoads.has(index)) return { recovered: false, bodyText };
+            parameterLoads.set(index, binding);
+            continue;
+        }
+        const tail = varargTailInfo(binding.init);
+        if (tail) tailCandidates.push({ ...binding, ...tail });
+    }
+
+    let fixedCount;
+    let tail = null;
+    if (varargFactory) {
+        if (tailCandidates.length !== 1) return { recovered: false, bodyText };
+        tail = tailCandidates[0];
+        fixedCount = tail.offset - 1;
+    } else {
+        if (tailCandidates.length !== 0) return { recovered: false, bodyText };
+        fixedCount = parameterLoads.size ? Math.max(...parameterLoads.keys()) : 0;
+        if (!Number.isInteger(fixedFactoryArity) || fixedCount > fixedFactoryArity) return { recovered: false, bodyText };
+    }
+
+    if (parameterLoads.size !== fixedCount) return { recovered: false, bodyText };
+    for (let index = 1; index <= fixedCount; index++) if (!parameterLoads.has(index)) return { recovered: false, bodyText };
+
+    const allowedArgsRanges = [];
+    for (const binding of parameterLoads.values()) {
+        if (!Array.isArray(binding.init.range)) return { recovered: false, bodyText };
+        allowedArgsRanges.push(binding.init.range);
+    }
+    if (tail) {
+        if (!Array.isArray(tail.unpackCall.range)) return { recovered: false, bodyText };
+        allowedArgsRanges.push(tail.unpackCall.range);
+    }
+    const rangeInsideAllowed = range => Array.isArray(range) && allowedArgsRanges.some(allowed => range[0] >= allowed[0] && range[1] <= allowed[1]);
+    let argsSafe = true;
+    function scanArgs(node, root = false) {
+        if (!isNode(node) || !argsSafe) return;
+        if (node.type === "FunctionDeclaration") return;
+        if (isIdentifier(node, "args") && !rangeInsideAllowed(node.range)) {
+            argsSafe = false;
+            return;
+        }
+        for (const key of Object.keys(node)) {
+            if (key === "loc" || key === "range") continue;
+            const value = node[key];
+            if (Array.isArray(value)) for (const child of value) scanArgs(child, false);
+            else if (isNode(value)) scanArgs(value, false);
+        }
+    }
+    for (const statement of body) scanArgs(statement, true);
+    if (!argsSafe) return { recovered: false, bodyText };
+
+    const edits = [];
+    const parameterNames = [];
+    const removedStatements = new Set();
+    for (let index = 1; index <= fixedCount; index++) {
+        const binding = parameterLoads.get(index);
+        parameterNames.push(binding.target.name);
+        edits.push({ start: binding.statement.range[0], end: binding.statement.range[1], replacement: "" });
+        removedStatements.add(binding.statement);
+        if (!binding.declares) {
+            const declaration = singleUninitializedLocalFor(body, binding.target.name, removedStatements);
+            if (declaration.ambiguous || !declaration.statement || !Array.isArray(declaration.statement.range)) return { recovered: false, bodyText };
+            edits.push({ start: declaration.statement.range[0], end: declaration.statement.range[1], replacement: "" });
+            removedStatements.add(declaration.statement);
+        }
+    }
+
+    if (tail) {
+        edits.push({ start: tail.statement.range[0], end: tail.statement.range[1], replacement: "" });
+        removedStatements.add(tail.statement);
+        if (!tail.declares) {
+            const declaration = singleUninitializedLocalFor(body, tail.target.name, removedStatements);
+            if (declaration.ambiguous || !declaration.statement || !Array.isArray(declaration.statement.range)) return { recovered: false, bodyText };
+            edits.push({ start: declaration.statement.range[0], end: declaration.statement.range[1], replacement: "" });
+            removedStatements.add(declaration.statement);
+        }
+
+        let tailSafe = true;
+        let recoveredTailReads = 0;
+        function scanTail(node, parent = null, key = null, root = false) {
+            if (!isNode(node) || !tailSafe) return;
+            if (node.type === "FunctionDeclaration") return;
+            if (node.type === "CallExpression" && isIdentifier(node.base, "unpack")) {
+                const callArgs = node.arguments || [];
+                if (callArgs.length === 1 && isIdentifier(callArgs[0], tail.target.name)) {
+                    if (!Array.isArray(node.range)) { tailSafe = false; return; }
+                    edits.push({ start: node.range[0], end: node.range[1], replacement: "..." });
+                    recoveredTailReads++;
+                    return;
+                }
+            }
+            if (node.type === "IndexExpression" && isIdentifier(node.base, tail.target.name)) {
+                const slot = numericValue(node.index);
+                if (slot === null || slot < 1 || !Array.isArray(node.range)) { tailSafe = false; return; }
+                edits.push({ start: node.range[0], end: node.range[1], replacement: `(select(${slot}, ...))` });
+                recoveredTailReads++;
+                return;
+            }
+            if (isIdentifier(node, tail.target.name)) {
+                // The defining/declaration statements were already skipped above.
+                // Any remaining bare read, write, alias, or redeclaration means the
+                // compiler vararg storage is observable and cannot be removed.
+                tailSafe = false;
+                return;
+            }
+            for (const childKey of Object.keys(node)) {
+                if (childKey === "loc" || childKey === "range") continue;
+                const value = node[childKey];
+                if (Array.isArray(value)) for (const child of value) scanTail(child, node, childKey, false);
+                else if (isNode(value)) scanTail(value, node, childKey, false);
+            }
+        }
+        for (const statement of body) {
+            if (removedStatements.has(statement)) continue;
+            scanTail(statement, null, null, true);
+        }
+        if (!tailSafe) return { recovered: false, bodyText };
+    }
+
+    return {
+        recovered: true,
+        bodyText: applyTextEdits(String(bodyText || ""), edits),
+        parameters: parameterNames,
+        vararg: varargFactory,
+        fixedParameterCount: fixedCount,
+    };
+}
+
 function nestedFunctionExpression(bodyText, options = {}) {
     const body = String(bodyText || "").trim();
+    const recoveredSignature = options.recoveredSignature === true;
+    const parameters = recoveredSignature ? [...(options.parameters || [])] : [];
+    if (recoveredSignature && options.vararg === true) parameters.push("...");
     const lines = [
-        "function(...)",
+        recoveredSignature ? `function(${parameters.join(", ")})` : "function(...)",
         "    --headers",
         "",
-        "    local args = { ... }",
     ];
+    if (!recoveredSignature) lines.push("    local args = { ... }");
     if (options.registerOverflowUsed === true) lines.push("    local RegisterOverflow = {}");
     lines.push(
         "",
@@ -3832,9 +4038,15 @@ function regionGraph(graph, entry, ownerByState, solvedBodies) {
                 if (call.captureCount !== 0) {
                     return { error: `Closure entry ${call.entry} has ${call.captureCount} capture value(s); capture reconstruction is not implemented` };
                 }
+                const signature = recoverNestedFunctionSignature(child.bodyText, call.factoryName);
                 const replacement = replaceClosureFactoryOperation(
                     operation,
-                    nestedFunctionExpression(child.bodyText, { registerOverflowUsed: child.registerOverflowUsed === true })
+                    nestedFunctionExpression(signature.bodyText, {
+                        registerOverflowUsed: child.registerOverflowUsed === true,
+                        recoveredSignature: signature.recovered === true,
+                        parameters: signature.parameters || [],
+                        vararg: signature.vararg === true,
+                    })
                 );
                 if (!replacement) {
                     return { error: `Closure factory for entry ${call.entry} has no replaceable beta assignment target` };

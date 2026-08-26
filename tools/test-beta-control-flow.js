@@ -427,15 +427,53 @@ assert.equal(nestedClosureRegions.entryState, 1);
 assert.equal(nestedClosureRegions.stateCount, 3);
 assert.equal(nestedClosureRegions.closureRegionCount, 2);
 assert.equal(nestedClosureRegions.inlinedClosureFactoryCount, 1);
-assert(nestedClosureRegions.source.includes("local r_v1_1 = function(...)"));
-assert(nestedClosureRegions.source.includes("local args = { ... }"));
-assert(nestedClosureRegions.source.includes("local r_v3_1 = args[1]"));
-assert(nestedClosureRegions.source.includes("local r_v4_1 = args[2]"));
+assert(nestedClosureRegions.source.includes("local r_v1_1 = function(r_v3_1, r_v4_1)"));
+assert(!nestedClosureRegions.source.includes("local r_v3_1 = args[1]"));
+assert(!nestedClosureRegions.source.includes("local r_v4_1 = args[2]"));
 assert(nestedClosureRegions.source.includes("return r_v5_1"));
 assert(!nestedClosureRegions.source.includes("createClosure7("));
 assert(!nestedClosureRegions.source.includes("state ="));
 assert(!nestedClosureRegions.source.includes("ReturnVal ="));
 parseLua(nestedClosureRegions.source, "<beta-cf-nested-closure-output>");
+
+const nestedVarargClosureRegions = solveBetaControlFlow(ast, {
+    applied: true,
+    graph: {
+        cfgComplete: true,
+        entries: [1, 30],
+        states: [
+            {
+                id: 1,
+                predecessors: [],
+                successors: [],
+                operations: [
+                    { kind: "version-define", emittedTarget: "fn", emittedText: "local fn = createClosure(30, {})", rhs: "createClosure(30, {})", reads: [] },
+                    { kind: "version-define", emittedTarget: "result", emittedText: "local result = fn(\"x\", 1, 2)", rhs: "fn(\"x\", 1, 2)", reads: ["fn"] },
+                    { kind: "return-payload", terminalCompilerReturnPayload: true, returnExpressions: [], emittedText: "ReturnVal = {}", rhs: "{}", reads: [] },
+                    { kind: "state-transition", emittedTarget: "state", emittedText: "state = nil", rhs: "nil", reads: [] },
+                ],
+            },
+            {
+                id: 30,
+                predecessors: [],
+                successors: [],
+                operations: [
+                    { kind: "version-define", emittedTarget: "tail", emittedText: "local tail = { select(2, unpack(args)) }", rhs: "{ select(2, unpack(args)) }", reads: [] },
+                    { kind: "version-define", emittedTarget: "head", emittedText: "local head = args[1]", rhs: "args[1]", reads: [] },
+                    { kind: "version-define", emittedTarget: "count", emittedText: "local count = select(\"#\", unpack(tail))", rhs: "select(\"#\", unpack(tail))", reads: ["tail"] },
+                    { kind: "return-payload", terminalCompilerReturnPayload: true, returnExpressions: ["head", "count"], emittedText: "ReturnVal = { head, count }", rhs: "{ head, count }", reads: ["head", "count"] },
+                    { kind: "state-transition", emittedTarget: "state", emittedText: "state = nil", rhs: "nil", reads: [] },
+                ],
+            },
+        ],
+    },
+});
+assert.equal(nestedVarargClosureRegions.applied, true);
+assert(nestedVarargClosureRegions.source.includes("local fn = function(head, ...)"));
+assert(!nestedVarargClosureRegions.source.includes("local head = args[1]"));
+assert(!nestedVarargClosureRegions.source.includes("local tail ="));
+assert(nestedVarargClosureRegions.source.includes('local count = select("#", ...)'));
+parseLua(nestedVarargClosureRegions.source, "<beta-cf-nested-vararg-closure-output>");
 
 const capturedClosureRejected = solveBetaControlFlow(ast, {
     applied: true,
@@ -1279,7 +1317,7 @@ const overflowFactoryNormalized = solveBetaControlFlow(ast, {
     },
 });
 assert.equal(overflowFactoryNormalized.applied, true);
-assert(overflowFactoryNormalized.source.includes("RegisterOverflow.v1 = function(...)"));
+assert(overflowFactoryNormalized.source.includes("RegisterOverflow.v1 = function()"));
 assert(!overflowFactoryNormalized.source.includes("createClosure2("));
 assert(!overflowFactoryNormalized.source.includes("RegisterOverflow["));
 parseLua(overflowFactoryNormalized.source, "<beta-cf-overflow-factory-normalized>");
