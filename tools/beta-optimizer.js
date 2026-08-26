@@ -31,6 +31,7 @@ function main() {
     console.log(`Adjacent copy chains folded: ${result.stats.adjacentCopyChainsFolded}`);
     console.log(`Adjacent index base aliases folded: ${result.stats.adjacentIndexBaseAliasesFolded}`);
     console.log(`Adjacent index keys inlined: ${result.stats.adjacentIndexKeyInlines}`);
+    console.log(`Adjacent assignment keys inlined: ${result.stats.adjacentAssignmentKeyInlines}`);
     console.log(`Deferred local initializers folded: ${result.stats.deferredLocalInitializersFolded}`);
     console.log(`Dead locals: ${result.stats.deadLocals}`);
     console.log(`Dead call results: ${result.stats.deadCallResults}`);

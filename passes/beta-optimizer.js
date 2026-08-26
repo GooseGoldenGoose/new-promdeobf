@@ -1333,6 +1333,64 @@ function findAdjacentIndexKeyBatch(source, block, functionBody, stats, limit = 1
     return { compound: true, edits, transformCount, kind: transformCount === 1 ? "adjacent-index-key-inline" : "adjacent-index-key-batch" };
 }
 
+function findAdjacentAssignmentKeyInline(source, block, functionBody, stats, startIndex = 0) {
+    for (let index = startIndex; index + 1 < block.length; index++) {
+        const producerStatement = block[index];
+        const consumerStatement = block[index + 1];
+        const producer = directLocalInfo(producerStatement);
+        if (!producer || producer.init?.type !== "IndexExpression" || !Array.isArray(producer.init.range)) continue;
+        if (consumerStatement?.type !== "AssignmentStatement" || !Array.isArray(consumerStatement.range)) continue;
+
+        const variables = consumerStatement.variables || [];
+        const init = consumerStatement.init || [];
+        if (variables.length !== 1 || init.length !== 1) continue;
+        const target = variables[0];
+        if (target?.type !== "IndexExpression" || !isIdentifier(target.index, producer.name)) continue;
+        if (!isIdentifier(target.base) || target.base.isLocal !== true) continue;
+        if (!Array.isArray(target.index.range)) continue;
+
+        const refs = scanLaterReferences(block, index, producer.name);
+        const sameBlockRefs = scanLaterReferencesSameBlock(block, index, producer.name);
+        if (refs.captured || refs.redeclared || refs.writes.length || refs.reads.length !== 1) continue;
+        if (sameBlockRefs.reads.length !== 1 || sameBlockRefs.reads[0].node !== target.index || sameBlockRefs.reads[0].topIndex !== index + 1) continue;
+
+        // The split form finishes the producer lookup before reading the assignment
+        // destination local. In the inlined form Lua reads the destination base
+        // before evaluating its index expression. That is equivalent only when a
+        // nested closure reached by the producer cannot rebind the destination.
+        if (nestedFunctionWritesName(functionBody, target.base.name)) continue;
+
+        stats.adjacentAssignmentKeyInlines++;
+        return {
+            compound: true,
+            edits: [
+                { start: producerStatement.range[0], end: producerStatement.range[1], replacement: "" },
+                { start: target.index.range[0], end: target.index.range[1], replacement: sourceOf(source, producer.init) },
+            ],
+            kind: "adjacent-assignment-key-inline",
+            statementIndex: index,
+        };
+    }
+    return null;
+}
+
+function findAdjacentAssignmentKeyBatch(source, block, functionBody, stats, limit = 128) {
+    const edits = [];
+    let transformCount = 0;
+    let cursor = 0;
+    while (transformCount < limit) {
+        const trialStats = { adjacentAssignmentKeyInlines: 0 };
+        const candidate = findAdjacentAssignmentKeyInline(source, block, functionBody, trialStats, cursor);
+        if (!candidate) break;
+        edits.push(...editParts(candidate));
+        stats.adjacentAssignmentKeyInlines += trialStats.adjacentAssignmentKeyInlines;
+        transformCount++;
+        cursor = candidate.statementIndex + 2;
+    }
+    if (!transformCount) return null;
+    return { compound: true, edits, transformCount, kind: transformCount === 1 ? "adjacent-assignment-key-inline" : "adjacent-assignment-key-batch" };
+}
+
 function findDeferredLocalInitialization(source, block, stats, startIndex = 0) {
     for (let declarationIndex = startIndex; declarationIndex < block.length; declarationIndex++) {
         const declaration = block[declarationIndex];
@@ -1870,6 +1928,8 @@ function findTransformEdit(source, ast, stats, budget = 1) {
             if (indexBaseAliasEdit) return indexBaseAliasEdit;
             const indexKeyEdit = findAdjacentIndexKeyBatch(source, block, functionBody, stats, Math.min(128, budget));
             if (indexKeyEdit) return indexKeyEdit;
+            const assignmentKeyEdit = findAdjacentAssignmentKeyBatch(source, block, functionBody, stats, Math.min(128, budget));
+            if (assignmentKeyEdit) return assignmentKeyEdit;
         }
         const envEdit = findEnvFold(source, functionBody, inheritedEnvName, Math.min(128, budget));
         if (envEdit) {
@@ -1964,6 +2024,7 @@ function optimizeBetaSource(source, options = {}) {
         adjacentCopyChainsFolded: 0,
         adjacentIndexBaseAliasesFolded: 0,
         adjacentIndexKeyInlines: 0,
+        adjacentAssignmentKeyInlines: 0,
         deferredLocalInitializersFolded: 0,
         deadLocals: 0,
         deadCallResults: 0,

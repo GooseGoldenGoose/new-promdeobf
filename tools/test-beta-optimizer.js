@@ -961,6 +961,41 @@ assert(adjacentIndexKeyNestedWriterBarrier.source.includes('local key = decode("
 assert(adjacentIndexKeyNestedWriterBarrier.source.includes("local value = cache[key]"));
 assert.equal(adjacentIndexKeyNestedWriterBarrier.stats.adjacentIndexKeyInlines, 0);
 
+const adjacentAssignmentKeyInline = optimize(`local source = {}
+local target = {}
+local key = source[decode("x")]
+target[key] = true`);
+assert(!adjacentAssignmentKeyInline.source.includes("local key ="));
+assert(adjacentAssignmentKeyInline.source.includes('target[source[decode("x")]] = true'));
+assert.equal(adjacentAssignmentKeyInline.stats.adjacentAssignmentKeyInlines, 1);
+
+const adjacentAssignmentKeyGlobalBaseBarrier = optimize(`local source = {}
+local key = source[decode("x")]
+target[key] = true`);
+assert(adjacentAssignmentKeyGlobalBaseBarrier.source.includes('local key = source[decode("x")]'));
+assert(adjacentAssignmentKeyGlobalBaseBarrier.source.includes("target[key] = true"));
+assert.equal(adjacentAssignmentKeyGlobalBaseBarrier.stats.adjacentAssignmentKeyInlines, 0);
+
+const adjacentAssignmentKeyNestedWriterBarrier = optimize(`local source = {}
+local target = {}
+local mutate = function()
+    target = {}
+end
+local key = source[decode(mutate)]
+target[key] = true
+consume(mutate)`);
+assert(adjacentAssignmentKeyNestedWriterBarrier.source.includes("local key = source[decode(mutate)]"));
+assert(adjacentAssignmentKeyNestedWriterBarrier.source.includes("target[key] = true"));
+assert.equal(adjacentAssignmentKeyNestedWriterBarrier.stats.adjacentAssignmentKeyInlines, 0);
+
+const adjacentAssignmentKeyComplexBaseBarrier = optimize(`local source = {}
+local holder = { target = {} }
+local key = source[decode("x")]
+holder.target[key] = true`);
+assert(adjacentAssignmentKeyComplexBaseBarrier.source.includes('local key = source[decode("x")]'));
+assert(adjacentAssignmentKeyComplexBaseBarrier.source.includes("holder.target[key] = true"));
+assert.equal(adjacentAssignmentKeyComplexBaseBarrier.stats.adjacentAssignmentKeyInlines, 0);
+
 const independentDeferredBatch = optimize(`local a
 local b
 a = 1
