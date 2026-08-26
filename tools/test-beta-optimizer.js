@@ -1419,6 +1419,40 @@ print(out, mutate)`);
 assert(adjacentCallArgumentPriorWriterBarrier.source.includes("local temp ="));
 assert.equal(adjacentCallArgumentPriorWriterBarrier.stats.adjacentCallArgumentInlines, 0);
 
+const adjacentCallArgumentExpressionInline = optimize(`local callee = assert
+local fn = foo
+local value = fn(1)
+callee(value == nil)`);
+assert(!adjacentCallArgumentExpressionInline.source.includes("local callee = assert"));
+assert(!adjacentCallArgumentExpressionInline.source.includes("local value ="));
+assert(adjacentCallArgumentExpressionInline.source.includes("assert((foo(1)) == nil)"));
+assert.equal(adjacentCallArgumentExpressionInline.stats.adjacentCallArgumentInlines, 1);
+
+const adjacentCallArgumentExpressionLogicalBarrier = optimize(`local callee = consume
+local fn = make
+local value = fn()
+callee(false and value)`);
+assert(adjacentCallArgumentExpressionLogicalBarrier.source.includes("local value ="));
+assert.equal(adjacentCallArgumentExpressionLogicalBarrier.stats.adjacentCallArgumentInlines, 0);
+
+const adjacentCallArgumentExpressionWriterBarrier = optimize(`local callee = consume
+local fn = make
+local mutate = function()
+    callee = warn
+end
+local value = fn(mutate)
+callee(value == nil)`);
+assert(adjacentCallArgumentExpressionWriterBarrier.source.includes("local value ="));
+assert(adjacentCallArgumentExpressionWriterBarrier.source.includes("callee(value == nil)"));
+
+const adjacentCallArgumentExpressionPrefixBarrier = optimize(`local callee = consume
+local fn = make
+local value = fn()
+callee(other(), value == nil)`);
+assert(adjacentCallArgumentExpressionPrefixBarrier.source.includes("local value ="));
+assert.equal(adjacentCallArgumentExpressionPrefixBarrier.stats.adjacentCallArgumentInlines, 0);
+assert(adjacentCallArgumentExpressionPrefixBarrier.source.includes("callee(other(), value == nil)"));
+
 const adjacentAssignmentValueInline = optimize(`local target = {}
 local key = 1
 local temp = makeValue()

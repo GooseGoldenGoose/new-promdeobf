@@ -2155,6 +2155,89 @@ function findAdjacentCallArgumentInline(source, block, functionBody, stats, star
     return null;
 }
 
+function callExpressionFromStatement(statement) {
+    if (statement?.type === "CallStatement" && statement.expression?.type === "CallExpression") return statement.expression;
+    if (statement?.type === "LocalStatement" || statement?.type === "AssignmentStatement") {
+        const variables = statement.variables || [];
+        const init = statement.init || [];
+        if (variables.length === 1 && init.length === 1 && init[0]?.type === "CallExpression") return init[0];
+    }
+    return null;
+}
+
+function nodeContainsIdentity(root, target) {
+    if (root === target) return true;
+    if (!root) return false;
+    if (Array.isArray(root)) return root.some(child => nodeContainsIdentity(child, target));
+    if (!isNode(root)) return false;
+    for (const key of Object.keys(root)) {
+        if (key === "range" || key === "loc") continue;
+        if (nodeContainsIdentity(root[key], target)) return true;
+    }
+    return false;
+}
+
+function findAdjacentCallArgumentExpressionInline(source, block, functionBody, stats, startIndex = 0) {
+    for (let index = startIndex; index + 1 < block.length; index++) {
+        const producerStatement = block[index];
+        const consumerStatement = block[index + 1];
+        const producer = directLocalInfo(producerStatement);
+        if (!producer || producer.variable.typeAnnotation || !Array.isArray(producerStatement.range)) continue;
+        if (!isStandaloneCall(producer.init) && !isScalarTempExpression(producer.init)) continue;
+        if (isLiteral(producer.init) || isIdentifier(producer.init)) continue;
+
+        const call = callExpressionFromStatement(consumerStatement);
+        if (!call || !isIdentifier(call.base) || call.base.isLocal !== true) continue;
+        if (nestedFunctionWritesName(functionBody, call.base.name)) continue;
+
+        const refs = scanLaterReferences(block, index, producer.name);
+        const sameBlockRefs = scanLaterReferencesSameBlock(block, index, producer.name);
+        if (refs.captured || refs.redeclared || refs.writes.length || refs.reads.length !== 1) continue;
+        if (sameBlockRefs.reads.length !== 1 || sameBlockRefs.reads[0].topIndex !== index + 1) continue;
+        const useNode = sameBlockRefs.reads[0].node;
+        if (!Array.isArray(useNode?.range)) continue;
+
+        const args = call.arguments || [];
+        let argIndex = -1;
+        for (let candidateIndex = 0; candidateIndex < args.length; candidateIndex++) {
+            if (!nodeContainsIdentity(args[candidateIndex], useNode)) continue;
+            if (argIndex !== -1) {
+                argIndex = -2;
+                break;
+            }
+            argIndex = candidateIndex;
+        }
+        if (argIndex < 0) continue;
+        const argument = args[argIndex];
+        if (!isLeadingScalarUse(argument, useNode)) continue;
+
+        // Prometheus evaluates the call base before its arguments. The split
+        // register form has already snapshotted that base into a stable local;
+        // moving the adjacent producer into the argument is valid only when the
+        // outer callee and all earlier arguments cannot be changed by the producer.
+        let prefixStable = true;
+        for (let prior = 0; prior < argIndex; prior++) {
+            if (!stableMovedCallPrefixExpression(args[prior], functionBody)) {
+                prefixStable = false;
+                break;
+            }
+        }
+        if (!prefixStable) continue;
+
+        stats.adjacentCallArgumentInlines++;
+        return {
+            compound: true,
+            edits: [
+                { start: producerStatement.range[0], end: producerStatement.range[1], replacement: "" },
+                { start: useNode.range[0], end: useNode.range[1], replacement: singleValueInlineSource(source, producer.init) },
+            ],
+            kind: "adjacent-call-argument-expression-inline",
+            statementIndex: index,
+        };
+    }
+    return null;
+}
+
 function findAdjacentCallArgumentBatch(source, block, functionBody, stats, limit = 128) {
     const edits = [];
     let transformCount = 0;
@@ -2875,6 +2958,8 @@ function findTransformEdit(source, ast, stats, budget = 1) {
             if (dependencySafeAssignmentKeyEdit) return dependencySafeAssignmentKeyEdit;
             const tableCallArgumentEdit = findAdjacentTableCallArgumentGroup(source, block, functionBody, stats);
             if (tableCallArgumentEdit) return tableCallArgumentEdit;
+            const callArgumentExpressionEdit = findAdjacentCallArgumentExpressionInline(source, block, functionBody, stats);
+            if (callArgumentExpressionEdit) return callArgumentExpressionEdit;
             const callArgumentEdit = findAdjacentCallArgumentBatch(source, block, functionBody, stats, Math.min(128, budget));
             if (callArgumentEdit) return callArgumentEdit;
             const assignmentValueEdit = findAdjacentAssignmentValueBatch(source, block, stats, Math.min(128, budget));
