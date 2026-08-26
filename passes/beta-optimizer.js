@@ -1743,6 +1743,41 @@ function findAdjacentIndexBaseAliasBatch(source, block, stats, limit = 128) {
     return { compound: true, edits, transformCount, kind: transformCount === 1 ? "adjacent-index-base-alias-inline" : "adjacent-index-base-alias-batch" };
 }
 
+function findAdjacentIndexedCallBaseAliasInline(source, block, stats) {
+    for (let index = 0; index + 1 < block.length; index++) {
+        const producerStatement = block[index];
+        const producer = directLocalInfo(producerStatement);
+        if (!producer || producer.init?.type !== "IndexExpression" || !Array.isArray(producerStatement.range)) continue;
+
+        const consumerStatement = block[index + 1];
+        if (consumerStatement?.type !== "IfStatement") continue;
+
+        const refs = scanLaterReferences(block, index, producer.name);
+        const sameBlockRefs = scanLaterReferencesSameBlock(block, index, producer.name);
+        if (refs.captured || refs.redeclared || refs.writes.length || refs.reads.length !== 1) continue;
+        if (sameBlockRefs.reads.length !== 1 || sameBlockRefs.reads[0].topIndex !== index + 1) continue;
+
+        const read = sameBlockRefs.reads[0];
+        const call = read.parent;
+        if (read.key !== "base" || call?.type !== "CallExpression" || call.base !== read.node || !Array.isArray(read.node.range)) continue;
+        if (!immediateScalarConsumerIsSafe(consumerStatement, call)) continue;
+
+        // The indexed callee snapshot is immediately followed by an if whose
+        // condition begins with that exact call. Restoring the lookup into call-base
+        // position preserves lookup -> argument -> call ordering exactly.
+        stats.adjacentIndexBaseAliasesFolded++;
+        return {
+            compound: true,
+            edits: [
+                { start: producerStatement.range[0], end: producerStatement.range[1], replacement: "" },
+                { start: read.node.range[0], end: read.node.range[1], replacement: sourceOf(source, producer.init) },
+            ],
+            kind: "adjacent-indexed-if-call-base-alias-inline",
+        };
+    }
+    return null;
+}
+
 function findAdjacentIndexKeyBatch(source, block, functionBody, stats, limit = 128) {
     const edits = [];
     let transformCount = 0;
@@ -2747,7 +2782,8 @@ function tryOptimizeLocal(source, block, index, stats, mode = "inline", tailNode
     // Compiler scalar temporaries can be folded into the immediately following
     // statement only when the use is in the leading evaluation position. This
     // keeps arithmetic/comparison metamethod timing and mutable-read order intact.
-    if (!isIdentifier(info.init) && isScalarTempExpression(info.init) && read.topIndex === index + 1) {
+    const adjacentIfCallTemp = isStandaloneCall(info.init) && readTopStatement?.type === "IfStatement" && read.parent?.type === "BinaryExpression";
+    if (!isIdentifier(info.init) && (isScalarTempExpression(info.init) || adjacentIfCallTemp) && read.topIndex === index + 1) {
         if (isRepeatedEvaluationStatement(readTopStatement)) return null;
         if (!immediateScalarConsumerIsSafe(readTopStatement, read.node)) return null;
         stats.singleUseInlines++;
@@ -2755,9 +2791,9 @@ function tryOptimizeLocal(source, block, index, stats, mode = "inline", tailNode
             compound: true,
             edits: [
                 { start: statement.range[0], end: statement.range[1], replacement: "" },
-                { start: read.node.range[0], end: read.node.range[1], replacement: `(${sourceOf(source, info.init)})` }
+                { start: read.node.range[0], end: read.node.range[1], replacement: adjacentIfCallTemp ? sourceOf(source, info.init) : `(${sourceOf(source, info.init)})` }
             ],
-            kind: "scalar-temp-inline"
+            kind: adjacentIfCallTemp ? "if-call-temp-inline" : "scalar-temp-inline"
         };
     }
 
@@ -3027,6 +3063,8 @@ function findTransformEdit(source, ast, stats, budget = 1) {
             if (copyChainEdit) return copyChainEdit;
             const indexBaseAliasEdit = findAdjacentIndexBaseAliasBatch(source, block, stats, Math.min(128, budget));
             if (indexBaseAliasEdit) return indexBaseAliasEdit;
+            const indexedIfCallBaseAliasEdit = findAdjacentIndexedCallBaseAliasInline(source, block, stats);
+            if (indexedIfCallBaseAliasEdit) return indexedIfCallBaseAliasEdit;
             const indexKeyEdit = findAdjacentIndexKeyBatch(source, block, functionBody, stats, Math.min(128, budget));
             if (indexKeyEdit) return indexKeyEdit;
             const assignmentKeyEdit = findAdjacentAssignmentKeyBatch(source, block, functionBody, stats, Math.min(128, budget));

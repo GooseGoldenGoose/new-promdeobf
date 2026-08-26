@@ -1478,6 +1478,32 @@ assert(adjacentCallArgumentExpressionPrefixBarrier.source.includes("local value 
 assert.equal(adjacentCallArgumentExpressionPrefixBarrier.stats.adjacentCallArgumentInlines, 0);
 assert(adjacentCallArgumentExpressionPrefixBarrier.source.includes("callee(other(), value == nil)"));
 
+const adjacentIfCallTempIndexedAlias = optimize(`local r_v2_1 = 9
+local r_v5_3 = math["random"]
+local r_v4_5 = r_v5_3(2, 3)
+if r_v4_5 == 3 then
+    print(r_v2_1)
+    return
+end`);
+assert(!adjacentIfCallTempIndexedAlias.source.includes("local r_v5_3 ="));
+assert(!adjacentIfCallTempIndexedAlias.source.includes("local r_v4_5 ="));
+assert(adjacentIfCallTempIndexedAlias.source.includes('if math["random"](2, 3) == 3 then'));
+assert.equal(adjacentIfCallTempIndexedAlias.stats.adjacentIndexBaseAliasesFolded, 1);
+assert.equal(adjacentIfCallTempIndexedAlias.stats.singleUseInlines, 1);
+
+const adjacentIfCallTempOrderBarrier = optimize(`local fn = make
+local value = fn()
+if other() == value then
+    print(value)
+end`);
+assert(adjacentIfCallTempOrderBarrier.source.includes("local value ="));
+
+const adjacentIndexedIfCallLogicalBarrier = optimize(`local f = math["random"]
+if false and f(2, 3) then
+    print("bad")
+end`);
+assert(adjacentIndexedIfCallLogicalBarrier.source.includes('local f = math["random"]'));
+
 const adjacentAssignmentValueInline = optimize(`local target = {}
 local key = 1
 local temp = makeValue()
