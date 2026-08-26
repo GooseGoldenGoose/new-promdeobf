@@ -1121,18 +1121,22 @@ function findPreFoldDeadNilAssignment(source, functionBody, stats, limit = 128) 
     // This is intentionally a pre-fold-only cleanup. A direct `x = nil` emitted
     // as compiler lifetime cleanup can be deleted when its value is never observed.
     // Root-block writes use ordinary later-reference proof. Nested blocks are only
-    // eligible when they terminate the function with a direct return; other nested
+    // eligible when they terminate the function with a direct return, or when they
+    // are repeat bodies whose `until` tail does not observe the local. Other nested
     // control flow still fails closed.
     if (functionHasScopeTransfer(functionBody) || limit <= 0) return null;
 
     const edits = [];
+    const repeatConditions = repeatConditionByBody(functionBody);
     const blocks = allBlocksForFunction(functionBody);
     for (const block of blocks) {
         if (edits.length >= limit) break;
         const isFunctionRoot = block === functionBody;
         const last = block[block.length - 1];
         const isTerminalNestedBlock = !isFunctionRoot && last?.type === "ReturnStatement";
-        if (!isFunctionRoot && !isTerminalNestedBlock) continue;
+        const repeatTailCondition = repeatConditions.get(block) || null;
+        const isRepeatBody = repeatTailCondition !== null;
+        if (!isFunctionRoot && !isTerminalNestedBlock && !isRepeatBody) continue;
 
         for (let index = block.length - 1; index >= 0 && edits.length < limit; index--) {
             const statement = block[index];
@@ -1145,7 +1149,7 @@ function findPreFoldDeadNilAssignment(source, functionBody, stats, limit = 128) 
             if (!hasPriorDirectLocalDeclaration(block, index, info.name)) continue;
             if (functionCapturesName(functionBody, info.name)) continue;
 
-            const refs = scanLaterReferences(block, index, info.name);
+            const refs = scanLaterReferences(block, index, info.name, isRepeatBody ? repeatTailCondition : null);
             if (refs.reads.length || refs.captured || refs.redeclared) continue;
 
             edits.push({ start: statement.range[0], end: statement.range[1], replacement: "", kind: "dead-direct-nil-cleanup" });
@@ -1389,6 +1393,176 @@ function findAdjacentAssignmentKeyBatch(source, block, functionBody, stats, limi
     }
     if (!transformCount) return null;
     return { compound: true, edits, transformCount, kind: transformCount === 1 ? "adjacent-assignment-key-inline" : "adjacent-assignment-key-batch" };
+}
+
+function stableMovedCallPrefixExpression(node, functionBody) {
+    if (isLiteral(node)) return true;
+    if (!isIdentifier(node) || node.isLocal !== true) return false;
+    return !nestedFunctionWritesName(functionBody, node.name);
+}
+
+function singleValueInlineSource(source, node) {
+    const text = sourceOf(source, node);
+    // A local initializer captures only the first result. If a call becomes the
+    // final argument of another call, bare `f()` would expand all of its returns.
+    // Parentheses preserve the original single-value local semantics. Scalar
+    // expressions are already single-valued and need no extra wrapper as an arg.
+    return isStandaloneCall(node) ? `(${text})` : text;
+}
+
+function findAdjacentCallArgumentInline(source, block, functionBody, stats, startIndex = 0) {
+    for (let index = startIndex; index + 1 < block.length; index++) {
+        const producerStatement = block[index];
+        const consumerStatement = block[index + 1];
+        const producer = directLocalInfo(producerStatement);
+        const consumer = directLocalInfo(consumerStatement);
+        if (!producer || !consumer || producer.variable.typeAnnotation) continue;
+        if (!isStandaloneCall(producer.init) && !isScalarTempExpression(producer.init)) continue;
+        if (isLiteral(producer.init) || isIdentifier(producer.init)) continue;
+
+        const call = consumer.init;
+        if (call?.type !== "CallExpression" || !isIdentifier(call.base) || call.base.isLocal !== true) continue;
+        if (nestedFunctionWritesName(functionBody, call.base.name)) continue;
+        const args = call.arguments || [];
+        const matches = [];
+        for (let argIndex = 0; argIndex < args.length; argIndex++) {
+            if (isIdentifier(args[argIndex], producer.name) && args[argIndex].isLocal === true) matches.push(argIndex);
+        }
+        if (matches.length !== 1) continue;
+        const argIndex = matches[0];
+        const useNode = args[argIndex];
+        if (!Array.isArray(useNode.range) || !Array.isArray(producerStatement.range)) continue;
+
+        const refs = scanLaterReferences(block, index, producer.name);
+        const sameBlockRefs = scanLaterReferencesSameBlock(block, index, producer.name);
+        if (refs.captured || refs.redeclared || refs.writes.length || refs.reads.length !== 1) continue;
+        if (sameBlockRefs.reads.length !== 1 || sameBlockRefs.reads[0].node !== useNode || sameBlockRefs.reads[0].topIndex !== index + 1) continue;
+
+        // The split form evaluates the producer before reading the outer callee and
+        // its earlier arguments. After inlining those reads happen first. Permit
+        // only literal/local snapshots that the producer cannot rebind through a
+        // nested closure in this lexical function.
+        let prefixStable = true;
+        for (let prior = 0; prior < argIndex; prior++) {
+            if (!stableMovedCallPrefixExpression(args[prior], functionBody)) {
+                prefixStable = false;
+                break;
+            }
+        }
+        if (!prefixStable) continue;
+
+        stats.adjacentCallArgumentInlines++;
+        return {
+            compound: true,
+            edits: [
+                { start: producerStatement.range[0], end: producerStatement.range[1], replacement: "" },
+                { start: useNode.range[0], end: useNode.range[1], replacement: singleValueInlineSource(source, producer.init) },
+            ],
+            kind: "adjacent-call-argument-inline",
+            statementIndex: index,
+        };
+    }
+    return null;
+}
+
+function findAdjacentCallArgumentBatch(source, block, functionBody, stats, limit = 128) {
+    const edits = [];
+    let transformCount = 0;
+    let cursor = 0;
+    while (transformCount < limit) {
+        const trialStats = { adjacentCallArgumentInlines: 0 };
+        const candidate = findAdjacentCallArgumentInline(source, block, functionBody, trialStats, cursor);
+        if (!candidate) break;
+        edits.push(...editParts(candidate));
+        stats.adjacentCallArgumentInlines += trialStats.adjacentCallArgumentInlines;
+        transformCount++;
+        cursor = candidate.statementIndex + 2;
+    }
+    if (!transformCount) return null;
+    return { compound: true, edits, transformCount, kind: transformCount === 1 ? "adjacent-call-argument-inline" : "adjacent-call-argument-batch" };
+}
+
+function findAdjacentAssignmentValueInline(source, block, stats, startIndex = 0) {
+    for (let index = startIndex; index + 1 < block.length; index++) {
+        const producerStatement = block[index];
+        const consumerStatement = block[index + 1];
+        const producer = directLocalInfo(producerStatement);
+        if (!producer || producer.variable.typeAnnotation || !Array.isArray(producerStatement.range)) continue;
+        if (consumerStatement?.type !== "AssignmentStatement") continue;
+        const variables = consumerStatement.variables || [];
+        const init = consumerStatement.init || [];
+        if (variables.length !== 1 || init.length !== 1) continue;
+        const useNode = init[0];
+        if (!isIdentifier(useNode, producer.name) || useNode.isLocal !== true || !Array.isArray(useNode.range)) continue;
+
+        const refs = scanLaterReferences(block, index, producer.name);
+        const sameBlockRefs = scanLaterReferencesSameBlock(block, index, producer.name);
+        if (refs.captured || refs.redeclared || refs.writes.length || refs.reads.length !== 1) continue;
+        if (sameBlockRefs.reads.length !== 1 || sameBlockRefs.reads[0].node !== useNode || sameBlockRefs.reads[0].topIndex !== index + 1) continue;
+
+        // Luau/Lua assignment evaluates the RHS expression before resolving the
+        // indexed LHS destination. The producer was already evaluated immediately
+        // before this assignment, so substituting it as the sole RHS preserves the
+        // same effect ordering and one-result adjustment.
+        stats.adjacentAssignmentValueInlines++;
+        return {
+            compound: true,
+            edits: [
+                { start: producerStatement.range[0], end: producerStatement.range[1], replacement: "" },
+                { start: useNode.range[0], end: useNode.range[1], replacement: sourceOf(source, producer.init) },
+            ],
+            kind: "adjacent-assignment-value-inline",
+            statementIndex: index,
+        };
+    }
+    return null;
+}
+
+function findAdjacentAssignmentValueBatch(source, block, stats, limit = 128) {
+    const edits = [];
+    let transformCount = 0;
+    let cursor = 0;
+    while (transformCount < limit) {
+        const trialStats = { adjacentAssignmentValueInlines: 0 };
+        const candidate = findAdjacentAssignmentValueInline(source, block, trialStats, cursor);
+        if (!candidate) break;
+        edits.push(...editParts(candidate));
+        stats.adjacentAssignmentValueInlines += trialStats.adjacentAssignmentValueInlines;
+        transformCount++;
+        cursor = candidate.statementIndex + 2;
+    }
+    if (!transformCount) return null;
+    return { compound: true, edits, transformCount, kind: transformCount === 1 ? "adjacent-assignment-value-inline" : "adjacent-assignment-value-batch" };
+}
+
+function lastRealStatementIndex(block) {
+    for (let index = block.length - 1; index >= 0; index--) {
+        const statement = block[index];
+        if (statement?.type !== "CommentStatement" && statement?.type !== "EmptyStatement") return index;
+    }
+    return -1;
+}
+
+function findRepeatTailConditionTempInline(source, block, condition, stats) {
+    if (!condition || condition.type !== "Identifier" || condition.isLocal !== true || !Array.isArray(condition.range)) return null;
+    const index = lastRealStatementIndex(block);
+    if (index < 0) return null;
+    const statement = block[index];
+    const producer = directLocalInfo(statement);
+    if (!producer || producer.name !== condition.name || producer.variable.typeAnnotation || !Array.isArray(statement.range)) return null;
+
+    const refs = scanLaterReferences(block, index, producer.name, condition);
+    if (refs.captured || refs.redeclared || refs.writes.length || refs.reads.length !== 1 || refs.reads[0].node !== condition) return null;
+
+    stats.repeatTailConditionTempsInlined++;
+    return {
+        compound: true,
+        edits: [
+            { start: statement.range[0], end: statement.range[1], replacement: "" },
+            { start: condition.range[0], end: condition.range[1], replacement: sourceOf(source, producer.init) },
+        ],
+        kind: "repeat-tail-condition-temp-inline",
+    };
 }
 
 function findDeferredLocalInitialization(source, block, stats, startIndex = 0) {
@@ -1969,7 +2143,10 @@ function findTransformEdit(source, ast, stats, budget = 1) {
         const inheritedEnvName = record.parent ? (effectiveEnvNames.get(record.parent) || null) : null;
         const envContext = resolveEnvContext(functionBody, inheritedEnvName);
         effectiveEnvNames.set(record, envContext?.name || null);
+        const repeatConditions = repeatConditionByBody(functionBody);
         for (const block of allBlocksForFunction(functionBody)) {
+            const repeatTailTempEdit = findRepeatTailConditionTempInline(source, block, repeatConditions.get(block) || null, stats);
+            if (repeatTailTempEdit) return repeatTailTempEdit;
             const repeatPrecheckEdit = findDiscardedRepeatPrecheck(source, block, stats);
             if (repeatPrecheckEdit) return repeatPrecheckEdit;
             const loopConditionEdit = findLoopConditionCollapse(source, block, stats);
@@ -1994,6 +2171,10 @@ function findTransformEdit(source, ast, stats, budget = 1) {
             if (indexKeyEdit) return indexKeyEdit;
             const assignmentKeyEdit = findAdjacentAssignmentKeyBatch(source, block, functionBody, stats, Math.min(128, budget));
             if (assignmentKeyEdit) return assignmentKeyEdit;
+            const callArgumentEdit = findAdjacentCallArgumentBatch(source, block, functionBody, stats, Math.min(128, budget));
+            if (callArgumentEdit) return callArgumentEdit;
+            const assignmentValueEdit = findAdjacentAssignmentValueBatch(source, block, stats, Math.min(128, budget));
+            if (assignmentValueEdit) return assignmentValueEdit;
         }
         const envEdit = findEnvFold(source, functionBody, inheritedEnvName, Math.min(128, budget));
         if (envEdit) {
@@ -2089,6 +2270,9 @@ function optimizeBetaSource(source, options = {}) {
         adjacentIndexBaseAliasesFolded: 0,
         adjacentIndexKeyInlines: 0,
         adjacentAssignmentKeyInlines: 0,
+        adjacentCallArgumentInlines: 0,
+        adjacentAssignmentValueInlines: 0,
+        repeatTailConditionTempsInlined: 0,
         deferredLocalInitializersFolded: 0,
         deadLocals: 0,
         deadCallResults: 0,

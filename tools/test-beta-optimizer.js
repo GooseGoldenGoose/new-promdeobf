@@ -789,9 +789,10 @@ repeat
     done = x >= 2
 until done
 print(x)`);
-assert(repeatConditionLocalUse.source.includes("local done = x >= 2"));
-assert(repeatConditionLocalUse.source.includes("until done"));
+assert(!repeatConditionLocalUse.source.includes("local done"));
+assert(repeatConditionLocalUse.source.includes("until x >= 2"));
 assert.equal(repeatConditionLocalUse.stats.deferredLocalInitializersFolded >= 1, true);
+assert.equal(repeatConditionLocalUse.stats.repeatTailConditionTempsInlined, 1);
 
 
 const directNilCleanupBeforeFold = optimize(`local temp = makeValue()
@@ -1029,6 +1030,84 @@ holder.target[key] = true`);
 assert(adjacentAssignmentKeyComplexBaseBarrier.source.includes('local key = source[decode("x")]'));
 assert(adjacentAssignmentKeyComplexBaseBarrier.source.includes("holder.target[key] = true"));
 assert.equal(adjacentAssignmentKeyComplexBaseBarrier.stats.adjacentAssignmentKeyInlines, 0);
+
+const adjacentScalarCallArgumentInline = optimize(`local callee = consume
+local values = {}
+local n = #values
+local out = callee(1, n)
+print(out)`);
+assert(!adjacentScalarCallArgumentInline.source.includes("local n ="));
+assert(adjacentScalarCallArgumentInline.source.includes("(1, #values)"));
+assert.equal(adjacentScalarCallArgumentInline.stats.adjacentCallArgumentInlines, 1);
+
+const adjacentCallArgumentSingleResult = optimize(`local inner = make
+local outer = consume
+local state = {}
+local temp = inner()
+local out = outer(state, temp)
+print(out)`);
+assert(!adjacentCallArgumentSingleResult.source.includes("local temp ="));
+assert(adjacentCallArgumentSingleResult.source.includes("state, ("));
+assert(adjacentCallArgumentSingleResult.source.includes("(make())"));
+assert.equal(adjacentCallArgumentSingleResult.stats.adjacentCallArgumentInlines, 1);
+
+const adjacentCallArgumentWriterBarrier = optimize(`local inner = make
+local outer = consume
+local mutate = function()
+    outer = warn
+end
+local temp = inner(mutate)
+local out = outer(temp)
+print(out, mutate)`);
+assert(adjacentCallArgumentWriterBarrier.source.includes("local temp ="));
+assert(adjacentCallArgumentWriterBarrier.source.includes("outer(temp)"));
+assert.equal(adjacentCallArgumentWriterBarrier.stats.adjacentCallArgumentInlines, 0);
+
+const adjacentCallArgumentPriorWriterBarrier = optimize(`local inner = make
+local outer = consume
+local state = {}
+local mutate = function()
+    state = {}
+end
+local temp = inner(mutate)
+local out = outer(state, temp)
+print(out, mutate)`);
+assert(adjacentCallArgumentPriorWriterBarrier.source.includes("local temp ="));
+assert.equal(adjacentCallArgumentPriorWriterBarrier.stats.adjacentCallArgumentInlines, 0);
+
+const adjacentAssignmentValueInline = optimize(`local target = {}
+local key = 1
+local temp = makeValue()
+target[key] = temp
+print(target[key])`);
+assert(!adjacentAssignmentValueInline.source.includes("local temp ="));
+assert(adjacentAssignmentValueInline.source.includes("target[key] = makeValue()"));
+assert.equal(adjacentAssignmentValueInline.stats.adjacentAssignmentValueInlines, 1);
+
+const repeatTailConditionTempInline = optimize(`repeat
+    body()
+    local done = check()
+until done`);
+assert(!repeatTailConditionTempInline.source.includes("local done ="));
+assert(repeatTailConditionTempInline.source.includes("until check()"));
+assert.equal(repeatTailConditionTempInline.stats.repeatTailConditionTempsInlined, 1);
+
+const repeatTailNilCleanup = optimize(`repeat
+    local value = makeValue()
+    use(value)
+    value = nil
+until done()`);
+assert(!repeatTailNilCleanup.source.includes("value = nil"));
+assert.equal(repeatTailNilCleanup.stats.directNilCleanupWritesRemoved, 1);
+
+const repeatTailNilCaptureBarrier = optimize(`local keep
+repeat
+    local value = makeValue()
+    keep = function() return value end
+    value = nil
+until done()
+print(keep())`);
+assert(repeatTailNilCaptureBarrier.source.includes("value = nil"));
 
 const independentDeferredBatch = optimize(`local a
 local b
