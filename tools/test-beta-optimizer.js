@@ -1176,6 +1176,45 @@ target[key] = true`);
 assert(dependencySafeAssignmentKeyCallIndexBarrier.source.includes("local key = source["));
 assert.equal(dependencySafeAssignmentKeyCallIndexBarrier.stats.dependencySafeAssignmentKeyInlines, 0);
 
+const adjacentTableConstructorKeyInline = optimize(`local cache = {}
+local decode = function() return "K" end
+local key = cache[decode()]
+local built = { [key] = 0.5 }
+consume(built)`);
+assert(!adjacentTableConstructorKeyInline.source.includes("local key ="));
+assert(adjacentTableConstructorKeyInline.source.includes('local built = { [cache['));
+assert(adjacentTableConstructorKeyInline.source.includes('] = 0.5 }'));
+assert.equal(adjacentTableConstructorKeyInline.stats.adjacentTableConstructorKeyInlines, 1);
+
+const adjacentTableConstructorKeyEffectValueBarrier = optimize(`local cache = {}
+local key = cache[1]
+local built = { [key] = makeValue() }
+consume(built)`);
+assert(adjacentTableConstructorKeyEffectValueBarrier.source.includes("local key = cache[1]"));
+assert.equal(adjacentTableConstructorKeyEffectValueBarrier.stats.adjacentTableConstructorKeyInlines, 0);
+
+const adjacentTableConstructorKeyMultipleFieldBarrier = optimize(`local cache = {}
+local key = cache[1]
+local built = { [key] = 0.5, other = 1 }
+consume(built)`);
+assert(adjacentTableConstructorKeyMultipleFieldBarrier.source.includes("local key = cache[1]"));
+assert.equal(adjacentTableConstructorKeyMultipleFieldBarrier.stats.adjacentTableConstructorKeyInlines, 0);
+
+const adjacentTableConstructorKeyLaterUseBarrier = optimize(`local cache = {}
+local key = cache[1]
+local built = { [key] = 0.5 }
+consume(built, key)`);
+assert(adjacentTableConstructorKeyLaterUseBarrier.source.includes("local key = cache[1]"));
+assert.equal(adjacentTableConstructorKeyLaterUseBarrier.stats.adjacentTableConstructorKeyInlines, 0);
+
+const adjacentTableConstructorKeyGapBarrier = optimize(`local cache = {}
+local key = cache[1]
+unrelated()
+local built = { [key] = 0.5 }
+consume(built)`);
+assert(adjacentTableConstructorKeyGapBarrier.source.includes("local key = cache[1]"));
+assert.equal(adjacentTableConstructorKeyGapBarrier.stats.adjacentTableConstructorKeyInlines, 0);
+
 const adjacentScalarCallArgumentInline = optimize(`local callee = consume
 local values = {}
 local n = #values

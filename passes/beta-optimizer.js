@@ -1545,6 +1545,58 @@ function findAdjacentAssignmentKeyBatch(source, block, functionBody, stats, limi
     return { compound: true, edits, transformCount, kind: transformCount === 1 ? "adjacent-assignment-key-inline" : "adjacent-assignment-key-batch" };
 }
 
+function findAdjacentTableConstructorKeyInline(source, block, stats, startIndex = 0) {
+    for (let index = startIndex; index + 1 < block.length; index++) {
+        const producerStatement = block[index];
+        const consumerStatement = block[index + 1];
+        const producer = directLocalInfo(producerStatement);
+        const consumer = directLocalInfo(consumerStatement);
+        if (!producer || !consumer || producer.variable.typeAnnotation || !Array.isArray(producerStatement.range)) continue;
+        const table = consumer.init;
+        if (table?.type !== "TableConstructorExpression" || (table.fields || []).length !== 1) continue;
+        const field = table.fields[0];
+        if (field?.type !== "TableKey" || !isIdentifier(field.key, producer.name) || field.key.isLocal !== true || !Array.isArray(field.key.range)) continue;
+        // Keep field evaluation-order proof trivial. The producer becomes the only
+        // effectful expression inside this one-field constructor; the value cannot
+        // call, index, mutate, or observe anything.
+        if (!isLiteral(field.value)) continue;
+
+        const refs = scanLaterReferences(block, index, producer.name);
+        const sameBlockRefs = scanLaterReferencesSameBlock(block, index, producer.name);
+        if (refs.captured || refs.redeclared || refs.writes.length || refs.reads.length !== 1) continue;
+        if (sameBlockRefs.reads.length !== 1 || sameBlockRefs.reads[0].node !== field.key || sameBlockRefs.reads[0].topIndex !== index + 1) continue;
+
+        stats.adjacentTableConstructorKeyInlines++;
+        return {
+            compound: true,
+            edits: [
+                { start: producerStatement.range[0], end: producerStatement.range[1], replacement: "" },
+                { start: field.key.range[0], end: field.key.range[1], replacement: sourceOf(source, producer.init) },
+            ],
+            kind: "adjacent-table-constructor-key-inline",
+            statementIndex: index,
+        };
+    }
+    return null;
+}
+
+function findAdjacentTableConstructorKeyBatch(source, block, stats, limit = 128) {
+    const edits = [];
+    let transformCount = 0;
+    let cursor = 0;
+    while (transformCount < limit) {
+        const trialStats = { adjacentTableConstructorKeyInlines: 0 };
+        const candidate = findAdjacentTableConstructorKeyInline(source, block, trialStats, cursor);
+        if (!candidate) break;
+        edits.push(...editParts(candidate));
+        stats.adjacentTableConstructorKeyInlines += trialStats.adjacentTableConstructorKeyInlines;
+        transformCount++;
+        cursor = candidate.statementIndex + 2;
+    }
+    if (!transformCount) return null;
+    return { compound: true, edits, transformCount, kind: transformCount === 1 ? "adjacent-table-constructor-key-inline" : "adjacent-table-constructor-key-batch" };
+}
+
 const tableSafetyIndexCache = new WeakMap();
 
 function tableSafetyIndexForFunction(functionBody) {
@@ -2521,6 +2573,8 @@ function findTransformEdit(source, ast, stats, budget = 1) {
             if (indexKeyEdit) return indexKeyEdit;
             const assignmentKeyEdit = findAdjacentAssignmentKeyBatch(source, block, functionBody, stats, Math.min(128, budget));
             if (assignmentKeyEdit) return assignmentKeyEdit;
+            const tableConstructorKeyEdit = findAdjacentTableConstructorKeyBatch(source, block, stats, Math.min(128, budget));
+            if (tableConstructorKeyEdit) return tableConstructorKeyEdit;
             const dependencySafeAssignmentKeyEdit = findDependencySafeAssignmentKeyBatch(source, block, functionBody, stats, Math.min(128, budget));
             if (dependencySafeAssignmentKeyEdit) return dependencySafeAssignmentKeyEdit;
             const callArgumentEdit = findAdjacentCallArgumentBatch(source, block, functionBody, stats, Math.min(128, budget));
@@ -2623,6 +2677,7 @@ function optimizeBetaSource(source, options = {}) {
         adjacentIndexKeyInlines: 0,
         adjacentAssignmentKeyInlines: 0,
         dependencySafeAssignmentKeyInlines: 0,
+        adjacentTableConstructorKeyInlines: 0,
         adjacentCallArgumentInlines: 0,
         adjacentAssignmentValueInlines: 0,
         repeatTailConditionTempsInlined: 0,
