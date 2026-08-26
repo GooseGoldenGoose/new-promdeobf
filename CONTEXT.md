@@ -418,7 +418,7 @@ Current v1 behavior is conservative and iterative:
 - inlines single-use literals
 - inlines single-use local aliases only when the source local is not changed before the use; scoped parsing distinguishes globals from lexically local/captured outer bindings inside nested functions
 - folds adjacent one-use scalar compiler temporaries (identifier/literal unary/binary/logical trees) only into a proven leading evaluation position of the immediately following statement; loop snapshot boundaries still block movement, and a temp is never moved into the conditional right arm of `and`/`or`
-- proves the generated `local _env = getfenv()` header before folding static `_env["name"]` lookups to direct globals; any `setfenv` in that function blocks the fold
+- proves the generated `local _env = getfenv()` header before folding static `_env["name"]` lookups to direct globals; captured uses no longer block other proven same-function `_env` folds, while writes/redeclarations and any `setfenv` in that function still block the fold
 - moves a direct global alias only across effect-free sibling statements and only into call-base position
 - collapses proven compiler multi-return table storage `local t = { call(...) }; local a = t[1]; local b = t[2]` back to one native multi-return assignment at the original call position
 - sparse used result slots are preserved with collision-free `__beta_unused_return_N` locals, so using only slot 2 becomes `local __beta_unused_return_1, b = call()` without relying on `_`

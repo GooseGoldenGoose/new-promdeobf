@@ -231,7 +231,7 @@ function findEnvContext(block) {
     }
     if (envIndex < 0) return null;
     const refs = scanLaterReferences(block, envIndex, "_env");
-    if (refs.writes.length || refs.redeclared || refs.captured) return null;
+    if (refs.writes.length || refs.redeclared) return null;
     const fakeFunction = { type: "Chunk", body: block };
     if (functionHasSetfenv(fakeFunction)) return null;
     return { name: "_env", declarationIndex: envIndex };

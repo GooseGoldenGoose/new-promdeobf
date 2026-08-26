@@ -48,6 +48,17 @@ assert(globalBarrier.source.includes("local p = print"));
 const envSetfenv = optimize(`local _env = getfenv()\nlocal p = _env["print"]\nsetfenv(1, other)\np("x")`);
 assert(envSetfenv.source.includes('_env["print"]'));
 
+const envCapturedButOuterFold = optimize(`local _env = getfenv()
+local f = function()
+    return _env["warn"]
+end
+local p = _env["print"]
+p("x")
+print(f ~= nil)`);
+assert(envCapturedButOuterFold.source.includes('local _env = getfenv()'));
+assert(envCapturedButOuterFold.source.includes('_env["warn"]'));
+assert(envCapturedButOuterFold.source.includes('print("x")'));
+assert(!envCapturedButOuterFold.source.includes('local p = _env["print"]'));
 const deadTable = optimize(`local args = { ... }\nprint("x")`);
 assert(!deadTable.source.includes("local args"));
 assert(deadTable.source.includes('print("x")'));
