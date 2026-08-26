@@ -21,6 +21,8 @@ function main() {
     console.log(`Input: ${inputPath}`);
     console.log(`Applied: ${result.applied}`);
     console.log(`Rounds: ${result.stats.rounds}`);
+    console.log(`Full parses: ${result.stats.parseRounds}`);
+    console.log(`Fixed point: ${!result.stats.parseLimitHit}`);
     console.log(`Global folds: ${result.stats.globalFolds}`);
     console.log(`Global alias inlines: ${result.stats.globalAliasInlines}`);
     console.log(`Single-use inlines: ${result.stats.singleUseInlines}`);

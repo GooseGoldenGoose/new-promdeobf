@@ -866,30 +866,35 @@ function resolveEnvContext(block, inheritedEnvName = null) {
     return inheritedEnvContext(block, inheritedEnvName);
 }
 
-function findEnvFold(source, block, inheritedEnvName = null) {
+function findEnvFold(source, block, inheritedEnvName = null, limit = 128) {
     const env = resolveEnvContext(block, inheritedEnvName);
-    if (!env) return null;
-    let found = null;
+    if (!env || limit <= 0) return null;
+    const edits = [];
     function visit(node, parent = null, key = null) {
-        if (found || !node) return;
+        if (edits.length >= limit || !node) return;
         if (Array.isArray(node)) {
-            for (const child of node) visit(child, parent, key);
+            for (const child of node) {
+                visit(child, parent, key);
+                if (edits.length >= limit) break;
+            }
             return;
         }
         if (!isNode(node)) return;
         if (node.type === "FunctionDeclaration") return;
         const globalName = globalNameFromEnvIndex(source, node, env.name);
         if (globalName && Array.isArray(node.range)) {
-            found = { start: node.range[0], end: node.range[1], replacement: globalName, kind: "global-fold" };
+            edits.push({ start: node.range[0], end: node.range[1], replacement: globalName, kind: "global-fold" });
             return;
         }
         for (const childKey of Object.keys(node)) {
             if (childKey === "range" || childKey === "loc") continue;
             visit(node[childKey], node, childKey);
+            if (edits.length >= limit) break;
         }
     }
-    for (let index = env.declarationIndex + 1; index < block.length && !found; index++) visit(block[index]);
-    return found;
+    for (let index = env.declarationIndex + 1; index < block.length && edits.length < limit; index++) visit(block[index]);
+    if (!edits.length) return null;
+    return { compound: true, edits, transformCount: edits.length, kind: edits.length === 1 ? "global-fold" : "global-fold-batch" };
 }
 
 function isRepeatedEvaluationStatement(statement) {
@@ -973,14 +978,15 @@ function hasPriorDirectLocalDeclaration(functionBody, beforeIndex, name) {
     return false;
 }
 
-function findPreFoldDeadNilAssignment(source, functionBody, stats) {
+function findPreFoldDeadNilAssignment(source, functionBody, stats, limit = 128) {
     // This is intentionally a pre-fold-only cleanup. A direct final `x = nil`
     // emitted as lifetime cleanup can be deleted when its value is never observed.
     // Restrict it to a function's root block; nested control-flow liveness needs CFG
     // proof and therefore fails closed here.
-    if (functionHasScopeTransfer(functionBody)) return null;
+    if (functionHasScopeTransfer(functionBody) || limit <= 0) return null;
 
-    for (let index = functionBody.length - 1; index >= 0; index--) {
+    const edits = [];
+    for (let index = functionBody.length - 1; index >= 0 && edits.length < limit; index--) {
         const statement = functionBody[index];
         const info = directNilAssignmentInfo(statement);
         if (!info) continue;
@@ -993,19 +999,15 @@ function findPreFoldDeadNilAssignment(source, functionBody, stats) {
         const refs = scanLaterReferences(functionBody, index, info.name);
         if (refs.reads.length || refs.captured || refs.redeclared) continue;
 
-        stats.directNilCleanupWritesRemoved++;
-        return {
-            start: statement.range[0],
-            end: statement.range[1],
-            replacement: "",
-            kind: "dead-direct-nil-cleanup",
-        };
+        edits.push({ start: statement.range[0], end: statement.range[1], replacement: "", kind: "dead-direct-nil-cleanup" });
     }
-    return null;
+    if (!edits.length) return null;
+    stats.directNilCleanupWritesRemoved += edits.length;
+    return { compound: true, edits, transformCount: edits.length, kind: edits.length === 1 ? "dead-direct-nil-cleanup" : "dead-direct-nil-cleanup-batch" };
 }
 
-function findAdjacentCopyChainFold(source, block, stats) {
-    for (let index = 0; index + 1 < block.length; index++) {
+function findAdjacentCopyChainFold(source, block, stats, startIndex = 0) {
+    for (let index = startIndex; index + 1 < block.length; index++) {
         const producerStatement = block[index];
         const consumerStatement = block[index + 1];
         const producer = directLocalInfo(producerStatement);
@@ -1039,6 +1041,7 @@ function findAdjacentCopyChainFold(source, block, stats) {
                 { start: consumerStatement.range[0], end: consumerStatement.range[1], replacement: "" },
             ],
             kind: "adjacent-copy-chain",
+            statementIndex: index,
         };
     }
     return null;
@@ -1074,8 +1077,8 @@ function nestedFunctionWritesName(functionBody, name) {
     return found;
 }
 
-function findAdjacentIndexBaseAliasInline(source, block, stats) {
-    for (let index = 0; index + 1 < block.length; index++) {
+function findAdjacentIndexBaseAliasInline(source, block, stats, startIndex = 0) {
+    for (let index = startIndex; index + 1 < block.length; index++) {
         const producerStatement = block[index];
         const consumerStatement = block[index + 1];
         const producer = directLocalInfo(producerStatement);
@@ -1104,13 +1107,14 @@ function findAdjacentIndexBaseAliasInline(source, block, stats) {
                 { start: lookup.base.range[0], end: lookup.base.range[1], replacement: sourceOf(source, producer.init) },
             ],
             kind: "adjacent-index-base-alias-inline",
+            statementIndex: index,
         };
     }
     return null;
 }
 
-function findAdjacentIndexKeyInline(source, block, functionBody, stats) {
-    for (let index = 0; index + 1 < block.length; index++) {
+function findAdjacentIndexKeyInline(source, block, functionBody, stats, startIndex = 0) {
+    for (let index = startIndex; index + 1 < block.length; index++) {
         const producerStatement = block[index];
         const consumerStatement = block[index + 1];
         const producer = directLocalInfo(producerStatement);
@@ -1139,13 +1143,48 @@ function findAdjacentIndexKeyInline(source, block, functionBody, stats) {
                 { start: lookup.index.range[0], end: lookup.index.range[1], replacement: sourceOf(source, producer.init) },
             ],
             kind: "adjacent-index-key-inline",
+            statementIndex: index,
         };
     }
     return null;
 }
 
-function findDeferredLocalInitialization(source, block, stats) {
-    for (let declarationIndex = 0; declarationIndex < block.length; declarationIndex++) {
+function findAdjacentIndexBaseAliasBatch(source, block, stats, limit = 128) {
+    const edits = [];
+    let transformCount = 0;
+    let cursor = 0;
+    while (transformCount < limit) {
+        const trialStats = { adjacentIndexBaseAliasesFolded: 0 };
+        const candidate = findAdjacentIndexBaseAliasInline(source, block, trialStats, cursor);
+        if (!candidate) break;
+        edits.push(...editParts(candidate));
+        stats.adjacentIndexBaseAliasesFolded += trialStats.adjacentIndexBaseAliasesFolded;
+        transformCount++;
+        cursor = candidate.statementIndex + 2;
+    }
+    if (!transformCount) return null;
+    return { compound: true, edits, transformCount, kind: transformCount === 1 ? "adjacent-index-base-alias-inline" : "adjacent-index-base-alias-batch" };
+}
+
+function findAdjacentIndexKeyBatch(source, block, functionBody, stats, limit = 128) {
+    const edits = [];
+    let transformCount = 0;
+    let cursor = 0;
+    while (transformCount < limit) {
+        const trialStats = { adjacentIndexKeyInlines: 0 };
+        const candidate = findAdjacentIndexKeyInline(source, block, functionBody, trialStats, cursor);
+        if (!candidate) break;
+        edits.push(...editParts(candidate));
+        stats.adjacentIndexKeyInlines += trialStats.adjacentIndexKeyInlines;
+        transformCount++;
+        cursor = candidate.statementIndex + 2;
+    }
+    if (!transformCount) return null;
+    return { compound: true, edits, transformCount, kind: transformCount === 1 ? "adjacent-index-key-inline" : "adjacent-index-key-batch" };
+}
+
+function findDeferredLocalInitialization(source, block, stats, startIndex = 0) {
+    for (let declarationIndex = startIndex; declarationIndex < block.length; declarationIndex++) {
         const declaration = block[declarationIndex];
         const info = directLocalOrUninitializedInfo(declaration);
         if (!info || info.init !== null) continue;
@@ -1179,6 +1218,8 @@ function findDeferredLocalInitialization(source, block, stats) {
                         }
                     ],
                     kind: "deferred-local-initialization",
+                    statementIndex: declarationIndex,
+                    assignmentIndex: index,
                 };
             }
 
@@ -1188,6 +1229,43 @@ function findDeferredLocalInitialization(source, block, stats) {
         }
     }
     return null;
+}
+
+function findAdjacentCopyChainBatch(source, block, stats, limit = 128) {
+    const edits = [];
+    let transformCount = 0;
+    let cursor = 0;
+    while (transformCount < limit) {
+        const trialStats = { adjacentCopyChainsFolded: 0 };
+        const candidate = findAdjacentCopyChainFold(source, block, trialStats, cursor);
+        if (!candidate) break;
+        edits.push(...editParts(candidate));
+        stats.adjacentCopyChainsFolded += trialStats.adjacentCopyChainsFolded;
+        transformCount++;
+        cursor = candidate.statementIndex + 2;
+    }
+    if (!transformCount) return null;
+    return { compound: true, edits, transformCount, kind: transformCount === 1 ? "adjacent-copy-chain" : "adjacent-copy-chain-batch" };
+}
+
+function findDeferredLocalInitializationBatch(source, block, stats, limit = 128) {
+    const edits = [];
+    let transformCount = 0;
+    let cursor = 0;
+    while (transformCount < limit) {
+        const trialStats = { deferredLocalInitializersFolded: 0 };
+        const candidate = findDeferredLocalInitialization(source, block, trialStats, cursor);
+        if (!candidate) break;
+        const parts = editParts(candidate);
+        if (!parts.some(part => edits.some(selected => textEditRangesOverlap(part, selected)))) {
+            edits.push(...parts);
+            stats.deferredLocalInitializersFolded += trialStats.deferredLocalInitializersFolded;
+            transformCount++;
+        }
+        cursor = candidate.statementIndex + 1;
+    }
+    if (!transformCount) return null;
+    return { compound: true, edits, transformCount, kind: transformCount === 1 ? "deferred-local-initialization" : "deferred-local-initialization-batch" };
 }
 
 function isScalarTempExpression(node) {
@@ -1439,7 +1517,78 @@ function allBlocksForFunction(functionBody) {
     return out;
 }
 
-function findTransformEdit(source, ast, stats) {
+function localOptimizationDeltaStats() {
+    return {
+        globalAliasInlines: 0,
+        singleUseInlines: 0,
+        deadLocals: 0,
+        deadCallResults: 0,
+    };
+}
+
+function mergeLocalOptimizationStats(stats, delta) {
+    stats.globalAliasInlines += delta.globalAliasInlines;
+    stats.singleUseInlines += delta.singleUseInlines;
+    stats.deadLocals += delta.deadLocals;
+    stats.deadCallResults += delta.deadCallResults;
+}
+
+function editParts(edit) {
+    return edit?.compound ? (edit.edits || []) : (edit ? [edit] : []);
+}
+
+function textEditRangesOverlap(left, right) {
+    return left.start < right.end && right.start < left.end;
+}
+
+function findLocalOptimizationBatch(source, block, stats, limit = 128) {
+    if (limit <= 0) return null;
+    const selectedEdits = [];
+    let transformCount = 0;
+
+    for (let index = 0; index < block.length && transformCount < limit; index++) {
+        const trialStats = localOptimizationDeltaStats();
+        const candidate = tryOptimizeLocal(source, block, index, trialStats, "inline");
+        if (!candidate) continue;
+        const parts = editParts(candidate);
+        if (!parts.length) continue;
+
+        // All candidates were proven against this exact AST. Batch only source-
+        // disjoint edits. Dependency chains overlap because one candidate edits
+        // text inside a statement another candidate deletes, so those still force
+        // a reparse before the dependent optimization is considered.
+        if (parts.some(part => selectedEdits.some(selected => textEditRangesOverlap(part, selected)))) continue;
+
+        selectedEdits.push(...parts);
+        mergeLocalOptimizationStats(stats, trialStats);
+        transformCount++;
+    }
+
+    if (!transformCount) return null;
+    return {
+        compound: true,
+        edits: selectedEdits,
+        transformCount,
+        kind: transformCount === 1 ? "local-inline" : "local-inline-batch",
+    };
+}
+
+function findLocalOptimizationBatchAcrossBlocks(source, blocks, stats, limit = 128) {
+    if (limit <= 0) return null;
+    const edits = [];
+    let transformCount = 0;
+    for (const block of blocks) {
+        if (transformCount >= limit) break;
+        const batch = findLocalOptimizationBatch(source, block, stats, limit - transformCount);
+        if (!batch) continue;
+        edits.push(...editParts(batch));
+        transformCount += batch.transformCount || 1;
+    }
+    if (!transformCount) return null;
+    return { compound: true, edits, transformCount, kind: transformCount === 1 ? "local-inline" : "local-inline-cross-block-batch" };
+}
+
+function findTransformEdit(source, ast, stats, budget = 1) {
     const functionRecords = findFunctionRecords(ast);
     const effectiveEnvNames = new Map();
     for (const record of functionRecords) {
@@ -1458,70 +1607,95 @@ function findTransformEdit(source, ast, stats) {
             if (unusedReturnEdit) return unusedReturnEdit;
             const genericForEdit = findGenericForTupleInline(source, block, stats);
             if (genericForEdit) return genericForEdit;
-            const deferredLocalEdit = findDeferredLocalInitialization(source, block, stats);
+            const deferredLocalEdit = findDeferredLocalInitializationBatch(source, block, stats, Math.min(128, budget));
             if (deferredLocalEdit) return deferredLocalEdit;
-            const copyChainEdit = findAdjacentCopyChainFold(source, block, stats);
+            const copyChainEdit = findAdjacentCopyChainBatch(source, block, stats, Math.min(128, budget));
             if (copyChainEdit) return copyChainEdit;
-            const indexBaseAliasEdit = findAdjacentIndexBaseAliasInline(source, block, stats);
+            const indexBaseAliasEdit = findAdjacentIndexBaseAliasBatch(source, block, stats, Math.min(128, budget));
             if (indexBaseAliasEdit) return indexBaseAliasEdit;
-            const indexKeyEdit = findAdjacentIndexKeyInline(source, block, functionBody, stats);
+            const indexKeyEdit = findAdjacentIndexKeyBatch(source, block, functionBody, stats, Math.min(128, budget));
             if (indexKeyEdit) return indexKeyEdit;
         }
-        const envEdit = findEnvFold(source, functionBody, inheritedEnvName);
+        const envEdit = findEnvFold(source, functionBody, inheritedEnvName, Math.min(128, budget));
         if (envEdit) {
-            stats.globalFolds++;
+            stats.globalFolds += envEdit.transformCount || 1;
             return envEdit;
         }
-        for (const block of allBlocksForFunction(functionBody)) {
-            for (let index = 0; index < block.length; index++) {
-                const edit = tryOptimizeLocal(source, block, index, stats, "inline");
-                if (edit) return edit;
-            }
-        }
+        const inlineEdit = findLocalOptimizationBatchAcrossBlocks(source, allBlocksForFunction(functionBody), stats, Math.min(128, budget));
+        if (inlineEdit) return inlineEdit;
     }
     return null;
 }
 
-function findPreFoldCleanupEdit(source, ast, stats) {
+function findPreFoldCleanupEdit(source, ast, stats, budget = 1) {
     const functionRoots = findFunctionBlocks(ast);
+    const edits = [];
+    let transformCount = 0;
     for (const functionBody of functionRoots) {
-        const edit = findPreFoldDeadNilAssignment(source, functionBody, stats);
-        if (edit) return edit;
+        if (transformCount >= budget) break;
+        const edit = findPreFoldDeadNilAssignment(source, functionBody, stats, Math.min(128, budget - transformCount));
+        if (!edit) continue;
+        edits.push(...editParts(edit));
+        transformCount += edit.transformCount || 1;
     }
-    return null;
+    if (!transformCount) return null;
+    return { compound: true, edits, transformCount, kind: transformCount === 1 ? "dead-direct-nil-cleanup" : "dead-direct-nil-cleanup-global-batch" };
 }
 
-function findDeadCleanupEdit(source, ast, stats) {
+function findDeadCleanupBatch(source, ast, stats, limit = 128) {
     // Cleanup deliberately runs after every structural/inline transform has
-    // reached a fixed point. Scan nested/later code first and statements from
-    // bottom to top so removing dead compiler storage cannot hide a structure
-    // that an earlier recovery pass still needs.
+    // reached a fixed point. Candidates are all proven against the same AST;
+    // only source-disjoint edits are batched. Dependency chains therefore wait
+    // for the next parse, preserving the original bottom-to-top fixed point.
+    if (limit <= 0) return null;
     const functionRoots = findFunctionBlocks(ast);
-    for (let rootIndex = functionRoots.length - 1; rootIndex >= 0; rootIndex--) {
+    const edits = [];
+    let transformCount = 0;
+    for (let rootIndex = functionRoots.length - 1; rootIndex >= 0 && transformCount < limit; rootIndex--) {
         const functionBody = functionRoots[rootIndex];
         const repeatConditions = repeatConditionByBody(functionBody);
         const blocks = allBlocksForFunction(functionBody);
-        for (let blockIndex = blocks.length - 1; blockIndex >= 0; blockIndex--) {
+        for (let blockIndex = blocks.length - 1; blockIndex >= 0 && transformCount < limit; blockIndex--) {
             const block = blocks[blockIndex];
             const tailNode = repeatConditions.get(block) || null;
-            for (let index = block.length - 1; index >= 0; index--) {
-                const edit = tryOptimizeLocal(source, block, index, stats, "dead", tailNode);
-                if (edit) return edit;
+            for (let index = block.length - 1; index >= 0 && transformCount < limit; index--) {
+                const trialStats = localOptimizationDeltaStats();
+                const candidate = tryOptimizeLocal(source, block, index, trialStats, "dead", tailNode);
+                if (!candidate) continue;
+                const parts = editParts(candidate);
+                if (parts.some(part => edits.some(selected => textEditRangesOverlap(part, selected)))) continue;
+                edits.push(...parts);
+                mergeLocalOptimizationStats(stats, trialStats);
+                transformCount++;
             }
             const last = block[block.length - 1];
-            if (block === functionBody && last?.type === "ReturnStatement" && (last.arguments || []).length === 0 && Array.isArray(last.range)) {
-                stats.bareReturnsRemoved++;
-                return { start: last.range[0], end: last.range[1], replacement: "", kind: "bare-return" };
+            if (transformCount < limit && block === functionBody && last?.type === "ReturnStatement" && (last.arguments || []).length === 0 && Array.isArray(last.range)) {
+                const candidate = { start: last.range[0], end: last.range[1], replacement: "", kind: "bare-return" };
+                if (!edits.some(selected => textEditRangesOverlap(candidate, selected))) {
+                    edits.push(candidate);
+                    stats.bareReturnsRemoved++;
+                    transformCount++;
+                }
             }
         }
     }
-    return null;
+    if (!transformCount) return null;
+    return { compound: true, edits, transformCount, kind: transformCount === 1 ? "dead-cleanup" : "dead-cleanup-batch" };
 }
 
 function optimizeBetaSource(source, options = {}) {
-    const maxRounds = Number.isInteger(options.maxRounds) ? options.maxRounds : 1000;
+    // `maxRounds` historically capped logical edits. With batching that made the
+    // result depend on file size: one parse can safely apply 100+ edits and burn
+    // the whole budget. Keep it as a backward-compatible alias for the actual
+    // safety boundary: expensive full scoped parses. Logical transforms are stats.
+    const maxParseRounds = Number.isInteger(options.maxParseRounds)
+        ? Math.max(1, options.maxParseRounds)
+        : (Number.isInteger(options.maxRounds) ? Math.max(1, options.maxRounds) : 1000);
+    const batchLimit = Number.isInteger(options.batchLimit) ? Math.max(1, options.batchLimit) : 128;
     const stats = {
         rounds: 0,
+        parseRounds: 0,
+        parseLimitHit: false,
         globalFolds: 0,
         globalAliasInlines: 0,
         singleUseInlines: 0,
@@ -1545,38 +1719,38 @@ function optimizeBetaSource(source, options = {}) {
         repeatPrechecksRemoved: 0,
     };
     let current = source;
-    let round = 0;
+
+    function runPhase(label, findEdit) {
+        for (let pass = 0; stats.parseRounds < maxParseRounds; pass++) {
+            stats.parseRounds++;
+            const ast = parseLua(current, `<beta-optimizer-${label}-${pass + 1}>`);
+            const edit = findEdit(ast);
+            if (!edit) return true;
+            current = applyTextEdits(current, editParts(edit));
+            const transformCount = Number.isInteger(edit.transformCount) && edit.transformCount > 0 ? edit.transformCount : 1;
+            stats.rounds += transformCount;
+        }
+        return false;
+    }
 
     // Phase 0: remove only proven dead direct-nil lifetime cleanup before any
     // folding. Do not revisit this phase later: a source-style `local t = nil;
     // local x = t` may legitimately fold to `local x = nil` and must remain.
-    for (; round < maxRounds; round++) {
-        const ast = parseLua(current, `<beta-optimizer-pre-cleanup-${round + 1}>`);
-        const edit = findPreFoldCleanupEdit(current, ast, stats);
-        if (!edit) break;
-        current = applyTextEdits(current, [edit]);
-        stats.rounds++;
-    }
+    const preCleanupFixed = runPhase("pre-cleanup", ast => findPreFoldCleanupEdit(current, ast, stats, batchLimit));
+    if (!preCleanupFixed) stats.parseLimitHit = true;
 
     // Phase 1: structural recovery and safe inlining to a fixed point.
-    for (; round < maxRounds; round++) {
-        const ast = parseLua(current, `<beta-optimizer-transform-${round + 1}>`);
-        const edit = findTransformEdit(current, ast, stats);
-        if (!edit) break;
-        const edits = edit.compound ? edit.edits : [edit];
-        current = applyTextEdits(current, edits);
-        stats.rounds++;
+    let transformFixed = false;
+    if (!stats.parseLimitHit) {
+        transformFixed = runPhase("transform", ast => findTransformEdit(current, ast, stats, batchLimit));
+        if (!transformFixed) stats.parseLimitHit = true;
     }
 
     // Phase 2: unused/dead cleanup only, bottom-to-top. Do not return to the
     // transform phase after cleanup; dead storage is intentionally the last pass.
-    for (; round < maxRounds; round++) {
-        const ast = parseLua(current, `<beta-optimizer-dead-${round + 1}>`);
-        const edit = findDeadCleanupEdit(current, ast, stats);
-        if (!edit) break;
-        const edits = edit.compound ? edit.edits : [edit];
-        current = applyTextEdits(current, edits);
-        stats.rounds++;
+    if (!stats.parseLimitHit) {
+        const deadFixed = runPhase("dead", ast => findDeadCleanupBatch(current, ast, stats, batchLimit));
+        if (!deadFixed) stats.parseLimitHit = true;
     }
 
     parseLuaStructural(current, "<beta-optimizer-final>");

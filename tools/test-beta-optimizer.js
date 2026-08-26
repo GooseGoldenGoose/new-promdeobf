@@ -807,4 +807,91 @@ assert(adjacentIndexKeyNestedWriterBarrier.source.includes('local key = decode("
 assert(adjacentIndexKeyNestedWriterBarrier.source.includes("local value = cache[key]"));
 assert.equal(adjacentIndexKeyNestedWriterBarrier.stats.adjacentIndexKeyInlines, 0);
 
+const independentDeferredBatch = optimize(`local a
+local b
+a = 1
+b = 2
+print(a, b)`);
+assert(independentDeferredBatch.source.includes("print(1, 2)"));
+assert.equal(independentDeferredBatch.stats.deferredLocalInitializersFolded, 2);
+
+const deferredBatchScopeDependencyBarrier = optimize(`local a
+local b
+b = a
+a = 2
+print(a, b)`);
+assert(deferredBatchScopeDependencyBarrier.source.includes("local a"));
+assert(deferredBatchScopeDependencyBarrier.source.includes("local b = a"));
+assert(!deferredBatchScopeDependencyBarrier.source.includes("local a = 2"));
+
+const independentInlineBatch = optimize(`local a = 1
+local b = 2
+local c = 3
+local d = 4
+local e = 5
+local f = 6
+local g = 7
+local h = 8
+print(a)
+print(b)
+print(c)
+print(d)
+print(e)
+print(f)
+print(g)
+print(h)`);
+assert(independentInlineBatch.source.includes("print(1)"));
+assert(independentInlineBatch.source.includes("print(8)"));
+assert.equal(independentInlineBatch.stats.singleUseInlines, 8);
+assert(independentInlineBatch.stats.parseRounds < independentInlineBatch.stats.rounds);
+
+const dependentInlineChainBatchBarrier = optimize(`local a = 1
+local b = a
+print(b)`);
+assert(dependentInlineChainBatchBarrier.source.includes("print(1)"));
+assert.equal(dependentInlineChainBatchBarrier.stats.singleUseInlines, 2);
+assert(dependentInlineChainBatchBarrier.stats.parseRounds >= 2);
+
+
+const parseBudgetBatchSource = `local a = 1
+local b = 2
+local c = 3
+local d = 4
+local e = 5
+local f = 6
+local g = 7
+local h = 8
+print(a)
+print(b)
+print(c)
+print(d)
+print(e)
+print(f)
+print(g)
+print(h)`;
+const parseBudgetBatch = optimizeBetaSource(parseBudgetBatchSource, { maxParseRounds: 4 });
+parseLuaStructural(parseBudgetBatch.source, "<beta-optimizer-parse-budget-batch>");
+assert.equal(parseBudgetBatch.stats.singleUseInlines, 8);
+assert(parseBudgetBatch.stats.rounds > parseBudgetBatch.stats.parseRounds);
+assert.equal(parseBudgetBatch.stats.parseRounds, 4);
+assert.equal(parseBudgetBatch.stats.parseLimitHit, false);
+assert(parseBudgetBatch.source.includes("print(1)"));
+assert(parseBudgetBatch.source.includes("print(8)"));
+
+const parseBudgetLimit = optimizeBetaSource(`local a = 1\nprint(a)`, { maxParseRounds: 1 });
+assert.equal(parseBudgetLimit.stats.parseRounds, 1);
+assert.equal(parseBudgetLimit.stats.parseLimitHit, true);
+assert(parseBudgetLimit.source.includes("local a = 1"));
+
+// Swap snapshots must remain unless a dedicated proof can preserve both global
+// read order and global write order (globals may have environment metamethods).
+const globalSwapSnapshot = optimize(`local a = l2
+local b = l1
+l1 = a
+l2 = b`);
+assert(globalSwapSnapshot.source.includes("local a = l2"));
+assert(globalSwapSnapshot.source.includes("local b = l1"));
+assert(globalSwapSnapshot.source.includes("l1 = a"));
+assert(globalSwapSnapshot.source.includes("l2 = b"));
+
 console.log("beta optimizer tests passed");
