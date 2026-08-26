@@ -152,6 +152,46 @@ function scanLaterReferences(block, declarationIndex, name, tailNode = null) {
     return result;
 }
 
+function scanNameInSameBlockNode(node, name, result, topIndex, parent = null, key = null, root = true) {
+    if (!node) return;
+    if (Array.isArray(node)) {
+        if (!root && node.some(child => isNode(child) && /Statement$/.test(child.type))) return;
+        for (const child of node) scanNameInSameBlockNode(child, name, result, topIndex, parent, key, false);
+        return;
+    }
+    if (!isNode(node)) return;
+    if (!root && node.type === "FunctionDeclaration") return;
+
+    if (isIdentifier(node, name)) {
+        if (isDirectWriteIdentifier(node, parent, key)) {
+            result.writes.push({ node, parent, key, topIndex });
+            if (parent?.type === "LocalStatement") result.redeclared = true;
+            return;
+        }
+        if (!isNonReadIdentifier(node, parent, key)) result.reads.push({ node, parent, key, topIndex });
+        return;
+    }
+
+    for (const childKey of Object.keys(node)) {
+        if (childKey === "range" || childKey === "loc") continue;
+        const value = node[childKey];
+        if (Array.isArray(value)) {
+            if (value.some(child => isNode(child) && /Statement$/.test(child.type))) continue;
+            for (const child of value) scanNameInSameBlockNode(child, name, result, topIndex, node, childKey, false);
+        } else if (isNode(value)) {
+            scanNameInSameBlockNode(value, name, result, topIndex, node, childKey, false);
+        }
+    }
+}
+
+function scanLaterReferencesSameBlock(block, declarationIndex, name) {
+    const result = { reads: [], writes: [], captured: false, redeclared: false };
+    for (let index = declarationIndex + 1; index < block.length; index++) {
+        scanNameInSameBlockNode(block[index], name, result, index, null, null, true);
+    }
+    return result;
+}
+
 function statementHasEffect(statement) {
     if (!statement) return false;
     if (statement.type === "LocalStatement") return !(statement.init || []).every(isNoEffectExpression);
@@ -1004,6 +1044,71 @@ function findAdjacentCopyChainFold(source, block, stats) {
     return null;
 }
 
+function nestedFunctionWritesName(functionBody, name) {
+    let found = false;
+    function visit(value) {
+        if (found || !value) return;
+        if (Array.isArray(value)) {
+            for (const child of value) visit(child);
+            return;
+        }
+        if (!isNode(value)) return;
+        if (value.type === "FunctionDeclaration") {
+            const refs = { reads: [], writes: [], captured: false, redeclared: false };
+            for (let index = 0; index < (value.body || []).length; index++) {
+                scanNameInNode(value.body[index], name, refs, index, null, null, true);
+            }
+            if (refs.writes.some(write => write.parent?.type !== "LocalStatement")) {
+                found = true;
+                return;
+            }
+            for (const statement of value.body || []) visit(statement);
+            return;
+        }
+        for (const childKey of Object.keys(value)) {
+            if (childKey === "range" || childKey === "loc") continue;
+            visit(value[childKey]);
+        }
+    }
+    for (const statement of functionBody) visit(statement);
+    return found;
+}
+
+function findAdjacentIndexKeyInline(source, block, functionBody, stats) {
+    for (let index = 0; index + 1 < block.length; index++) {
+        const producerStatement = block[index];
+        const consumerStatement = block[index + 1];
+        const producer = directLocalInfo(producerStatement);
+        const consumer = directLocalInfo(consumerStatement);
+        if (!producer || !consumer || !isStandaloneCall(producer.init)) continue;
+        const lookup = consumer.init;
+        if (lookup?.type !== "IndexExpression" || !isIdentifier(lookup.index, producer.name)) continue;
+        if (!isIdentifier(lookup.base) || lookup.base.isLocal !== true) continue;
+        if (!Array.isArray(producerStatement.range) || !Array.isArray(lookup.index.range)) continue;
+
+        const refs = scanLaterReferences(block, index, producer.name);
+        const sameBlockRefs = scanLaterReferencesSameBlock(block, index, producer.name);
+        if (refs.captured || refs.redeclared || refs.writes.length || refs.reads.length !== 1) continue;
+        if (sameBlockRefs.reads.length !== 1 || sameBlockRefs.reads[0].node !== lookup.index || sameBlockRefs.reads[0].topIndex !== index + 1) continue;
+
+        // `base[keyCall()]` reads the local base binding before evaluating the key.
+        // The split compiler form evaluates the key call first. This is equivalent
+        // only when no nested closure in this function can rebind that local base.
+        if (nestedFunctionWritesName(functionBody, lookup.base.name)) continue;
+
+        stats.adjacentIndexKeyInlines++;
+        return {
+            compound: true,
+            edits: [
+                { start: producerStatement.range[0], end: producerStatement.range[1], replacement: "" },
+                { start: lookup.index.range[0], end: lookup.index.range[1], replacement: sourceOf(source, producer.init) },
+            ],
+            kind: "adjacent-index-key-inline",
+        };
+    }
+    return null;
+}
+
 function findDeferredLocalInitialization(source, block, stats) {
     for (let declarationIndex = 0; declarationIndex < block.length; declarationIndex++) {
         const declaration = block[declarationIndex];
@@ -1103,6 +1208,8 @@ function tryOptimizeLocal(source, block, index, stats, mode = "inline", tailNode
     if (!info) return null;
     const refs = scanLaterReferences(block, index, info.name, tailNode);
     if (refs.captured || refs.redeclared || refs.writes.length) return null;
+    const sameBlockRefs = mode === "inline" ? scanLaterReferencesSameBlock(block, index, info.name) : refs;
+    if (mode === "inline" && sameBlockRefs.reads.length !== refs.reads.length) return null;
 
     if (refs.reads.length === 0) {
         if (mode !== "dead") return null;
@@ -1127,8 +1234,8 @@ function tryOptimizeLocal(source, block, index, stats, mode = "inline", tailNode
     }
 
     if (mode === "dead") return null;
-    if (refs.reads.length !== 1) return null;
-    const read = refs.reads[0];
+    if (sameBlockRefs.reads.length !== 1) return null;
+    const read = sameBlockRefs.reads[0];
     if (!Array.isArray(read.node.range)) return null;
     const readTopStatement = block[read.topIndex];
 
@@ -1320,6 +1427,8 @@ function findTransformEdit(source, ast, stats) {
             if (deferredLocalEdit) return deferredLocalEdit;
             const copyChainEdit = findAdjacentCopyChainFold(source, block, stats);
             if (copyChainEdit) return copyChainEdit;
+            const indexKeyEdit = findAdjacentIndexKeyInline(source, block, functionBody, stats);
+            if (indexKeyEdit) return indexKeyEdit;
         }
         const envEdit = findEnvFold(source, functionBody, inheritedEnvName);
         if (envEdit) {
@@ -1381,6 +1490,7 @@ function optimizeBetaSource(source, options = {}) {
         singleUseInlines: 0,
         directNilCleanupWritesRemoved: 0,
         adjacentCopyChainsFolded: 0,
+        adjacentIndexKeyInlines: 0,
         deferredLocalInitializersFolded: 0,
         deadLocals: 0,
         deadCallResults: 0,

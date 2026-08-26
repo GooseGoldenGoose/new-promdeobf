@@ -26,6 +26,7 @@ function main() {
     console.log(`Single-use inlines: ${result.stats.singleUseInlines}`);
     console.log(`Direct nil cleanup writes removed: ${result.stats.directNilCleanupWritesRemoved}`);
     console.log(`Adjacent copy chains folded: ${result.stats.adjacentCopyChainsFolded}`);
+    console.log(`Adjacent index keys inlined: ${result.stats.adjacentIndexKeyInlines}`);
     console.log(`Deferred local initializers folded: ${result.stats.deferredLocalInitializersFolded}`);
     console.log(`Dead locals: ${result.stats.deadLocals}`);
     console.log(`Dead call results: ${result.stats.deadCallResults}`);

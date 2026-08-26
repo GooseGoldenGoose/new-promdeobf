@@ -757,4 +757,41 @@ print(x)`);
 assert(nestedBareReturnMustStay.source.includes("return"));
 assert.equal(nestedBareReturnMustStay.stats.bareReturnsRemoved, 0);
 
+const genericCrossBlockReadBarrier = optimize(`local x = 1
+local snapshot = x
+if cond then
+    print(snapshot)
+end`);
+assert(/local snapshot = /.test(genericCrossBlockReadBarrier.source));
+assert(genericCrossBlockReadBarrier.source.includes("print(snapshot)"));
+assert(!genericCrossBlockReadBarrier.source.includes("print(x)"));
+
+const genericDoBlockReadBarrier = optimize(`local x = 1
+local snapshot = x
+do
+    print(snapshot)
+end`);
+assert(/local snapshot = /.test(genericDoBlockReadBarrier.source));
+assert(genericDoBlockReadBarrier.source.includes("print(snapshot)"));
+assert(!genericDoBlockReadBarrier.source.includes("print(x)"));
+
+const adjacentIndexKeyInline = optimize(`local cache = {}
+local key = decode("x")
+local value = cache[key]
+consume(value)`);
+assert(!adjacentIndexKeyInline.source.includes("local key ="));
+assert(adjacentIndexKeyInline.source.includes('local value = cache[decode("x")]'));
+assert.equal(adjacentIndexKeyInline.stats.adjacentIndexKeyInlines, 1);
+
+const adjacentIndexKeyNestedWriterBarrier = optimize(`local cache = {}
+local mutate = function()
+    cache = {}
+end
+local key = decode("x")
+local value = cache[key]
+consume(value, mutate)`);
+assert(adjacentIndexKeyNestedWriterBarrier.source.includes('local key = decode("x")'));
+assert(adjacentIndexKeyNestedWriterBarrier.source.includes("local value = cache[key]"));
+assert.equal(adjacentIndexKeyNestedWriterBarrier.stats.adjacentIndexKeyInlines, 0);
+
 console.log("beta optimizer tests passed");
