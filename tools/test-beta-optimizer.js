@@ -703,6 +703,23 @@ end
 print(x)`);
 assert(nestedDirectNilFailsClosed.source.includes("x = nil"));
 
+const terminalNestedDirectNilCleanup = optimize(`if cond then
+    local x = 1
+    x = nil
+    return
+end`);
+assert(!terminalNestedDirectNilCleanup.source.includes("x = nil"));
+assert.equal(terminalNestedDirectNilCleanup.stats.directNilCleanupWritesRemoved, 1);
+
+const terminalNestedCapturedNilMustStay = optimize(`if cond then
+    local x = 1
+    local f = function() return x end
+    x = nil
+    return f
+end`);
+assert(terminalNestedCapturedNilMustStay.source.includes("x = nil"));
+assert.equal(terminalNestedCapturedNilMustStay.stats.directNilCleanupWritesRemoved, 0);
+
 const upvalueDirectNilMustStay = optimize(`local x = 1
 local f = function()
     x = nil

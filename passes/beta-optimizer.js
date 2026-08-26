@@ -979,27 +979,38 @@ function hasPriorDirectLocalDeclaration(functionBody, beforeIndex, name) {
 }
 
 function findPreFoldDeadNilAssignment(source, functionBody, stats, limit = 128) {
-    // This is intentionally a pre-fold-only cleanup. A direct final `x = nil`
-    // emitted as lifetime cleanup can be deleted when its value is never observed.
-    // Restrict it to a function's root block; nested control-flow liveness needs CFG
-    // proof and therefore fails closed here.
+    // This is intentionally a pre-fold-only cleanup. A direct `x = nil` emitted
+    // as compiler lifetime cleanup can be deleted when its value is never observed.
+    // Root-block writes use ordinary later-reference proof. Nested blocks are only
+    // eligible when they terminate the function with a direct return; other nested
+    // control flow still fails closed.
     if (functionHasScopeTransfer(functionBody) || limit <= 0) return null;
 
     const edits = [];
-    for (let index = functionBody.length - 1; index >= 0 && edits.length < limit; index--) {
-        const statement = functionBody[index];
-        const info = directNilAssignmentInfo(statement);
-        if (!info) continue;
-        // `isLocal` also covers an upvalue in the parser. Require an actual prior
-        // declaration in this function root so an outer captured binding can never
-        // be mistaken for disposable local lifetime cleanup.
-        if (!hasPriorDirectLocalDeclaration(functionBody, index, info.name)) continue;
-        if (functionCapturesName(functionBody, info.name)) continue;
+    const blocks = allBlocksForFunction(functionBody);
+    for (const block of blocks) {
+        if (edits.length >= limit) break;
+        const isFunctionRoot = block === functionBody;
+        const last = block[block.length - 1];
+        const isTerminalNestedBlock = !isFunctionRoot && last?.type === "ReturnStatement";
+        if (!isFunctionRoot && !isTerminalNestedBlock) continue;
 
-        const refs = scanLaterReferences(functionBody, index, info.name);
-        if (refs.reads.length || refs.captured || refs.redeclared) continue;
+        for (let index = block.length - 1; index >= 0 && edits.length < limit; index--) {
+            const statement = block[index];
+            const info = directNilAssignmentInfo(statement);
+            if (!info) continue;
 
-        edits.push({ start: statement.range[0], end: statement.range[1], replacement: "", kind: "dead-direct-nil-cleanup" });
+            // `isLocal` also covers upvalues. Require a prior declaration in this
+            // exact lexical block. This proves same-function ownership without
+            // treating an outer captured binding as disposable cleanup.
+            if (!hasPriorDirectLocalDeclaration(block, index, info.name)) continue;
+            if (functionCapturesName(functionBody, info.name)) continue;
+
+            const refs = scanLaterReferences(block, index, info.name);
+            if (refs.reads.length || refs.captured || refs.redeclared) continue;
+
+            edits.push({ start: statement.range[0], end: statement.range[1], replacement: "", kind: "dead-direct-nil-cleanup" });
+        }
     }
     if (!edits.length) return null;
     stats.directNilCleanupWritesRemoved += edits.length;
