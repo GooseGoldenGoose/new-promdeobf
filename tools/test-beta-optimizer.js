@@ -775,6 +775,19 @@ assert(/local snapshot = /.test(genericDoBlockReadBarrier.source));
 assert(genericDoBlockReadBarrier.source.includes("print(snapshot)"));
 assert(!genericDoBlockReadBarrier.source.includes("print(x)"));
 
+const adjacentIndexBaseAliasInline = optimize(`local temp = math
+local real = temp["random"]
+consume(real)`);
+assert(!adjacentIndexBaseAliasInline.source.includes("local temp ="));
+assert(adjacentIndexBaseAliasInline.source.includes('local real = math["random"]'));
+assert.equal(adjacentIndexBaseAliasInline.stats.adjacentIndexBaseAliasesFolded, 1);
+
+const adjacentIndexBaseAliasUseBarrier = optimize(`local temp = math
+local real = temp["random"]
+consume(temp, real)`);
+assert(adjacentIndexBaseAliasUseBarrier.source.includes("local temp = math"));
+assert.equal(adjacentIndexBaseAliasUseBarrier.stats.adjacentIndexBaseAliasesFolded, 0);
+
 const adjacentIndexKeyInline = optimize(`local cache = {}
 local key = decode("x")
 local value = cache[key]

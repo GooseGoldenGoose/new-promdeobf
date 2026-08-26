@@ -1074,6 +1074,41 @@ function nestedFunctionWritesName(functionBody, name) {
     return found;
 }
 
+function findAdjacentIndexBaseAliasInline(source, block, stats) {
+    for (let index = 0; index + 1 < block.length; index++) {
+        const producerStatement = block[index];
+        const consumerStatement = block[index + 1];
+        const producer = directLocalInfo(producerStatement);
+        const consumer = directLocalInfo(consumerStatement);
+        if (!producer || !consumer || !isIdentifier(producer.init)) continue;
+        const lookup = consumer.init;
+        if (lookup?.type !== "IndexExpression" || !isIdentifier(lookup.base, producer.name)) continue;
+        if (!Array.isArray(producerStatement.range) || !Array.isArray(lookup.base.range)) continue;
+
+        // This is an exact adjacent snapshot transfer:
+        //   local t = math
+        //   local f = t["random"]
+        // -> local f = math["random"]
+        // No statement executes between the two reads, and the temporary must have
+        // exactly this one same-block use with no write/capture/redeclaration.
+        const refs = scanLaterReferences(block, index, producer.name);
+        const sameBlockRefs = scanLaterReferencesSameBlock(block, index, producer.name);
+        if (refs.captured || refs.redeclared || refs.writes.length || refs.reads.length !== 1) continue;
+        if (sameBlockRefs.reads.length !== 1 || sameBlockRefs.reads[0].node !== lookup.base || sameBlockRefs.reads[0].topIndex !== index + 1) continue;
+
+        stats.adjacentIndexBaseAliasesFolded++;
+        return {
+            compound: true,
+            edits: [
+                { start: producerStatement.range[0], end: producerStatement.range[1], replacement: "" },
+                { start: lookup.base.range[0], end: lookup.base.range[1], replacement: sourceOf(source, producer.init) },
+            ],
+            kind: "adjacent-index-base-alias-inline",
+        };
+    }
+    return null;
+}
+
 function findAdjacentIndexKeyInline(source, block, functionBody, stats) {
     for (let index = 0; index + 1 < block.length; index++) {
         const producerStatement = block[index];
@@ -1427,6 +1462,8 @@ function findTransformEdit(source, ast, stats) {
             if (deferredLocalEdit) return deferredLocalEdit;
             const copyChainEdit = findAdjacentCopyChainFold(source, block, stats);
             if (copyChainEdit) return copyChainEdit;
+            const indexBaseAliasEdit = findAdjacentIndexBaseAliasInline(source, block, stats);
+            if (indexBaseAliasEdit) return indexBaseAliasEdit;
             const indexKeyEdit = findAdjacentIndexKeyInline(source, block, functionBody, stats);
             if (indexKeyEdit) return indexKeyEdit;
         }
@@ -1490,6 +1527,7 @@ function optimizeBetaSource(source, options = {}) {
         singleUseInlines: 0,
         directNilCleanupWritesRemoved: 0,
         adjacentCopyChainsFolded: 0,
+        adjacentIndexBaseAliasesFolded: 0,
         adjacentIndexKeyInlines: 0,
         deferredLocalInitializersFolded: 0,
         deadLocals: 0,
