@@ -2008,6 +2008,98 @@ function singleValueInlineSource(source, node) {
     return isStandaloneCall(node) ? `(${text})` : text;
 }
 
+function isPlainMovableTableConstructor(node, functionBody) {
+    function safeValue(value) {
+        if (isLiteral(value)) return true;
+        if (isIdentifier(value)) {
+            return value.isLocal === true && !nestedFunctionWritesName(functionBody, value.name);
+        }
+        if (value?.type !== "TableConstructorExpression") return false;
+        return (value.fields || []).every(field => {
+            if (field.type === "TableValue") return safeValue(field.value);
+            if (field.type === "TableKey") return safeValue(field.key) && safeValue(field.value);
+            if (field.type === "TableKeyString") return safeValue(field.value);
+            return false;
+        });
+    }
+    return node?.type === "TableConstructorExpression" && safeValue(node);
+}
+
+function directCallConsumer(statement) {
+    if (statement?.type === "LocalStatement" || statement?.type === "AssignmentStatement") {
+        const variables = statement.variables || [];
+        const init = statement.init || [];
+        if (variables.length !== 1 || init.length !== 1 || init[0]?.type !== "CallExpression") return null;
+        return init[0];
+    }
+    return null;
+}
+
+function findAdjacentTableCallArgumentGroup(source, block, functionBody, stats, startIndex = 0) {
+    for (let consumerIndex = Math.max(2, startIndex + 2); consumerIndex < block.length; consumerIndex++) {
+        const call = directCallConsumer(block[consumerIndex]);
+        if (!call) continue;
+
+        const producers = [];
+        for (let index = consumerIndex - 1; index >= startIndex; index--) {
+            const producer = directLocalInfo(block[index]);
+            if (!producer || producer.variable.typeAnnotation || !Array.isArray(block[index].range)) break;
+            if (!isPlainMovableTableConstructor(producer.init, functionBody)) break;
+            producers.push({ ...producer, statement: block[index], index });
+        }
+        producers.reverse();
+        if (producers.length < 2) continue;
+
+        const args = call.arguments || [];
+        const matched = [];
+        let previousArgIndex = -1;
+        let valid = true;
+        for (const producer of producers) {
+            const matches = [];
+            for (let argIndex = 0; argIndex < args.length; argIndex++) {
+                if (isIdentifier(args[argIndex], producer.name) && args[argIndex].isLocal === true) {
+                    matches.push({ node: args[argIndex], argIndex });
+                }
+            }
+            if (matches.length !== 1 || matches[0].argIndex <= previousArgIndex || !Array.isArray(matches[0].node.range)) {
+                valid = false;
+                break;
+            }
+            const useNode = matches[0].node;
+            const refs = scanLaterReferences(block, producer.index, producer.name);
+            const sameBlockRefs = scanLaterReferencesSameBlock(block, producer.index, producer.name);
+            if (refs.captured || refs.redeclared || refs.writes.length || refs.reads.length !== 1 ||
+                sameBlockRefs.reads.length !== 1 || sameBlockRefs.reads[0].node !== useNode ||
+                sameBlockRefs.reads[0].topIndex !== consumerIndex) {
+                valid = false;
+                break;
+            }
+            previousArgIndex = matches[0].argIndex;
+            matched.push({ producer, useNode });
+        }
+        if (!valid) continue;
+
+        // Prometheus commonly materializes adjacent constructor arguments into
+        // separate registers. For two or more plain constructors, restoring them
+        // as call arguments preserves constructor order, fresh identities, and all
+        // literal/stable-local field values while avoiding broad single-table moves.
+        stats.adjacentTableCallArgumentInlines += matched.length;
+        const edits = [];
+        for (const { producer, useNode } of matched) {
+            edits.push({ start: producer.statement.range[0], end: producer.statement.range[1], replacement: "" });
+            edits.push({ start: useNode.range[0], end: useNode.range[1], replacement: sourceOf(source, producer.init) });
+        }
+        return {
+            compound: true,
+            edits,
+            transformCount: matched.length,
+            kind: "adjacent-table-call-argument-group",
+            statementIndex: producers[0].index,
+        };
+    }
+    return null;
+}
+
 function findAdjacentCallArgumentInline(source, block, functionBody, stats, startIndex = 0) {
     for (let index = startIndex; index + 1 < block.length; index++) {
         const producerStatement = block[index];
@@ -2781,6 +2873,8 @@ function findTransformEdit(source, ast, stats, budget = 1) {
             if (tableConstructorKeyEdit) return tableConstructorKeyEdit;
             const dependencySafeAssignmentKeyEdit = findDependencySafeAssignmentKeyBatch(source, block, functionBody, stats, Math.min(128, budget));
             if (dependencySafeAssignmentKeyEdit) return dependencySafeAssignmentKeyEdit;
+            const tableCallArgumentEdit = findAdjacentTableCallArgumentGroup(source, block, functionBody, stats);
+            if (tableCallArgumentEdit) return tableCallArgumentEdit;
             const callArgumentEdit = findAdjacentCallArgumentBatch(source, block, functionBody, stats, Math.min(128, budget));
             if (callArgumentEdit) return callArgumentEdit;
             const assignmentValueEdit = findAdjacentAssignmentValueBatch(source, block, stats, Math.min(128, budget));
@@ -2882,6 +2976,7 @@ function optimizeBetaSource(source, options = {}) {
         adjacentAssignmentKeyInlines: 0,
         dependencySafeAssignmentKeyInlines: 0,
         adjacentTableConstructorKeyInlines: 0,
+        adjacentTableCallArgumentInlines: 0,
         adjacentCallArgumentInlines: 0,
         adjacentAssignmentValueInlines: 0,
         repeatTailConditionTempsInlined: 0,

@@ -1349,6 +1349,32 @@ consume(built)`);
 assert(adjacentTableConstructorKeyGapBarrier.source.includes("local key = cache[1]"));
 assert.equal(adjacentTableConstructorKeyGapBarrier.stats.adjacentTableConstructorKeyInlines, 0);
 
+const adjacentTableCallArgumentInline = optimize(`local r_v21_8 = existing
+local r_v24_11 = {}
+local r_v25_5 = {
+    ["__index"] = r_v21_8,
+    ["__metatable"] = nil
+}
+local r_v4_3
+r_v4_3 = setmetatable(r_v24_11, r_v25_5)
+return r_v4_3`);
+assert(!adjacentTableCallArgumentInline.source.includes("local r_v24_11 ="));
+assert(!adjacentTableCallArgumentInline.source.includes("local r_v25_5 ="));
+assert(adjacentTableCallArgumentInline.source.includes("setmetatable({}, {"));
+assert.equal(adjacentTableCallArgumentInline.stats.adjacentTableCallArgumentInlines, 2);
+
+const adjacentTableCallArgumentEffectBarrier = optimize(`local packed = { build() }
+local out = consume(packed)
+print(out)`);
+assert(adjacentTableCallArgumentEffectBarrier.source.includes("local packed = { build() }"));
+assert.equal(adjacentTableCallArgumentEffectBarrier.stats.adjacentTableCallArgumentInlines, 0);
+
+const adjacentTableCallArgumentGlobalFieldBarrier = optimize(`local packed = { currentValue }
+local out = consume(packed)
+print(out)`);
+assert(adjacentTableCallArgumentGlobalFieldBarrier.source.includes("local packed = { currentValue }"));
+assert.equal(adjacentTableCallArgumentGlobalFieldBarrier.stats.adjacentTableCallArgumentInlines, 0);
+
 const adjacentScalarCallArgumentInline = optimize(`local callee = consume
 local values = {}
 local n = #values
