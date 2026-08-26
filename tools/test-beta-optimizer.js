@@ -256,6 +256,31 @@ return unpack(t)`);
 assert(valueReturnPackedIifeBarrier.source.includes("local t ="));
 assert.equal(valueReturnPackedIifeBarrier.stats.packedReturnForwardersCollapsed, 0);
 
+const prometheusPackedReturnForward = optimize(`local callee = source
+local t = { callee() }
+return unpack(t)`);
+assert(!prometheusPackedReturnForward.source.includes("local t ="));
+assert(!prometheusPackedReturnForward.source.includes("return unpack(t)"));
+assert(prometheusPackedReturnForward.source.includes("return source()"));
+assert.equal(prometheusPackedReturnForward.stats.packedReturnForwardersCollapsed, 1);
+
+const prometheusPackedReturnLocalUnpackBarrier = optimize(`local callee = source
+local unpack = customUnpack
+local t = { callee() }
+return unpack(t)`);
+assert(prometheusPackedReturnLocalUnpackBarrier.source.includes("local t ="));
+assert(prometheusPackedReturnLocalUnpackBarrier.source.includes("return unpack(t)"));
+
+const adjacentReturnedCallBaseInline = optimize(`local maker = source
+local callee = maker()
+local t = { callee() }
+return unpack(t)`);
+assert(!adjacentReturnedCallBaseInline.source.includes("local callee ="));
+assert(!adjacentReturnedCallBaseInline.source.includes("local t ="));
+assert(adjacentReturnedCallBaseInline.source.includes("return (source())()"));
+assert.equal(adjacentReturnedCallBaseInline.stats.packedReturnForwardersCollapsed, 1);
+assert.equal(adjacentReturnedCallBaseInline.stats.returnedCallBaseInlines, 1);
+
 const packedUnpackForward = optimize(`local sink = print
 local fn = function() return 1, 2, 3 end
 local t = { pcall(fn) }

@@ -494,6 +494,81 @@ function functionReturnsOnlyZeroValues(functionNode) {
     return valid;
 }
 
+function findPrometheusPackedReturnForwarding(source, block, stats) {
+    for (let packIndex = 0; packIndex + 1 < block.length; packIndex++) {
+        const packStatement = block[packIndex];
+        const packInfo = directLocalInfo(packStatement);
+        if (!packInfo || !Array.isArray(packStatement.range)) continue;
+        const call = packedCallFromTable(packInfo.init);
+        if (!call || !Array.isArray(call.range) || !isIdentifier(call.base) || call.base.isLocal !== true) continue;
+
+        const returnStatement = block[packIndex + 1];
+        if (returnStatement?.type !== "ReturnStatement" || !Array.isArray(returnStatement.range)) continue;
+        const returnArgs = returnStatement.arguments || [];
+        if (returnArgs.length !== 1) continue;
+        const unpackCall = returnArgs[0];
+        if (!isStandaloneCall(unpackCall) || !isIdentifier(unpackCall.base, "unpack") || unpackCall.base.isLocal === true) continue;
+        const unpackArgs = unpackCall.arguments || [];
+        if (unpackArgs.length !== 1) continue;
+        const packUse = unpackArgs[0];
+        if (!isIdentifier(packUse, packInfo.name) || packUse.isLocal !== true) continue;
+
+        const refs = scanLaterReferences(block, packIndex, packInfo.name);
+        if (refs.captured || refs.redeclared || refs.writes.length || refs.reads.length !== 1) continue;
+        if (refs.reads[0].topIndex !== packIndex + 1 || refs.reads[0].node !== packUse) continue;
+
+        // Local WeAreDevs Prometheus compiles a final returned call with RETURN_ALL,
+        // stores that result in a one-field table, then returns unpack(temp). Restore
+        // the source call only for this exact adjacent lexical-callee shape.
+        stats.multiReturnTableCollapses++;
+        stats.packedReturnForwardersCollapsed++;
+        return {
+            compound: true,
+            edits: [
+                { start: packStatement.range[0], end: packStatement.range[1], replacement: "" },
+                { start: returnStatement.range[0], end: returnStatement.range[1], replacement: `return ${sourceOf(source, call)}` },
+            ],
+            kind: "prometheus-packed-return-forwarding",
+        };
+    }
+    return null;
+}
+
+function findAdjacentReturnedCallBaseInline(source, block, stats) {
+    for (let index = 0; index + 1 < block.length; index++) {
+        const producerStatement = block[index];
+        const producer = directLocalInfo(producerStatement);
+        if (!producer || producer.variable.typeAnnotation || !Array.isArray(producerStatement.range)) continue;
+        if (!isStandaloneCall(producer.init) || !Array.isArray(producer.init.range)) continue;
+
+        const returnStatement = block[index + 1];
+        if (returnStatement?.type !== "ReturnStatement") continue;
+        const args = returnStatement.arguments || [];
+        if (args.length !== 1 || args[0]?.type !== "CallExpression") continue;
+        const returnedCall = args[0];
+        if (!isIdentifier(returnedCall.base, producer.name) || returnedCall.base.isLocal !== true || !Array.isArray(returnedCall.base.range)) continue;
+
+        const refs = scanLaterReferences(block, index, producer.name);
+        const sameBlockRefs = scanLaterReferencesSameBlock(block, index, producer.name);
+        if (refs.captured || refs.redeclared || refs.writes.length || refs.reads.length !== 1) continue;
+        if (sameBlockRefs.reads.length !== 1 || sameBlockRefs.reads[0].node !== returnedCall.base || sameBlockRefs.reads[0].topIndex !== index + 1) continue;
+
+        // A function-call base is single-value adjusted. An immediately preceding
+        // local initialized by a call has the same single-value adjustment, so
+        // `local f = maker(); return f(...)` is exactly `return (maker())(...)`.
+        stats.returnedCallBaseInlines++;
+        return {
+            compound: true,
+            edits: [
+                { start: producerStatement.range[0], end: producerStatement.range[1], replacement: "" },
+                { start: returnedCall.base.range[0], end: returnedCall.base.range[1], replacement: `(${sourceOf(source, producer.init)})` },
+            ],
+            kind: "adjacent-returned-call-base-inline",
+        };
+    }
+    return null;
+}
+
 function findZeroReturnPackedIifeForwarding(source, block, stats) {
     for (let packIndex = 0; packIndex + 1 < block.length; packIndex++) {
         const packStatement = block[packIndex];
@@ -2930,6 +3005,10 @@ function findTransformEdit(source, ast, stats, budget = 1) {
             if (multiReturnEdit) return multiReturnEdit;
             const multiReturnForwardEdit = findPackedCallUnpackForwarding(source, block, functionBody, stats);
             if (multiReturnForwardEdit) return multiReturnForwardEdit;
+            const prometheusPackedReturnEdit = findPrometheusPackedReturnForwarding(source, block, stats);
+            if (prometheusPackedReturnEdit) return prometheusPackedReturnEdit;
+            const returnedCallBaseEdit = findAdjacentReturnedCallBaseInline(source, block, stats);
+            if (returnedCallBaseEdit) return returnedCallBaseEdit;
             const packedReturnForwardEdit = findZeroReturnPackedIifeForwarding(source, block, stats);
             if (packedReturnForwardEdit) return packedReturnForwardEdit;
             const multiReturnSelfAssignmentEdit = findPackedCallUnpackSelfAssignment(source, block, functionBody, stats);
@@ -3072,6 +3151,7 @@ function optimizeBetaSource(source, options = {}) {
         multiReturnTableCollapses: 0,
         multiReturnForwardersCollapsed: 0,
         packedReturnForwardersCollapsed: 0,
+        returnedCallBaseInlines: 0,
         multiReturnSelfAssignmentForwardersCollapsed: 0,
         namecallRecoveries: 0,
         multiReturnSlotsRecovered: 0,
