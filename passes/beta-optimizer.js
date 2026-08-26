@@ -1545,6 +1545,204 @@ function findAdjacentAssignmentKeyBatch(source, block, functionBody, stats, limi
     return { compound: true, edits, transformCount, kind: transformCount === 1 ? "adjacent-assignment-key-inline" : "adjacent-assignment-key-batch" };
 }
 
+const tableSafetyIndexCache = new WeakMap();
+
+function tableSafetyIndexForFunction(functionBody) {
+    const cached = tableSafetyIndexCache.get(functionBody);
+    if (cached) return cached;
+
+    const declarationCounts = new Map();
+    const directTables = new Map();
+    for (const block of allBlocksForFunction(functionBody)) {
+        for (const statement of block) {
+            if (statement?.type !== "LocalStatement") continue;
+            const variables = statement.variables || [];
+            const init = statement.init || [];
+            for (const variable of variables) {
+                if (!isIdentifier(variable)) continue;
+                declarationCounts.set(variable.name, (declarationCounts.get(variable.name) || 0) + 1);
+            }
+            if (block === functionBody && variables.length === 1 && init.length === 1 &&
+                isIdentifier(variables[0]) && init[0]?.type === "TableConstructorExpression" && Array.isArray(statement.range)) {
+                directTables.set(variables[0].name, { statement, table: init[0] });
+            }
+        }
+    }
+
+    const candidates = new Set();
+    for (const name of directTables.keys()) {
+        if (declarationCounts.get(name) === 1) candidates.add(name);
+    }
+    const unsafeUses = new Map([...candidates].map(name => [name, []]));
+    const mutations = new Map([...candidates].map(name => [name, []]));
+
+    function record(map, name, node) {
+        if (!candidates.has(name) || !Array.isArray(node?.range)) return;
+        map.get(name).push(node.range[0]);
+    }
+
+    function recordMutationTarget(target, statement) {
+        if ((target?.type === "IndexExpression" || target?.type === "MemberExpression") &&
+            isIdentifier(target.base) && target.base.isLocal === true && candidates.has(target.base.name)) {
+            record(mutations, target.base.name, statement);
+        } else if (isIdentifier(target) && target.isLocal === true && candidates.has(target.name)) {
+            record(mutations, target.name, statement);
+        }
+    }
+
+    function visit(value, parent = null, key = null, insideNestedFunction = false) {
+        if (!value) return;
+        if (Array.isArray(value)) {
+            for (const child of value) visit(child, parent, key, insideNestedFunction);
+            return;
+        }
+        if (!isNode(value)) return;
+
+        const nested = insideNestedFunction || value.type === "FunctionDeclaration";
+        if (value.type === "AssignmentStatement") {
+            for (const target of value.variables || []) recordMutationTarget(target, value);
+        } else if (value.type === "CompoundAssignmentStatement") {
+            recordMutationTarget(value.variable, value);
+        }
+
+        if (isIdentifier(value) && value.isLocal === true && candidates.has(value.name)) {
+            if (nested) {
+                record(unsafeUses, value.name, value);
+                return;
+            }
+            if (parent?.type === "IndexExpression" && key === "base") return;
+            if (parent?.type === "MemberExpression" && key === "base") return;
+            if (parent?.type === "LocalStatement" && key === "variables") return;
+            // Alias, function argument, return/store, direct rebind, or any other
+            // exposure connects the table to code outside this exact binding.
+            record(unsafeUses, value.name, value);
+            return;
+        }
+
+        for (const childKey of Object.keys(value)) {
+            if (childKey === "range" || childKey === "loc") continue;
+            visit(value[childKey], value, childKey, nested);
+        }
+    }
+    for (const statement of functionBody) visit(statement);
+
+    const result = { candidates, directTables, unsafeUses, mutations };
+    tableSafetyIndexCache.set(functionBody, result);
+    return result;
+}
+
+function stableTableLookupIndex(node, functionBody, block, producerIndex, consumerIndex) {
+    if (isLiteral(node)) return true;
+    if (!isIdentifier(node) || node.isLocal !== true) return false;
+    if (nestedFunctionWritesName(functionBody, node.name)) return false;
+    return !scanWritesInStatements(block, producerIndex, consumerIndex, node.name);
+}
+
+function purePrivateTableLookupCanMove(functionBody, tableName, producerStatement, consumerStatement) {
+    const index = tableSafetyIndexForFunction(functionBody);
+    if (!index.candidates.has(tableName)) return false;
+    const declaration = index.directTables.get(tableName);
+    if (!declaration || declaration.statement.range[0] >= producerStatement.range[0]) return false;
+
+    const lifetimeStart = declaration.statement.range[1];
+    const lifetimeEnd = consumerStatement.range[1];
+    if (index.unsafeUses.get(tableName).some(offset => offset >= lifetimeStart && offset < lifetimeEnd)) return false;
+
+    const gapStart = producerStatement.range[1];
+    const gapEnd = consumerStatement.range[0];
+    if (index.mutations.get(tableName).some(offset => offset >= gapStart && offset < gapEnd)) return false;
+    return true;
+}
+
+function assignmentKeyConsumers(block) {
+    const consumers = new Map();
+    for (let index = 0; index < block.length; index++) {
+        const statement = block[index];
+        if (statement?.type !== "AssignmentStatement") continue;
+        const variables = statement.variables || [];
+        const init = statement.init || [];
+        if (variables.length !== 1 || init.length !== 1) continue;
+        const target = variables[0];
+        if (target?.type !== "IndexExpression" || !isIdentifier(target.index) || target.index.isLocal !== true) continue;
+        const list = consumers.get(target.index.name) || [];
+        list.push({ index, statement, target });
+        consumers.set(target.index.name, list);
+    }
+    return consumers;
+}
+
+function findDependencySafeAssignmentKeyInline(source, block, functionBody, stats, startIndex = 0) {
+    const consumersByName = assignmentKeyConsumers(block);
+    for (let index = startIndex; index < block.length; index++) {
+        const producerStatement = block[index];
+        const producer = directLocalInfo(producerStatement);
+        if (!producer || producer.variable.typeAnnotation || producer.init?.type !== "IndexExpression" || !Array.isArray(producerStatement.range)) continue;
+        if (!isIdentifier(producer.init.base) || producer.init.base.isLocal !== true) continue;
+        if (!Array.isArray(producer.init.index?.range)) continue;
+        const possibleConsumers = consumersByName.get(producer.name);
+        if (!possibleConsumers || possibleConsumers.length !== 1 || possibleConsumers[0].index <= index + 1) continue;
+
+        const refs = scanLaterReferences(block, index, producer.name);
+        const sameBlockRefs = scanLaterReferencesSameBlock(block, index, producer.name);
+        if (refs.captured || refs.redeclared || refs.writes.length || refs.reads.length !== 1) continue;
+        if (sameBlockRefs.reads.length !== 1) continue;
+        const read = sameBlockRefs.reads[0];
+        const consumerIndex = read.topIndex;
+        if (consumerIndex <= index + 1) continue; // adjacent path already handles this.
+
+        const consumerStatement = block[consumerIndex];
+        if (consumerStatement?.type !== "AssignmentStatement") continue;
+        const variables = consumerStatement.variables || [];
+        const init = consumerStatement.init || [];
+        if (variables.length !== 1 || init.length !== 1) continue;
+        const target = variables[0];
+        if (target?.type !== "IndexExpression" || read.node !== target.index || !isIdentifier(target.index, producer.name)) continue;
+        if (!isIdentifier(target.base) || target.base.isLocal !== true || !Array.isArray(target.index.range)) continue;
+
+        // A non-adjacent lookup may move only when it is a pure read from one
+        // private plain table. Any alias/pass/capture/rebind connects that table to
+        // other code and blocks movement. Direct table mutation in the gap also
+        // blocks movement. Calls on unrelated state may be crossed because this
+        // proven lookup itself has no side effect and cannot observe that state.
+        const tableName = producer.init.base.name;
+        if (!purePrivateTableLookupCanMove(functionBody, tableName, producerStatement, consumerStatement)) continue;
+        if (!stableTableLookupIndex(producer.init.index, functionBody, block, index, consumerIndex)) continue;
+
+        // Keep the established indexed-assignment destination binding barrier.
+        if (nestedFunctionWritesName(functionBody, target.base.name)) continue;
+
+        stats.dependencySafeAssignmentKeyInlines++;
+        return {
+            compound: true,
+            edits: [
+                { start: producerStatement.range[0], end: producerStatement.range[1], replacement: "" },
+                { start: target.index.range[0], end: target.index.range[1], replacement: sourceOf(source, producer.init) },
+            ],
+            kind: "dependency-safe-assignment-key-inline",
+            statementIndex: index,
+            consumerIndex,
+        };
+    }
+    return null;
+}
+
+function findDependencySafeAssignmentKeyBatch(source, block, functionBody, stats, limit = 128) {
+    const edits = [];
+    let transformCount = 0;
+    let cursor = 0;
+    while (transformCount < limit) {
+        const trialStats = { dependencySafeAssignmentKeyInlines: 0 };
+        const candidate = findDependencySafeAssignmentKeyInline(source, block, functionBody, trialStats, cursor);
+        if (!candidate) break;
+        edits.push(...editParts(candidate));
+        stats.dependencySafeAssignmentKeyInlines += trialStats.dependencySafeAssignmentKeyInlines;
+        transformCount++;
+        cursor = candidate.consumerIndex + 1;
+    }
+    if (!transformCount) return null;
+    return { compound: true, edits, transformCount, kind: transformCount === 1 ? "dependency-safe-assignment-key-inline" : "dependency-safe-assignment-key-batch" };
+}
+
 function stableMovedCallPrefixExpression(node, functionBody) {
     if (isLiteral(node)) return true;
     if (!isIdentifier(node) || node.isLocal !== true) return false;
@@ -2323,6 +2521,8 @@ function findTransformEdit(source, ast, stats, budget = 1) {
             if (indexKeyEdit) return indexKeyEdit;
             const assignmentKeyEdit = findAdjacentAssignmentKeyBatch(source, block, functionBody, stats, Math.min(128, budget));
             if (assignmentKeyEdit) return assignmentKeyEdit;
+            const dependencySafeAssignmentKeyEdit = findDependencySafeAssignmentKeyBatch(source, block, functionBody, stats, Math.min(128, budget));
+            if (dependencySafeAssignmentKeyEdit) return dependencySafeAssignmentKeyEdit;
             const callArgumentEdit = findAdjacentCallArgumentBatch(source, block, functionBody, stats, Math.min(128, budget));
             if (callArgumentEdit) return callArgumentEdit;
             const assignmentValueEdit = findAdjacentAssignmentValueBatch(source, block, stats, Math.min(128, budget));
@@ -2422,6 +2622,7 @@ function optimizeBetaSource(source, options = {}) {
         adjacentIndexBaseAliasesFolded: 0,
         adjacentIndexKeyInlines: 0,
         adjacentAssignmentKeyInlines: 0,
+        dependencySafeAssignmentKeyInlines: 0,
         adjacentCallArgumentInlines: 0,
         adjacentAssignmentValueInlines: 0,
         repeatTailConditionTempsInlined: 0,

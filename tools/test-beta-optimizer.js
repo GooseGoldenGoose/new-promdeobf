@@ -1102,6 +1102,80 @@ assert(adjacentAssignmentKeyComplexBaseBarrier.source.includes('local key = sour
 assert(adjacentAssignmentKeyComplexBaseBarrier.source.includes("holder.target[key] = true"));
 assert.equal(adjacentAssignmentKeyComplexBaseBarrier.stats.adjacentAssignmentKeyInlines, 0);
 
+
+const dependencySafeAssignmentKeyInline = optimize(`local source = {}
+local target = {}
+local other = {}
+local touch = function()
+    other[1] = 2
+end
+local key = source[1]
+touch()
+target[key] = true`);
+assert(!dependencySafeAssignmentKeyInline.source.includes("local key ="));
+assert(dependencySafeAssignmentKeyInline.source.includes("target[source[1]] = true"));
+assert.equal(dependencySafeAssignmentKeyInline.stats.dependencySafeAssignmentKeyInlines, 1);
+
+const dependencySafeAssignmentKeyMutationBarrier = optimize(`local source = {}
+local target = {}
+local key = source[1]
+source[1] = 2
+target[key] = true`);
+assert(dependencySafeAssignmentKeyMutationBarrier.source.includes("local key = source[1]"));
+assert.equal(dependencySafeAssignmentKeyMutationBarrier.stats.dependencySafeAssignmentKeyInlines, 0);
+
+const dependencySafeAssignmentKeyFunctionPassBarrier = optimize(`local source = {}
+local target = {}
+local mutate = function(t)
+    t[1] = 2
+end
+local key = source[1]
+mutate(source)
+target[key] = true`);
+assert(dependencySafeAssignmentKeyFunctionPassBarrier.source.includes("local key = source[1]"));
+assert.equal(dependencySafeAssignmentKeyFunctionPassBarrier.stats.dependencySafeAssignmentKeyInlines, 0);
+
+const dependencySafeAssignmentKeyAliasBarrier = optimize(`local source = {}
+local alias = source
+local target = {}
+local key = source[1]
+alias[1] = 2
+target[key] = true
+print(alias)`);
+assert(dependencySafeAssignmentKeyAliasBarrier.source.includes("local key = source[1]"));
+assert.equal(dependencySafeAssignmentKeyAliasBarrier.stats.dependencySafeAssignmentKeyInlines, 0);
+
+const dependencySafeAssignmentKeyCaptureBarrier = optimize(`local source = {}
+local target = {}
+local mutate = function()
+    source[1] = 2
+end
+local key = source[1]
+mutate()
+target[key] = true`);
+assert(dependencySafeAssignmentKeyCaptureBarrier.source.includes("local key = source[1]"));
+assert.equal(dependencySafeAssignmentKeyCaptureBarrier.stats.dependencySafeAssignmentKeyInlines, 0);
+
+const dependencySafeAssignmentKeyIndexWriteBarrier = optimize(`local source = {}
+local target = {}
+local i = 1
+local key = source[i]
+i = 2
+target[key] = true`);
+assert(dependencySafeAssignmentKeyIndexWriteBarrier.source.includes("local key = source[i]"));
+assert.equal(dependencySafeAssignmentKeyIndexWriteBarrier.stats.dependencySafeAssignmentKeyInlines, 0);
+
+const dependencySafeAssignmentKeyCallIndexBarrier = optimize(`local source = {}
+local target = {}
+local decode = function()
+    return 1
+end
+local key = source[decode()]
+unrelated()
+target[key] = true`);
+assert(dependencySafeAssignmentKeyCallIndexBarrier.source.includes("local key = source["));
+assert.equal(dependencySafeAssignmentKeyCallIndexBarrier.stats.dependencySafeAssignmentKeyInlines, 0);
+
 const adjacentScalarCallArgumentInline = optimize(`local callee = consume
 local values = {}
 local n = #values

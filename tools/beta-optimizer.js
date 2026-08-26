@@ -32,6 +32,7 @@ function main() {
     console.log(`Adjacent index base aliases folded: ${result.stats.adjacentIndexBaseAliasesFolded}`);
     console.log(`Adjacent index keys inlined: ${result.stats.adjacentIndexKeyInlines}`);
     console.log(`Adjacent assignment keys inlined: ${result.stats.adjacentAssignmentKeyInlines}`);
+    console.log(`Dependency-safe assignment keys inlined: ${result.stats.dependencySafeAssignmentKeyInlines}`);
     console.log(`Adjacent call arguments inlined: ${result.stats.adjacentCallArgumentInlines}`);
     console.log(`Adjacent assignment values inlined: ${result.stats.adjacentAssignmentValueInlines}`);
     console.log(`Repeat tail condition temps inlined: ${result.stats.repeatTailConditionTempsInlined}`);
