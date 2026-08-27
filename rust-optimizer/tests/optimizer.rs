@@ -681,18 +681,33 @@ return 1
 }
 
 #[test]
-fn dead_parenthesized_namecall_result_gets_statement_separator() {
+fn dead_parenthesized_call_result_emits_parseable_chain() {
     let out = opt(r#"
 local function probe(game, key)
     local unused = (game:GetService(key)):Set3dRenderingEnabled(false)
+    local loader = (loadstring("return 1"))()
 end
 "#);
     assert!(
-        out.contains(";(game:GetService(key)):Set3dRenderingEnabled(false)"),
+        out.contains("game:GetService(key):Set3dRenderingEnabled(false)"),
         "{out}"
     );
+    assert!(out.contains("loadstring(\"return 1\")()"), "{out}");
+    assert!(!out.contains(";("), "{out}");
 }
 
+#[test]
+fn leading_function_literal_call_is_not_emitted_with_semicolon() {
+    let out = opt(r#"
+local function probe()
+    local run = function()
+        return 1
+    end
+    run()
+end
+"#);
+    assert!(!out.contains(";("), "{out}");
+}
 #[test]
 fn removes_only_function_root_bare_return() {
     let out = opt(r#"
@@ -2025,7 +2040,7 @@ local fn = makeFn()
 fn()
 "#);
     assert!(!out.contains("local fn ="));
-    assert!(out.contains("(makeFn())()"));
+    assert!(out.contains("makeFn()()"));
 }
 
 const PROM_DECODER_FIXTURE: &str = r#"

@@ -1863,6 +1863,28 @@ fn unwrapped_call(expr: &Expr) -> Option<&Expr> {
     matches!(expr, Expr::Call { .. }).then_some(expr)
 }
 
+fn statement_safe_call_text(ctx: &Ctx<'_>, call: &Expr) -> Option<String> {
+    let Expr::Call { func, .. } = call else {
+        return None;
+    };
+    let mut text = ctx.expr_text(call)?.to_string();
+    let Expr::Paren { inner, .. } = func.as_ref() else {
+        return Some(text);
+    };
+    let inner = unwrap_parens(inner);
+    if !matches!(inner, Expr::Call { .. } | Expr::Name(_) | Expr::Index { .. }) {
+        return None;
+    }
+    let call_range = ctx.range(call.span())?;
+    let func_range = ctx.range(func.span())?;
+    if func_range.start != call_range.start {
+        return None;
+    }
+    let inner_text = ctx.expr_text(inner)?;
+    text.replace_range(0..(func_range.end - call_range.start), inner_text);
+    Some(text)
+}
+
 fn direct_local_names_before(ctx: &Ctx<'_>, block: &Block, index: usize) -> HashSet<String> {
     let mut names = HashSet::new();
     for stmt in block.stmts.iter().take(index) {

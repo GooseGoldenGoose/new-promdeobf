@@ -933,6 +933,25 @@ fn collect_block_with_tail(
                         )
                     {
                         if let Some(value) = ctx.expr_text(init) {
+                            let direct_argument = stmt_has_direct_call_argument_use(
+                                ctx,
+                                &block.stmts[consumer_index],
+                                read,
+                            );
+                            let leading_call_base = matches!(
+                                &block.stmts[consumer_index],
+                                Stmt::Call(_, _)
+                            ) && ctx
+                                .stmt_range(&block.stmts[consumer_index])
+                                .is_some_and(|r| r.start == read.start);
+                            if leading_call_base && !direct_argument {
+                                continue;
+                            }
+                            let replacement = if direct_argument {
+                                value.to_string()
+                            } else {
+                                format!("({value})")
+                            };
                             if add_group(
                                 ctx,
                                 edits,
@@ -946,28 +965,7 @@ fn collect_block_with_tail(
                                     Edit {
                                         start: read.start,
                                         end: read.end,
-                                        replacement: {
-                                            let direct_argument = stmt_has_direct_call_argument_use(
-                                                ctx,
-                                                &block.stmts[consumer_index],
-                                                read,
-                                            );
-                                            let mut replacement = if direct_argument {
-                                                value.to_string()
-                                            } else {
-                                                format!("({value})")
-                                            };
-                                            if matches!(
-                                                &block.stmts[consumer_index],
-                                                Stmt::Call(_, _)
-                                            ) && ctx
-                                                .stmt_range(&block.stmts[consumer_index])
-                                                .is_some_and(|r| r.start == read.start)
-                                            {
-                                                replacement.insert(0, ';');
-                                            }
-                                            replacement
-                                        },
+                                        replacement,
                                         kind: EditKind::FunctionInline,
                                     },
                                 ],
@@ -1020,27 +1018,29 @@ fn collect_block_with_tail(
                     || adjacent_assignment_target_base_temp)
             {
                 if let Some(value) = ctx.expr_text(init) {
-                    let mut replacement =
-                        if adjacent_assignment_target_base_temp {
-                            value.to_string()
-                        } else if adjacent_call_base_temp && matches!(init, Expr::Call { .. }) {
-                            format!("({value})")
-                        } else if adjacent_if_effect_temp
-                            || adjacent_if_value_temp
-                            || matches!(init, Expr::Name(_) | Expr::Index { .. })
-                        {
-                            value.to_string()
-                        } else {
-                            format!("({value})")
-                        };
-                    if (matches!(&block.stmts[index + 1], Stmt::Call(_, _))
-                        && ctx
-                            .stmt_range(&block.stmts[index + 1])
-                            .is_some_and(|next| next.start == read.start)
-                        && replacement.starts_with('('))
-                        || (adjacent_assignment_target_base_temp && replacement.starts_with('('))
+                    let replacement = if adjacent_assignment_target_base_temp
+                        && matches!(init, Expr::Call { .. })
                     {
-                        replacement.insert(0, ';');
+                        statement_safe_call_text(ctx, init).unwrap_or_else(|| value.to_string())
+                    } else if adjacent_call_base_temp && matches!(init, Expr::Call { .. }) {
+                        statement_safe_call_text(ctx, init)
+                            .unwrap_or_else(|| format!("({value})"))
+                    } else if adjacent_if_effect_temp
+                        || adjacent_if_value_temp
+                        || matches!(init, Expr::Name(_) | Expr::Index { .. })
+                    {
+                        value.to_string()
+                    } else {
+                        format!("({value})")
+                    };
+                    let leading_parenthesized_statement = replacement.starts_with('(')
+                        && ((matches!(&block.stmts[index + 1], Stmt::Call(_, _))
+                            && ctx
+                                .stmt_range(&block.stmts[index + 1])
+                                .is_some_and(|next| next.start == read.start))
+                            || adjacent_assignment_target_base_temp);
+                    if leading_parenthesized_statement {
+                        continue;
                     }
                     if add_group(
                         ctx,
@@ -1088,12 +1088,7 @@ fn collect_block_with_tail(
                 continue;
             }
             if let Some(call_expr) = unwrapped_call(init) {
-                if let Some(call) = ctx.expr_text(call_expr) {
-                    let replacement = if call.trim_start().starts_with('(') {
-                        format!(";{call}")
-                    } else {
-                        call.to_string()
-                    };
+                if let Some(replacement) = statement_safe_call_text(ctx, call_expr) {
                     add_edit(
                         ctx,
                         edits,
