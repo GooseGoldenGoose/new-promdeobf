@@ -2492,3 +2492,24 @@ end
 "#);
     assert!(out.contains("local wanted = profile.macro_profile"), "{out}");
 }
+
+#[test]
+fn stable_field_snapshot_and_env_target_collapse() {
+    let out = opt(r#"
+local function probe(profile)
+    local env = getgenv()
+    local ui = T_Macro
+    local method = ui.AddToggle
+    local wanted = profile.macro_record
+    env.MacroRecordToggle = method(ui, "title", "desc", wanted, function() end)
+end
+"#);
+    assert!(!out.contains("local env = getgenv()"), "{out}");
+    assert!(!out.contains("local ui = T_Macro"), "{out}");
+    assert!(!out.contains("local method ="), "{out}");
+    assert!(!out.contains("local wanted = profile.macro_record"), "{out}");
+    assert!(
+        out.contains("getgenv().MacroRecordToggle = T_Macro:AddToggle(\"title\", \"desc\", profile.macro_record, function()"),
+        "{out}"
+    );
+}

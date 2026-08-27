@@ -474,14 +474,14 @@ Manual usage:
 rust-optimizer\target\release\prom-rust-optimizer.exe <final-cf.lua> [optimized.lua] --max-rounds 1000
 ```
 
-The port uses `eclipse_luau` and byte-range AST edits. The attempted `full_moon` migration was reverted before commit; `eclipse_luau` remains authoritative. It runs to a parse-validated fixed point and ports the JS structural/fail-closed optimizer behavior rather than using textual substitutions. Dedicated Rust regressions are **172/172 PASS**.
+The port uses `eclipse_luau` and byte-range AST edits. The attempted `full_moon` migration was reverted before commit; `eclipse_luau` remains authoritative. It runs to a parse-validated fixed point and ports the JS structural/fail-closed optimizer behavior rather than using textual substitutions. Dedicated Rust regressions are **173/173 PASS**.
 
 Important safety/parity rules:
 - nested functions distinguish stable captured lexical bindings from globals; read-only captures are allowed only where the JS proof allows them, while nested writers block movement
 - parenthesized binary `if` conditions use the narrow adjacent call-result proof; direct booleans and logical right arms remain barriers
 - immediate generic-for header aliases may fold anywhere inside the iterator header, including a source argument whose spelling is shadowed by a loop variable; the read still occurs before loop variables enter scope, and later/body uses remain blockers
 - direct calls nested under an adjacent `if` condition may consume a sole-use callee alias and a sole-use argument snapshot when prior arguments are stable/effect-free; this recovers shapes such as `table.find(items, profile.field)` while effectful earlier arguments remain barriers
-- method/namecall argument snapshots remain conservative: do not move a prior mutable/index snapshot into `obj:Method(...)` merely because it has one use, because method lookup/evaluation order can change; the `getgenv()`/`T_Macro:AddToggle(...macro_record...)` full collapse is therefore intentionally not applied without stronger proof
+- relaxed static-field policy: an adjacent sole-use dot-field snapshot may move into a stable `obj:Method(...)` argument when all earlier arguments are stable/effect-free; computed-index snapshots remain conservative. An adjacent call snapshot may also replace the base of a dot-field assignment target, with a statement separator emitted when a parenthesized call would be syntactically ambiguous. This now collapses the verified `getgenv()` / `T_Macro` / `macro_record` compiler shape to `getgenv().MacroRecordToggle = T_Macro:AddToggle(..., r_v40_42.macro_record, ...)`.
 - deferred locals may cross unrelated loops only when the local is not observed there
 - repeat-body liveness includes the `until` expression and repeat bodies are always backedge contexts, so ancestor lifetime-release writes are not deleted unsafely
 - `_env` recovery requires proven getfenv provenance and respects rebind/shadow/setfenv barriers, including parenthesized string keys

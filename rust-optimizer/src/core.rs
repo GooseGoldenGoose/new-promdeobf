@@ -1278,6 +1278,29 @@ fn direct_call_base_name_span(ctx: &Ctx<'_>, stmt: &Stmt, name: &str) -> Option<
     }
 }
 
+fn direct_assignment_target_base_name_span(
+    ctx: &Ctx<'_>,
+    stmt: &Stmt,
+    name: &str,
+) -> Option<TokSpan> {
+    let Stmt::Assign(node) = stmt else {
+        return None;
+    };
+    if node.targets.len() != 1 {
+        return None;
+    }
+    let Expr::Index { object, key, .. } = unwrap_parens(&node.targets[0]) else {
+        return None;
+    };
+    if !matches!(key, IndexKey::Field(_)) {
+        return None;
+    }
+    match unwrap_parens(object) {
+        Expr::Name(span) if ctx.text(*span) == Some(name) => Some(*span),
+        _ => None,
+    }
+}
+
 fn stmt_leading_use(ctx: &Ctx<'_>, stmt: &Stmt, target: &Range<usize>) -> bool {
     match stmt {
         Stmt::Local(n) => n

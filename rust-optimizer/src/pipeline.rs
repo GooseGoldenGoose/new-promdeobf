@@ -719,7 +719,9 @@ fn collect_block_with_tail(
                     .or_else(|| direct_if_condition_call(&block.stmts[index + 1]))
                 {
                     if let Some((func, method, args_node)) = call_parts(call) {
-                        if method.is_none() {
+                        let allow_method_field_snapshot = method.is_some()
+                            && matches!(init, Expr::Index { key: IndexKey::Field(_), .. });
+                        if method.is_none() || allow_method_field_snapshot {
                             if let (Some(base), Some(args)) =
                                 (name_of_expr(ctx, func), paren_args(args_node))
                             {
@@ -909,20 +911,29 @@ fn collect_block_with_tail(
                     .and_then(|stmt| direct_call_base_name_span(ctx, stmt, name))
                     .and_then(|span| ctx.range(span))
                     .is_some_and(|range| range == *read);
+            let adjacent_assignment_target_base_temp = matches!(init, Expr::Call { .. })
+                && next_stmt
+                    .and_then(|stmt| direct_assignment_target_base_name_span(ctx, stmt, name))
+                    .and_then(|span| ctx.range(span))
+                    .is_some_and(|range| range == *read);
             if !matches!(init, Expr::Name(_))
                 && (is_scalar_temp_expr(init)
                     || adjacent_if_effect_temp
                     || adjacent_if_value_temp
-                    || adjacent_call_base_temp)
+                    || adjacent_call_base_temp
+                    || adjacent_assignment_target_base_temp)
                 && index + 1 < block.stmts.len()
                 && stmt_contains_range(ctx, &block.stmts[index + 1], read)
                 && (stmt_leading_use(ctx, &block.stmts[index + 1], read)
                     || adjacent_if_value_temp
-                    || adjacent_call_base_temp)
+                    || adjacent_call_base_temp
+                    || adjacent_assignment_target_base_temp)
             {
                 if let Some(value) = ctx.expr_text(init) {
                     let mut replacement =
-                        if adjacent_call_base_temp && matches!(init, Expr::Call { .. }) {
+                        if adjacent_assignment_target_base_temp {
+                            value.to_string()
+                        } else if adjacent_call_base_temp && matches!(init, Expr::Call { .. }) {
                             format!("({value})")
                         } else if adjacent_if_effect_temp
                             || adjacent_if_value_temp
@@ -932,11 +943,12 @@ fn collect_block_with_tail(
                         } else {
                             format!("({value})")
                         };
-                    if matches!(&block.stmts[index + 1], Stmt::Call(_, _))
+                    if (matches!(&block.stmts[index + 1], Stmt::Call(_, _))
                         && ctx
                             .stmt_range(&block.stmts[index + 1])
                             .is_some_and(|next| next.start == read.start)
-                        && replacement.starts_with('(')
+                        && replacement.starts_with('('))
+                        || (adjacent_assignment_target_base_temp && replacement.starts_with('('))
                     {
                         replacement.insert(0, ';');
                     }
