@@ -63,5 +63,7 @@ fn main() -> Result<()> {
     println!("Call argument inlines: {}", stats.call_argument_inlines / 2);
     println!("Function inlines: {}", stats.function_inlines / 2);
     println!("Bare returns: {}", stats.bare_returns);
+    println!("Decoded strings: {}", stats.string_decodes);
+    println!("Static field indexes: {}", stats.static_field_indexes);
     Ok(())
 }

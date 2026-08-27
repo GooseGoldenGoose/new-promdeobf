@@ -23,7 +23,7 @@ if v == 3 then
 end
 "#);
     assert!(out.contains("math"));
-    assert!(out.contains("[\"random\"]"));
+    assert!(out.contains(".random(2, 3)"));
     assert!(out.contains("(2, 3)"));
     assert!(!out.contains("local v ="));
     assert!(!out.contains("_env[m]"));
@@ -81,6 +81,17 @@ print(method)
     assert!(!out.contains(":Run()"));
 }
 #[test]
+fn namecall_recovers_field_index_syntax() {
+    let out = opt(r#"
+local obj = source
+local method = obj.Run
+method(obj, 1)
+"#);
+    assert!(!out.contains("local method"), "{out}");
+    assert!(out.contains(":Run(1)"), "{out}");
+}
+
+#[test]
 fn namecall_captured_base_is_blocked() {
     let out = opt(r#"
 local obj = make()
@@ -92,7 +103,7 @@ method(obj)
 return mutate
 "#);
     assert!(!out.contains(":Run()"));
-    assert!(out.contains("local method") || out.contains("obj[\"Run\"](obj)"));
+    assert!(out.contains("local method") || out.contains("obj.Run(obj)"));
 }
 #[test]
 fn second_pass_is_fixed_point() {
@@ -291,7 +302,7 @@ local f = t["random"]
 return f
 "#);
     assert!(!out.contains("local t"));
-    assert!(out.contains("math[\"random\"]"));
+    assert!(out.contains("math.random"));
 }
 
 #[test]
@@ -989,7 +1000,7 @@ local p = _env["print"]
 setfenv(1, other)
 p("x")
 "#);
-    assert!(out.contains("_env[\"print\"]"));
+    assert!(out.contains("_env.print"));
 }
 
 #[test]
@@ -1000,7 +1011,7 @@ local p = _env["print"]
 _env = other
 p("x")
 "#);
-    assert!(out.contains("_env[\"print\"]"));
+    assert!(out.contains("_env.print"));
 }
 
 #[test]
@@ -1043,7 +1054,7 @@ end
 return outer, f
 "#);
     assert!(!out.contains("_env[\"print\"]"));
-    assert!(out.contains("_env[\"warn\"]"));
+    assert!(out.contains("_env.warn"));
 }
 
 #[test]
@@ -1227,7 +1238,7 @@ return r_v4_5
     assert!(!out.contains("if not (r_v14_1) then"));
     assert!(!out.contains("local r_v14_1 ="));
     assert!(out.contains("table"));
-    assert!(out.contains("[\"unpack\"]"));
+    assert!(out.contains(".unpack"));
     assert!(out.contains(" and "));
     assert!(out.contains(" or "));
 }
@@ -1242,7 +1253,7 @@ return r_v8_2
 "#);
     assert!(!out.contains("local r_v5_3 = math"));
     assert!(!out.contains("r_v8_2 = r_v5_3[r_v8_2]"));
-    assert!(out.contains("local r_v8_2 = math[\"random\"]"));
+    assert!(out.contains("local r_v8_2 = math.random"));
 }
 
 #[test]
@@ -1418,6 +1429,60 @@ sink(value)
 }
 
 #[test]
+fn inlines_nonadjacent_plain_table_call_arguments() {
+    let out = opt(r#"
+local a = {}
+local middle = {}
+local meta = { ["__index"] = middle, ["__metatable"] = nil }
+result = setmetatable(a, meta)
+"#);
+    assert!(!out.contains("local a = {}"));
+    assert!(!out.contains("local meta ="));
+    assert!(out.contains("setmetatable({}, {"));
+    assert!(out.contains("[\"__index\"] = middle"));
+    assert!(out.contains("local middle = {}"));
+}
+
+#[test]
+fn table_call_argument_allows_later_referenced_table_mutation() {
+    let out = opt(r#"
+local base = {}
+local cache = {}
+local meta = { ["__index"] = cache, ["__metatable"] = nil }
+result = setmetatable(base, meta)
+cache[1] = "later"
+"#);
+    assert!(!out.contains("local base = {}"), "{out}");
+    assert!(!out.contains("local meta ="), "{out}");
+    assert!(out.contains("setmetatable({}, {"), "{out}");
+    assert!(out.contains("[\"__index\"] = cache"), "{out}");
+    assert!(out.contains("cache[1] = \"later\""), "{out}");
+}
+
+#[test]
+fn table_call_argument_effect_gap_is_blocked() {
+    let out = opt(r#"
+local a = {}
+sideEffect()
+local meta = { ["__index"] = current }
+result = setmetatable(a, meta)
+"#);
+    assert!(out.contains("local a = {}"));
+}
+
+#[test]
+fn adjacent_call_result_moves_into_direct_if_condition() {
+    let out = opt(r#"
+local loaded = game:IsLoaded()
+if not loaded then
+    warn("wait")
+end
+"#);
+    assert!(!out.contains("local loaded ="));
+    assert!(out.contains("if not game:IsLoaded() then"));
+}
+
+#[test]
 fn adjacent_index_result_moves_into_leading_nested_if_use() {
     let out = opt(r#"
 local players_service = game.Players
@@ -1444,4 +1509,362 @@ end
         out.contains("local players_service = game.Players"),
         "{out}"
     );
+}
+
+#[test]
+fn adjacent_index_result_moves_into_direct_if_condition() {
+    let out = opt(r#"
+local player = players[key]
+if player then
+    use(player)
+end
+"#);
+    // The body use makes this two reads, so the snapshot must stay.
+    assert!(out.contains("local player = players[key]"));
+
+    let out = opt(r#"
+local player = players[key]
+if player then
+    print("yes")
+end
+"#);
+    assert!(!out.contains("local player = players[key]"));
+    assert!(out.contains("if players[key] then"));
+}
+
+#[test]
+fn adjacent_index_result_moves_into_namecall_base() {
+    let out = opt(r#"
+local loadedSignal = game[key]
+loadedSignal:Wait()
+"#);
+    assert!(!out.contains("local loadedSignal ="));
+    assert!(out.contains("game[key]:Wait()"));
+}
+
+#[test]
+fn adjacent_index_result_moves_into_call_base() {
+    let out = opt(r#"
+local fn = task[key]
+fn()
+"#);
+    assert!(!out.contains("local fn ="));
+    assert!(out.contains("task[key]()"));
+}
+
+#[test]
+fn adjacent_call_created_callee_keeps_single_result_grouping() {
+    let out = opt(r#"
+local fn = makeFn()
+fn()
+"#);
+    assert!(!out.contains("local fn ="));
+    assert!(out.contains("(makeFn())()"));
+}
+
+const PROM_DECODER_FIXTURE: &str = r#"
+local chars = {}
+local proxy = nil
+local pool = {}
+local decoder = nil
+local floor = math.floor
+local random = math.random
+local remove = table.remove
+local char = string.char
+local state = 0
+local cursor = 2
+for index = 1, 256 do
+    pool[index] = index
+end
+repeat
+    local index = remove(pool, random(1, #pool))
+    chars[index] = char(index - 1)
+    local remaining = #pool
+    local zero = 0
+until remaining == zero
+local empty_buffer = {}
+local buffer
+local next_byte = function()
+    if #buffer == 0 then
+        state = ((state * 45) + 21402374792941) % 35184372088832
+        repeat
+            cursor = (cursor * 164) % 257
+            local current = cursor
+            local one = 1
+        until current ~= one
+        local shift = cursor % 32
+        local divisor = 2 ^ (13 - ((cursor - shift) / 32))
+        local floored = floor(state / divisor)
+        local state32 = floored % 4294967296
+        local power = 2 ^ shift
+        local mixed = state32 / power
+        local fraction = floor((mixed % 1) * 4294967296)
+        local whole = floor(mixed)
+        local packed = fraction + whole
+        local low = packed % 65536
+        local high = (packed - low) / 65536
+        local b0 = low % 256
+        local b1 = (low - b0) / 256
+        local b2 = high % 256
+        local b3 = (high - b2) / 256
+        buffer = { b0, b1, b2, b3 }
+    end
+    return table.remove(buffer)
+end
+buffer = empty_buffer
+local cache = {}
+proxy = setmetatable({}, { ["__index"] = cache, ["__metatable"] = nil })
+decoder = function(cipher, key)
+    local cache_alias = cache
+    local cached = cache_alias[key]
+    if not cached then
+        buffer = {}
+        local chars_alias = chars
+        local string_lib = string
+        state = key % 35184372088832
+        cursor = (key % 255) + 2
+        local length = string_lib.len(cipher)
+        cache_alias[key] = ""
+        local limit = length
+        local rolling = 28
+        for index = 1, limit do
+            local byte = string_lib.byte(cipher, index)
+            local stream = next_byte()
+            rolling = ((byte + stream) + rolling) % 256
+            local old = cache_alias[key]
+            local ch = chars_alias[rolling + 1]
+            cache_alias[key] = old .. ch
+        end
+    end
+    return key
+end
+return task[proxy[decoder("\184@\156~", 5321961048494)]]
+"#;
+
+#[test]
+fn decodes_structurally_proven_private_string_layer() {
+    let out = opt(PROM_DECODER_FIXTURE);
+    assert!(out.contains("task.wait"), "{out}");
+    assert!(!out.contains("5321961048494"), "{out}");
+    assert!(!out.contains("\\184@\\156~"), "{out}");
+}
+
+#[test]
+fn decoder_assignment_aliases_are_discovered() {
+    let source = PROM_DECODER_FIXTURE.replace(
+        "return task[proxy[decoder(\"\\184@\\156~\", 5321961048494)]]",
+        "local proxy_alias = nil\nlocal decoder_alias = nil\nproxy_alias = proxy\ndecoder_alias = decoder\nreturn task[proxy_alias[decoder_alias(\"\\184@\\156~\", 5321961048494)]]",
+    );
+    let out = opt(&source);
+    assert!(out.contains("task.wait"), "{out}");
+    assert!(!out.contains("5321961048494"), "{out}");
+}
+
+#[test]
+fn decoder_assignment_alias_without_local_binding_is_blocked() {
+    let source = PROM_DECODER_FIXTURE.replace(
+        "return task[proxy[decoder(\"\\184@\\156~\", 5321961048494)]]",
+        "proxy_alias = proxy\ndecoder_alias = decoder\nreturn task[proxy_alias[decoder_alias(\"\\184@\\156~\", 5321961048494)]]",
+    );
+    let out = opt(&source);
+    assert!(out.contains("5321961048494"), "{out}");
+}
+
+#[test]
+fn decoder_two_step_temp_lookup_is_folded() {
+    let source = PROM_DECODER_FIXTURE.replace(
+        "return task[proxy[decoder(\"\\184@\\156~\", 5321961048494)]]",
+        "local decoded_key = decoder(\"\\184@\\156~\", 5321961048494)\nreturn task[proxy[decoded_key]]",
+    );
+    let out = opt(&source);
+    assert!(out.contains("task.wait"), "{out}");
+    assert!(!out.contains("5321961048494"), "{out}");
+}
+
+#[test]
+fn decoder_alias_rhs_reassignment_is_folded() {
+    let source = PROM_DECODER_FIXTURE.replace(
+        "return task[proxy[decoder(\"\\184@\\156~\", 5321961048494)]]",
+        "local decode_alias = decoder\ndecode_alias = proxy[decode_alias(\"\\184@\\156~\", 5321961048494)]\nreturn task[decode_alias]",
+    );
+    let out = opt(&source);
+    assert!(out.contains("decode_alias = \"wait\""), "{out}");
+    assert!(!out.contains("5321961048494"), "{out}");
+    assert!(!out.contains("\\184@\\156~"), "{out}");
+}
+
+#[test]
+fn proxy_alias_reassigned_after_decode_still_folds_prior_use() {
+    let source = PROM_DECODER_FIXTURE.replace(
+        "return task[proxy[decoder(\"\\184@\\156~\", 5321961048494)]]",
+        "local proxy_alias = proxy\nlocal decoded = proxy_alias[decoder(\"\\184@\\156~\", 5321961048494)]\nproxy_alias = other\nreturn task[decoded]",
+    );
+    let out = opt(&source);
+    assert!(out.contains("task.wait"), "{out}");
+    assert!(!out.contains("5321961048494"), "{out}");
+}
+
+#[test]
+fn proxy_alias_use_after_reassignment_is_not_folded() {
+    let source = PROM_DECODER_FIXTURE.replace(
+        "return task[proxy[decoder(\"\\184@\\156~\", 5321961048494)]]",
+        "local proxy_alias = proxy\nproxy_alias = other\nreturn task[proxy_alias[decoder(\"\\184@\\156~\", 5321961048494)]]",
+    );
+    let out = opt(&source);
+    assert!(out.contains("5321961048494"), "{out}");
+}
+
+#[test]
+fn decoder_near_miss_without_cache_append_is_not_folded() {
+    let broken = PROM_DECODER_FIXTURE.replace("cache_alias[key] = old .. ch", "sink(old, ch)");
+    let out = opt(&broken);
+    assert!(out.contains("5321961048494"), "{out}");
+}
+
+#[test]
+fn decoder_cache_escape_is_not_folded() {
+    let broken = PROM_DECODER_FIXTURE.replace(
+        "return task[proxy[decoder(\"\\184@\\156~\", 5321961048494)]]",
+        "observe(cache)\nreturn task[proxy[decoder(\"\\184@\\156~\", 5321961048494)]]",
+    );
+    let out = opt(&broken);
+    assert!(out.contains("5321961048494"), "{out}");
+}
+
+#[test]
+fn decoder_generator_escape_is_not_folded() {
+    let broken = PROM_DECODER_FIXTURE.replace(
+        "return task[proxy[decoder(\"\\184@\\156~\", 5321961048494)]]",
+        "observe(next_byte)\nreturn task[proxy[decoder(\"\\184@\\156~\", 5321961048494)]]",
+    );
+    let out = opt(&broken);
+    assert!(out.contains("5321961048494"), "{out}");
+}
+
+#[test]
+fn decoder_dynamic_unmatched_use_blocks_static_folding() {
+    let broken = PROM_DECODER_FIXTURE.replace(
+        "return task[proxy[decoder(\"\\184@\\156~\", 5321961048494)]]",
+        "observe(proxy[decoder(dynamicCipher, dynamicKey)])\nreturn task[proxy[decoder(\"\\184@\\156~\", 5321961048494)]]",
+    );
+    let out = opt(&broken);
+    assert!(out.contains("5321961048494"), "{out}");
+}
+
+#[test]
+fn decoder_extra_side_effect_is_not_folded() {
+    let broken = PROM_DECODER_FIXTURE.replace(
+        "    return key\nend\nreturn task",
+        "    touch()\n    return key\nend\nreturn task",
+    );
+    let out = opt(&broken);
+    assert!(out.contains("5321961048494"), "{out}");
+}
+
+#[test]
+fn decoder_extra_state_write_is_not_folded() {
+    let broken = PROM_DECODER_FIXTURE.replace(
+        "        buffer = {}\n        local chars_alias = chars",
+        "        buffer = {}\n        state = state + 1\n        local chars_alias = chars",
+    );
+    let out = opt(&broken);
+    assert!(out.contains("5321961048494"), "{out}");
+}
+
+#[test]
+fn decoder_generator_extra_side_effect_is_not_folded() {
+    let broken = PROM_DECODER_FIXTURE.replace(
+        "    return table.remove(buffer)\nend",
+        "    touch()\n    return table.remove(buffer)\nend",
+    );
+    let out = opt(&broken);
+    assert!(out.contains("5321961048494"), "{out}");
+}
+
+#[test]
+fn decoder_extra_rolling_write_is_not_folded() {
+    let broken = PROM_DECODER_FIXTURE.replace(
+        "            rolling = ((byte + stream) + rolling) % 256\n            local old",
+        "            rolling = ((byte + stream) + rolling) % 256\n            rolling = rolling + 1\n            local old",
+    );
+    let out = opt(&broken);
+    assert!(out.contains("5321961048494"), "{out}");
+}
+
+#[test]
+fn decoder_char_table_escape_is_not_folded() {
+    let broken = PROM_DECODER_FIXTURE.replace(
+        "return task[proxy[decoder(\"\\184@\\156~\", 5321961048494)]]",
+        "observe(chars)\nreturn task[proxy[decoder(\"\\184@\\156~\", 5321961048494)]]",
+    );
+    let out = opt(&broken);
+    assert!(out.contains("5321961048494"), "{out}");
+}
+
+#[test]
+fn decoder_char_table_extra_write_is_not_folded() {
+    let broken = PROM_DECODER_FIXTURE.replace(
+        "local empty_buffer = {}",
+        "chars[1] = \"tampered\"\nlocal empty_buffer = {}",
+    );
+    let out = opt(&broken);
+    assert!(out.contains("5321961048494"), "{out}");
+}
+
+#[test]
+fn decoder_extra_global_write_is_not_folded() {
+    let broken = PROM_DECODER_FIXTURE.replace(
+        "    return key\nend\nreturn task",
+        "    external_state = 1\n    return key\nend\nreturn task",
+    );
+    let out = opt(&broken);
+    assert!(out.contains("5321961048494"), "{out}");
+}
+
+#[test]
+fn decoder_generator_extra_state_write_is_not_folded() {
+    let broken = PROM_DECODER_FIXTURE.replace(
+        "        state = ((state * 45) + 21402374792941) % 35184372088832",
+        "        state = state + 1\n        state = ((state * 45) + 21402374792941) % 35184372088832",
+    );
+    let out = opt(&broken);
+    assert!(out.contains("5321961048494"), "{out}");
+}
+
+#[test]
+fn decoder_near_miss_without_cache_write_is_not_folded() {
+    let out = opt(r#"
+local state
+local cursor
+local cache = {}
+local proxy = setmetatable({}, { ["__index"] = cache })
+local function next_byte()
+    state = ((state * 45) + 21402374792941) % 35184372088832
+    cursor = (cursor * 164) % 257
+    local shift = cursor % 32
+    return 2 ^ (13 - ((cursor - shift) / 32))
+end
+local function decoder(cipher, key)
+    local cached = cache[key]
+    state = key % 35184372088832
+    cursor = (key % 255) + 2
+    local rolling = 28
+    rolling = (rolling + next_byte()) % 256
+    return key
+end
+return task[proxy[decoder("\\184@\\156~", 5321961048494)]]
+"#);
+    assert!(out.contains("5321961048494"), "{out}");
+}
+
+#[test]
+fn static_identifier_index_becomes_field_but_keyword_stays_bracketed() {
+    let out = opt(r#"
+local object = source
+local a = object["Valid_Name9"]
+local b = object["end"]
+return a, b
+"#);
+    assert!(out.contains(".Valid_Name9"), "{out}");
+    assert!(out.contains("[\"end\"]"), "{out}");
 }

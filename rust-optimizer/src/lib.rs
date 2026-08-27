@@ -1,3 +1,5 @@
+mod string_decoder;
+
 use anyhow::{Result, anyhow};
 use eclipse_luau::{
     ast::*,
@@ -58,6 +60,8 @@ pub struct Stats {
     pub while_conditions: usize,
     pub repeat_conditions: usize,
     pub repeat_prechecks: usize,
+    pub string_decodes: usize,
+    pub static_field_indexes: usize,
 }
 
 #[derive(Debug, Clone)]
@@ -112,6 +116,9 @@ enum EditKind {
     WhileCondition,
     RepeatCondition,
     RepeatPrecheck,
+    StringDecode,
+    StringDecodeCleanup,
+    StaticFieldIndex,
 }
 
 struct Ctx<'a> {
@@ -201,6 +208,13 @@ fn simple_string_identifier(ctx: &Ctx<'_>, expr: &Expr) -> Option<String> {
         return None;
     }
     Some(inner.to_string())
+}
+
+fn index_key_identifier(ctx: &Ctx<'_>, key: &IndexKey) -> Option<String> {
+    match key {
+        IndexKey::Field(span) => ctx.text(*span).map(str::to_string),
+        IndexKey::Computed(expr) => simple_string_identifier(ctx, expr),
+    }
 }
 
 fn is_pure_literal(expr: &Expr) -> bool {
@@ -1217,6 +1231,35 @@ fn leading_call_base_span(ctx: &Ctx<'_>, expr: &Expr, name: &str) -> Option<TokS
     }
 }
 
+fn direct_if_condition_name_span(ctx: &Ctx<'_>, stmt: &Stmt, name: &str) -> Option<TokSpan> {
+    fn inner(ctx: &Ctx<'_>, expr: &Expr, name: &str) -> Option<TokSpan> {
+        match expr {
+            Expr::Paren { inner: value, .. } | Expr::TypeAssert { expr: value, .. } => {
+                inner(ctx, value, name)
+            }
+            Expr::Unary { op, operand, .. } if ctx.text(*op) == Some("not") => {
+                inner(ctx, operand, name)
+            }
+            Expr::Name(span) if ctx.text(*span) == Some(name) => Some(*span),
+            _ => None,
+        }
+    }
+    let Stmt::If(node) = stmt else {
+        return None;
+    };
+    let (condition, _) = node.branches.first()?;
+    inner(ctx, condition, name)
+}
+
+fn direct_call_base_name_span(ctx: &Ctx<'_>, stmt: &Stmt, name: &str) -> Option<TokSpan> {
+    let call = call_expr_whole(stmt)?;
+    let (func, _, _) = call_parts(call)?;
+    match unwrap_parens(func) {
+        Expr::Name(span) if ctx.text(*span) == Some(name) => Some(*span),
+        _ => None,
+    }
+}
+
 fn stmt_leading_use(ctx: &Ctx<'_>, stmt: &Stmt, target: &Range<usize>) -> bool {
     match stmt {
         Stmt::Local(n) => n
@@ -1532,6 +1575,131 @@ fn collect_env_folds_stmt(ctx: &Ctx<'_>, stmt: &Stmt, edits: &mut Vec<Edit>) {
         Stmt::Return(n) => {
             for e in &n.values {
                 collect_env_folds(ctx, e, edits)
+            }
+        }
+        _ => {}
+    }
+}
+
+fn collect_static_field_indexes(ctx: &Ctx<'_>, expr: &Expr, edits: &mut Vec<Edit>) {
+    match expr {
+        Expr::Index { object, key, span } => {
+            if let IndexKey::Computed(k) = key {
+                if let (Some(id), Some(object_text), Some(r)) = (
+                    simple_string_identifier(ctx, k),
+                    ctx.expr_text(object),
+                    ctx.range(*span),
+                ) {
+                    let base = match unwrap_parens(object) {
+                        Expr::Name(_) | Expr::Index { .. } | Expr::Call { .. } => {
+                            object_text.to_string()
+                        }
+                        _ => format!("({object_text})"),
+                    };
+                    if add_edit(
+                        ctx,
+                        edits,
+                        Edit {
+                            start: r.start,
+                            end: r.end,
+                            replacement: format!("{base}.{id}"),
+                            kind: EditKind::StaticFieldIndex,
+                        },
+                    ) {
+                        return;
+                    }
+                }
+            }
+            collect_static_field_indexes(ctx, object, edits);
+            if let IndexKey::Computed(k) = key {
+                collect_static_field_indexes(ctx, k, edits);
+            }
+        }
+        Expr::Table { fields, .. } => {
+            for field in fields {
+                match field {
+                    TableField::Positional(value) | TableField::Named { value, .. } => {
+                        collect_static_field_indexes(ctx, value, edits)
+                    }
+                    TableField::Computed { key, value } => {
+                        collect_static_field_indexes(ctx, key, edits);
+                        collect_static_field_indexes(ctx, value, edits);
+                    }
+                }
+            }
+        }
+        Expr::Binary { lhs, rhs, .. } => {
+            collect_static_field_indexes(ctx, lhs, edits);
+            collect_static_field_indexes(ctx, rhs, edits);
+        }
+        Expr::Unary { operand, .. }
+        | Expr::Paren { inner: operand, .. }
+        | Expr::TypeAssert { expr: operand, .. } => {
+            collect_static_field_indexes(ctx, operand, edits)
+        }
+        Expr::Call { func, args, .. } => {
+            collect_static_field_indexes(ctx, func, edits);
+            match args {
+                CallArgs::Paren(values) => {
+                    for value in values {
+                        collect_static_field_indexes(ctx, value, edits);
+                    }
+                }
+                CallArgs::Table(value) => collect_static_field_indexes(ctx, value, edits),
+                CallArgs::Str(_) => {}
+            }
+        }
+        Expr::IfElse {
+            branches,
+            else_value,
+            ..
+        } => {
+            for (condition, value) in branches {
+                collect_static_field_indexes(ctx, condition, edits);
+                collect_static_field_indexes(ctx, value, edits);
+            }
+            collect_static_field_indexes(ctx, else_value, edits);
+        }
+        Expr::Function { .. } => {}
+        _ => {}
+    }
+}
+
+fn collect_static_field_indexes_stmt(ctx: &Ctx<'_>, stmt: &Stmt, edits: &mut Vec<Edit>) {
+    match stmt {
+        Stmt::Local(node) => {
+            for expr in &node.values {
+                collect_static_field_indexes(ctx, expr, edits);
+            }
+        }
+        Stmt::Assign(node) => {
+            for expr in node.targets.iter().chain(node.values.iter()) {
+                collect_static_field_indexes(ctx, expr, edits);
+            }
+        }
+        Stmt::Call(expr, _) => collect_static_field_indexes(ctx, expr, edits),
+        Stmt::While(node) => collect_static_field_indexes(ctx, &node.cond, edits),
+        Stmt::Repeat(node) => collect_static_field_indexes(ctx, &node.cond, edits),
+        Stmt::If(node) => {
+            for (condition, _) in &node.branches {
+                collect_static_field_indexes(ctx, condition, edits);
+            }
+        }
+        Stmt::NumericFor(node) => {
+            collect_static_field_indexes(ctx, &node.start, edits);
+            collect_static_field_indexes(ctx, &node.limit, edits);
+            if let Some(step) = &node.step {
+                collect_static_field_indexes(ctx, step, edits);
+            }
+        }
+        Stmt::GenericFor(node) => {
+            for expr in &node.exprs {
+                collect_static_field_indexes(ctx, expr, edits);
+            }
+        }
+        Stmt::Return(node) => {
+            for expr in &node.values {
+                collect_static_field_indexes(ctx, expr, edits);
             }
         }
         _ => {}
@@ -2162,26 +2330,62 @@ fn name_is_stable_lexical(
     !nested_function_writes_name(ctx, block, name)
 }
 
-fn plain_table_expr(
+fn name_is_stable_between(
+    ctx: &Ctx<'_>,
+    block: &Block,
+    usage_index: &UsageIndex,
+    from_index: usize,
+    to_index: usize,
+    name: &str,
+) -> bool {
+    if !direct_local_declared_before(ctx, block, from_index, name) {
+        return false;
+    }
+    let Some(from) = ctx.stmt_range(&block.stmts[from_index]) else {
+        return false;
+    };
+    let Some(to) = ctx.stmt_range(&block.stmts[to_index]) else {
+        return false;
+    };
+    !usage_index.by_name.get(name).is_some_and(|items| {
+        items.iter().any(|item| {
+            item.pos > from.end
+                && item.pos < to.start
+                && matches!(
+                    item.kind,
+                    OccKind::Write | OccKind::Redeclare | OccKind::Capture
+                )
+        })
+    })
+}
+
+fn plain_table_expr_between(
     ctx: &Ctx<'_>,
     expr: &Expr,
     block: &Block,
     usage_index: &UsageIndex,
-    before_index: usize,
+    from_index: usize,
+    to_index: usize,
 ) -> bool {
     match expr {
         Expr::Nil(_) | Expr::True(_) | Expr::False(_) | Expr::Number(_) | Expr::String(_) => true,
-        Expr::Name(span) => ctx
-            .text(*span)
-            .is_some_and(|name| name_is_stable_local(ctx, block, usage_index, before_index, name)),
+        Expr::Name(span) => ctx.text(*span).is_some_and(|name| {
+            name_is_stable_between(ctx, block, usage_index, from_index, to_index, name)
+        }),
         Expr::Table { fields, .. } => fields.iter().all(|field| match field {
-            TableField::Positional(v) => plain_table_expr(ctx, v, block, usage_index, before_index),
-            TableField::Named { value, .. } => {
-                plain_table_expr(ctx, value, block, usage_index, before_index)
+            TableField::Positional(value) | TableField::Named { value, .. } => {
+                plain_table_expr_between(ctx, value, block, usage_index, from_index, to_index)
             }
             TableField::Computed { key, value } => {
-                plain_table_expr(ctx, key, block, usage_index, before_index)
-                    && plain_table_expr(ctx, value, block, usage_index, before_index)
+                plain_table_expr_between(ctx, key, block, usage_index, from_index, to_index)
+                    && plain_table_expr_between(
+                        ctx,
+                        value,
+                        block,
+                        usage_index,
+                        from_index,
+                        to_index,
+                    )
             }
         }),
         _ => false,
@@ -2521,7 +2725,9 @@ fn collect_low_risk_structural(
         if let (Some((producer_binding, producer_init)), Some((_consumer_binding, consumer_init))) =
             (local_single(&block.stmts[i]), local_single(next))
         {
-            if matches!(producer_init, Expr::Call { .. } | Expr::Index { .. }) {
+            if matches!(producer_init, Expr::Call { .. } | Expr::Index { .. })
+                || is_scalar_temp_expr(producer_init)
+            {
                 if let Expr::Index {
                     object,
                     key: IndexKey::Computed(key),
@@ -2747,8 +2953,10 @@ fn collect_low_risk_structural(
             }
         }
     }
-    // Two-or-more adjacent plain constructor arguments feeding one call.
-    for consumer_index in 2..block.stmts.len() {
+    // Two-or-more plain constructor arguments feeding one call. Producers may be
+    // separated by other effect-free setup locals; moving a fresh plain table across
+    // those statements does not move any call/index/metamethod effect.
+    for consumer_index in 1..block.stmts.len() {
         let Some(call) = call_expr_whole(&block.stmts[consumer_index]) else {
             continue;
         };
@@ -2759,61 +2967,57 @@ fn collect_low_risk_structural(
             continue;
         };
         let mut producers = Vec::new();
-        let mut index = consumer_index;
-        while index > 0 {
-            index -= 1;
-            let Some((binding, init)) = local_single(&block.stmts[index]) else {
-                break;
+        for (arg_i, arg) in args.iter().enumerate() {
+            let Some(name) = name_of_expr(ctx, arg) else {
+                continue;
+            };
+            let Some((producer_index, binding, init)) =
+                (0..consumer_index).rev().find_map(|index| {
+                    let (binding, init) = local_single(&block.stmts[index])?;
+                    (ctx.text(binding.name) == Some(name)).then_some((index, binding, init))
+                })
+            else {
+                continue;
             };
             if !matches!(init, Expr::Table { .. })
-                || !plain_table_expr(ctx, init, block, usage_index, index)
+                || !plain_table_expr_between(
+                    ctx,
+                    init,
+                    block,
+                    usage_index,
+                    producer_index,
+                    consumer_index,
+                )
+                || !barrier_free(block, producer_index, consumer_index)
             {
-                break;
+                continue;
             }
-            producers.push((index, binding, init));
-        }
-        producers.reverse();
-        if producers.len() < 2 {
-            continue;
-        }
-        let mut group = Vec::new();
-        let mut last_arg = None;
-        let mut valid = true;
-        for (producer_index, binding, init) in producers {
-            let name = ctx.text(binding.name).unwrap_or("");
-            let matches: Vec<_> = args
-                .iter()
-                .enumerate()
-                .filter_map(|(arg_i, arg)| {
-                    if name_of_expr(ctx, arg) == Some(name) {
-                        Some((arg_i, arg))
-                    } else {
-                        None
-                    }
-                })
-                .collect();
-            if matches.len() != 1 || last_arg.is_some_and(|last| matches[0].0 <= last) {
-                valid = false;
-                break;
-            }
-            let (arg_i, arg) = matches[0];
             let Some(stmt_range) = ctx.stmt_range(&block.stmts[producer_index]) else {
-                valid = false;
-                break;
+                continue;
+            };
+            let Some(arg_range) = ctx.range(arg.span()) else {
+                continue;
             };
             let usage = usage_index.usage_after(name, stmt_range.end);
-            let Some(arg_range) = ctx.range(arg.span()) else {
-                valid = false;
-                break;
-            };
             if usage.reads.len() != 1
                 || usage.writes != 0
                 || usage.redeclared
                 || usage.captured
                 || usage.reads[0] != arg_range
             {
-                valid = false;
-                break;
+                continue;
+            }
+            producers.push((arg_i, producer_index, binding, init, stmt_range, arg_range));
+        }
+        if producers.len() < 2 {
+            continue;
+        }
+        producers.sort_by_key(|item| item.0);
+        let mut group = Vec::new();
+        let mut seen_statements = HashSet::new();
+        for (_, producer_index, _binding, init, stmt_range, arg_range) in producers {
+            if !seen_statements.insert(producer_index) {
+                continue;
             }
             group.push(Edit {
                 start: stmt_range.start,
@@ -2827,9 +3031,8 @@ fn collect_low_risk_structural(
                 replacement: ctx.expr_text(init).unwrap_or("").to_string(),
                 kind: EditKind::TableCallArgumentInline,
             });
-            last_arg = Some(arg_i);
         }
-        if valid {
+        if group.len() >= 4 {
             add_group(ctx, edits, group);
         }
     }
@@ -5755,15 +5958,15 @@ fn collect_block_with_tail(
                     && !method_usage.captured
                 {
                     if let Expr::Index { object, key, .. } = init {
-                        if let (Some(base), IndexKey::Computed(k)) =
-                            (name_of_expr(ctx, object), key)
+                        if let (Some(base), Some(method)) =
+                            (name_of_expr(ctx, object), index_key_identifier(ctx, key))
                         {
                             let base_captured =
                                 usage_index.by_name.get(base).is_some_and(|items| {
                                     items.iter().any(|item| item.kind == OccKind::Capture)
                                 });
                             if !base_captured {
-                                if let Some(method) = simple_string_identifier(ctx, k) {
+                                {
                                     let read_range = &method_usage.reads[0];
                                     let consumer =
                                         ((i + 1)..block.stmts.len()).find_map(|consumer_index| {
@@ -6134,26 +6337,51 @@ fn collect_block_with_tail(
                 }
             }
 
-            // Adjacent leading use safely preserves evaluation order. Parenthesize
-            // non-name producers to preserve single-result/local-assignment semantics.
+            // Adjacent leading use safely preserves evaluation order. Exact direct
+            // condition/call-base uses also admit call/index producers: the producer
+            // still executes once at the same statement boundary and no other effect is crossed.
+            let next_stmt = block.stmts.get(index + 1);
             let adjacent_if_effect_temp = matches!(init, Expr::Call { .. } | Expr::Index { .. })
-                && matches!(&block.stmts.get(index + 1), Some(Stmt::If(node)) if node.branches.first().is_some_and(|(cond, _)| {
+                && matches!(next_stmt, Some(Stmt::If(node)) if node.branches.first().is_some_and(|(cond, _)| {
                     matches!(unwrap_parens(cond), Expr::Binary { .. }) && expr_leading_use(ctx, cond, read)
                 }));
+            let adjacent_if_value_temp = matches!(init, Expr::Call { .. } | Expr::Index { .. })
+                // A local+if immediately before repeat may be the compiler's discarded
+                // repeat-condition precheck. Keep that snapshot unless the dedicated
+                // exact repeat matcher proves it removable.
+                && !matches!(block.stmts.get(index + 2), Some(Stmt::Repeat(_)))
+                && next_stmt
+                    .and_then(|stmt| direct_if_condition_name_span(ctx, stmt, name))
+                    .and_then(|span| ctx.range(span))
+                    .is_some_and(|range| range == *read);
+            let adjacent_call_base_temp = matches!(init, Expr::Call { .. } | Expr::Index { .. })
+                && next_stmt
+                    .and_then(|stmt| direct_call_base_name_span(ctx, stmt, name))
+                    .and_then(|span| ctx.range(span))
+                    .is_some_and(|range| range == *read);
             if !matches!(init, Expr::Name(_))
-                && (is_scalar_temp_expr(init) || adjacent_if_effect_temp)
+                && (is_scalar_temp_expr(init)
+                    || adjacent_if_effect_temp
+                    || adjacent_if_value_temp
+                    || adjacent_call_base_temp)
                 && index + 1 < block.stmts.len()
                 && stmt_contains_range(ctx, &block.stmts[index + 1], read)
-                && stmt_leading_use(ctx, &block.stmts[index + 1], read)
+                && (stmt_leading_use(ctx, &block.stmts[index + 1], read)
+                    || adjacent_if_value_temp
+                    || adjacent_call_base_temp)
             {
                 if let Some(value) = ctx.expr_text(init) {
-                    let mut replacement = if adjacent_if_effect_temp
-                        || matches!(init, Expr::Name(_) | Expr::Index { .. })
-                    {
-                        value.to_string()
-                    } else {
-                        format!("({value})")
-                    };
+                    let mut replacement =
+                        if adjacent_call_base_temp && matches!(init, Expr::Call { .. }) {
+                            format!("({value})")
+                        } else if adjacent_if_effect_temp
+                            || adjacent_if_value_temp
+                            || matches!(init, Expr::Name(_) | Expr::Index { .. })
+                        {
+                            value.to_string()
+                        } else {
+                            format!("({value})")
+                        };
                     if matches!(&block.stmts[index + 1], Stmt::Call(_, _))
                         && ctx
                             .stmt_range(&block.stmts[index + 1])
@@ -6281,6 +6509,10 @@ fn collect_block_with_tail(
                 collect_env_folds_stmt(ctx, stmt, edits);
             }
         }
+    }
+
+    for stmt in &block.stmts {
+        collect_static_field_indexes_stmt(ctx, stmt, edits);
     }
 }
 
@@ -6414,6 +6646,9 @@ fn apply_edits(source: &str, mut edits: Vec<Edit>, stats: &mut Stats) -> Result<
             EditKind::WhileCondition => stats.while_conditions += 1,
             EditKind::RepeatCondition => stats.repeat_conditions += 1,
             EditKind::RepeatPrecheck => stats.repeat_prechecks += 1,
+            EditKind::StringDecode => stats.string_decodes += 1,
+            EditKind::StringDecodeCleanup => {}
+            EditKind::StaticFieldIndex => stats.static_field_indexes += 1,
         }
     }
     // Two edits form one inline logical transform, but raw edit count is useful performance data.
@@ -6487,8 +6722,31 @@ pub fn optimize(source: &str, max_rounds: usize) -> Result<(String, Stats)> {
             false,
         );
         if edits.is_empty() {
-            stats.rounds = round;
-            return Ok((current, stats));
+            let decoded = string_decoder::collect_decoded_string_edits(
+                &current,
+                &parsed.chunk.block,
+                &parsed.lexed.toks,
+            );
+            for decoded_edit in decoded {
+                add_edit(
+                    &ctx,
+                    &mut edits,
+                    Edit {
+                        start: decoded_edit.start,
+                        end: decoded_edit.end,
+                        replacement: decoded_edit.replacement,
+                        kind: if decoded_edit.counts_decode {
+                            EditKind::StringDecode
+                        } else {
+                            EditKind::StringDecodeCleanup
+                        },
+                    },
+                );
+            }
+            if edits.is_empty() {
+                stats.rounds = round;
+                return Ok((current, stats));
+            }
         }
         current = apply_edits(&current, edits, &mut stats)?;
         stats.rounds = round + 1;
