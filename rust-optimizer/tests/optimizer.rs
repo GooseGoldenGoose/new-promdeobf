@@ -1361,3 +1361,58 @@ return probe
 "#);
     assert!(out.contains("local key = source[decode()]"));
 }
+
+#[test]
+fn inlines_negative_numeric_constant_across_effect_gap() {
+    let out = opt(r#"
+local r_v6_34 = -1
+sideEffect()
+r_v2_23(r_v8_17 == r_v6_34)
+"#);
+    assert!(!out.contains("local r_v6_34 = -1"));
+    assert!(out.contains("r_v8_17 == (-1)"));
+}
+
+#[test]
+fn negative_constant_inline_preserves_precedence() {
+    let out = opt(r#"
+local value = -2
+return value ^ 2
+"#);
+    assert!(!out.contains("local value = -2"));
+    assert!(out.contains("return (-2) ^ 2"));
+}
+
+#[test]
+fn inlines_safe_literal_unary_constants_across_effect_gap() {
+    let out = opt(r#"
+local truth = not false
+local length = #"abc"
+sideEffect()
+sink(truth, length)
+"#);
+    assert!(!out.contains("local truth ="));
+    assert!(!out.contains("local length ="));
+    assert!(out.contains("not false"));
+    assert!(out.contains("#\"abc\""));
+}
+
+#[test]
+fn mutable_unary_minus_is_not_treated_as_movable_constant() {
+    let out = opt(r#"
+local value = -source
+sideEffect()
+sink(value)
+"#);
+    assert!(out.contains("local value = -source"));
+}
+
+#[test]
+fn table_length_is_not_treated_as_movable_constant() {
+    let out = opt(r#"
+local value = #source
+sideEffect()
+sink(value)
+"#);
+    assert!(out.contains("local value = #source"));
+}

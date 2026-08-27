@@ -4,7 +4,8 @@ use eclipse_luau::{
     lexer::{Tok, TokKind},
 };
 use std::{
-    collections::{HashMap, HashSet},
+    cell::RefCell,
+    collections::{BTreeMap, HashMap, HashSet},
     ops::Range,
 };
 
@@ -117,6 +118,9 @@ struct Ctx<'a> {
     src: &'a str,
     toks: &'a [Tok],
     comments: &'a [(u32, u32)],
+    nested_writer_cache: RefCell<HashMap<usize, HashSet<String>>>,
+    direct_decl_cache: RefCell<HashMap<usize, HashMap<String, Vec<usize>>>>,
+    edit_intervals: RefCell<BTreeMap<usize, usize>>,
 }
 
 impl<'a> Ctx<'a> {
@@ -204,6 +208,55 @@ fn is_pure_literal(expr: &Expr) -> bool {
         expr,
         Expr::Nil(_) | Expr::True(_) | Expr::False(_) | Expr::Number(_) | Expr::String(_)
     )
+}
+
+fn is_numeric_literal_constant(ctx: &Ctx<'_>, expr: &Expr) -> bool {
+    match expr {
+        Expr::Number(_) => true,
+        Expr::Paren { inner, .. } => is_numeric_literal_constant(ctx, inner),
+        Expr::Unary { op, operand, .. } if ctx.text(*op) == Some("-") => {
+            is_numeric_literal_constant(ctx, operand)
+        }
+        _ => false,
+    }
+}
+
+fn is_string_literal_constant(expr: &Expr) -> bool {
+    match expr {
+        Expr::String(_) => true,
+        Expr::Paren { inner, .. } => is_string_literal_constant(inner),
+        _ => false,
+    }
+}
+
+// Constants accepted here must be safe to move across unrelated statements:
+// no mutable reads, calls, identity-bearing allocations, metamethod dispatch, or
+// operand-dependent runtime errors. Keep the operator whitelist deliberately narrow.
+fn is_safe_inline_constant(ctx: &Ctx<'_>, expr: &Expr) -> bool {
+    if is_pure_literal(expr) {
+        return true;
+    }
+    match expr {
+        Expr::Paren { inner, .. } => is_safe_inline_constant(ctx, inner),
+        Expr::Unary { op, operand, .. } => match ctx.text(*op) {
+            Some("-") => is_numeric_literal_constant(ctx, operand),
+            Some("not") => is_safe_inline_constant(ctx, operand),
+            Some("#") => is_string_literal_constant(operand),
+            _ => false,
+        },
+        _ => false,
+    }
+}
+
+fn safe_inline_constant_text(ctx: &Ctx<'_>, expr: &Expr) -> Option<String> {
+    let value = ctx.expr_text(expr)?;
+    if is_pure_literal(expr) {
+        Some(value.to_string())
+    } else {
+        // A local name is a primary expression. Parenthesize non-atomic constants so
+        // replacement cannot change precedence, e.g. `x ^ 2` with `x = -1`.
+        Some(format!("({value})"))
+    }
 }
 
 fn is_scalar_temp_expr(expr: &Expr) -> bool {
@@ -863,7 +916,7 @@ fn index_write(ctx: &Ctx<'_>, span: TokSpan, index: &mut UsageIndex) {
             name,
             Occurrence {
                 pos: range.start,
-                range: None,
+                range: Some(range),
                 kind: OccKind::Write,
             },
         );
@@ -1058,6 +1111,39 @@ fn build_usage_index(ctx: &Ctx<'_>, block: &Block) -> UsageIndex {
 fn stmt_contains_range(ctx: &Ctx<'_>, stmt: &Stmt, range: &Range<usize>) -> bool {
     ctx.stmt_range(stmt)
         .is_some_and(|r| r.start <= range.start && r.end >= range.end)
+}
+
+fn direct_statement_index_containing(
+    ctx: &Ctx<'_>,
+    block: &Block,
+    start_index: usize,
+    target: &Range<usize>,
+) -> Option<usize> {
+    if start_index >= block.stmts.len() {
+        return None;
+    }
+    let mut lo = start_index;
+    let mut hi = block.stmts.len();
+    while lo < hi {
+        let mid = lo + (hi - lo) / 2;
+        let Some(range) = ctx.stmt_range(&block.stmts[mid]) else {
+            // Rare malformed/empty statement range: fall back to the safe linear path.
+            return block.stmts[start_index..]
+                .iter()
+                .position(|stmt| stmt_contains_range(ctx, stmt, target))
+                .map(|offset| start_index + offset);
+        };
+        if range.start <= target.start {
+            lo = mid + 1;
+        } else {
+            hi = mid;
+        }
+    }
+    let candidate = lo.checked_sub(1)?;
+    if candidate < start_index {
+        return None;
+    }
+    stmt_contains_range(ctx, &block.stmts[candidate], target).then_some(candidate)
 }
 
 fn expr_leading_use(ctx: &Ctx<'_>, expr: &Expr, target: &Range<usize>) -> bool {
@@ -1295,29 +1381,29 @@ fn table_single_index_of<'a>(ctx: &Ctx<'_>, expr: &'a Expr, base: &str) -> Optio
     ctx.text(*span)?.parse::<usize>().ok().filter(|n| *n >= 1)
 }
 
-fn add_edit(edits: &mut Vec<Edit>, edit: Edit) -> bool {
-    if edit.start >= edit.end {
+fn edit_overlaps(ctx: &Ctx<'_>, start: usize, end: usize) -> bool {
+    let intervals = ctx.edit_intervals.borrow();
+    intervals
+        .range(..end)
+        .next_back()
+        .is_some_and(|(_, existing_end)| *existing_end > start)
+}
+
+fn add_edit(ctx: &Ctx<'_>, edits: &mut Vec<Edit>, edit: Edit) -> bool {
+    if edit.start >= edit.end || edit_overlaps(ctx, edit.start, edit.end) {
         return false;
     }
-    if edits
-        .iter()
-        .any(|e| edit.start < e.end && e.start < edit.end)
-    {
-        return false;
-    }
+    ctx.edit_intervals.borrow_mut().insert(edit.start, edit.end);
     edits.push(edit);
     true
 }
 
-fn add_group(edits: &mut Vec<Edit>, group: Vec<Edit>) -> bool {
+fn add_group(ctx: &Ctx<'_>, edits: &mut Vec<Edit>, group: Vec<Edit>) -> bool {
     if group.iter().any(|e| e.start >= e.end) {
         return false;
     }
     for (index, left) in group.iter().enumerate() {
-        if edits
-            .iter()
-            .any(|e| left.start < e.end && e.start < left.end)
-        {
+        if edit_overlaps(ctx, left.start, left.end) {
             return false;
         }
         if group
@@ -1328,10 +1414,15 @@ fn add_group(edits: &mut Vec<Edit>, group: Vec<Edit>) -> bool {
             return false;
         }
     }
+    {
+        let mut intervals = ctx.edit_intervals.borrow_mut();
+        for edit in &group {
+            intervals.insert(edit.start, edit.end);
+        }
+    }
     edits.extend(group);
     true
 }
-
 fn collect_env_folds(ctx: &Ctx<'_>, expr: &Expr, edits: &mut Vec<Edit>) {
     match expr {
         Expr::Index { object, key, span } => {
@@ -1340,6 +1431,7 @@ fn collect_env_folds(ctx: &Ctx<'_>, expr: &Expr, edits: &mut Vec<Edit>) {
                     if let Some(id) = simple_string_identifier(ctx, k) {
                         if let Some(r) = ctx.range(*span) {
                             add_edit(
+                                ctx,
                                 edits,
                                 Edit {
                                     start: r.start,
@@ -1491,7 +1583,43 @@ fn direct_local_names_before(ctx: &Ctx<'_>, block: &Block, index: usize) -> Hash
 }
 
 fn direct_local_declared_before(ctx: &Ctx<'_>, block: &Block, index: usize, name: &str) -> bool {
-    direct_local_names_before(ctx, block, index).contains(name)
+    // Build each immutable block's direct declaration positions once per parse round.
+    // Hot callers then answer prefix-membership without rescanning prior statements.
+    let block_key = block as *const Block as usize;
+    if !ctx.direct_decl_cache.borrow().contains_key(&block_key) {
+        let mut declarations: HashMap<String, Vec<usize>> = HashMap::new();
+        for (stmt_index, stmt) in block.stmts.iter().enumerate() {
+            match stmt {
+                Stmt::Local(local) => {
+                    for binding in &local.names {
+                        if let Some(local_name) = ctx.text(binding.name) {
+                            declarations
+                                .entry(local_name.to_string())
+                                .or_default()
+                                .push(stmt_index);
+                        }
+                    }
+                }
+                Stmt::LocalFunction(local) => {
+                    if let Some(local_name) = ctx.text(local.name) {
+                        declarations
+                            .entry(local_name.to_string())
+                            .or_default()
+                            .push(stmt_index);
+                    }
+                }
+                _ => {}
+            }
+        }
+        ctx.direct_decl_cache
+            .borrow_mut()
+            .insert(block_key, declarations);
+    }
+    ctx.direct_decl_cache
+        .borrow()
+        .get(&block_key)
+        .and_then(|declarations| declarations.get(name))
+        .is_some_and(|positions| positions.first().is_some_and(|position| *position < index))
 }
 
 fn scopes_resolve(scopes: &[HashSet<String>], name: &str) -> bool {
@@ -1771,175 +1899,206 @@ fn usage_is_single_next_read(
         && stmt_contains_range(ctx, next_stmt, &usage.reads[0])
 }
 
-fn expr_has_nested_writer(ctx: &Ctx<'_>, expr: &Expr, name: &str) -> bool {
+fn collect_expr_nested_function_writes(ctx: &Ctx<'_>, expr: &Expr, out: &mut HashSet<String>) {
     match expr {
-        Expr::Function { body, .. } => function_body_writes_name(ctx, &body.block, name),
-        Expr::Table { fields, .. } => fields.iter().any(|field| match field {
-            TableField::Positional(value) => expr_has_nested_writer(ctx, value, name),
-            TableField::Named { value, .. } => expr_has_nested_writer(ctx, value, name),
-            TableField::Computed { key, value } => {
-                expr_has_nested_writer(ctx, key, name) || expr_has_nested_writer(ctx, value, name)
+        Expr::Function { body, .. } => collect_function_body_writes(ctx, &body.block, out),
+        Expr::Table { fields, .. } => {
+            for field in fields {
+                match field {
+                    TableField::Positional(value) => {
+                        collect_expr_nested_function_writes(ctx, value, out)
+                    }
+                    TableField::Named { value, .. } => {
+                        collect_expr_nested_function_writes(ctx, value, out)
+                    }
+                    TableField::Computed { key, value } => {
+                        collect_expr_nested_function_writes(ctx, key, out);
+                        collect_expr_nested_function_writes(ctx, value, out);
+                    }
+                }
             }
-        }),
+        }
         Expr::Binary { lhs, rhs, .. } => {
-            expr_has_nested_writer(ctx, lhs, name) || expr_has_nested_writer(ctx, rhs, name)
+            collect_expr_nested_function_writes(ctx, lhs, out);
+            collect_expr_nested_function_writes(ctx, rhs, out);
         }
         Expr::Unary { operand, .. }
         | Expr::Paren { inner: operand, .. }
-        | Expr::TypeAssert { expr: operand, .. } => expr_has_nested_writer(ctx, operand, name),
+        | Expr::TypeAssert { expr: operand, .. } => {
+            collect_expr_nested_function_writes(ctx, operand, out)
+        }
         Expr::Index { object, key, .. } => {
-            expr_has_nested_writer(ctx, object, name)
-                || match key {
-                    IndexKey::Computed(key) => expr_has_nested_writer(ctx, key, name),
-                    IndexKey::Field(_) => false,
-                }
+            collect_expr_nested_function_writes(ctx, object, out);
+            if let IndexKey::Computed(key) = key {
+                collect_expr_nested_function_writes(ctx, key, out);
+            }
         }
         Expr::Call { func, args, .. } => {
-            expr_has_nested_writer(ctx, func, name)
-                || match args {
-                    CallArgs::Paren(values) => values
-                        .iter()
-                        .any(|value| expr_has_nested_writer(ctx, value, name)),
-                    CallArgs::Table(value) => expr_has_nested_writer(ctx, value, name),
-                    CallArgs::Str(_) => false,
+            collect_expr_nested_function_writes(ctx, func, out);
+            match args {
+                CallArgs::Paren(values) => {
+                    for value in values {
+                        collect_expr_nested_function_writes(ctx, value, out);
+                    }
                 }
+                CallArgs::Table(value) => collect_expr_nested_function_writes(ctx, value, out),
+                CallArgs::Str(_) => {}
+            }
         }
         Expr::IfElse {
             branches,
             else_value,
             ..
         } => {
-            branches.iter().any(|(condition, value)| {
-                expr_has_nested_writer(ctx, condition, name)
-                    || expr_has_nested_writer(ctx, value, name)
-            }) || expr_has_nested_writer(ctx, else_value, name)
+            for (condition, value) in branches {
+                collect_expr_nested_function_writes(ctx, condition, out);
+                collect_expr_nested_function_writes(ctx, value, out);
+            }
+            collect_expr_nested_function_writes(ctx, else_value, out);
         }
-        _ => false,
+        _ => {}
     }
 }
 
-fn function_body_writes_name(ctx: &Ctx<'_>, block: &Block, name: &str) -> bool {
-    block.stmts.iter().any(|stmt| match stmt {
-        Stmt::Local(node) => node
-            .values
-            .iter()
-            .any(|value| expr_has_nested_writer(ctx, value, name)),
-        Stmt::Assign(node) => {
-            node.targets
-                .iter()
-                .any(|target| matches!(target, Expr::Name(span) if ctx.text(*span) == Some(name)))
-                || node
-                    .targets
-                    .iter()
-                    .any(|target| expr_has_nested_writer(ctx, target, name))
-                || node
-                    .values
-                    .iter()
-                    .any(|value| expr_has_nested_writer(ctx, value, name))
+fn collect_function_body_writes(ctx: &Ctx<'_>, block: &Block, out: &mut HashSet<String>) {
+    for stmt in &block.stmts {
+        match stmt {
+            Stmt::Local(node) => {
+                for value in &node.values {
+                    collect_expr_nested_function_writes(ctx, value, out);
+                }
+            }
+            Stmt::Assign(node) => {
+                for target in &node.targets {
+                    if let Expr::Name(span) = target {
+                        if let Some(name) = ctx.text(*span) {
+                            out.insert(name.to_string());
+                        }
+                    }
+                    collect_expr_nested_function_writes(ctx, target, out);
+                }
+                for value in &node.values {
+                    collect_expr_nested_function_writes(ctx, value, out);
+                }
+            }
+            Stmt::Call(expr, _) => collect_expr_nested_function_writes(ctx, expr, out),
+            Stmt::Do(node) => collect_function_body_writes(ctx, &node.block, out),
+            Stmt::While(node) => {
+                collect_expr_nested_function_writes(ctx, &node.cond, out);
+                collect_function_body_writes(ctx, &node.block, out);
+            }
+            Stmt::Repeat(node) => {
+                collect_function_body_writes(ctx, &node.block, out);
+                collect_expr_nested_function_writes(ctx, &node.cond, out);
+            }
+            Stmt::If(node) => {
+                for (condition, body) in &node.branches {
+                    collect_expr_nested_function_writes(ctx, condition, out);
+                    collect_function_body_writes(ctx, body, out);
+                }
+                if let Some(body) = &node.else_block {
+                    collect_function_body_writes(ctx, body, out);
+                }
+            }
+            Stmt::NumericFor(node) => {
+                collect_expr_nested_function_writes(ctx, &node.start, out);
+                collect_expr_nested_function_writes(ctx, &node.limit, out);
+                if let Some(step) = &node.step {
+                    collect_expr_nested_function_writes(ctx, step, out);
+                }
+                collect_function_body_writes(ctx, &node.block, out);
+            }
+            Stmt::GenericFor(node) => {
+                for expr in &node.exprs {
+                    collect_expr_nested_function_writes(ctx, expr, out);
+                }
+                collect_function_body_writes(ctx, &node.block, out);
+            }
+            Stmt::Function(node) => collect_function_body_writes(ctx, &node.body.block, out),
+            Stmt::LocalFunction(node) => collect_function_body_writes(ctx, &node.body.block, out),
+            Stmt::Return(node) => {
+                for value in &node.values {
+                    collect_expr_nested_function_writes(ctx, value, out);
+                }
+            }
+            _ => {}
         }
-        Stmt::Call(expr, _) => expr_has_nested_writer(ctx, expr, name),
-        Stmt::Do(node) => function_body_writes_name(ctx, &node.block, name),
-        Stmt::While(node) => {
-            expr_has_nested_writer(ctx, &node.cond, name)
-                || function_body_writes_name(ctx, &node.block, name)
+    }
+}
+
+fn collect_nested_function_writes(ctx: &Ctx<'_>, block: &Block, out: &mut HashSet<String>) {
+    for stmt in &block.stmts {
+        match stmt {
+            Stmt::Local(node) => {
+                for value in &node.values {
+                    collect_expr_nested_function_writes(ctx, value, out);
+                }
+            }
+            Stmt::Assign(node) => {
+                for target in &node.targets {
+                    collect_expr_nested_function_writes(ctx, target, out);
+                }
+                for value in &node.values {
+                    collect_expr_nested_function_writes(ctx, value, out);
+                }
+            }
+            Stmt::Call(expr, _) => collect_expr_nested_function_writes(ctx, expr, out),
+            Stmt::Do(node) => collect_nested_function_writes(ctx, &node.block, out),
+            Stmt::While(node) => {
+                collect_expr_nested_function_writes(ctx, &node.cond, out);
+                collect_nested_function_writes(ctx, &node.block, out);
+            }
+            Stmt::Repeat(node) => {
+                collect_nested_function_writes(ctx, &node.block, out);
+                collect_expr_nested_function_writes(ctx, &node.cond, out);
+            }
+            Stmt::If(node) => {
+                for (condition, body) in &node.branches {
+                    collect_expr_nested_function_writes(ctx, condition, out);
+                    collect_nested_function_writes(ctx, body, out);
+                }
+                if let Some(body) = &node.else_block {
+                    collect_nested_function_writes(ctx, body, out);
+                }
+            }
+            Stmt::NumericFor(node) => {
+                collect_expr_nested_function_writes(ctx, &node.start, out);
+                collect_expr_nested_function_writes(ctx, &node.limit, out);
+                if let Some(step) = &node.step {
+                    collect_expr_nested_function_writes(ctx, step, out);
+                }
+                collect_nested_function_writes(ctx, &node.block, out);
+            }
+            Stmt::GenericFor(node) => {
+                for expr in &node.exprs {
+                    collect_expr_nested_function_writes(ctx, expr, out);
+                }
+                collect_nested_function_writes(ctx, &node.block, out);
+            }
+            Stmt::Function(node) => collect_function_body_writes(ctx, &node.body.block, out),
+            Stmt::LocalFunction(node) => collect_function_body_writes(ctx, &node.body.block, out),
+            Stmt::Return(node) => {
+                for value in &node.values {
+                    collect_expr_nested_function_writes(ctx, value, out);
+                }
+            }
+            _ => {}
         }
-        Stmt::Repeat(node) => {
-            function_body_writes_name(ctx, &node.block, name)
-                || expr_has_nested_writer(ctx, &node.cond, name)
-        }
-        Stmt::If(node) => {
-            node.branches.iter().any(|(condition, body)| {
-                expr_has_nested_writer(ctx, condition, name)
-                    || function_body_writes_name(ctx, body, name)
-            }) || node
-                .else_block
-                .as_ref()
-                .is_some_and(|body| function_body_writes_name(ctx, body, name))
-        }
-        Stmt::NumericFor(node) => {
-            expr_has_nested_writer(ctx, &node.start, name)
-                || expr_has_nested_writer(ctx, &node.limit, name)
-                || node
-                    .step
-                    .as_ref()
-                    .is_some_and(|step| expr_has_nested_writer(ctx, step, name))
-                || function_body_writes_name(ctx, &node.block, name)
-        }
-        Stmt::GenericFor(node) => {
-            node.exprs
-                .iter()
-                .any(|expr| expr_has_nested_writer(ctx, expr, name))
-                || function_body_writes_name(ctx, &node.block, name)
-        }
-        Stmt::Function(node) => function_body_writes_name(ctx, &node.body.block, name),
-        Stmt::LocalFunction(node) => function_body_writes_name(ctx, &node.body.block, name),
-        Stmt::Return(node) => node
-            .values
-            .iter()
-            .any(|value| expr_has_nested_writer(ctx, value, name)),
-        _ => false,
-    })
+    }
 }
 
 fn nested_function_writes_name(ctx: &Ctx<'_>, block: &Block, name: &str) -> bool {
-    block.stmts.iter().any(|stmt| match stmt {
-        Stmt::Local(node) => node
-            .values
-            .iter()
-            .any(|value| expr_has_nested_writer(ctx, value, name)),
-        Stmt::Assign(node) => {
-            node.targets
-                .iter()
-                .any(|target| expr_has_nested_writer(ctx, target, name))
-                || node
-                    .values
-                    .iter()
-                    .any(|value| expr_has_nested_writer(ctx, value, name))
-        }
-        Stmt::Call(expr, _) => expr_has_nested_writer(ctx, expr, name),
-        Stmt::Do(node) => nested_function_writes_name(ctx, &node.block, name),
-        Stmt::While(node) => {
-            expr_has_nested_writer(ctx, &node.cond, name)
-                || nested_function_writes_name(ctx, &node.block, name)
-        }
-        Stmt::Repeat(node) => {
-            nested_function_writes_name(ctx, &node.block, name)
-                || expr_has_nested_writer(ctx, &node.cond, name)
-        }
-        Stmt::If(node) => {
-            node.branches.iter().any(|(condition, body)| {
-                expr_has_nested_writer(ctx, condition, name)
-                    || nested_function_writes_name(ctx, body, name)
-            }) || node
-                .else_block
-                .as_ref()
-                .is_some_and(|body| nested_function_writes_name(ctx, body, name))
-        }
-        Stmt::NumericFor(node) => {
-            expr_has_nested_writer(ctx, &node.start, name)
-                || expr_has_nested_writer(ctx, &node.limit, name)
-                || node
-                    .step
-                    .as_ref()
-                    .is_some_and(|step| expr_has_nested_writer(ctx, step, name))
-                || nested_function_writes_name(ctx, &node.block, name)
-        }
-        Stmt::GenericFor(node) => {
-            node.exprs
-                .iter()
-                .any(|expr| expr_has_nested_writer(ctx, expr, name))
-                || nested_function_writes_name(ctx, &node.block, name)
-        }
-        Stmt::Function(node) => function_body_writes_name(ctx, &node.body.block, name),
-        Stmt::LocalFunction(node) => function_body_writes_name(ctx, &node.body.block, name),
-        Stmt::Return(node) => node
-            .values
-            .iter()
-            .any(|value| expr_has_nested_writer(ctx, value, name)),
-        _ => false,
-    })
+    let key = block as *const Block as usize;
+    if !ctx.nested_writer_cache.borrow().contains_key(&key) {
+        let mut names = HashSet::new();
+        collect_nested_function_writes(ctx, block, &mut names);
+        ctx.nested_writer_cache.borrow_mut().insert(key, names);
+    }
+    ctx.nested_writer_cache
+        .borrow()
+        .get(&key)
+        .is_some_and(|names| names.contains(name))
 }
-
 fn name_is_immediate_stable_lexical(
     ctx: &Ctx<'_>,
     block: &Block,
@@ -2062,47 +2221,53 @@ fn collect_low_risk_structural(
             let Some(decl_range) = ctx.stmt_range(&block.stmts[i]) else {
                 continue;
             };
-            for j in (i + 1)..block.stmts.len() {
-                if let Some((target, value)) = assignment_single(&block.stmts[j]) {
-                    if name_of_expr(ctx, target) == Some(name) {
-                        if expr_contains_name(ctx, value, name) {
-                            break;
-                        }
-                        let mut blocked = false;
-                        for gap in &block.stmts[(i + 1)..j] {
-                            if stmt_contains_name(ctx, gap, name) {
-                                blocked = true;
-                                break;
+            // The usage index already contains every nested observation. The first
+            // occurrence after `local x` must be the direct assignment write; otherwise
+            // the old forward scan would stop before folding too.
+            let first = usage_index.by_name.get(name).and_then(|items| {
+                items
+                    .iter()
+                    .filter(|item| item.pos > decl_range.end)
+                    .min_by_key(|item| item.pos)
+            });
+            if let Some(first) = first {
+                if first.kind == OccKind::Write {
+                    if let Some(first_range) = &first.range {
+                        if let Some(j) =
+                            direct_statement_index_containing(ctx, block, i + 1, first_range)
+                        {
+                            if let Some((target, value)) = assignment_single(&block.stmts[j]) {
+                                if name_of_expr(ctx, target) == Some(name)
+                                    && !expr_contains_name(ctx, value, name)
+                                {
+                                    if let (Some(assign_range), Some(value_text)) =
+                                        (ctx.stmt_range(&block.stmts[j]), ctx.expr_text(value))
+                                    {
+                                        add_group(
+                                            ctx,
+                                            edits,
+                                            vec![
+                                                Edit {
+                                                    start: decl_range.start,
+                                                    end: decl_range.end,
+                                                    replacement: String::new(),
+                                                    kind: EditKind::DeferredLocal,
+                                                },
+                                                Edit {
+                                                    start: assign_range.start,
+                                                    end: assign_range.end,
+                                                    replacement: format!(
+                                                        "local {name} = {value_text}"
+                                                    ),
+                                                    kind: EditKind::DeferredLocal,
+                                                },
+                                            ],
+                                        );
+                                    }
+                                }
                             }
                         }
-                        if !blocked {
-                            if let (Some(assign_range), Some(value_text)) =
-                                (ctx.stmt_range(&block.stmts[j]), ctx.expr_text(value))
-                            {
-                                add_group(
-                                    edits,
-                                    vec![
-                                        Edit {
-                                            start: decl_range.start,
-                                            end: decl_range.end,
-                                            replacement: String::new(),
-                                            kind: EditKind::DeferredLocal,
-                                        },
-                                        Edit {
-                                            start: assign_range.start,
-                                            end: assign_range.end,
-                                            replacement: format!("local {name} = {value_text}"),
-                                            kind: EditKind::DeferredLocal,
-                                        },
-                                    ],
-                                );
-                            }
-                        }
-                        break;
                     }
-                }
-                if stmt_contains_name(ctx, &block.stmts[j], name) {
-                    break;
                 }
             }
         }
@@ -2142,6 +2307,7 @@ fn collect_low_risk_structural(
                         consumer_init.span(),
                     ) {
                         add_group(
+                            ctx,
                             edits,
                             vec![
                                 Edit {
@@ -2218,6 +2384,7 @@ fn collect_low_risk_structural(
                                         && base_usage.reads[0] == object_range
                                     {
                                         add_group(
+                                            ctx,
                                             edits,
                                             vec![
                                                 Edit {
@@ -2273,6 +2440,7 @@ fn collect_low_risk_structural(
                                     *base_span,
                                 ) {
                                     add_group(
+                                        ctx,
                                         edits,
                                         vec![
                                             Edit {
@@ -2323,6 +2491,7 @@ fn collect_low_risk_structural(
                                         && usage.reads[0] == base_range
                                     {
                                         add_group(
+                                            ctx,
                                             edits,
                                             vec![
                                                 Edit {
@@ -2387,6 +2556,7 @@ fn collect_low_risk_structural(
                                     *key_span,
                                 ) {
                                     add_group(
+                                        ctx,
                                         edits,
                                         vec![
                                             Edit {
@@ -2450,6 +2620,7 @@ fn collect_low_risk_structural(
                                             *key_span,
                                         ) {
                                             add_group(
+                                                ctx,
                                                 edits,
                                                 vec![
                                                     Edit {
@@ -2501,6 +2672,7 @@ fn collect_low_risk_structural(
                                     *key_span,
                                 ) {
                                     add_group(
+                                        ctx,
                                         edits,
                                         vec![
                                             Edit {
@@ -2548,6 +2720,7 @@ fn collect_low_risk_structural(
                                             *func_span,
                                         ) {
                                             add_group(
+                                                ctx,
                                                 edits,
                                                 vec![
                                                     Edit {
@@ -2574,7 +2747,6 @@ fn collect_low_risk_structural(
             }
         }
     }
-
     // Two-or-more adjacent plain constructor arguments feeding one call.
     for consumer_index in 2..block.stmts.len() {
         let Some(call) = call_expr_whole(&block.stmts[consumer_index]) else {
@@ -2658,10 +2830,9 @@ fn collect_low_risk_structural(
             last_arg = Some(arg_i);
         }
         if valid {
-            add_group(edits, group);
+            add_group(ctx, edits, group);
         }
     }
-
     // Adjacent 3-value iterator tuple into generic-for header.
     for i in 0..block.stmts.len().saturating_sub(1) {
         let Stmt::Local(local) = &block.stmts[i] else {
@@ -2733,6 +2904,7 @@ fn collect_low_risk_structural(
             .collect::<Vec<_>>()
             .join(", ");
         add_group(
+            ctx,
             edits,
             vec![
                 Edit {
@@ -2750,7 +2922,6 @@ fn collect_low_risk_structural(
             ],
         );
     }
-
     // Numeric-for literal snapshots in start/limit/step.
     for (loop_index, stmt) in block.stmts.iter().enumerate() {
         let Stmt::NumericFor(loop_stmt) = stmt else {
@@ -2823,7 +2994,7 @@ fn collect_low_risk_structural(
                 kind: EditKind::NumericForConstant,
             });
         }
-        add_group(edits, group);
+        add_group(ctx, edits, group);
     }
 }
 
@@ -2853,6 +3024,7 @@ fn collect_repeat_tail_inline(ctx: &Ctx<'_>, repeat: &Repeat, edits: &mut Vec<Ed
         return;
     };
     add_group(
+        ctx,
         edits,
         vec![
             Edit {
@@ -3165,7 +3337,7 @@ fn collect_multi_return_structural(
                 kind: EditKind::MultiReturnCollapse,
             });
         }
-        add_group(edits, group);
+        add_group(ctx, edits, group);
     }
 
     // Rename dead positions of already-native multi-return assignments to placeholders.
@@ -3205,7 +3377,7 @@ fn collect_multi_return_structural(
                 ordinal += 1;
             }
         }
-        add_group(edits, group);
+        add_group(ctx, edits, group);
     }
 
     // Generic adjacent packed-unpack forwarding and self-assignment recovery.
@@ -3272,6 +3444,7 @@ fn collect_multi_return_structural(
                                 ) {
                                     let _ = inner_text;
                                     add_group(
+                                        ctx,
                                         edits,
                                         vec![
                                             Edit {
@@ -3324,6 +3497,7 @@ fn collect_multi_return_structural(
             continue;
         };
         add_group(
+            ctx,
             edits,
             vec![
                 Edit {
@@ -3888,7 +4062,7 @@ fn collect_generated_vararg_recovery(ctx: &Ctx<'_>, body: &FunctionBody, edits: 
     }];
     group.extend(tail_edits);
     group.extend(direct_edits);
-    add_group(edits, group);
+    add_group(ctx, edits, group);
 }
 #[derive(Debug, Clone)]
 struct ShortProgram {
@@ -4250,6 +4424,9 @@ fn generated_expression_signature(text: &str) -> Option<String> {
         src: &src,
         toks: &parsed.lexed.toks,
         comments: &parsed.lexed.comments,
+        nested_writer_cache: RefCell::new(HashMap::new()),
+        direct_decl_cache: RefCell::new(HashMap::new()),
+        edit_intervals: RefCell::new(BTreeMap::new()),
     };
     Some(expr_signature(&ctx, expr))
 }
@@ -4378,6 +4555,7 @@ fn collect_value_short_circuit(
             continue;
         };
         if add_edit(
+            ctx,
             edits,
             Edit {
                 start: start.start,
@@ -4422,6 +4600,7 @@ fn collect_loop_short_circuit(ctx: &Ctx<'_>, block: &Block, edits: &mut Vec<Edit
                     continue;
                 };
                 if add_group(
+                    ctx,
                     edits,
                     vec![
                         Edit {
@@ -4460,6 +4639,7 @@ fn collect_loop_short_circuit(ctx: &Ctx<'_>, block: &Block, edits: &mut Vec<Edit
                     continue;
                 };
                 if add_group(
+                    ctx,
                     edits,
                     vec![
                         Edit {
@@ -4562,6 +4742,7 @@ fn collect_repeat_precheck(ctx: &Ctx<'_>, block: &Block, edits: &mut Vec<Edit>) 
                     continue;
                 };
                 if add_group(
+                    ctx,
                     edits,
                     vec![
                         Edit {
@@ -4929,6 +5110,7 @@ fn collect_dependency_safe_assignment_keys(
                 continue;
             };
             if add_group(
+                ctx,
                 edits,
                 vec![
                     Edit {
@@ -5169,17 +5351,27 @@ fn collect_block_with_tail(
     tail_expr: Option<&Expr>,
 ) {
     // Structural control-flow recovery must claim the compiler ladder before child cleanup can erase it.
-    let structural_usage = build_usage_index_with_tail(ctx, block, tail_expr);
+    // Function roots already receive their whole-function usage index from the caller; reuse it
+    // instead of indexing the entire function body twice in the same immutable AST round.
+    let structural_usage_owned;
+    let structural_usage = if function_root && tail_expr.is_none() {
+        function_usage
+    } else {
+        structural_usage_owned = build_usage_index_with_tail(ctx, block, tail_expr);
+        &structural_usage_owned
+    };
     collect_repeat_precheck(ctx, block, edits);
     collect_loop_short_circuit(ctx, block, edits);
-    collect_value_short_circuit(ctx, block, &structural_usage, edits);
+    collect_value_short_circuit(ctx, block, structural_usage, edits);
 
     // Recurse after structural claims so overlapping child cleanup is refused.
     // Track lexical names visible at each statement so nested closures can distinguish
     // outer locals/upvalues from globals without trusting generated names.
     let mut visible_here = outer_lexical.clone();
     for stmt in &block.stmts {
-        let statement_visible = visible_here.clone();
+        // The visible set is not mutated until this statement is fully processed, so
+        // nested analysis can borrow it directly instead of cloning a growing HashSet.
+        let statement_visible = &visible_here;
         match stmt {
             Stmt::Do(n) => collect_block(
                 ctx,
@@ -5187,7 +5379,7 @@ fn collect_block_with_tail(
                 edits,
                 false,
                 env_start,
-                &statement_visible,
+                statement_visible,
                 function_usage,
                 repeated_context,
             ),
@@ -5197,7 +5389,7 @@ fn collect_block_with_tail(
                 edits,
                 false,
                 env_start,
-                &statement_visible,
+                statement_visible,
                 function_usage,
                 true,
             ),
@@ -5209,7 +5401,7 @@ fn collect_block_with_tail(
                     edits,
                     false,
                     env_start,
-                    &statement_visible,
+                    statement_visible,
                     function_usage,
                     true,
                     Some(&n.cond),
@@ -5223,7 +5415,7 @@ fn collect_block_with_tail(
                         edits,
                         false,
                         env_start,
-                        &statement_visible,
+                        statement_visible,
                         function_usage,
                         repeated_context,
                     );
@@ -5235,7 +5427,7 @@ fn collect_block_with_tail(
                         edits,
                         false,
                         env_start,
-                        &statement_visible,
+                        statement_visible,
                         function_usage,
                         repeated_context,
                     );
@@ -5247,7 +5439,7 @@ fn collect_block_with_tail(
                 edits,
                 false,
                 env_start,
-                &statement_visible,
+                statement_visible,
                 function_usage,
                 true,
             ),
@@ -5257,14 +5449,14 @@ fn collect_block_with_tail(
                 edits,
                 false,
                 env_start,
-                &statement_visible,
+                statement_visible,
                 function_usage,
                 true,
             ),
             Stmt::Function(n) => {
                 collect_generated_vararg_recovery(ctx, &n.body, edits);
                 let child_env = resolve_env_start(ctx, &n.body.block, env_start.is_some());
-                let child_lexical = function_visible_scope(ctx, &n.body, &statement_visible);
+                let child_lexical = function_visible_scope(ctx, &n.body, statement_visible);
                 let child_usage = build_usage_index(ctx, &n.body.block);
                 collect_block(
                     ctx,
@@ -5280,7 +5472,7 @@ fn collect_block_with_tail(
             Stmt::LocalFunction(n) => {
                 collect_generated_vararg_recovery(ctx, &n.body, edits);
                 let child_env = resolve_env_start(ctx, &n.body.block, env_start.is_some());
-                let child_lexical = function_visible_scope(ctx, &n.body, &statement_visible);
+                let child_lexical = function_visible_scope(ctx, &n.body, statement_visible);
                 let child_usage = build_usage_index(ctx, &n.body.block);
                 collect_block(
                     ctx,
@@ -5295,20 +5487,20 @@ fn collect_block_with_tail(
             }
             Stmt::Local(n) => {
                 for e in &n.values {
-                    collect_expr_functions(ctx, e, edits, env_start.is_some(), &statement_visible)
+                    collect_expr_functions(ctx, e, edits, env_start.is_some(), statement_visible)
                 }
             }
             Stmt::Assign(n) => {
                 for e in &n.values {
-                    collect_expr_functions(ctx, e, edits, env_start.is_some(), &statement_visible)
+                    collect_expr_functions(ctx, e, edits, env_start.is_some(), statement_visible)
                 }
             }
             Stmt::Call(e, _) => {
-                collect_expr_functions(ctx, e, edits, env_start.is_some(), &statement_visible)
+                collect_expr_functions(ctx, e, edits, env_start.is_some(), statement_visible)
             }
             Stmt::Return(n) => {
                 for e in &n.values {
-                    collect_expr_functions(ctx, e, edits, env_start.is_some(), &statement_visible)
+                    collect_expr_functions(ctx, e, edits, env_start.is_some(), statement_visible)
                 }
             }
             _ => {}
@@ -5329,12 +5521,12 @@ fn collect_block_with_tail(
             _ => {}
         }
     }
-
-    let usage_index = build_usage_index_with_tail(ctx, block, tail_expr);
-    collect_low_risk_structural(ctx, block, &usage_index, edits, outer_lexical);
-    collect_multi_return_structural(ctx, block, &usage_index, edits, outer_lexical);
-    collect_dependency_safe_assignment_keys(ctx, block, &usage_index, edits);
-
+    // The AST is immutable during a collection round. Reuse the structural usage index;
+    // rebuilding the same block index here doubles one of the hottest large-file scans.
+    let usage_index = structural_usage;
+    collect_low_risk_structural(ctx, block, usage_index, edits, outer_lexical);
+    collect_multi_return_structural(ctx, block, usage_index, edits, outer_lexical);
+    collect_dependency_safe_assignment_keys(ctx, block, usage_index, edits);
     // Dedicated structural patterns first.
     let mut i = 0usize;
     while i < block.stmts.len() {
@@ -5365,6 +5557,7 @@ fn collect_block_with_tail(
                     };
                     if safe {
                         add_edit(
+                            ctx,
                             edits,
                             Edit {
                                 start: stmt_range.start,
@@ -5395,6 +5588,7 @@ fn collect_block_with_tail(
                         {
                             if let Some(value) = ctx.expr_text(init) {
                                 if add_group(
+                                    ctx,
                                     edits,
                                     vec![
                                         Edit {
@@ -5435,6 +5629,7 @@ fn collect_block_with_tail(
                             ctx.expr_text(value),
                         ) {
                             add_edit(
+                                ctx,
                                 edits,
                                 Edit {
                                     start: a.start,
@@ -5478,6 +5673,7 @@ fn collect_block_with_tail(
                                 ctx.expr_text(inner),
                             ) {
                                 add_edit(
+                                    ctx,
                                     edits,
                                     Edit {
                                         start: a.start,
@@ -5529,6 +5725,7 @@ fn collect_block_with_tail(
                             ctx.expr_text(inner),
                         ) {
                             add_edit(
+                                ctx,
                                 edits,
                                 Edit {
                                     start: a.start,
@@ -5595,6 +5792,7 @@ fn collect_block_with_tail(
                                             ) {
                                                 if let Some(call_range) = ctx.range(call.span()) {
                                                     if add_group(
+                                                        ctx,
                                                         edits,
                                                         vec![
                                                             Edit {
@@ -5628,7 +5826,6 @@ fn collect_block_with_tail(
 
         i += 1;
     }
-
     // Single-use local and cleanup candidates.
     for (index, stmt) in block.stmts.iter().enumerate() {
         let Some((binding, init)) = local_single(stmt) else {
@@ -5644,10 +5841,11 @@ fn collect_block_with_tail(
 
         if usage.reads.len() == 1 && usage.writes == 0 && !usage.redeclared && !usage.captured {
             let read = &usage.reads[0];
-            if is_pure_literal(init) {
-                let consumer_index = ((index + 1)..block.stmts.len()).find(|candidate| {
-                    stmt_has_direct_expression_use(ctx, &block.stmts[*candidate], read)
-                });
+            if is_safe_inline_constant(ctx, init) {
+                let consumer_index = direct_statement_index_containing(ctx, block, index + 1, read)
+                    .filter(|candidate| {
+                        stmt_has_direct_expression_use(ctx, &block.stmts[*candidate], read)
+                    });
                 let Some(consumer_index) = consumer_index else {
                     // Generic single-use inlining is same lexical block only. Child
                     // blocks are handled only by dedicated structural proofs.
@@ -5656,8 +5854,9 @@ fn collect_block_with_tail(
                 if is_repeated_evaluation_statement(&block.stmts[consumer_index]) {
                     continue;
                 }
-                if let Some(value) = ctx.expr_text(init) {
+                if let Some(value) = safe_inline_constant_text(ctx, init) {
                     if add_group(
+                        ctx,
                         edits,
                         vec![
                             Edit {
@@ -5669,7 +5868,7 @@ fn collect_block_with_tail(
                             Edit {
                                 start: read.start,
                                 end: read.end,
-                                replacement: value.to_string(),
+                                replacement: value,
                                 kind: EditKind::LiteralInline,
                             },
                         ],
@@ -5680,9 +5879,10 @@ fn collect_block_with_tail(
             }
             if let Expr::Name(source_span) = init {
                 let source_name = ctx.text(*source_span).unwrap_or("");
-                let consumer_index = ((index + 1)..block.stmts.len()).find(|candidate| {
-                    stmt_has_direct_expression_use(ctx, &block.stmts[*candidate], read)
-                });
+                let consumer_index = direct_statement_index_containing(ctx, block, index + 1, read)
+                    .filter(|candidate| {
+                        stmt_has_direct_expression_use(ctx, &block.stmts[*candidate], read)
+                    });
                 if let Some(consumer_index) = consumer_index {
                     let source_is_lexical = outer_lexical.contains(source_name)
                         || direct_local_declared_before(ctx, block, index, source_name);
@@ -5699,6 +5899,7 @@ fn collect_block_with_tail(
                                 consumer_start,
                             ) {
                                 if add_group(
+                                    ctx,
                                     edits,
                                     vec![
                                         Edit {
@@ -5730,6 +5931,7 @@ fn collect_block_with_tail(
                             && barrier_free(block, index, consumer_index);
                         if call_safe || immediate_generic_iterator_use {
                             if add_group(
+                                ctx,
                                 edits,
                                 vec![
                                     Edit {
@@ -5816,6 +6018,7 @@ fn collect_block_with_tail(
                                                         value.to_string()
                                                     };
                                                 if add_group(
+                                                    ctx,
                                                     edits,
                                                     vec![
                                                         Edit {
@@ -5847,8 +6050,7 @@ fn collect_block_with_tail(
             // Small sole-use anonymous functions may move to a later same-block leading use
             // only when every runtime identifier is lexical and the gap cannot shadow it.
             if let Expr::Function { body, .. } = init {
-                let consumer_index = ((index + 1)..block.stmts.len())
-                    .find(|candidate| stmt_contains_range(ctx, &block.stmts[*candidate], read));
+                let consumer_index = direct_statement_index_containing(ctx, block, index + 1, read);
                 if let Some(consumer_index) = consumer_index {
                     let source_lines_ok = ctx.range(init.span()).is_some_and(|range| {
                         let mut bytes = ctx.src.as_bytes()[range.clone()].to_vec();
@@ -5887,6 +6089,7 @@ fn collect_block_with_tail(
                     {
                         if let Some(value) = ctx.expr_text(init) {
                             if add_group(
+                                ctx,
                                 edits,
                                 vec![
                                     Edit {
@@ -5960,6 +6163,7 @@ fn collect_block_with_tail(
                         replacement.insert(0, ';');
                     }
                     if add_group(
+                        ctx,
                         edits,
                         vec![
                             Edit {
@@ -5992,6 +6196,7 @@ fn collect_block_with_tail(
             let generated_env = name == "_env" && direct_call_named_no_args(ctx, init, "getfenv");
             if is_no_effect_expr(init) || dead_local_name || generated_env {
                 add_edit(
+                    ctx,
                     edits,
                     Edit {
                         start: stmt_range.start,
@@ -6005,6 +6210,7 @@ fn collect_block_with_tail(
             if let Some(call_expr) = unwrapped_call(init) {
                 if let Some(call) = ctx.expr_text(call_expr) {
                     add_edit(
+                        ctx,
                         edits,
                         Edit {
                             start: stmt_range.start,
@@ -6018,7 +6224,6 @@ fn collect_block_with_tail(
             }
         }
     }
-
     // Unused uninitialized locals carry no value/effect and can be removed.
     for stmt in &block.stmts {
         let Some(binding) = local_uninitialized(stmt) else {
@@ -6033,6 +6238,7 @@ fn collect_block_with_tail(
         let usage = usage_index.usage_after(name, stmt_range.end);
         if usage.reads.is_empty() && usage.writes == 0 && !usage.captured && !usage.redeclared {
             add_edit(
+                ctx,
                 edits,
                 Edit {
                     start: stmt_range.start,
@@ -6051,6 +6257,7 @@ fn collect_block_with_tail(
             if ret.values.is_empty() {
                 if let Some(range) = ctx.stmt_range(block.stmts.last().unwrap()) {
                     add_edit(
+                        ctx,
                         edits,
                         Edit {
                             start: range.start,
@@ -6063,7 +6270,6 @@ fn collect_block_with_tail(
             }
         }
     }
-
     // Fold only a proven getfenv-backed environment binding. Child blocks share the
     // current function context; nested functions resolve their own/inherited context.
     if let Some(start) = env_start {
@@ -6224,10 +6430,19 @@ fn apply_edits(source: &str, mut edits: Vec<Edit>, stats: &mut Stats) -> Result<
             ));
         }
     }
-    let mut out = source.to_string();
-    for e in edits.into_iter().rev() {
-        out.replace_range(e.start..e.end, &e.replacement);
+    // Build the rewritten source once. Repeated String::replace_range on a multi-MB
+    // file shifts the remaining bytes for every edit and becomes O(file_size * edits).
+    let replacement_bytes: usize = edits.iter().map(|e| e.replacement.len()).sum();
+    let removed_bytes: usize = edits.iter().map(|e| e.end - e.start).sum();
+    let mut out =
+        String::with_capacity(source.len() + replacement_bytes.saturating_sub(removed_bytes));
+    let mut cursor = 0usize;
+    for e in edits {
+        out.push_str(&source[cursor..e.start]);
+        out.push_str(&e.replacement);
+        cursor = e.end;
     }
+    out.push_str(&source[cursor..]);
     Ok(out)
 }
 
@@ -6253,6 +6468,9 @@ pub fn optimize(source: &str, max_rounds: usize) -> Result<(String, Stats)> {
             src: &current,
             toks: &parsed.lexed.toks,
             comments: &parsed.lexed.comments,
+            nested_writer_cache: RefCell::new(HashMap::new()),
+            direct_decl_cache: RefCell::new(HashMap::new()),
+            edit_intervals: RefCell::new(BTreeMap::new()),
         };
         let mut edits = Vec::new();
         let root_env = resolve_env_start(&ctx, &parsed.chunk.block, false);
