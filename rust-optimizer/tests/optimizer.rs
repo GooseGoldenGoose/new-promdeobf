@@ -1922,3 +1922,45 @@ end
         "{out}"
     );
 }
+
+#[test]
+fn same_index_read_modify_write_inlines_but_namecall_snapshot_stays() {
+    let out = opt(r#"
+local function probe(state, pager)
+    local old = state["index-focus"]
+    state["index-focus"] = old - 1
+    local current = state["index-focus"]
+    pager:JumpToIndex(current)
+end
+"#);
+    assert!(!out.contains("local old ="), "{out}");
+    assert!(
+        out.contains("state[\"index-focus\"] = state[\"index-focus\"] - 1"),
+        "{out}"
+    );
+    assert!(
+        out.contains("local current = state[\"index-focus\"]"),
+        "{out}"
+    );
+    assert!(out.contains("pager:JumpToIndex(current)"), "{out}");
+}
+
+#[test]
+fn same_index_read_modify_write_blocks_global_base() {
+    let out = opt(r#"
+local old = state["index-focus"]
+state["index-focus"] = old - 1
+"#);
+    assert!(out.contains("local old = state[\"index-focus\"]"), "{out}");
+}
+
+#[test]
+fn same_index_read_modify_write_blocks_different_key() {
+    let out = opt(r#"
+local function probe(state)
+    local old = state["before"]
+    state["after"] = old - 1
+end
+"#);
+    assert!(out.contains("local old = state.before"), "{out}");
+}

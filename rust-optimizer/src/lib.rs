@@ -2788,6 +2788,99 @@ fn collect_low_risk_structural(
             }
         }
 
+        // Adjacent same-index read/modify/write: local old = base["k"];
+        // base["k"] = old - 1. The base must be a stable lexical binding and the
+        // exact same key must be a pure literal, so moving the indexed read into the
+        // assignment RHS crosses only effect-free LHS base/key evaluation.
+        if let Some((producer_binding, producer_init)) = local_single(&block.stmts[i]) {
+            if let Expr::Index {
+                object: producer_object,
+                key: producer_key,
+                ..
+            } = producer_init
+            {
+                if let Stmt::Assign(assign) = next {
+                    if assign.targets.len() == 1 && assign.values.len() == 1 {
+                        if let Expr::Index {
+                            object: target_object,
+                            key: target_key,
+                            ..
+                        } = &assign.targets[0]
+                        {
+                            let same_key = match (producer_key, target_key) {
+                                (IndexKey::Field(a), IndexKey::Field(b)) => {
+                                    ctx.text(*a) == ctx.text(*b)
+                                }
+                                (IndexKey::Computed(a), IndexKey::Computed(b)) => {
+                                    is_pure_literal(a)
+                                        && is_pure_literal(b)
+                                        && expr_signature(ctx, a) == expr_signature(ctx, b)
+                                }
+                                _ => false,
+                            };
+                            if same_key {
+                                if let (Expr::Name(producer_base), Expr::Name(target_base)) =
+                                    (producer_object.as_ref(), target_object.as_ref())
+                                {
+                                    let base_name = ctx.text(*producer_base).unwrap_or("");
+                                    let producer_name =
+                                        ctx.text(producer_binding.name).unwrap_or("");
+                                    if ctx.text(*target_base) == Some(base_name)
+                                        && name_is_immediate_stable_lexical(
+                                            ctx,
+                                            block,
+                                            i,
+                                            base_name,
+                                            outer_lexical,
+                                        )
+                                    {
+                                        if let Some(stmt_range) = ctx.stmt_range(&block.stmts[i]) {
+                                            let usage = usage_index
+                                                .usage_after(producer_name, stmt_range.end);
+                                            if usage.reads.len() == 1
+                                                && usage.writes == 0
+                                                && !usage.redeclared
+                                                && !usage.captured
+                                                && stmt_contains_range(ctx, next, &usage.reads[0])
+                                                && expr_leading_use(
+                                                    ctx,
+                                                    &assign.values[0],
+                                                    &usage.reads[0],
+                                                )
+                                            {
+                                                if let Some(value) = ctx.expr_text(producer_init) {
+                                                    add_group(
+                                                        ctx,
+                                                        edits,
+                                                        vec![
+                                                            Edit {
+                                                                start: stmt_range.start,
+                                                                end: stmt_range.end,
+                                                                replacement: String::new(),
+                                                                kind:
+                                                                    EditKind::AssignmentValueInline,
+                                                            },
+                                                            Edit {
+                                                                start: usage.reads[0].start,
+                                                                end: usage.reads[0].end,
+                                                                replacement: value.to_string(),
+                                                                kind:
+                                                                    EditKind::AssignmentValueInline,
+                                                            },
+                                                        ],
+                                                    );
+                                                }
+                                            }
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+
         // Adjacent assignment key: local k = source[idx]; target[k] = value.
         if let Some((producer_binding, producer_init)) = local_single(&block.stmts[i]) {
             if matches!(producer_init, Expr::Index { .. }) {
