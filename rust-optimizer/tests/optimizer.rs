@@ -392,7 +392,7 @@ end
 "#);
     assert!(!out.contains("local wave ="), "{out}");
     assert!(
-        out.contains("result = game.ReplicatedStorage.WaveValue.Value"),
+        out.contains("return game.ReplicatedStorage.WaveValue.Value"),
         "{out}"
     );
 }
@@ -1734,7 +1734,7 @@ return r_v8_2
 "#);
     assert!(!out.contains("local r_v5_3 = math"));
     assert!(!out.contains("r_v8_2 = r_v5_3[r_v8_2]"));
-    assert!(out.contains("local r_v8_2 = math.random"));
+    assert!(out.contains("return math.random"), "{out}");
 }
 
 #[test]
@@ -2703,4 +2703,73 @@ local env = GLOBAL_ENV
 env.value = mutate()
 "#);
     assert!(out.contains("local env = GLOBAL_ENV"), "{out}");
+}
+
+
+#[test]
+fn adjacent_index_snapshot_inlines_into_leading_local_fallback() {
+    let out = opt(r#"
+local function probe(cfg, consume)
+    local snapshot = cfg.toggle_size
+    local initial = snapshot or 50
+    consume(initial)
+end
+"#);
+    assert!(!out.contains("local snapshot ="), "{out}");
+    assert!(!out.contains("local initial ="), "{out}");
+    assert!(out.contains("consume(cfg.toggle_size or 50)"), "{out}");
+}
+
+#[test]
+fn nonadjacent_function_with_globals_crosses_only_effect_free_gap() {
+    let out = opt(r#"
+local function probe(cfg)
+    local callback = function(value)
+        cfg.value = value
+        Save()
+        UDim2.new(0, value)
+    end
+    local initial = 50
+    consume(initial, callback)
+end
+"#);
+    assert!(!out.contains("local callback ="), "{out}");
+    assert!(out.contains("consume(50, function(value)"), "{out}");
+}
+
+#[test]
+fn nonadjacent_function_with_globals_keeps_effectful_gap() {
+    let out = opt(r#"
+local function probe(cfg)
+    local callback = function(value)
+        cfg.value = value
+        Save()
+    end
+    touch()
+    consume(callback)
+end
+"#);
+    assert!(out.contains("local callback = function"), "{out}");
+}
+
+#[test]
+fn slider_snapshot_chain_collapses_to_direct_namecall() {
+    let out = opt(r#"
+local function probe(cfg, holder)
+    local panel = T_Misc
+    local sizeSnapshot = cfg.toggle_size
+    local callback = function(value)
+        cfg.toggle_size = value
+        Save()
+        holder.Size = UDim2.new(0, value, 0, value)
+    end
+    local initial = sizeSnapshot or 50
+    panel:AddSlider("Toggle Size", 30, 100, initial, callback)
+end
+"#);
+    assert!(!out.contains("local panel ="), "{out}");
+    assert!(!out.contains("local sizeSnapshot ="), "{out}");
+    assert!(!out.contains("local callback ="), "{out}");
+    assert!(!out.contains("local initial ="), "{out}");
+    assert!(out.contains("T_Misc:AddSlider(\"Toggle Size\", 30, 100, cfg.toggle_size or 50, function(value)"), "{out}");
 }

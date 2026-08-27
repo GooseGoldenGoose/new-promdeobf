@@ -948,7 +948,8 @@ fn collect_block_with_tail(
                         && stmt_has_direct_expression_use(ctx, &block.stmts[consumer_index], read)
                         && !is_repeated_evaluation_statement(&block.stmts[consumer_index])
                         && (consumer_index == index + 1
-                            || function_move_is_lexical(ctx, body, outer_locals))
+                            || function_move_is_lexical(ctx, body, outer_locals)
+                            || barrier_free(block, index, consumer_index))
                         && gap_is_safe_for_function_move(
                             ctx,
                             block,
@@ -1006,6 +1007,8 @@ fn collect_block_with_tail(
             // condition/call-base uses also admit call/index producers: the producer
             // still executes once at the same statement boundary and no other effect is crossed.
             let next_stmt = block.stmts.get(index + 1);
+            let adjacent_leading_index_temp = matches!(init, Expr::Index { .. })
+                && next_stmt.is_some_and(|stmt| stmt_leading_use(ctx, stmt, read));
             let adjacent_if_effect_temp = matches!(init, Expr::Call { .. } | Expr::Index { .. })
                 && matches!(next_stmt, Some(Stmt::If(node)) if node.branches.first().is_some_and(|(cond, _)| {
                     matches!(unwrap_parens(cond), Expr::Binary { .. }) && expr_leading_use(ctx, cond, read)
@@ -1031,6 +1034,7 @@ fn collect_block_with_tail(
                     .is_some_and(|range| range == *read);
             if !matches!(init, Expr::Name(_))
                 && (is_scalar_temp_expr(init)
+                    || adjacent_leading_index_temp
                     || adjacent_if_effect_temp
                     || adjacent_if_value_temp
                     || adjacent_call_base_temp
