@@ -2134,6 +2134,93 @@ fn collect_low_risk_structural(
             }
         }
 
+        // Prometheus self-key overwrite: local base = source; local key = scalar;
+        // key = base[key] -> local key = source[scalar]. The source snapshot is
+        // evaluated before the scalar in both forms, and the base must have no
+        // other observable use.
+        if i + 2 < block.stmts.len() {
+            if let (
+                Some((base_binding, base_init)),
+                Some((key_binding, key_init)),
+                Some((target, value)),
+            ) = (
+                local_single(&block.stmts[i]),
+                local_single(&block.stmts[i + 1]),
+                assignment_single(&block.stmts[i + 2]),
+            ) {
+                if let Expr::Name(source_span) = base_init {
+                    let base_name = ctx.text(base_binding.name).unwrap_or("");
+                    let key_name = ctx.text(key_binding.name).unwrap_or("");
+                    if !base_name.is_empty()
+                        && !key_name.is_empty()
+                        && name_of_expr(ctx, target) == Some(key_name)
+                        && is_scalar_temp_expr(key_init)
+                    {
+                        if let Expr::Index {
+                            object,
+                            key: IndexKey::Computed(index),
+                            ..
+                        } = value
+                        {
+                            if name_of_expr(ctx, object) == Some(base_name)
+                                && name_of_expr(ctx, index) == Some(key_name)
+                            {
+                                if let (
+                                    Some(base_stmt_range),
+                                    Some(key_stmt_range),
+                                    Some(assign_range),
+                                    Some(object_range),
+                                    Some(source_text),
+                                    Some(key_text),
+                                ) = (
+                                    ctx.stmt_range(&block.stmts[i]),
+                                    ctx.stmt_range(&block.stmts[i + 1]),
+                                    ctx.stmt_range(&block.stmts[i + 2]),
+                                    ctx.range(object.span()),
+                                    ctx.text(*source_span),
+                                    ctx.expr_text(key_init),
+                                ) {
+                                    let base_usage =
+                                        usage_index.usage_after(base_name, base_stmt_range.end);
+                                    if base_usage.reads.len() == 1
+                                        && base_usage.writes == 0
+                                        && !base_usage.redeclared
+                                        && !base_usage.captured
+                                        && base_usage.reads[0] == object_range
+                                    {
+                                        add_group(
+                                            edits,
+                                            vec![
+                                                Edit {
+                                                    start: base_stmt_range.start,
+                                                    end: base_stmt_range.end,
+                                                    replacement: String::new(),
+                                                    kind: EditKind::AssignmentKeyInline,
+                                                },
+                                                Edit {
+                                                    start: key_stmt_range.start,
+                                                    end: key_stmt_range.end,
+                                                    replacement: format!(
+                                                        "local {key_name} = {source_text}[{key_text}]"
+                                                    ),
+                                                    kind: EditKind::AssignmentKeyInline,
+                                                },
+                                                Edit {
+                                                    start: assign_range.start,
+                                                    end: assign_range.end,
+                                                    replacement: String::new(),
+                                                    kind: EditKind::AssignmentKeyInline,
+                                                },
+                                            ],
+                                        );
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
         // Adjacent base alias: local t = math; local f = t["random"].
         if let (Some((producer_binding, producer_init)), Some((_consumer_binding, consumer_init))) =
             (local_single(&block.stmts[i]), local_single(next))

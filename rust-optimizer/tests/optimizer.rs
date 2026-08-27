@@ -1231,3 +1231,29 @@ return r_v4_5
     assert!(out.contains(" and "));
     assert!(out.contains(" or "));
 }
+
+#[test]
+fn folds_self_key_overwrite_lookup() {
+    let out = opt(r#"
+local r_v5_3 = math
+local r_v8_2 = "random"
+r_v8_2 = r_v5_3[r_v8_2]
+return r_v8_2
+"#);
+    assert!(!out.contains("local r_v5_3 = math"));
+    assert!(!out.contains("r_v8_2 = r_v5_3[r_v8_2]"));
+    assert!(out.contains("local r_v8_2 = math[\"random\"]"));
+}
+
+#[test]
+fn self_key_overwrite_keeps_live_base_snapshot() {
+    let out = opt(r#"
+local base = math
+local key = "random"
+key = base[key]
+consume(base)
+return key
+"#);
+    assert!(out.contains("local base = math"));
+    assert!(out.contains("key = base[key]"));
+}

@@ -474,7 +474,7 @@ Manual usage:
 rust-optimizer\target\release\prom-rust-optimizer.exe <final-cf.lua> [optimized.lua] --max-rounds 1000
 ```
 
-The port uses `eclipse_luau` and byte-range AST edits. It runs to a parse-validated fixed point and ports the JS structural/fail-closed optimizer behavior rather than using textual substitutions. Dedicated Rust regressions are **86/86 PASS**; the full JS optimizer regression/oracle and full project gate are also passing.
+The port uses `eclipse_luau` and byte-range AST edits. It runs to a parse-validated fixed point and ports the JS structural/fail-closed optimizer behavior rather than using textual substitutions. Dedicated Rust regressions are **88/88 PASS**; the full JS optimizer regression/oracle and full project gate are also passing.
 
 Important safety/parity rules:
 - nested functions distinguish stable captured lexical bindings from globals; read-only captures are allowed only where the JS proof allows them, while nested writers block movement
@@ -484,6 +484,7 @@ Important safety/parity rules:
 - `_env` recovery requires proven getfenv provenance and respects rebind/shadow/setfenv barriers, including parenthesized string keys
 - value short-circuit recovery handles branch-local simple aliases, including the Prometheus `table and table["unpack"] or unpack` shape, while preserving evaluation order
 - packed final-argument forwarding accepts proven stable outer lexical locals/read-only captures but still blocks nested writers and effectful earlier prefixes
+- self-key overwrite recovery folds local base = source; local key = scalar; key = base[key] to local key = source[scalar] only when the base snapshot has no other observable use; live-base cases remain unchanged
 
 Final small/normal parity gates:
 - fresh samples 14/20/23 and sample 63: Rust second pass = 0 edits and JS-after-Rust = 0 transforms
