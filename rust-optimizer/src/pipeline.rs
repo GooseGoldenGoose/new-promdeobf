@@ -782,9 +782,13 @@ fn collect_block_with_tail(
                                 &block.stmts[consumer_index],
                                 Stmt::Assign(node) if node.values.iter().all(is_no_effect_expr)
                             );
+                        let immediate_leading_use = consumer_index == index + 1
+                            && !is_repeated_evaluation_statement(&block.stmts[consumer_index])
+                            && stmt_leading_use(ctx, &block.stmts[consumer_index], read);
                         if call_safe
                             || immediate_generic_iterator_use
                             || immediate_field_assignment_use
+                            || immediate_leading_use
                         {
                             if add_group(
                                 ctx,
@@ -1013,7 +1017,10 @@ fn collect_block_with_tail(
                 && matches!(next_stmt, Some(Stmt::If(node)) if node.branches.first().is_some_and(|(cond, _)| {
                     matches!(unwrap_parens(cond), Expr::Binary { .. }) && expr_leading_use(ctx, cond, read)
                 }));
-            let adjacent_if_value_temp = matches!(init, Expr::Call { .. } | Expr::Index { .. })
+            // Any non-name initializer can move into an immediately following direct
+            // if condition: both contexts consume exactly one value, and no effect is crossed.
+            // Name aliases are handled by the dedicated lexical/global alias rules above.
+            let adjacent_if_value_temp = !matches!(init, Expr::Name(_))
                 // A local+if immediately before repeat may be the compiler's discarded
                 // repeat-condition precheck. Keep that snapshot unless the dedicated
                 // exact repeat matcher proves it removable.

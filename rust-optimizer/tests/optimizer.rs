@@ -2773,3 +2773,32 @@ end
     assert!(!out.contains("local initial ="), "{out}");
     assert!(out.contains("T_Misc:AddSlider(\"Toggle Size\", 30, 100, cfg.toggle_size or 50, function(value)"), "{out}");
 }
+
+#[test]
+fn global_alias_and_unary_field_snapshot_collapse_into_if() {
+    let out = opt(r#"
+local function probe()
+    local env = _G
+    local shouldRun = not env.auto_executed
+    if shouldRun then
+        consume()
+    end
+end
+"#);
+    assert!(!out.contains("local env ="), "{out}");
+    assert!(!out.contains("local shouldRun ="), "{out}");
+    assert!(out.contains("if not _G.auto_executed then"), "{out}");
+}
+
+#[test]
+fn global_alias_snapshot_before_while_is_preserved() {
+    let out = opt(r#"
+local function probe()
+    local env = _G
+    while env.enabled do
+        consume()
+    end
+end
+"#);
+    assert!(out.contains("local env = _G"), "{out}");
+}
