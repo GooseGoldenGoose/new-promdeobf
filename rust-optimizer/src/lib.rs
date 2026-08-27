@@ -2621,11 +2621,12 @@ fn collect_low_risk_structural(
                 }
             }
         }
-        // Adjacent base alias: local t = math; local f = t["random"].
+        // Adjacent base alias: local t = math; local f = t["random"], or
+        // local t = Enum.EasingStyle; local f = t.Circular. No effect is crossed.
         if let (Some((producer_binding, producer_init)), Some((_consumer_binding, consumer_init))) =
             (local_single(&block.stmts[i]), local_single(next))
         {
-            if let Expr::Name(source_span) = producer_init {
+            if matches!(producer_init, Expr::Name(_) | Expr::Index { .. }) {
                 if let Expr::Index { object, .. } = consumer_init {
                     if let Expr::Name(base_span) = object.as_ref() {
                         let producer_name = ctx.text(producer_binding.name).unwrap_or("");
@@ -2633,7 +2634,7 @@ fn collect_low_risk_structural(
                             if let (Some(stmt_range), Some(base_range), Some(source_text)) = (
                                 ctx.stmt_range(&block.stmts[i]),
                                 ctx.range(*base_span),
-                                ctx.text(*source_span),
+                                ctx.expr_text(producer_init),
                             ) {
                                 if usage_is_single_next_read(
                                     ctx,
@@ -3009,7 +3010,11 @@ fn collect_low_risk_structural(
             }
             producers.push((arg_i, producer_index, binding, init, stmt_range, arg_range));
         }
-        if producers.len() < 2 {
+        if producers.len() < 2
+            && !producers
+                .first()
+                .is_some_and(|item| item.1 + 1 == consumer_index)
+        {
             continue;
         }
         producers.sort_by_key(|item| item.0);
@@ -3032,7 +3037,7 @@ fn collect_low_risk_structural(
                 kind: EditKind::TableCallArgumentInline,
             });
         }
-        if group.len() >= 4 {
+        if group.len() >= 2 {
             add_group(ctx, edits, group);
         }
     }

@@ -1868,3 +1868,57 @@ return a, b
     assert!(out.contains(".Valid_Name9"), "{out}");
     assert!(out.contains("[\"end\"]"), "{out}");
 }
+
+#[test]
+fn adjacent_index_chain_inlines_enum_style() {
+    let out = opt(r#"
+local style = Enum.EasingStyle
+local circular = style.Circular
+use(circular)
+"#);
+    assert!(!out.contains("local style = Enum.EasingStyle"), "{out}");
+    assert!(out.contains("Enum.EasingStyle.Circular"), "{out}");
+}
+
+#[test]
+fn single_adjacent_plain_table_call_argument_inlines() {
+    let out = opt(r#"
+local props = {
+    ["ImageTransparency"] = 0
+}
+apply(target, props)
+"#);
+    assert!(!out.contains("local props ="), "{out}");
+    assert!(out.contains("apply(target, {"), "{out}");
+    assert!(out.contains("[\"ImageTransparency\"] = 0"), "{out}");
+}
+
+#[test]
+fn decoded_style_chain_reaches_post_decode_shape_fixed_point() {
+    let out = opt(r#"
+local function probe(ui, first_call, first_target, first_style, second_target)
+    local first_props = {
+        ["ImageTransparency"] = 0
+    }
+    first_call(first_target, 0.25, first_style, first_props)
+
+    local tween = ui.tween
+    local easing_style = Enum.EasingStyle
+    local circular = easing_style.Circular
+    local second_props = {
+        ["BackgroundTransparency"] = 1
+    }
+    tween(second_target, 0.25, circular, second_props)
+end
+"#);
+    assert!(!out.contains("local first_props ="), "{out}");
+    assert!(!out.contains("local easing_style ="), "{out}");
+    assert!(!out.contains("local circular ="), "{out}");
+    assert!(!out.contains("local second_props ="), "{out}");
+    assert!(!out.contains("local tween = ui.tween"), "{out}");
+    assert!(out.contains("Enum.EasingStyle.Circular"), "{out}");
+    assert!(
+        out.contains("ui.tween(second_target, 0.25, Enum.EasingStyle.Circular, {"),
+        "{out}"
+    );
+}
