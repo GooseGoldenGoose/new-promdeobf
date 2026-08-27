@@ -715,7 +715,9 @@ fn collect_block_with_tail(
                 && index + 1 < block.stmts.len()
                 && !matches!(&block.stmts[index + 1], Stmt::Return(_))
             {
-                if let Some(call) = call_expr_whole(&block.stmts[index + 1]) {
+                if let Some(call) = call_expr_whole(&block.stmts[index + 1])
+                    .or_else(|| direct_if_condition_call(&block.stmts[index + 1]))
+                {
                     if let Some((func, method, args_node)) = call_parts(call) {
                         if method.is_none() {
                             if let (Some(base), Some(args)) =

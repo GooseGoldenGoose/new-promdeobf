@@ -1253,8 +1253,24 @@ fn direct_if_condition_name_span(ctx: &Ctx<'_>, stmt: &Stmt, name: &str) -> Opti
     inner(ctx, condition, name)
 }
 
+fn direct_if_condition_call(stmt: &Stmt) -> Option<&Expr> {
+    fn inner(expr: &Expr) -> Option<&Expr> {
+        match expr {
+            Expr::Call { .. } => Some(expr),
+            Expr::Paren { inner: value, .. }
+            | Expr::TypeAssert { expr: value, .. }
+            | Expr::Unary { operand: value, .. } => inner(value),
+            _ => None,
+        }
+    }
+
+    let Stmt::If(node) = stmt else {
+        return None;
+    };
+    node.branches.first().and_then(|(condition, _)| inner(condition))
+}
 fn direct_call_base_name_span(ctx: &Ctx<'_>, stmt: &Stmt, name: &str) -> Option<TokSpan> {
-    let call = call_expr_whole(stmt)?;
+    let call = call_expr_whole(stmt).or_else(|| direct_if_condition_call(stmt))?;
     let (func, _, _) = call_parts(call)?;
     match unwrap_parens(func) {
         Expr::Name(span) if ctx.text(*span) == Some(name) => Some(*span),

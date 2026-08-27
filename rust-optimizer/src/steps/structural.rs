@@ -1143,12 +1143,11 @@ fn collect_low_risk_structural(
             continue;
         }
         let read = hits[0].0.clone();
-        let first = &loop_stmt.exprs[0];
-        let leading = ctx.range(first.span()).is_some_and(|range| range == read)
-            || call_parts(first).is_some_and(|(func, _, _)| {
-                expr_is_leading_call_base_use(ctx, func, &read)
-            });
-        if !leading {
+        let header_use = loop_stmt.exprs.iter().any(|expr| {
+            ctx.range(expr.span())
+                .is_some_and(|range| read.start >= range.start && read.end <= range.end)
+        });
+        if !header_use {
             continue;
         }
         let shadows_alias = loop_stmt

@@ -451,6 +451,23 @@ end
 }
 
 #[test]
+fn generic_for_header_argument_alias_and_iterator_alias_collapse() {
+    let out = opt(r#"
+local function probe(t)
+    local iterator = pairs
+    local source = t
+    for source, value in iterator(source) do
+        consume(source, value)
+    end
+end
+"#);
+    assert!(!out.contains("local iterator = pairs"), "{out}");
+    assert!(!out.contains("local source = t"), "{out}");
+    assert!(out.contains("for source, value in pairs(t) do"), "{out}");
+}
+
+
+#[test]
 fn generic_for_header_alias_keeps_outer_alias_with_later_use() {
     let out = opt(r#"
 local function probe(t)
@@ -2445,4 +2462,33 @@ local function probe(state)
 end
 "#);
     assert!(out.contains("local old = state.before"), "{out}");
+}
+
+#[test]
+fn adjacent_if_call_argument_and_callee_aliases_collapse() {
+    let out = opt(r#"
+local function probe(items, profile)
+    local finder = table.find
+    local wanted = profile.macro_profile
+    if not finder(items, wanted) then
+        consume(items)
+    end
+end
+"#);
+    assert!(!out.contains("local finder = table.find"), "{out}");
+    assert!(!out.contains("local wanted = profile.macro_profile"), "{out}");
+    assert!(out.contains("if not table.find(items, profile.macro_profile) then"), "{out}");
+}
+
+#[test]
+fn adjacent_if_call_argument_keeps_effectful_prefix_order() {
+    let out = opt(r#"
+local function probe(profile)
+    local wanted = profile.macro_profile
+    if not find(loadItems(), wanted) then
+        consume()
+    end
+end
+"#);
+    assert!(out.contains("local wanted = profile.macro_profile"), "{out}");
 }
