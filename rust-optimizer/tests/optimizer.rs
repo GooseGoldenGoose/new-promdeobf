@@ -1257,3 +1257,107 @@ return key
     assert!(out.contains("local base = math"));
     assert!(out.contains("key = base[key]"));
 }
+
+#[test]
+fn folds_nested_index_key_with_stable_lexical_base() {
+    let out = opt(r#"
+local function probe(source, decode, base)
+    local key = source[decode()]
+    local value = base[key]
+    return value
+end
+return probe
+"#);
+    assert!(!out.contains("local key = source[decode()]"));
+    assert!(out.contains("base[source[decode()]]"));
+}
+
+#[test]
+fn nested_index_key_unstable_base_is_blocked() {
+    let out = opt(r#"
+local function probe(source, decode, base, replacement)
+    local function mutate()
+        base = replacement
+    end
+    local key = source[decode()]
+    local value = base[key]
+    return value, mutate
+end
+return probe
+"#);
+    assert!(out.contains("local key = source[decode()]"));
+}
+
+#[test]
+fn folds_index_temp_into_stable_call_argument() {
+    let out = opt(r#"
+local function probe(callee, source, decode, base)
+    local value = base[source[decode()]]
+    callee(value)
+end
+return probe
+"#);
+    assert!(!out.contains("local value = base[source[decode()]]"));
+    assert!(out.contains("callee(base[source[decode()]])"));
+}
+
+#[test]
+fn index_temp_call_argument_callee_writer_is_blocked() {
+    let out = opt(r#"
+local function probe(callee, source, decode, base, replacement)
+    local function mutate()
+        callee = replacement
+    end
+    local value = base[source[decode()]]
+    callee(value)
+    return mutate
+end
+return probe
+"#);
+    assert!(out.contains("local value = base[source[decode()]]"));
+}
+
+#[test]
+fn small_function_size_ignores_comment_only_lines() {
+    let comments = (0..120)
+        .map(|index| format!("-- filler {index}"))
+        .collect::<Vec<_>>()
+        .join("\n");
+    let source = format!(
+        "local function outer(x)\n    local f = function()\n{comments}\n        return x\n    end\n    return f()\nend\nreturn outer\n"
+    );
+    let out = opt(&source);
+    assert!(!out.contains("local f = function"));
+    assert!(out.contains("return (function()"));
+}
+
+#[test]
+fn folds_index_key_temp_inside_stable_call_argument() {
+    let out = opt(r#"
+local function probe(source, decode, base)
+    local fire = firesignal
+    local key = source[decode()]
+    fire(base[key])
+end
+return probe
+"#);
+    assert!(!out.contains("local fire = firesignal"));
+    assert!(!out.contains("local key = source[decode()]"));
+    assert!(out.contains("firesignal(base[source[decode()]])"));
+}
+
+#[test]
+fn index_key_temp_inside_call_blocks_unstable_index_base() {
+    let out = opt(r#"
+local function probe(source, decode, base, replacement, callee)
+    local function mutate()
+        base = replacement
+    end
+    local key = source[decode()]
+    callee(base[key])
+    return mutate
+end
+return probe
+"#);
+    assert!(out.contains("local key = source[decode()]"));
+}

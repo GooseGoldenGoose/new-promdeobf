@@ -1084,6 +1084,35 @@ fn expr_leading_use(ctx: &Ctx<'_>, expr: &Expr, target: &Range<usize>) -> bool {
     }
 }
 
+fn stable_index_key_use(
+    ctx: &Ctx<'_>,
+    expr: &Expr,
+    target: &Range<usize>,
+    block: &Block,
+    before_index: usize,
+    outer_lexical: &HashSet<String>,
+) -> bool {
+    match expr {
+        Expr::Paren { inner, .. } | Expr::TypeAssert { expr: inner, .. } => {
+            stable_index_key_use(ctx, inner, target, block, before_index, outer_lexical)
+        }
+        Expr::Index {
+            object,
+            key: IndexKey::Computed(key),
+            ..
+        } => {
+            let Expr::Name(base_span) = object.as_ref() else {
+                return false;
+            };
+            let Some(base_name) = ctx.text(*base_span) else {
+                return false;
+            };
+            name_is_immediate_stable_lexical(ctx, block, before_index, base_name, outer_lexical)
+                && expr_leading_use(ctx, key, target)
+        }
+        _ => false,
+    }
+}
 fn leading_call_base_span(ctx: &Ctx<'_>, expr: &Expr, name: &str) -> Option<TokSpan> {
     match expr {
         Expr::Paren { inner, .. } | Expr::TypeAssert { expr: inner, .. } => {
@@ -2323,7 +2352,7 @@ fn collect_low_risk_structural(
         if let (Some((producer_binding, producer_init)), Some((_consumer_binding, consumer_init))) =
             (local_single(&block.stmts[i]), local_single(next))
         {
-            if matches!(producer_init, Expr::Call { .. }) {
+            if matches!(producer_init, Expr::Call { .. } | Expr::Index { .. }) {
                 if let Expr::Index {
                     object,
                     key: IndexKey::Computed(key),
@@ -5729,7 +5758,7 @@ fn collect_block_with_tail(
             // producer is valid only with a stable lexical callee and stable earlier
             // argument snapshots. Conditional right arms remain blocked by
             // expr_leading_use.
-            if (is_scalar_temp_expr(init) || matches!(init, Expr::Call { .. }))
+            if (is_scalar_temp_expr(init) || matches!(init, Expr::Call { .. } | Expr::Index { .. }))
                 && index + 1 < block.stmts.len()
                 && !matches!(&block.stmts[index + 1], Stmt::Return(_))
             {
@@ -5768,7 +5797,17 @@ fn collect_block_with_tail(
                                                 outer_lexical,
                                             )
                                         });
-                                        if prefix_stable && expr_leading_use(ctx, argument, read) {
+                                        if prefix_stable
+                                            && (expr_leading_use(ctx, argument, read)
+                                                || stable_index_key_use(
+                                                    ctx,
+                                                    argument,
+                                                    read,
+                                                    block,
+                                                    index,
+                                                    outer_lexical,
+                                                ))
+                                        {
                                             if let Some(value) = ctx.expr_text(init) {
                                                 let replacement =
                                                     if matches!(init, Expr::Call { .. }) {
@@ -5811,8 +5850,25 @@ fn collect_block_with_tail(
                 let consumer_index = ((index + 1)..block.stmts.len())
                     .find(|candidate| stmt_contains_range(ctx, &block.stmts[*candidate], read));
                 if let Some(consumer_index) = consumer_index {
-                    let source_lines_ok = ctx.expr_text(init).is_some_and(|text| {
-                        text.lines().filter(|line| !line.trim().is_empty()).count() <= 100
+                    let source_lines_ok = ctx.range(init.span()).is_some_and(|range| {
+                        let mut bytes = ctx.src.as_bytes()[range.clone()].to_vec();
+                        for &(comment_start, comment_end) in ctx.comments {
+                            let from = (comment_start as usize).max(range.start);
+                            let to = (comment_end as usize).min(range.end);
+                            if from >= to {
+                                continue;
+                            }
+                            for byte in &mut bytes[(from - range.start)..(to - range.start)] {
+                                if *byte != b'\n' && *byte != b'\r' {
+                                    *byte = b' ';
+                                }
+                            }
+                        }
+                        String::from_utf8_lossy(&bytes)
+                            .lines()
+                            .filter(|line| !line.trim().is_empty())
+                            .count()
+                            <= 100
                     });
                     let mut outer_locals = direct_local_names_before(ctx, block, index);
                     outer_locals.extend(outer_lexical.iter().cloned());

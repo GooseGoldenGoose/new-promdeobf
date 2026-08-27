@@ -474,7 +474,7 @@ Manual usage:
 rust-optimizer\target\release\prom-rust-optimizer.exe <final-cf.lua> [optimized.lua] --max-rounds 1000
 ```
 
-The port uses `eclipse_luau` and byte-range AST edits. It runs to a parse-validated fixed point and ports the JS structural/fail-closed optimizer behavior rather than using textual substitutions. Dedicated Rust regressions are **88/88 PASS**; the full JS optimizer regression/oracle and full project gate are also passing.
+The port uses `eclipse_luau` and byte-range AST edits. It runs to a parse-validated fixed point and ports the JS structural/fail-closed optimizer behavior rather than using textual substitutions. Dedicated Rust regressions are **95/95 PASS**; the full JS optimizer regression/oracle and full project gate are also passing.
 
 Important safety/parity rules:
 - nested functions distinguish stable captured lexical bindings from globals; read-only captures are allowed only where the JS proof allows them, while nested writers block movement
@@ -485,15 +485,17 @@ Important safety/parity rules:
 - value short-circuit recovery handles branch-local simple aliases, including the Prometheus `table and table["unpack"] or unpack` shape, while preserving evaluation order
 - packed final-argument forwarding accepts proven stable outer lexical locals/read-only captures but still blocks nested writers and effectful earlier prefixes
 - self-key overwrite recovery folds local base = source; local key = scalar; key = base[key] to local key = source[scalar] only when the base snapshot has no other observable use; live-base cases remain unchanged
+- nested effectful index-key producers may fold into a following stable lexical index base, and index temps may fold into a computed key inside a call argument only when both the outer callee and the index base are proven stable lexical bindings with no nested writer
+- small-function size accounting ignores comment-only lines, matching the JS oracle so compiler `--headers` / `--body` comments do not block otherwise-safe sole-use closure inlining
 
 Final small/normal parity gates:
 - fresh samples 14/20/23 and sample 63: Rust second pass = 0 edits and JS-after-Rust = 0 transforms
 - samples 14/20/23 LuaJIT runtime stdout/exit parity passes (14 against raw CF; 20/23 against readable source because raw 20 exceeds LuaJIT's 200-local limit)
-- sample 63 Rust optimization is ~0.7 s on the current fixture; JS-after-Rust completes well below 60 s and finds 0 transforms
+- current measured Rust timings: sample 14 ~4 ms, 20 ~18 ms, 23 ~13 ms, 63 ~697 ms; JS-after-Rust timings are ~84/87/87/490 ms respectively and all find 0 transforms
 
 JS optimizer test policy from the user: do **not** run JS optimizer on `spacial6`. Sample 63 is allowed. For any other file, if a JS optimizer run exceeds 60 seconds, stop it and do not use that file with the JS optimizer again. Rust has no equivalent restriction.
 
-Fresh `spacial6` beta-CF remains 3799 states / 554 closures. With the current Rust optimizer, final `opti/spacial6.lua` is produced in **36 rounds / 37 parses**, **93,324 raw edits**, measured at **82,043 ms** on the final gate. Final size is **2,918,360 bytes**. Rust pass 2 performs 0 edits and is byte-for-byte identical; SHA-256 is `33033678EC5C7C5FC9B29BD41623BC62138CBCFF178167BB5883ED448944D266`. The final file passes the project Luau structural parser and has zero checked `RegisterOverflow[...]`, `createClosure`, `upvalueValues[...]`, `allocUpvalue(...)`, `ReturnVal =`, or `while state do` scaffold patterns.
+Fresh `spacial6` beta-CF remains 3799 states / 554 closures. With the current Rust optimizer, final `opti/spacial6.lua` is produced in **36 rounds / 37 parses**, **101,577 raw edits**, measured at **77,047 ms** on the final gate. Final size is **2,808,827 bytes**. Rust pass 2 takes about **745 ms**, performs 0 edits, and is byte-for-byte identical; SHA-256 is `488B14B5B52B8C5758A53C1E85708B956ABD5DEC7572E65FF65FA9AC5FE3C44A`. The final file passes the project Luau structural parser and has zero checked `RegisterOverflow[...]`, `createClosure`, `upvalueValues[...]`, `allocUpvalue(...)`, `ReturnVal =`, or `while state do` scaffold patterns. The reported `firesignal` chain now emits directly as `firesignal(r_v2_330[r_v2_3[r_v3_5(...)]])`.
 ## Current Immediate Beta Optimizer Checkpoint
 
 The JavaScript optimizer section below remains the semantic baseline/oracle for the active standalone optimizer work. Both JS and Rust optimizers remain experimental and standalone; do not connect either to `main.js`, canonical CF, or `deobf.bat` unless the user explicitly asks later.
