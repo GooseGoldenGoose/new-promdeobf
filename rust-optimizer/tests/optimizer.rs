@@ -101,7 +101,7 @@ local function probe(game, r_v4_874)
     local r_v2_2097 = game.PlaceId
     local r_v3_2193 = game.JobId
     local r_v6_2883 = game.Players
-    r_v4_3312(r_v1_2873, r_v2_2097, r_v3_2193, r_v6_2883.LocalPlayer)
+    local result = r_v4_3312(r_v1_2873, r_v2_2097, r_v3_2193, r_v6_2883.LocalPlayer)
 end
 "#);
     assert!(
@@ -113,6 +113,26 @@ end
     assert!(!out.contains("local r_v2_2097 ="), "{out}");
     assert!(!out.contains("local r_v3_2193 ="), "{out}");
     assert!(!out.contains("local r_v6_2883 ="), "{out}");
+}
+
+#[test]
+fn namecall_gap_allows_pure_literal_temp_reordering() {
+    let out = opt(r#"
+local function probe(service, game, decode)
+    local method = service.Run
+    local decode_alias = decode
+    local number = 7
+    local text = "key"
+    local key = decode_alias(text, number)
+    local value = game[key]
+    local result = method(service, value)
+end
+"#);
+    assert!(!out.contains("local number ="), "{out}");
+    assert!(!out.contains("local text ="), "{out}");
+    assert!(!out.contains("local value ="), "{out}");
+    assert!(out.contains("service:Run(game["), "{out}");
+    assert!(out.contains("decode"), "{out}");
 }
 
 #[test]
@@ -1733,6 +1753,18 @@ fn decodes_structurally_proven_private_string_layer() {
     assert!(out.contains("task.wait"), "{out}");
     assert!(!out.contains("5321961048494"), "{out}");
     assert!(!out.contains("\\184@\\156~"), "{out}");
+}
+
+#[test]
+fn decoder_precedes_namecall_snapshot_recovery() {
+    let source = PROM_DECODER_FIXTURE.replace(
+        "return task[proxy[decoder(\"\\184@\\156~\", 5321961048494)]]",
+        "local service = {}\nlocal method = service.Run\nlocal value = task[proxy[decoder(\"\\184@\\156~\", 5321961048494)]]\nmethod(service, value)\nreturn true",
+    );
+    let out = opt(&source);
+    assert!(out.contains("service:Run(task.wait)"), "{out}");
+    assert!(!out.contains("local value = task.wait"), "{out}");
+    assert!(!out.contains("5321961048494"), "{out}");
 }
 
 #[test]

@@ -5455,13 +5455,175 @@ fn reconstruct_call_without_first(
     Some(format!("{}:{}({})", base, method, rest.join(", ")))
 }
 
-fn reconstruct_namecall_with_gap_index_args(
+fn expr_contains_gap_def(
     ctx: &Ctx<'_>,
-    block: &Block,
+    expr: &Expr,
+    defs: &HashMap<String, &Expr>,
+) -> bool {
+    defs.keys().any(|name| expr_contains_name(ctx, expr, name))
+}
+
+fn collect_namecall_gap_eval_order<'a>(
+    ctx: &Ctx<'_>,
+    expr: &'a Expr,
+    defs: &HashMap<String, &'a Expr>,
+    def_order: &HashMap<String, usize>,
+    before_def: Option<usize>,
+    stack: &mut HashSet<String>,
+    counts: &mut HashMap<String, usize>,
+    order: &mut Vec<String>,
+) -> bool {
+    if let Expr::Name(span) = expr {
+        let Some(name) = ctx.text(*span) else {
+            return true;
+        };
+        let Some(def) = defs.get(name) else {
+            return true;
+        };
+        let Some(&index) = def_order.get(name) else {
+            return false;
+        };
+        if before_def.is_some_and(|limit| index >= limit) {
+            return false;
+        }
+        *counts.entry(name.to_string()).or_default() += 1;
+        if !stack.insert(name.to_string()) {
+            return false;
+        }
+        if !collect_namecall_gap_eval_order(
+            ctx,
+            def,
+            defs,
+            def_order,
+            Some(index),
+            stack,
+            counts,
+            order,
+        ) {
+            return false;
+        }
+        stack.remove(name);
+        if !is_pure_literal(def) {
+            order.push(name.to_string());
+        }
+        return true;
+    }
+
+    match expr {
+        Expr::Paren { inner, .. }
+        | Expr::TypeAssert { expr: inner, .. }
+        | Expr::Unary { operand: inner, .. } => collect_namecall_gap_eval_order(
+            ctx, inner, defs, def_order, before_def, stack, counts, order,
+        ),
+        Expr::Index { object, key, .. } => {
+            collect_namecall_gap_eval_order(
+                ctx, object, defs, def_order, before_def, stack, counts, order,
+            ) && match key {
+                IndexKey::Field(_) => true,
+                IndexKey::Computed(key) => collect_namecall_gap_eval_order(
+                    ctx, key, defs, def_order, before_def, stack, counts, order,
+                ),
+            }
+        }
+        Expr::Call { func, args, .. } => {
+            if !collect_namecall_gap_eval_order(
+                ctx, func, defs, def_order, before_def, stack, counts, order,
+            ) {
+                return false;
+            }
+            match args {
+                CallArgs::Paren(values) => values.iter().all(|value| {
+                    collect_namecall_gap_eval_order(
+                        ctx, value, defs, def_order, before_def, stack, counts, order,
+                    )
+                }),
+                // A table-constructor call argument has language-specific field
+                // evaluation details. Keep gap-local movement out of that shape.
+                CallArgs::Table(value) => !expr_contains_gap_def(ctx, value, defs),
+                CallArgs::Str(_) => true,
+            }
+        }
+        Expr::Binary { op, lhs, rhs, .. } => {
+            if !collect_namecall_gap_eval_order(
+                ctx, lhs, defs, def_order, before_def, stack, counts, order,
+            ) {
+                return false;
+            }
+            if matches!(ctx.text(*op), Some("and") | Some("or")) {
+                // Gap locals were evaluated unconditionally before the call. Never
+                // move one into a conditional right arm.
+                !expr_contains_gap_def(ctx, rhs, defs)
+            } else {
+                collect_namecall_gap_eval_order(
+                    ctx, rhs, defs, def_order, before_def, stack, counts, order,
+                )
+            }
+        }
+        Expr::Table { .. } | Expr::IfElse { .. } | Expr::Function { .. } => {
+            !expr_contains_gap_def(ctx, expr, defs)
+        }
+        _ => !expr_contains_gap_def(ctx, expr, defs),
+    }
+}
+
+fn render_namecall_gap_expr<'a>(
+    ctx: &Ctx<'_>,
+    expr: &'a Expr,
+    defs: &HashMap<String, &'a Expr>,
+    use_counts: &mut HashMap<String, usize>,
+    stack: &mut HashSet<String>,
+) -> Option<String> {
+    let base_range = ctx.range(expr.span())?;
+    let wanted = defs.keys().cloned().collect::<HashSet<_>>();
+    let mut hits = Vec::new();
+    collect_name_ranges(expr, ctx, &wanted, &mut hits);
+    if hits.is_empty() {
+        return ctx.expr_text(expr).map(str::to_string);
+    }
+
+    let mut replacements = Vec::new();
+    for (range, name) in hits {
+        if range.start < base_range.start || range.end > base_range.end {
+            continue;
+        }
+        *use_counts.entry(name.clone()).or_default() += 1;
+        if !stack.insert(name.clone()) {
+            return None;
+        }
+        let def = *defs.get(&name)?;
+        let rendered = render_namecall_gap_expr(ctx, def, defs, use_counts, stack)?;
+        stack.remove(&name);
+        let replacement = match unwrap_parens(def) {
+            Expr::Name(_)
+            | Expr::Index { .. }
+            | Expr::Nil(_)
+            | Expr::True(_)
+            | Expr::False(_)
+            | Expr::Number(_)
+            | Expr::String(_) => rendered,
+            _ => format!("({rendered})"),
+        };
+        replacements.push((
+            range.start - base_range.start,
+            range.end - base_range.start,
+            replacement,
+        ));
+    }
+    replacements.sort_by_key(|x| x.0);
+    let mut text = ctx.src.get(base_range)?.to_string();
+    for (start, end, replacement) in replacements.into_iter().rev() {
+        text.replace_range(start..end, &replacement);
+    }
+    Some(text)
+}
+
+fn reconstruct_namecall_with_gap_index_args<'a>(
+    ctx: &Ctx<'_>,
+    block: &'a Block,
     usage_index: &UsageIndex,
     method_index: usize,
     consumer_index: usize,
-    call: &Expr,
+    call: &'a Expr,
     base: &str,
     method: &str,
 ) -> Option<(String, Vec<Range<usize>>)> {
@@ -5475,58 +5637,95 @@ fn reconstruct_namecall_with_gap_index_args(
     }
 
     let gap = block.stmts.get(method_index + 1..consumer_index)?;
-    if gap.is_empty() || gap.len() > args.len() - 1 {
+    if gap.is_empty() {
         return None;
     }
 
-    let mut rendered = args
-        .iter()
-        .skip(1)
-        .map(|arg| ctx.expr_text(arg).map(str::to_owned))
-        .collect::<Option<Vec<_>>>()?;
+    let mut defs: HashMap<String, &Expr> = HashMap::new();
+    let mut def_order = HashMap::new();
+    let mut gap_order = Vec::with_capacity(gap.len());
+    let mut effect_order = Vec::with_capacity(gap.len());
     let mut removed = Vec::with_capacity(gap.len());
-
-    for (producer_offset, stmt) in gap.iter().enumerate() {
+    for (index, stmt) in gap.iter().enumerate() {
         let (binding, init) = local_single(stmt)?;
-        if !matches!(init, Expr::Index { .. }) {
+        let name = ctx.text(binding.name)?.to_string();
+        if defs.insert(name.clone(), init).is_some() {
             return None;
         }
-        let producer_name = ctx.text(binding.name)?;
+        def_order.insert(name.clone(), index);
+        gap_order.push(name.clone());
+        if !is_pure_literal(init) {
+            effect_order.push(name.clone());
+        }
         let stmt_range = ctx.stmt_range(stmt)?;
-        let usage = usage_index.usage_after(producer_name, stmt_range.end);
+        let usage = usage_index.usage_after(&name, stmt_range.end);
         if usage.reads.len() != 1 || usage.writes != 0 || usage.redeclared || usage.captured {
             return None;
         }
-        let read = &usage.reads[0];
+        removed.push(stmt_range);
+    }
 
-        // The generated method capture executes before these producer locals.
-        // Rebuilding a namecall keeps method lookup before argument evaluation, so
-        // producer effects remain ordered only when the producer locals feed the
-        // call arguments consecutively in the same left-to-right order.
-        let arg_index = producer_offset + 1;
-        let arg = args.get(arg_index)?;
-        if !expr_span_contains_range(ctx, arg, read) || !expr_leading_use(ctx, arg, read) {
+    // Prove that expanding the gap locals into the call evaluates every local
+    // initializer exactly once and in the same statement order. This handles the
+    // compiler's alias/index/decode chains without hardcoding any names or keys.
+    let mut eval_order = Vec::new();
+    let mut eval_counts = HashMap::new();
+    let mut stack = HashSet::new();
+    let call_args = &args[1..];
+    for (arg_index, arg) in call_args.iter().enumerate() {
+        let before = eval_order.len();
+        if !collect_namecall_gap_eval_order(
+            ctx,
+            arg,
+            &defs,
+            &def_order,
+            None,
+            &mut stack,
+            &mut eval_counts,
+            &mut eval_order,
+        ) {
             return None;
         }
-        let direct_arg = name_of_expr(ctx, arg) == Some(producer_name);
-        if !direct_arg && producer_offset + 1 != gap.len() {
-            return None;
-        }
-
-        let init_text = ctx.expr_text(init)?;
-        if direct_arg {
-            rendered[arg_index - 1] = init_text.to_string();
-        } else {
-            let arg_range = ctx.range(arg.span())?;
-            let rel_start = read.start.checked_sub(arg_range.start)?;
-            let rel_end = read.end.checked_sub(arg_range.start)?;
-            let slot = rendered.get_mut(arg_index - 1)?;
-            if rel_start > rel_end || rel_end > slot.len() {
+        if eval_order.len() != before {
+            let direct_gap_name = name_of_expr(ctx, arg).is_some_and(|name| defs.contains_key(name));
+            if !direct_gap_name
+                && call_args[arg_index + 1..]
+                    .iter()
+                    .any(|later| expr_contains_gap_def(ctx, later, &defs))
+            {
+                // Keep the previous conservative barrier: a nested/partial use may
+                // only be the final gap-fed argument.
                 return None;
             }
-            slot.replace_range(rel_start..rel_end, init_text);
         }
-        removed.push(stmt_range);
+    }
+    if eval_order != effect_order {
+        return None;
+    }
+    if gap_order
+        .iter()
+        .any(|name| eval_counts.get(name).copied().unwrap_or(0) != 1)
+    {
+        return None;
+    }
+
+    let mut rendered = Vec::with_capacity(call_args.len());
+    let mut render_counts = HashMap::new();
+    for arg in call_args {
+        let mut render_stack = HashSet::new();
+        rendered.push(render_namecall_gap_expr(
+            ctx,
+            arg,
+            &defs,
+            &mut render_counts,
+            &mut render_stack,
+        )?);
+    }
+    if gap_order
+        .iter()
+        .any(|name| render_counts.get(name).copied().unwrap_or(0) != 1)
+    {
+        return None;
     }
 
     Some((
@@ -6912,25 +7111,17 @@ pub fn optimize(source: &str, max_rounds: usize) -> Result<(String, Stats)> {
             edit_intervals: RefCell::new(BTreeMap::new()),
         };
         let mut edits = Vec::new();
-        let root_env = resolve_env_start(&ctx, &parsed.chunk.block, false);
-        let root_lexical = HashSet::new();
-        let root_usage = build_usage_index(&ctx, &parsed.chunk.block);
-        collect_block(
-            &ctx,
+        // Once the private Prometheus string layer is structurally proven, expose
+        // decoded indexes before ordinary source recovery can consume ordering proof
+        // such as a method capture that precedes compiler-generated argument temps.
+        // If the decoder is not proven yet, normal cleanup continues until a later
+        // round exposes the layer.
+        let decoded = string_decoder::collect_decoded_string_edits(
+            &current,
             &parsed.chunk.block,
-            &mut edits,
-            true,
-            root_env,
-            &root_lexical,
-            &root_usage,
-            false,
+            &parsed.lexed.toks,
         );
-        if edits.is_empty() {
-            let decoded = string_decoder::collect_decoded_string_edits(
-                &current,
-                &parsed.chunk.block,
-                &parsed.lexed.toks,
-            );
+        if !decoded.is_empty() {
             for decoded_edit in decoded {
                 add_edit(
                     &ctx,
@@ -6947,10 +7138,24 @@ pub fn optimize(source: &str, max_rounds: usize) -> Result<(String, Stats)> {
                     },
                 );
             }
-            if edits.is_empty() {
-                stats.rounds = round;
-                return Ok((current, stats));
-            }
+        } else {
+            let root_env = resolve_env_start(&ctx, &parsed.chunk.block, false);
+            let root_lexical = HashSet::new();
+            let root_usage = build_usage_index(&ctx, &parsed.chunk.block);
+            collect_block(
+                &ctx,
+                &parsed.chunk.block,
+                &mut edits,
+                true,
+                root_env,
+                &root_lexical,
+                &root_usage,
+                false,
+            );
+        }
+        if edits.is_empty() {
+            stats.rounds = round;
+            return Ok((current, stats));
         }
         current = apply_edits(&current, edits, &mut stats)?;
         stats.rounds = round + 1;
