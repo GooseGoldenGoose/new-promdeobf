@@ -2451,6 +2451,87 @@ fn stable_prefix_expr_with_outer(
     }
 }
 
+fn relaxed_static_field_snapshot_expr(
+    ctx: &Ctx<'_>,
+    expr: &Expr,
+    block: &Block,
+    before_index: usize,
+    outer_lexical: &HashSet<String>,
+) -> bool {
+    fn stable_field_object(
+        ctx: &Ctx<'_>,
+        expr: &Expr,
+        block: &Block,
+        before_index: usize,
+        outer_lexical: &HashSet<String>,
+    ) -> bool {
+        match expr {
+            Expr::Paren { inner, .. } | Expr::TypeAssert { expr: inner, .. } => {
+                stable_field_object(ctx, inner, block, before_index, outer_lexical)
+            }
+            Expr::Name(span) => ctx.text(*span).is_some_and(|name| {
+                name_is_immediate_stable_lexical(ctx, block, before_index, name, outer_lexical)
+            }),
+            Expr::Index {
+                object,
+                key: IndexKey::Field(_),
+                ..
+            } => stable_field_object(ctx, object, block, before_index, outer_lexical),
+            _ => false,
+        }
+    }
+
+    fn walk(
+        ctx: &Ctx<'_>,
+        expr: &Expr,
+        block: &Block,
+        before_index: usize,
+        outer_lexical: &HashSet<String>,
+        has_field: &mut bool,
+    ) -> bool {
+        match expr {
+            Expr::Paren { inner, .. } | Expr::TypeAssert { expr: inner, .. } => {
+                walk(ctx, inner, block, before_index, outer_lexical, has_field)
+            }
+            Expr::Nil(_) | Expr::True(_) | Expr::False(_) | Expr::Number(_) | Expr::String(_) => {
+                true
+            }
+            Expr::Name(span) => ctx.text(*span).is_some_and(|name| {
+                name_is_immediate_stable_lexical(ctx, block, before_index, name, outer_lexical)
+            }),
+            Expr::Index {
+                object,
+                key: IndexKey::Field(_),
+                ..
+            } => {
+                if stable_field_object(ctx, object, block, before_index, outer_lexical) {
+                    *has_field = true;
+                    true
+                } else {
+                    false
+                }
+            }
+            Expr::Binary { op, lhs, rhs, .. }
+                if matches!(ctx.text(*op), Some("and") | Some("or")) =>
+            {
+                walk(ctx, lhs, block, before_index, outer_lexical, has_field)
+                    && walk(ctx, rhs, block, before_index, outer_lexical, has_field)
+            }
+            _ => false,
+        }
+    }
+
+    let mut has_field = false;
+    walk(
+        ctx,
+        expr,
+        block,
+        before_index,
+        outer_lexical,
+        &mut has_field,
+    ) && has_field
+}
+
 fn name_is_stable_local(
     ctx: &Ctx<'_>,
     block: &Block,

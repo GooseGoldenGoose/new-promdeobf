@@ -2656,3 +2656,51 @@ return probe
 "#);
     assert!(out.contains("value = nil"), "{out}");
 }
+#[test]
+fn global_alias_inlines_into_immediate_field_assignment() {
+    let out = opt(r#"
+local env = _G
+env.auto_executed = true
+"#);
+    assert!(!out.contains("local env = _G"), "{out}");
+    assert!(out.contains("_G.auto_executed = true"), "{out}");
+}
+
+#[test]
+fn static_field_fallback_snapshot_inlines_into_calls() {
+    let out = opt(r#"
+local function probe(profile, widget, sink)
+    local image = profile.toggle_img_url or ""
+    widget:Set(image)
+    local font = profile.ui_font or "Gotham Bold"
+    sink(font)
+end
+"#);
+    assert!(!out.contains("local image ="), "{out}");
+    assert!(!out.contains("local font ="), "{out}");
+    assert!(out.contains("widget:Set(profile.toggle_img_url or \"\")"), "{out}");
+    assert!(out.contains("sink(profile.ui_font or \"Gotham Bold\")"), "{out}");
+}
+
+#[test]
+fn static_field_fallback_snapshot_keeps_computed_and_effectful_prefix_cases() {
+    let out = opt(r#"
+local function probe(profile, key, widget, effect)
+    local computed = profile[key()] or ""
+    widget:Set(computed)
+    local font = profile.ui_font or "Gotham Bold"
+    widget:Set(effect(), font)
+end
+"#);
+    assert!(out.contains("local computed ="), "{out}");
+    assert!(out.contains("local font ="), "{out}");
+}
+
+#[test]
+fn global_alias_field_assignment_keeps_effectful_rhs() {
+    let out = opt(r#"
+local env = GLOBAL_ENV
+env.value = mutate()
+"#);
+    assert!(out.contains("local env = GLOBAL_ENV"), "{out}");
+}

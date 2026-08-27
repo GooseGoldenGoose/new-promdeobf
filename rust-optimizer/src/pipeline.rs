@@ -770,7 +770,22 @@ fn collect_block_with_tail(
                             && (!is_repeated_evaluation_statement(&block.stmts[consumer_index])
                                 || immediate_generic_iterator_call_base)
                             && barrier_free(block, index, consumer_index);
-                        if call_safe || immediate_generic_iterator_use {
+                        let immediate_field_assignment_use = consumer_index == index + 1
+                            && direct_assignment_target_base_name_span(
+                                ctx,
+                                &block.stmts[consumer_index],
+                                name,
+                            )
+                            .and_then(|span| ctx.range(span))
+                            .is_some_and(|range| range == *read)
+                            && matches!(
+                                &block.stmts[consumer_index],
+                                Stmt::Assign(node) if node.values.iter().all(is_no_effect_expr)
+                            );
+                        if call_safe
+                            || immediate_generic_iterator_use
+                            || immediate_field_assignment_use
+                        {
                             if add_group(
                                 ctx,
                                 edits,
@@ -801,7 +816,16 @@ fn collect_block_with_tail(
             // producer is valid only with a stable lexical callee and stable earlier
             // argument snapshots. Conditional right arms remain blocked by
             // expr_leading_use.
-            if (is_scalar_temp_expr(init) || matches!(init, Expr::Call { .. } | Expr::Index { .. }))
+            let relaxed_field_snapshot = relaxed_static_field_snapshot_expr(
+                ctx,
+                init,
+                block,
+                index,
+                outer_lexical,
+            );
+            if (is_scalar_temp_expr(init)
+                || matches!(init, Expr::Call { .. } | Expr::Index { .. })
+                || relaxed_field_snapshot)
                 && index + 1 < block.stmts.len()
                 && !matches!(&block.stmts[index + 1], Stmt::Return(_))
             {
@@ -810,7 +834,8 @@ fn collect_block_with_tail(
                 {
                     if let Some((func, method, args_node)) = call_parts(call) {
                         let allow_method_field_snapshot = method.is_some()
-                            && matches!(init, Expr::Index { key: IndexKey::Field(_), .. });
+                            && (matches!(init, Expr::Index { key: IndexKey::Field(_), .. })
+                                || relaxed_field_snapshot);
                         if method.is_none() || allow_method_field_snapshot {
                             if let (Some(base), Some(args)) =
                                 (name_of_expr(ctx, func), paren_args(args_node))
