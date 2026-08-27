@@ -1650,6 +1650,27 @@ fn decodes_structurally_proven_private_string_layer() {
 }
 
 #[test]
+fn decoder_named_private_proxy_backing_table_is_folded() {
+    let source = PROM_DECODER_FIXTURE.replace(
+        "proxy = setmetatable({}, {",
+        "local proxy_backing = {}\nproxy = setmetatable(proxy_backing, {",
+    );
+    let out = opt(&source);
+    assert!(out.contains("task.wait"), "{out}");
+    assert!(!out.contains("5321961048494"), "{out}");
+}
+
+#[test]
+fn decoder_named_proxy_backing_table_escape_is_blocked() {
+    let source = PROM_DECODER_FIXTURE.replace(
+        "proxy = setmetatable({}, {",
+        "local proxy_backing = {}\nobserve(proxy_backing)\nproxy = setmetatable(proxy_backing, {",
+    );
+    let out = opt(&source);
+    assert!(out.contains("5321961048494"), "{out}");
+}
+
+#[test]
 fn decoder_assignment_aliases_are_discovered() {
     let source = PROM_DECODER_FIXTURE.replace(
         "return task[proxy[decoder(\"\\184@\\156~\", 5321961048494)]]",

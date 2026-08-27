@@ -1709,6 +1709,48 @@ fn cache_from_meta(c: &Ctx<'_>, e: &Expr) -> Option<String> {
     }
     z
 }
+fn proven_private_empty_table_arg(c: &Ctx<'_>, b: &Block, expr: &Expr) -> bool {
+    if matches!(unwrap(expr), Expr::Table { fields, .. } if fields.is_empty()) {
+        return true;
+    }
+    let Some(alias) = name(c, expr) else {
+        return false;
+    };
+    let Some((decl, decl_range)) = direct_local_decl(c, b, alias) else {
+        return false;
+    };
+    if decl.values.len() != 1 || !empty_table_expr(&decl.values[0]) {
+        return false;
+    }
+    let (Some(binding_range), Some(arg_range), Some(scope_range)) = (
+        c.range(decl.names[0].name),
+        c.range(expr.span()),
+        c.range(b.span),
+    ) else {
+        return false;
+    };
+    if decl_range.end > arg_range.start {
+        return false;
+    }
+
+    let occurrences: Vec<_> = c
+        .toks
+        .iter()
+        .filter(|tok| {
+            let start = tok.start as usize;
+            let end = tok.end as usize;
+            start >= scope_range.start && end <= scope_range.end && tok.text(c.src) == alias
+        })
+        .collect();
+    occurrences.len() == 2
+        && occurrences.iter().all(|tok| {
+            let start = tok.start as usize;
+            let end = tok.end as usize;
+            (start >= binding_range.start && end <= binding_range.end)
+                || (start >= arg_range.start && end <= arg_range.end)
+        })
+}
+
 fn proxy_cache(c: &Ctx<'_>, b: &Block, p: &str) -> Option<(String, Range<usize>)> {
     let mut found = None;
     for s in &b.stmts {
@@ -1736,14 +1778,13 @@ fn proxy_cache(c: &Ctx<'_>, b: &Block, p: &str) -> Option<(String, Range<usize>)
             continue;
         }
         let call_args = args(call_args)?;
-        if call_args.len() != 2
-            || !matches!(unwrap(&call_args[0]), Expr::Table { fields, .. } if fields.is_empty())
-        {
+        if call_args.len() != 2 || !proven_private_empty_table_arg(c, b, &call_args[0]) {
             continue;
         }
         // Decode recovery runs only after ordinary structural folding reaches a
-        // fixed point. Requiring an inline metatable here avoids accepting cache
-        // aliases whose identity could escape through another local.
+        // fixed point. A named backing table is accepted only when it is a fresh
+        // empty direct local whose only two identifier occurrences are its
+        // declaration and this setmetatable argument, so its identity cannot escape.
         let Expr::Table { .. } = unwrap(&call_args[1]) else {
             continue;
         };
