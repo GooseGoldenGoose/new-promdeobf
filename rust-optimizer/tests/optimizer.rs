@@ -302,6 +302,234 @@ end
 }
 
 #[test]
+fn ordered_call_results_inline_into_table_constructor() {
+    let out = opt(r#"
+local function probe(f)
+    local a = f(1)
+    local b = f(2)
+    local alias = f
+    local tail = { alias(3) }
+    local out = { a, b, unpack(tail) }
+    return out
+end
+"#);
+    assert!(!out.contains("local a ="), "{out}");
+    assert!(!out.contains("local b ="), "{out}");
+    assert!(!out.contains("local tail ="), "{out}");
+    assert!(out.contains("f(1)"), "{out}");
+    assert!(out.contains("f(2)"), "{out}");
+    assert!(out.contains("f(3)"), "{out}");
+}
+
+#[test]
+fn table_constructor_call_batch_preserves_producer_order() {
+    let out = opt(r#"
+local function probe(f)
+    local a = f(1)
+    local b = f(2)
+    local out = { b, a }
+    return out
+end
+"#);
+    assert!(out.contains("local a = f(1)"), "{out}");
+    assert!(out.contains("local b = f(2)"), "{out}");
+}
+
+#[test]
+fn packed_table_tail_does_not_cross_prior_field_effect() {
+    let out = opt(r#"
+local function probe(f, g)
+    local tail = { f() }
+    local out = { g(), unpack(tail) }
+    return out
+end
+"#);
+    assert!(out.contains("local tail ="), "{out}");
+    assert!(out.contains("unpack(tail)"), "{out}");
+}
+
+#[test]
+fn table_constructor_batch_preserves_prior_captured_read_timing() {
+    let out = opt(r#"
+local function probe()
+    local observed = 0
+    local function produce()
+        observed = 1
+        return 5
+    end
+    local value = produce()
+    local out = { observed, value }
+    return out
+end
+"#);
+    assert!(out.contains("local value = produce()"), "{out}");
+    assert!(out.contains("{ observed, value }"), "{out}");
+}
+
+#[test]
+fn table_constructor_call_batch_does_not_cross_prior_field_effect() {
+    let out = opt(r#"
+local function probe(f, g)
+    local a = f(1)
+    local b = f(2)
+    local out = { g(), a, b }
+    return out
+end
+"#);
+    assert!(out.contains("local a = f(1)"), "{out}");
+    assert!(out.contains("local b = f(2)"), "{out}");
+}
+
+#[test]
+fn adjacent_index_snapshot_inlines_into_leading_assignment_rhs() {
+    let out = opt(r#"
+local function probe(game)
+    local result
+    local wave = game.ReplicatedStorage.WaveValue
+    result = wave.Value
+    return result
+end
+"#);
+    assert!(!out.contains("local wave ="), "{out}");
+    assert!(
+        out.contains("result = game.ReplicatedStorage.WaveValue.Value"),
+        "{out}"
+    );
+}
+
+#[test]
+fn adjacent_index_snapshot_does_not_cross_prior_rhs_effect() {
+    let out = opt(r#"
+local function probe(game)
+    local result
+    local wave = game.ReplicatedStorage.WaveValue
+    result = before() + wave.Value
+    return result
+end
+"#);
+    assert!(out.contains("local wave = game.ReplicatedStorage.WaveValue"), "{out}");
+}
+
+#[test]
+fn nested_pass_self_call_recovers_namecall() {
+    let out = opt(r#"
+local function probe(obj, each)
+    local method = obj.GetChildren
+    local a, b, c = each(method(obj))
+    return a, b, c
+end
+"#);
+    assert!(!out.contains("local method ="), "{out}");
+    assert!(out.contains("each(obj:GetChildren())"), "{out}");
+}
+
+#[test]
+fn nested_pass_self_call_requires_same_base() {
+    let out = opt(r#"
+local function probe(obj, other, each)
+    local method = obj.GetChildren
+    local a, b, c = each(method(other))
+    return a, b, c
+end
+"#);
+    assert!(!out.contains("obj:GetChildren()"), "{out}");
+    assert!(out.contains("obj.GetChildren(other)"), "{out}");
+}
+
+#[test]
+fn generic_for_header_alias_allows_loop_variable_shadow() {
+    let out = opt(r#"
+local function probe(t)
+    local iterator = pairs
+    for iterator, value in iterator(t) do
+        consume(iterator, value)
+    end
+end
+"#);
+    assert!(!out.contains("local iterator = pairs"), "{out}");
+    assert!(out.contains("for iterator, value in pairs(t) do"), "{out}");
+}
+
+#[test]
+fn generic_for_header_alias_keeps_outer_alias_with_later_use() {
+    let out = opt(r#"
+local function probe(t)
+    local iterator = pairs
+    for iterator, value in iterator(t) do
+        consume(iterator, value)
+    end
+    consume(iterator)
+end
+"#);
+    assert!(out.contains("local iterator = pairs"), "{out}");
+}
+
+#[test]
+fn nested_namecall_tuple_and_iterator_alias_reach_direct_generic_for() {
+    let out = opt(r#"
+local function probe(obj)
+    local method = obj.GetChildren
+    local iter, state, control = pairs(method(obj))
+    local iter_alias = iter
+    for key, value in iter_alias, state, control do
+        consume(key, value)
+    end
+end
+"#);
+    assert!(!out.contains("local method ="), "{out}");
+    assert!(!out.contains("local iter, state, control"), "{out}");
+    assert!(!out.contains("local iter_alias ="), "{out}");
+    assert!(out.contains("for key, value in pairs(obj:GetChildren()) do"), "{out}");
+}
+
+#[test]
+fn packed_generic_for_argument_and_iterator_alias_collapse() {
+    let out = opt(r#"
+local function probe(obj)
+    local iterator = pairs
+    local packed = { obj:GetChildren() }
+    for key, value in iterator(unpack(packed)) do
+        consume(key, value)
+    end
+end
+"#);
+    assert!(!out.contains("local iterator = pairs"), "{out}");
+    assert!(!out.contains("local packed ="), "{out}");
+    assert!(!out.contains("unpack(packed)"), "{out}");
+    assert!(out.contains("for key, value in pairs(obj:GetChildren()) do"), "{out}");
+}
+
+#[test]
+fn packed_generic_for_argument_respects_shadowed_unpack() {
+    let out = opt(r#"
+local function probe(obj, unpack)
+    local iterator = pairs
+    local packed = { obj:GetChildren() }
+    for key, value in iterator(unpack(packed)) do
+        consume(key, value)
+    end
+end
+"#);
+    assert!(out.contains("local packed = { obj:GetChildren() }"), "{out}");
+    assert!(out.contains("unpack(packed)"), "{out}");
+}
+
+#[test]
+fn packed_generic_for_argument_keeps_escaping_pack() {
+    let out = opt(r#"
+local function probe(obj)
+    local iterator = pairs
+    local packed = { obj:GetChildren() }
+    observe(packed)
+    for key, value in iterator(unpack(packed)) do
+        consume(key, value)
+    end
+end
+"#);
+    assert!(out.contains("local packed = { obj:GetChildren() }"), "{out}");
+}
+
+#[test]
 fn second_pass_is_fixed_point() {
     let first = opt("local a = 1\nlocal b = a\nreturn b\n");
     let (second, stats) = optimize(&first, 30).expect("second pass failed");
@@ -1319,6 +1547,18 @@ end
 "#);
     assert!(!out.contains("local iterator = next"));
     assert!(out.contains("for k, v in next, t, nil do"));
+}
+
+#[test]
+fn global_alias_immediate_generic_iterator_call_base_recovers() {
+    let out = opt(r#"
+local iterator = pairs
+for k, v in iterator(t) do
+    print(k, v)
+end
+"#);
+    assert!(!out.contains("local iterator = pairs"), "{out}");
+    assert!(out.contains("for k, v in pairs(t) do"), "{out}");
 }
 
 #[test]

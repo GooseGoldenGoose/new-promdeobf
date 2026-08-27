@@ -39,6 +39,7 @@ pub struct Stats {
     pub assignment_key_inlines: usize,
     pub dependency_assignment_key_inlines: usize,
     pub table_constructor_key_inlines: usize,
+    pub table_constructor_value_inlines: usize,
     pub table_call_argument_inlines: usize,
     pub repeat_tail_inlines: usize,
     pub multi_return_table_collapses: usize,
@@ -96,6 +97,7 @@ enum EditKind {
     AssignmentKeyInline,
     DependencyAssignmentKeyInline,
     TableConstructorKeyInline,
+    TableConstructorValueInline,
     TableCallArgumentInline,
     RepeatTailInline,
     MultiReturnCollapse,
@@ -1391,6 +1393,100 @@ fn call_expr_whole(stmt: &Stmt) -> Option<&Expr> {
         Stmt::Return(n) if n.values.len() == 1 && matches!(n.values[0], Expr::Call { .. }) => {
             Some(&n.values[0])
         }
+        _ => None,
+    }
+}
+
+fn find_direct_call_by_func_range_in_expr<'a>(
+    ctx: &Ctx<'_>,
+    expr: &'a Expr,
+    target: &Range<usize>,
+) -> Option<&'a Expr> {
+    match expr {
+        Expr::Function { .. } => None,
+        Expr::Call { func, args, .. } => {
+            if ctx.range(func.span()).is_some_and(|range| range == *target) {
+                return Some(expr);
+            }
+            if let Some(found) = find_direct_call_by_func_range_in_expr(ctx, func, target) {
+                return Some(found);
+            }
+            match args {
+                CallArgs::Paren(values) => values
+                    .iter()
+                    .find_map(|value| find_direct_call_by_func_range_in_expr(ctx, value, target)),
+                CallArgs::Table(value) => find_direct_call_by_func_range_in_expr(ctx, value, target),
+                CallArgs::Str(_) => None,
+            }
+        }
+        Expr::Table { fields, .. } => fields.iter().find_map(|field| match field {
+            TableField::Positional(value) | TableField::Named { value, .. } => {
+                find_direct_call_by_func_range_in_expr(ctx, value, target)
+            }
+            TableField::Computed { key, value } => find_direct_call_by_func_range_in_expr(ctx, key, target)
+                .or_else(|| find_direct_call_by_func_range_in_expr(ctx, value, target)),
+        }),
+        Expr::Binary { lhs, rhs, .. } => find_direct_call_by_func_range_in_expr(ctx, lhs, target)
+            .or_else(|| find_direct_call_by_func_range_in_expr(ctx, rhs, target)),
+        Expr::Unary { operand, .. }
+        | Expr::Paren { inner: operand, .. }
+        | Expr::TypeAssert { expr: operand, .. } => {
+            find_direct_call_by_func_range_in_expr(ctx, operand, target)
+        }
+        Expr::Index { object, key, .. } => find_direct_call_by_func_range_in_expr(ctx, object, target)
+            .or_else(|| match key {
+                IndexKey::Field(_) => None,
+                IndexKey::Computed(key) => find_direct_call_by_func_range_in_expr(ctx, key, target),
+            }),
+        Expr::IfElse {
+            branches,
+            else_value,
+            ..
+        } => branches
+            .iter()
+            .find_map(|(condition, value)| {
+                find_direct_call_by_func_range_in_expr(ctx, condition, target)
+                    .or_else(|| find_direct_call_by_func_range_in_expr(ctx, value, target))
+            })
+            .or_else(|| find_direct_call_by_func_range_in_expr(ctx, else_value, target)),
+        _ => None,
+    }
+}
+
+fn find_direct_call_by_func_range_in_stmt<'a>(
+    ctx: &Ctx<'_>,
+    stmt: &'a Stmt,
+    target: &Range<usize>,
+) -> Option<&'a Expr> {
+    match stmt {
+        Stmt::Local(node) => node
+            .values
+            .iter()
+            .find_map(|expr| find_direct_call_by_func_range_in_expr(ctx, expr, target)),
+        Stmt::Assign(node) => node
+            .values
+            .iter()
+            .find_map(|expr| find_direct_call_by_func_range_in_expr(ctx, expr, target)),
+        Stmt::Call(expr, _) => find_direct_call_by_func_range_in_expr(ctx, expr, target),
+        Stmt::Return(node) => node
+            .values
+            .iter()
+            .find_map(|expr| find_direct_call_by_func_range_in_expr(ctx, expr, target)),
+        Stmt::If(node) => node
+            .branches
+            .iter()
+            .find_map(|(condition, _)| find_direct_call_by_func_range_in_expr(ctx, condition, target)),
+        Stmt::GenericFor(node) => node
+            .exprs
+            .iter()
+            .find_map(|expr| find_direct_call_by_func_range_in_expr(ctx, expr, target)),
+        Stmt::NumericFor(node) => find_direct_call_by_func_range_in_expr(ctx, &node.start, target)
+            .or_else(|| find_direct_call_by_func_range_in_expr(ctx, &node.limit, target))
+            .or_else(|| {
+                node.step
+                    .as_ref()
+                    .and_then(|expr| find_direct_call_by_func_range_in_expr(ctx, expr, target))
+            }),
         _ => None,
     }
 }
@@ -3147,6 +3243,468 @@ fn collect_low_risk_structural(
             add_group(ctx, edits, group);
         }
     }
+    // Contiguous single-use local dependency program feeding one table constructor.
+    // Expand the whole program together and require the runtime evaluation order of
+    // every non-literal producer to match its original statement order exactly.
+    for consumer_index in 1..block.stmts.len() {
+        let Some((_consumer_binding, consumer_init)) = local_single(&block.stmts[consumer_index]) else {
+            continue;
+        };
+        let Expr::Table { fields, .. } = consumer_init else {
+            continue;
+        };
+        // A one-call table is a compiler multi-return pack. Leave it entirely to
+        // the dedicated packed-return/multi-return passes so their native-return
+        // proof is not weakened by generic dependency inlining.
+        if table_single_call(consumer_init).is_some() || fields.is_empty() {
+            continue;
+        }
+
+        let mut start_index = consumer_index;
+        while start_index > 0 && local_single(&block.stmts[start_index - 1]).is_some() {
+            start_index -= 1;
+        }
+        if start_index == consumer_index {
+            continue;
+        }
+
+        let mut defs: HashMap<String, &Expr> = HashMap::new();
+        let mut def_order = HashMap::new();
+        let mut source_order = Vec::new();
+        let mut effect_order = Vec::new();
+        let mut producer_ranges = Vec::new();
+        let mut valid = true;
+        for (offset, stmt) in block.stmts[start_index..consumer_index].iter().enumerate() {
+            let Some((binding, init)) = local_single(stmt) else {
+                valid = false;
+                break;
+            };
+            let Some(name) = ctx.text(binding.name) else {
+                valid = false;
+                break;
+            };
+            let name = name.to_string();
+            if defs.insert(name.clone(), init).is_some() {
+                valid = false;
+                break;
+            }
+            def_order.insert(name.clone(), offset);
+            source_order.push(name.clone());
+            if !is_pure_literal(init) {
+                effect_order.push(name.clone());
+            }
+            let Some(stmt_range) = ctx.stmt_range(stmt) else {
+                valid = false;
+                break;
+            };
+            let usage = usage_index.usage_after(&name, stmt_range.end);
+            if usage.reads.len() != 1
+                || usage.writes != 0
+                || usage.redeclared
+                || usage.captured
+            {
+                valid = false;
+                break;
+            }
+            producer_ranges.push(stmt_range);
+        }
+        if !valid || defs.is_empty() {
+            continue;
+        }
+
+        let mut eval_counts = HashMap::new();
+        let mut eval_order = Vec::new();
+        let mut eval_stack = HashSet::new();
+        for (field_index, field) in fields.iter().enumerate() {
+            let before_effects = eval_order.len();
+            let field_ok = match field {
+                TableField::Positional(value) | TableField::Named { value, .. } => {
+                    collect_namecall_gap_eval_order(
+                        ctx,
+                        value,
+                        &defs,
+                        &def_order,
+                        None,
+                        &mut eval_stack,
+                        &mut eval_counts,
+                        &mut eval_order,
+                    )
+                }
+                TableField::Computed { key, value } => {
+                    collect_namecall_gap_eval_order(
+                        ctx,
+                        key,
+                        &defs,
+                        &def_order,
+                        None,
+                        &mut eval_stack,
+                        &mut eval_counts,
+                        &mut eval_order,
+                    ) && collect_namecall_gap_eval_order(
+                        ctx,
+                        value,
+                        &defs,
+                        &def_order,
+                        None,
+                        &mut eval_stack,
+                        &mut eval_counts,
+                        &mut eval_order,
+                    )
+                }
+            };
+            if !field_ok {
+                valid = false;
+                break;
+            }
+            let after_effects = eval_order.len();
+            let external_order_safe = match field {
+                TableField::Positional(value) => {
+                    if after_effects == before_effects {
+                        before_effects == effect_order.len()
+                            || stable_prefix_expr(
+                                ctx,
+                                value,
+                                block,
+                                usage_index,
+                                start_index,
+                                outer_lexical,
+                            )
+                    } else if name_of_expr(ctx, value).is_some_and(|name| defs.contains_key(name)) {
+                        true
+                    } else if field_index + 1 == fields.len()
+                        && after_effects == effect_order.len()
+                    {
+                        match unwrap_parens(value) {
+                            Expr::Call { func, method, args, .. }
+                                if method.is_none()
+                                    && name_of_expr(ctx, func)
+                                        .is_some_and(|name| defs.contains_key(name)) =>
+                            {
+                                match args {
+                                    CallArgs::Paren(values) => values.iter().all(is_no_effect_expr),
+                                    CallArgs::Table(value) => is_no_effect_expr(value),
+                                    CallArgs::Str(_) => true,
+                                }
+                            }
+                            _ => false,
+                        }
+                    } else {
+                        false
+                    }
+                }
+                TableField::Named { value, .. } => {
+                    if after_effects == before_effects {
+                        before_effects == effect_order.len()
+                            || stable_prefix_expr(
+                                ctx,
+                                value,
+                                block,
+                                usage_index,
+                                start_index,
+                                outer_lexical,
+                            )
+                    } else {
+                        name_of_expr(ctx, value).is_some_and(|name| defs.contains_key(name))
+                    }
+                }
+                TableField::Computed { key, value } => {
+                    after_effects == before_effects
+                        && (before_effects == effect_order.len()
+                            || (stable_prefix_expr(
+                                ctx,
+                                key,
+                                block,
+                                usage_index,
+                                start_index,
+                                outer_lexical,
+                            ) && stable_prefix_expr(
+                                ctx,
+                                value,
+                                block,
+                                usage_index,
+                                start_index,
+                                outer_lexical,
+                            )))
+                }
+            };
+            if !external_order_safe {
+                valid = false;
+                break;
+            }
+        }
+        if !valid
+            || eval_order != effect_order
+            || source_order
+                .iter()
+                .any(|name| eval_counts.get(name).copied().unwrap_or(0) != 1)
+        {
+            continue;
+        }
+
+        let mut render_counts = HashMap::new();
+        let mut field_edits = Vec::new();
+        for (field_index, field) in fields.iter().enumerate() {
+            let is_last_positional = field_index + 1 == fields.len()
+                && matches!(field, TableField::Positional(_));
+            let mut render_one = |expr: &Expr| -> Option<()> {
+                let range = ctx.range(expr.span())?;
+                let mut stack = HashSet::new();
+                let mut rendered = render_namecall_gap_expr(
+                    ctx,
+                    expr,
+                    &defs,
+                    &mut render_counts,
+                    &mut stack,
+                )?;
+                if !is_last_positional {
+                    if let Some(name) = name_of_expr(ctx, expr) {
+                        if defs.get(name).is_some_and(|def| matches!(unwrap_parens(def), Expr::Call { .. }))
+                            && rendered.starts_with('(')
+                            && rendered.ends_with(')')
+                            && rendered.len() >= 2
+                        {
+                            rendered = rendered[1..rendered.len() - 1].to_string();
+                        }
+                    }
+                }
+                if rendered != ctx.expr_text(expr)? {
+                    field_edits.push(Edit {
+                        start: range.start,
+                        end: range.end,
+                        replacement: rendered,
+                        kind: EditKind::TableConstructorValueInline,
+                    });
+                }
+                Some(())
+            };
+
+            let rendered = match field {
+                TableField::Positional(value) | TableField::Named { value, .. } => render_one(value),
+                TableField::Computed { key, value } => {
+                    render_one(key).and_then(|_| render_one(value))
+                }
+            };
+            if rendered.is_none() {
+                valid = false;
+                break;
+            }
+        }
+        if !valid
+            || source_order
+                .iter()
+                .any(|name| render_counts.get(name).copied().unwrap_or(0) != 1)
+        {
+            continue;
+        }
+
+        let mut group = Vec::with_capacity(producer_ranges.len() + field_edits.len());
+        for range in producer_ranges {
+            group.push(Edit {
+                start: range.start,
+                end: range.end,
+                replacement: String::new(),
+                kind: EditKind::TableConstructorValueInline,
+            });
+        }
+        group.extend(field_edits);
+        if !group.is_empty() {
+            add_group(ctx, edits, group);
+        }
+    }
+    // Adjacent indexed snapshot into the leading RHS of a direct assignment.
+    // No runtime statement is crossed, and a direct-name LHS has no address effect.
+    for i in 0..block.stmts.len().saturating_sub(1) {
+        let Some((binding, init)) = local_single(&block.stmts[i]) else {
+            continue;
+        };
+        if !matches!(init, Expr::Index { .. }) {
+            continue;
+        }
+        let Some((target, rhs)) = assignment_single(&block.stmts[i + 1]) else {
+            continue;
+        };
+        if !matches!(target, Expr::Name(_)) {
+            continue;
+        }
+        let Some(name) = ctx.text(binding.name) else {
+            continue;
+        };
+        let Some(stmt_range) = ctx.stmt_range(&block.stmts[i]) else {
+            continue;
+        };
+        let usage = usage_index.usage_after(name, stmt_range.end);
+        if usage.reads.len() != 1
+            || usage.writes != 0
+            || usage.redeclared
+            || usage.captured
+            || !expr_leading_use(ctx, rhs, &usage.reads[0])
+            || !stmt_contains_range(ctx, &block.stmts[i + 1], &usage.reads[0])
+        {
+            continue;
+        }
+        let Some(value) = ctx.expr_text(init) else {
+            continue;
+        };
+        add_group(
+            ctx,
+            edits,
+            vec![
+                Edit {
+                    start: stmt_range.start,
+                    end: stmt_range.end,
+                    replacement: String::new(),
+                    kind: EditKind::AssignmentValueInline,
+                },
+                Edit {
+                    start: usage.reads[0].start,
+                    end: usage.reads[0].end,
+                    replacement: value.to_string(),
+                    kind: EditKind::AssignmentValueInline,
+                },
+            ],
+        );
+    }
+
+    // Adjacent compiler method snapshot used as a pass-self call inside the next
+    // expression. This is the nested form of Prometheus namecall lowering, e.g.
+    // outer(method(base)) -> outer(base:Method()).
+    for i in 0..block.stmts.len().saturating_sub(1) {
+        let Some((binding, init)) = local_single(&block.stmts[i]) else {
+            continue;
+        };
+        let Expr::Index { object, key, .. } = init else {
+            continue;
+        };
+        let (Some(base), Some(method)) =
+            (name_of_expr(ctx, object), index_key_identifier(ctx, key))
+        else {
+            continue;
+        };
+        let Some(method_local) = ctx.text(binding.name) else {
+            continue;
+        };
+        let Some(stmt_range) = ctx.stmt_range(&block.stmts[i]) else {
+            continue;
+        };
+        let usage = usage_index.usage_after(method_local, stmt_range.end);
+        if usage.reads.len() != 1
+            || usage.writes != 0
+            || usage.redeclared
+            || usage.captured
+            || usage_index.by_name.get(base).is_some_and(|items| {
+                items.iter().any(|item| item.kind == OccKind::Capture)
+            })
+        {
+            continue;
+        }
+        let read = &usage.reads[0];
+        let next = &block.stmts[i + 1];
+        let Some(call) = find_direct_call_by_func_range_in_stmt(ctx, next, read) else {
+            continue;
+        };
+        if call_expr_whole(next).is_some_and(|whole| {
+            ctx.range(whole.span()) == ctx.range(call.span())
+        }) {
+            continue;
+        }
+        let Some(new_call) = reconstruct_call_without_first(ctx, call, base, &method) else {
+            continue;
+        };
+        let Some(call_range) = ctx.range(call.span()) else {
+            continue;
+        };
+        add_group(
+            ctx,
+            edits,
+            vec![
+                Edit {
+                    start: stmt_range.start,
+                    end: stmt_range.end,
+                    replacement: String::new(),
+                    kind: EditKind::Namecall,
+                },
+                Edit {
+                    start: call_range.start,
+                    end: call_range.end,
+                    replacement: new_call,
+                    kind: EditKind::Namecall,
+                },
+            ],
+        );
+    }
+
+    // An immediate alias used in the first generic-for iterator expression is read
+    // before the loop variables enter scope. Therefore a loop variable may legally
+    // reuse the alias spelling without redeclaring the outer binding at that read.
+    for i in 0..block.stmts.len().saturating_sub(1) {
+        let Some((binding, init)) = local_single(&block.stmts[i]) else {
+            continue;
+        };
+        let Expr::Name(source_span) = init else {
+            continue;
+        };
+        let Stmt::GenericFor(loop_stmt) = &block.stmts[i + 1] else {
+            continue;
+        };
+        let (Some(alias), Some(source_name)) =
+            (ctx.text(binding.name), ctx.text(*source_span))
+        else {
+            continue;
+        };
+        if alias == source_name || loop_stmt.exprs.is_empty() {
+            continue;
+        }
+        let wanted = HashSet::from([alias.to_string()]);
+        let mut hits = Vec::new();
+        for expr in &loop_stmt.exprs {
+            collect_name_ranges(expr, ctx, &wanted, &mut hits);
+        }
+        if hits.len() != 1 {
+            continue;
+        }
+        let read = hits[0].0.clone();
+        let first = &loop_stmt.exprs[0];
+        let leading = ctx.range(first.span()).is_some_and(|range| range == read)
+            || call_parts(first).is_some_and(|(func, _, _)| {
+                expr_is_leading_call_base_use(ctx, func, &read)
+            });
+        if !leading {
+            continue;
+        }
+        let shadows_alias = loop_stmt
+            .vars
+            .iter()
+            .any(|var| ctx.text(var.name) == Some(alias));
+        if (!shadows_alias && block_contains_name(ctx, &loop_stmt.block, alias))
+            || block.stmts[i + 2..]
+                .iter()
+                .any(|stmt| stmt_contains_name(ctx, stmt, alias))
+        {
+            continue;
+        }
+        let Some(stmt_range) = ctx.stmt_range(&block.stmts[i]) else {
+            continue;
+        };
+        add_group(
+            ctx,
+            edits,
+            vec![
+                Edit {
+                    start: stmt_range.start,
+                    end: stmt_range.end,
+                    replacement: String::new(),
+                    kind: EditKind::LocalAlias,
+                },
+                Edit {
+                    start: read.start,
+                    end: read.end,
+                    replacement: source_name.to_string(),
+                    kind: EditKind::LocalAlias,
+                },
+            ],
+        );
+    }
+
     // Adjacent 3-value iterator tuple into generic-for header.
     for i in 0..block.stmts.len().saturating_sub(1) {
         let Stmt::Local(local) = &block.stmts[i] else {
@@ -3393,6 +3951,7 @@ fn global_unpack_call_for_name<'a>(
     pack_name: &str,
     block: &Block,
     before_index: usize,
+    outer_lexical: &HashSet<String>,
 ) -> bool {
     let Some((func, method, args)) = call_parts(expr) else {
         return false;
@@ -3400,7 +3959,9 @@ fn global_unpack_call_for_name<'a>(
     if method.is_some() || name_of_expr(ctx, func) != Some("unpack") {
         return false;
     }
-    if direct_local_declared_before(ctx, block, before_index, "unpack") {
+    if outer_lexical.contains("unpack")
+        || direct_local_declared_before(ctx, block, before_index, "unpack")
+    {
         return false;
     }
     let Some(args) = paren_args(args) else {
@@ -3439,7 +4000,7 @@ fn leading_unpack_outer_call<'a>(
         Expr::Call { func, args, .. } => {
             if let CallArgs::Paren(values) = args {
                 if let Some(last) = values.last() {
-                    if global_unpack_call_for_name(ctx, last, pack_name, block, before_index)
+                    if global_unpack_call_for_name(ctx, last, pack_name, block, before_index, outer_lexical)
                         && values[..values.len().saturating_sub(1)].iter().all(|arg| {
                             stable_prefix_expr(
                                 ctx,
@@ -3523,6 +4084,10 @@ fn leading_expr_for_pack_stmt<'a>(stmt: &'a Stmt) -> Option<&'a Expr> {
         Stmt::Assign(n) if n.values.len() == 1 => Some(&n.values[0]),
         Stmt::Return(n) if n.values.len() == 1 => Some(&n.values[0]),
         Stmt::If(n) => n.branches.first().map(|(cond, _)| cond),
+        // Generic-for iterator expressions execute once, left-to-right, before the
+        // loop variables enter scope. The first iterator expression is therefore a
+        // valid leading consumer for compiler packed-return forwarding.
+        Stmt::GenericFor(n) => n.exprs.first(),
         _ => None,
     }
 }
@@ -3727,6 +4292,7 @@ fn collect_multi_return_structural(
                             pack_name,
                             block,
                             pack_index + 1,
+                            outer_lexical,
                         )
                     {
                         if let Some(outer_name) = name_of_expr(ctx, func) {
@@ -3787,6 +4353,78 @@ fn collect_multi_return_structural(
             continue;
         }
         let next = &block.stmts[pack_index + 1];
+
+        // Packed tail into the final table field. Moving the inner call to the
+        // last field preserves its position only when every earlier field is a
+        // stable/no-effect prefix. This recovers compiler multi-return packing
+        // without assuming the call itself is single-return.
+        if let Some((_table_binding, Expr::Table { fields, .. })) = local_single(next) {
+            if let Some(TableField::Positional(last)) = fields.last() {
+                let prefix_stable = fields[..fields.len().saturating_sub(1)].iter().all(|field| {
+                    match field {
+                        TableField::Positional(value) | TableField::Named { value, .. } => {
+                            stable_prefix_expr(
+                                ctx,
+                                value,
+                                block,
+                                usage_index,
+                                pack_index,
+                                outer_lexical,
+                            )
+                        }
+                        TableField::Computed { key, value } => {
+                            stable_prefix_expr(
+                                ctx,
+                                key,
+                                block,
+                                usage_index,
+                                pack_index,
+                                outer_lexical,
+                            ) && stable_prefix_expr(
+                                ctx,
+                                value,
+                                block,
+                                usage_index,
+                                pack_index,
+                                outer_lexical,
+                            )
+                        }
+                    }
+                });
+                if prefix_stable
+                    && global_unpack_call_for_name(ctx, last, pack_name, block, pack_index + 1, outer_lexical)
+                {
+                    if let (Some(unpack_range), Some(inner_text)) =
+                        (ctx.range(last.span()), ctx.expr_text(inner_call))
+                    {
+                        if usage.reads[0].start >= unpack_range.start
+                            && usage.reads[0].end <= unpack_range.end
+                            && add_group(
+                                ctx,
+                                edits,
+                                vec![
+                                    Edit {
+                                        start: pack_stmt_range.start,
+                                        end: pack_stmt_range.end,
+                                        replacement: String::new(),
+                                        kind: EditKind::MultiReturnForward,
+                                    },
+                                    Edit {
+                                        start: unpack_range.start,
+                                        end: unpack_range.end,
+                                        replacement: inner_text.to_string(),
+                                        kind: EditKind::MultiReturnForward,
+                                    },
+                                ],
+                            )
+                        {
+                            continue;
+                        }
+                    }
+                }
+            }
+        }
+
         let Some(expr) = leading_expr_for_pack_stmt(next) else {
             continue;
         };
@@ -6779,8 +7417,12 @@ fn collect_block_with_tail(
                         let immediate_generic_iterator_use = consumer_index == index + 1
                             && matches!(&block.stmts[consumer_index], Stmt::GenericFor(node)
                                 if node.exprs.iter().any(|expr| ctx.range(expr.span()).is_some_and(|range| range == *read)));
+                        let immediate_generic_iterator_call_base = consumer_index == index + 1
+                            && matches!(&block.stmts[consumer_index], Stmt::GenericFor(node)
+                                if node.exprs.iter().any(|expr| expr_has_call_base_use(ctx, expr, read)));
                         let call_safe = call_base_use
-                            && !is_repeated_evaluation_statement(&block.stmts[consumer_index])
+                            && (!is_repeated_evaluation_statement(&block.stmts[consumer_index])
+                                || immediate_generic_iterator_call_base)
                             && barrier_free(block, index, consumer_index);
                         if call_safe || immediate_generic_iterator_use {
                             if add_group(
@@ -7281,6 +7923,7 @@ fn apply_edits(source: &str, mut edits: Vec<Edit>, stats: &mut Stats) -> Result<
             EditKind::AssignmentKeyInline => stats.assignment_key_inlines += 1,
             EditKind::DependencyAssignmentKeyInline => stats.dependency_assignment_key_inlines += 1,
             EditKind::TableConstructorKeyInline => stats.table_constructor_key_inlines += 1,
+            EditKind::TableConstructorValueInline => stats.table_constructor_value_inlines += 1,
             EditKind::TableCallArgumentInline => stats.table_call_argument_inlines += 1,
             EditKind::RepeatTailInline => stats.repeat_tail_inlines += 1,
             EditKind::MultiReturnCollapse => stats.multi_return_table_collapses += 1,
