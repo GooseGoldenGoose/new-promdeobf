@@ -5455,6 +5455,86 @@ fn reconstruct_call_without_first(
     Some(format!("{}:{}({})", base, method, rest.join(", ")))
 }
 
+fn reconstruct_namecall_with_gap_index_args(
+    ctx: &Ctx<'_>,
+    block: &Block,
+    usage_index: &UsageIndex,
+    method_index: usize,
+    consumer_index: usize,
+    call: &Expr,
+    base: &str,
+    method: &str,
+) -> Option<(String, Vec<Range<usize>>)> {
+    let (_, existing_method, args_node) = call_parts(call)?;
+    if existing_method.is_some() {
+        return None;
+    }
+    let args = paren_args(args_node)?;
+    if args.len() < 2 || name_of_expr(ctx, &args[0]) != Some(base) {
+        return None;
+    }
+
+    let gap = block.stmts.get(method_index + 1..consumer_index)?;
+    if gap.is_empty() || gap.len() > args.len() - 1 {
+        return None;
+    }
+
+    let mut rendered = args
+        .iter()
+        .skip(1)
+        .map(|arg| ctx.expr_text(arg).map(str::to_owned))
+        .collect::<Option<Vec<_>>>()?;
+    let mut removed = Vec::with_capacity(gap.len());
+
+    for (producer_offset, stmt) in gap.iter().enumerate() {
+        let (binding, init) = local_single(stmt)?;
+        if !matches!(init, Expr::Index { .. }) {
+            return None;
+        }
+        let producer_name = ctx.text(binding.name)?;
+        let stmt_range = ctx.stmt_range(stmt)?;
+        let usage = usage_index.usage_after(producer_name, stmt_range.end);
+        if usage.reads.len() != 1 || usage.writes != 0 || usage.redeclared || usage.captured {
+            return None;
+        }
+        let read = &usage.reads[0];
+
+        // The generated method capture executes before these producer locals.
+        // Rebuilding a namecall keeps method lookup before argument evaluation, so
+        // producer effects remain ordered only when the producer locals feed the
+        // call arguments consecutively in the same left-to-right order.
+        let arg_index = producer_offset + 1;
+        let arg = args.get(arg_index)?;
+        if !expr_span_contains_range(ctx, arg, read) || !expr_leading_use(ctx, arg, read) {
+            return None;
+        }
+        let direct_arg = name_of_expr(ctx, arg) == Some(producer_name);
+        if !direct_arg && producer_offset + 1 != gap.len() {
+            return None;
+        }
+
+        let init_text = ctx.expr_text(init)?;
+        if direct_arg {
+            rendered[arg_index - 1] = init_text.to_string();
+        } else {
+            let arg_range = ctx.range(arg.span())?;
+            let rel_start = read.start.checked_sub(arg_range.start)?;
+            let rel_end = read.end.checked_sub(arg_range.start)?;
+            let slot = rendered.get_mut(arg_index - 1)?;
+            if rel_start > rel_end || rel_end > slot.len() {
+                return None;
+            }
+            slot.replace_range(rel_start..rel_end, init_text);
+        }
+        removed.push(stmt_range);
+    }
+
+    Some((
+        format!("{}:{}({})", base, method, rendered.join(", ")),
+        removed,
+    ))
+}
+
 fn expr_has_setfenv(ctx: &Ctx<'_>, expr: &Expr) -> bool {
     match expr {
         Expr::Function { .. } => false,
@@ -6088,28 +6168,49 @@ fn collect_block_with_tail(
                                             method_stmt_range.end,
                                             consumer_start,
                                         ) {
-                                            if let Some(new_call) = reconstruct_call_without_first(
-                                                ctx, call, base, &method,
-                                            ) {
+                                            let fused = reconstruct_namecall_with_gap_index_args(
+                                                ctx,
+                                                block,
+                                                &usage_index,
+                                                i,
+                                                consumer_index,
+                                                call,
+                                                base,
+                                                &method,
+                                            );
+                                            let fallback = || {
+                                                reconstruct_call_without_first(
+                                                    ctx, call, base, &method,
+                                                )
+                                                .map(|call| (call, Vec::new()))
+                                            };
+                                            if let Some((new_call, removed_gap)) =
+                                                fused.or_else(fallback)
+                                            {
                                                 if let Some(call_range) = ctx.range(call.span()) {
-                                                    if add_group(
-                                                        ctx,
-                                                        edits,
-                                                        vec![
-                                                            Edit {
-                                                                start: method_stmt_range.start,
-                                                                end: method_stmt_range.end,
-                                                                replacement: String::new(),
-                                                                kind: EditKind::Namecall,
-                                                            },
-                                                            Edit {
-                                                                start: call_range.start,
-                                                                end: call_range.end,
-                                                                replacement: new_call,
-                                                                kind: EditKind::Namecall,
-                                                            },
-                                                        ],
-                                                    ) {
+                                                    let mut group =
+                                                        Vec::with_capacity(removed_gap.len() + 2);
+                                                    group.push(Edit {
+                                                        start: method_stmt_range.start,
+                                                        end: method_stmt_range.end,
+                                                        replacement: String::new(),
+                                                        kind: EditKind::Namecall,
+                                                    });
+                                                    for range in removed_gap {
+                                                        group.push(Edit {
+                                                            start: range.start,
+                                                            end: range.end,
+                                                            replacement: String::new(),
+                                                            kind: EditKind::Namecall,
+                                                        });
+                                                    }
+                                                    group.push(Edit {
+                                                        start: call_range.start,
+                                                        end: call_range.end,
+                                                        replacement: new_call,
+                                                        kind: EditKind::Namecall,
+                                                    });
+                                                    if add_group(ctx, edits, group) {
                                                         i += 1;
                                                         continue;
                                                     }

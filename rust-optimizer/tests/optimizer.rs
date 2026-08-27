@@ -70,6 +70,79 @@ method(obj, 1)
 }
 
 #[test]
+fn namecall_recovery_inlines_ordered_index_argument_snapshots() {
+    let out = opt(r#"
+local function probe(game, service)
+    local method = service.TeleportToPlaceInstance
+    local place_id = game.PlaceId
+    local job_id = game.JobId
+    local players = game.Players
+    method(service, place_id, job_id, players.LocalPlayer)
+end
+"#);
+    assert!(!out.contains("local method ="), "{out}");
+    assert!(!out.contains("local place_id ="), "{out}");
+    assert!(!out.contains("local job_id ="), "{out}");
+    assert!(!out.contains("local players ="), "{out}");
+    assert!(
+        out.contains(
+            "service:TeleportToPlaceInstance(game.PlaceId, game.JobId, game.Players.LocalPlayer)"
+        ),
+        "{out}"
+    );
+}
+
+#[test]
+fn namecall_recovery_inlines_compiler_base_alias_and_ordered_index_args() {
+    let out = opt(r#"
+local function probe(game, r_v4_874)
+    local r_v1_2873 = r_v4_874
+    local r_v4_3312 = r_v1_2873.TeleportToPlaceInstance
+    local r_v2_2097 = game.PlaceId
+    local r_v3_2193 = game.JobId
+    local r_v6_2883 = game.Players
+    r_v4_3312(r_v1_2873, r_v2_2097, r_v3_2193, r_v6_2883.LocalPlayer)
+end
+"#);
+    assert!(
+        out.contains(
+            "r_v4_874:TeleportToPlaceInstance(game.PlaceId, game.JobId, game.Players.LocalPlayer)"
+        ),
+        "{out}"
+    );
+    assert!(!out.contains("local r_v2_2097 ="), "{out}");
+    assert!(!out.contains("local r_v3_2193 ="), "{out}");
+    assert!(!out.contains("local r_v6_2883 ="), "{out}");
+}
+
+#[test]
+fn namecall_argument_snapshot_fusion_requires_contiguous_gap() {
+    let out = opt(r#"
+local function probe(game, service)
+    local method = service.Teleport
+    local place_id = game.PlaceId
+    touch()
+    method(service, place_id)
+end
+"#);
+    assert!(out.contains("local place_id = game.PlaceId"), "{out}");
+}
+
+#[test]
+fn namecall_argument_snapshot_fusion_blocks_early_partial_use() {
+    let out = opt(r#"
+local function probe(game, service)
+    local method = service.Teleport
+    local players = game.Players
+    local place_id = game.PlaceId
+    method(service, players.LocalPlayer, place_id)
+end
+"#);
+    assert!(out.contains("local players = game.Players"), "{out}");
+    assert!(out.contains("local place_id = game.PlaceId"), "{out}");
+}
+
+#[test]
 fn namecall_multi_use_is_blocked() {
     let out = opt(r#"
 local obj = make()
