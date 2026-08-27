@@ -841,3 +841,4 @@ Use `git log` for commits newer than this handoff text.
 Read this file, inspect Git status/log, preserve unrelated working-copy files, continue the requested implementation directly, test it, update this file if needed, commit only intended files, and push main.
 
 Do not merely summarize this handoff unless the user asks for a summary.
+small adjacent-index/if follow-up: a sole-use adjacent `Index` snapshot may inline into the next binary `if` only when that read is the leading evaluated use. Split probe `local p = game.Players; if ((#p:GetPlayers()) <= 1) then ... end` now becomes `if ((#game.Players:GetPlayers()) <= 1) then ... end`; `check() and ...p...` remains blocked so no earlier effect is crossed. Small probe pass 2 is 0 edits/byte-identical; Rust suite 130/130 PASS; no big-file run was used.

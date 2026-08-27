@@ -1416,3 +1416,32 @@ sink(value)
 "#);
     assert!(out.contains("local value = #source"));
 }
+
+#[test]
+fn adjacent_index_result_moves_into_leading_nested_if_use() {
+    let out = opt(r#"
+local players_service = game.Players
+if ((#players_service:GetPlayers()) <= 1) then
+    print("one")
+end
+"#);
+    assert!(
+        !out.contains("local players_service = game.Players"),
+        "{out}"
+    );
+    assert!(out.contains("#game.Players:GetPlayers()"), "{out}");
+}
+
+#[test]
+fn adjacent_index_result_does_not_cross_prior_if_effect() {
+    let out = opt(r#"
+local players_service = game.Players
+if check() and ((#players_service:GetPlayers()) <= 1) then
+    print("one")
+end
+"#);
+    assert!(
+        out.contains("local players_service = game.Players"),
+        "{out}"
+    );
+}

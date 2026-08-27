@@ -6136,18 +6136,18 @@ fn collect_block_with_tail(
 
             // Adjacent leading use safely preserves evaluation order. Parenthesize
             // non-name producers to preserve single-result/local-assignment semantics.
-            let adjacent_if_call_temp = matches!(init, Expr::Call { .. })
+            let adjacent_if_effect_temp = matches!(init, Expr::Call { .. } | Expr::Index { .. })
                 && matches!(&block.stmts.get(index + 1), Some(Stmt::If(node)) if node.branches.first().is_some_and(|(cond, _)| {
                     matches!(unwrap_parens(cond), Expr::Binary { .. }) && expr_leading_use(ctx, cond, read)
                 }));
             if !matches!(init, Expr::Name(_))
-                && (is_scalar_temp_expr(init) || adjacent_if_call_temp)
+                && (is_scalar_temp_expr(init) || adjacent_if_effect_temp)
                 && index + 1 < block.stmts.len()
                 && stmt_contains_range(ctx, &block.stmts[index + 1], read)
                 && stmt_leading_use(ctx, &block.stmts[index + 1], read)
             {
                 if let Some(value) = ctx.expr_text(init) {
-                    let mut replacement = if adjacent_if_call_temp
+                    let mut replacement = if adjacent_if_effect_temp
                         || matches!(init, Expr::Name(_) | Expr::Index { .. })
                     {
                         value.to_string()
