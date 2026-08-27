@@ -351,11 +351,24 @@ fn barrier_free(block: &Block, from_index: usize, to_index: usize) -> bool {
         .all(|stmt| !statement_has_effect(stmt))
 }
 
+fn expr_is_leading_call_base_use(ctx: &Ctx<'_>, expr: &Expr, target: &Range<usize>) -> bool {
+    if ctx.range(expr.span()).is_some_and(|range| range == *target) {
+        return true;
+    }
+    match expr {
+        Expr::Paren { inner, .. } | Expr::TypeAssert { expr: inner, .. } => {
+            expr_is_leading_call_base_use(ctx, inner, target)
+        }
+        Expr::Index { object, .. } => expr_is_leading_call_base_use(ctx, object, target),
+        _ => false,
+    }
+}
+
 fn expr_has_call_base_use(ctx: &Ctx<'_>, expr: &Expr, target: &Range<usize>) -> bool {
     match expr {
         Expr::Function { .. } => false,
         Expr::Call { func, args, .. } => {
-            if ctx.range(func.span()).is_some_and(|range| range == *target) {
+            if expr_is_leading_call_base_use(ctx, func, target) {
                 return true;
             }
             expr_has_call_base_use(ctx, func, target)
@@ -4781,6 +4794,172 @@ fn assigned_branch_expression(ctx: &Ctx<'_>, body: &Block, result: &str) -> Opti
     (counts.get(&alias).copied() == Some(1)).then_some(rendered)
 }
 
+fn render_single_leading_name_substitution(
+    ctx: &Ctx<'_>,
+    outer: &Expr,
+    name: &str,
+    replacement: &Expr,
+) -> Option<String> {
+    let wanted = HashSet::from([name.to_string()]);
+    let mut hits = Vec::new();
+    collect_name_ranges(outer, ctx, &wanted, &mut hits);
+    if hits.len() != 1 || !expr_leading_use(ctx, outer, &hits[0].0) {
+        return None;
+    }
+    let outer_range = ctx.range(outer.span())?;
+    let hit = &hits[0].0;
+    if hit.start < outer_range.start || hit.end > outer_range.end {
+        return None;
+    }
+    let raw = ctx.expr_text(replacement)?;
+    let rendered = match unwrap_parens(replacement) {
+        Expr::Name(_)
+        | Expr::Index { .. }
+        | Expr::Nil(_)
+        | Expr::True(_)
+        | Expr::False(_)
+        | Expr::Number(_)
+        | Expr::String(_) => raw.to_string(),
+        _ => format!("({raw})"),
+    };
+    let mut text = ctx.src.get(outer_range.clone())?.to_string();
+    text.replace_range(
+        (hit.start - outer_range.start)..(hit.end - outer_range.start),
+        &rendered,
+    );
+    Some(text)
+}
+
+fn collect_conditional_value_coalesce(
+    ctx: &Ctx<'_>,
+    block: &Block,
+    usage_index: &UsageIndex,
+    edits: &mut Vec<Edit>,
+) {
+    for i in 0..block.stmts.len().saturating_sub(4) {
+        let Some((holder_binding, holder_init)) = local_single(&block.stmts[i]) else {
+            continue;
+        };
+        let Some((seed_binding, seed_expr)) = local_single(&block.stmts[i + 1]) else {
+            continue;
+        };
+        let Some((result_binding, result_init)) = local_single(&block.stmts[i + 2]) else {
+            continue;
+        };
+        let Some((cond, body)) = single_if(&block.stmts[i + 3]) else {
+            continue;
+        };
+        let Some((final_target, final_rhs)) = assignment_single(&block.stmts[i + 4]) else {
+            continue;
+        };
+
+        let holder = ctx.text(holder_binding.name).unwrap_or("");
+        let seed = ctx.text(seed_binding.name).unwrap_or("");
+        let result = ctx.text(result_binding.name).unwrap_or("");
+        if holder.is_empty()
+            || seed.is_empty()
+            || result.is_empty()
+            || holder == seed
+            || holder == result
+            || seed == result
+            || name_of_expr(ctx, result_init) != Some(seed)
+            || name_of_expr(ctx, unwrap_parens(cond)) != Some(seed)
+            || name_of_expr(ctx, final_target) != Some(holder)
+            || name_of_expr(ctx, final_rhs) != Some(result)
+            || body.stmts.len() != 2
+        {
+            continue;
+        }
+
+        let Some((branch_holder_target, branch_source)) = assignment_single(&body.stmts[0]) else {
+            continue;
+        };
+        let Some((branch_result_target, branch_expr)) = assignment_single(&body.stmts[1]) else {
+            continue;
+        };
+        if name_of_expr(ctx, branch_holder_target) != Some(holder)
+            || name_of_expr(ctx, branch_result_target) != Some(result)
+            || expr_contains_name(ctx, holder_init, holder)
+            || expr_contains_name(ctx, branch_source, holder)
+            || expr_contains_name(ctx, branch_source, seed)
+            || expr_contains_name(ctx, branch_source, result)
+            || expr_contains_name(ctx, branch_expr, seed)
+            || expr_contains_name(ctx, branch_expr, result)
+        {
+            continue;
+        }
+
+        let (Some(seed_stmt_range), Some(result_stmt_range), Some(final_stmt_range)) = (
+            ctx.stmt_range(&block.stmts[i + 1]),
+            ctx.stmt_range(&block.stmts[i + 2]),
+            ctx.stmt_range(&block.stmts[i + 4]),
+        ) else {
+            continue;
+        };
+        let seed_usage = usage_index.usage_after(seed, seed_stmt_range.end);
+        let result_usage = usage_index.usage_after(result, result_stmt_range.end);
+        let Some(result_seed_range) = ctx.range(result_init.span()) else {
+            continue;
+        };
+        let Expr::Name(cond_span) = unwrap_parens(cond) else {
+            continue;
+        };
+        let Some(cond_range) = ctx.range(*cond_span) else {
+            continue;
+        };
+        let Some(final_result_range) = ctx.range(final_rhs.span()) else {
+            continue;
+        };
+        if seed_usage.reads.len() != 2
+            || seed_usage.writes != 0
+            || seed_usage.redeclared
+            || seed_usage.captured
+            || !seed_usage
+                .reads
+                .iter()
+                .all(|r| *r == result_seed_range || *r == cond_range)
+            || result_usage.reads.len() != 1
+            || result_usage.reads[0] != final_result_range
+            || result_usage.writes != 1
+            || result_usage.redeclared
+            || result_usage.captured
+        {
+            continue;
+        }
+
+        let Some(seed_rendered) =
+            render_single_leading_name_substitution(ctx, seed_expr, holder, holder_init)
+        else {
+            continue;
+        };
+        let Some(branch_rendered) =
+            render_single_leading_name_substitution(ctx, branch_expr, holder, branch_source)
+        else {
+            continue;
+        };
+        let Some(start) = ctx.stmt_range(&block.stmts[i]) else {
+            continue;
+        };
+        let line_start = ctx.src[..start.start].rfind('\n').map(|pos| pos + 1).unwrap_or(0);
+        let indent = &ctx.src[line_start..start.start];
+        let replacement = format!(
+            "local {holder} = {seed_rendered}\n{indent}if {holder} then\n{indent}    {holder} = {branch_rendered}\n{indent}end"
+        );
+        if add_edit(
+            ctx,
+            edits,
+            Edit {
+                start: start.start,
+                end: final_stmt_range.end,
+                replacement,
+                kind: EditKind::CopyChain,
+            },
+        ) {
+            return;
+        }
+    }
+}
+
 fn collect_value_short_circuit(
     ctx: &Ctx<'_>,
     block: &Block,
@@ -5635,20 +5814,100 @@ fn reconstruct_namecall_with_gap_index_args<'a>(
     if args.len() < 2 || name_of_expr(ctx, &args[0]) != Some(base) {
         return None;
     }
+    let call_args = &args[1..];
+
+    // Collect a dependency closure of argument temporaries that were materialized
+    // immediately before the compiler's captured method. This is intentionally tied
+    // to proven namecall lowering (method = base[key]; method(base, ...)); arbitrary
+    // already-written namecalls never enter this path.
+    let mut available_pre: HashMap<String, (usize, &Expr, Range<usize>)> = HashMap::new();
+    let mut duplicate_pre = HashSet::new();
+    for (index, stmt) in block.stmts[..method_index].iter().enumerate() {
+        let Some((binding, init)) = local_single(stmt) else {
+            continue;
+        };
+        let name = ctx.text(binding.name)?.to_string();
+        let range = ctx.stmt_range(stmt)?;
+        if available_pre.insert(name.clone(), (index, init, range)).is_some() {
+            duplicate_pre.insert(name);
+        }
+    }
+    for name in &duplicate_pre {
+        available_pre.remove(name);
+    }
+    available_pre.remove(base);
+
+    let available_names = available_pre.keys().cloned().collect::<HashSet<_>>();
+    let mut selected_pre = HashSet::new();
+    let mut pending = Vec::new();
+    for arg in call_args {
+        let mut hits = Vec::new();
+        collect_name_ranges(arg, ctx, &available_names, &mut hits);
+        pending.extend(hits.into_iter().map(|(_, name)| name));
+    }
+    while let Some(name) = pending.pop() {
+        if !selected_pre.insert(name.clone()) {
+            continue;
+        }
+        let (_, init, _) = *available_pre.get(&name)?;
+        let mut hits = Vec::new();
+        collect_name_ranges(init, ctx, &available_names, &mut hits);
+        for (_, dep) in hits {
+            if dep != base && !selected_pre.contains(&dep) {
+                pending.push(dep);
+            }
+        }
+    }
+
+    // Prefix movement may not jump across unrelated statements. In the generated
+    // compiler shape the dependency program is a contiguous local run ending at the
+    // method capture; requiring that boundary also prevents lexical-shadow changes.
+    if let Some(first_pre) = selected_pre
+        .iter()
+        .filter_map(|name| available_pre.get(name).map(|(index, _, _)| *index))
+        .min()
+    {
+        for stmt in &block.stmts[first_pre..method_index] {
+            let (binding, _) = local_single(stmt)?;
+            let name = ctx.text(binding.name)?;
+            if !selected_pre.contains(name) {
+                return None;
+            }
+        }
+    }
+
+    let mut entries: Vec<(usize, String, &Expr, Range<usize>)> = Vec::new();
+    for name in &selected_pre {
+        let (index, init, range) = available_pre.get(name)?.clone();
+        let usage = usage_index.usage_after(name, range.end);
+        if usage.reads.len() != 1 || usage.writes != 0 || usage.redeclared || usage.captured {
+            return None;
+        }
+        entries.push((index, name.clone(), init, range));
+    }
 
     let gap = block.stmts.get(method_index + 1..consumer_index)?;
-    if gap.is_empty() {
+    for (offset, stmt) in gap.iter().enumerate() {
+        let (binding, init) = local_single(stmt)?;
+        let name = ctx.text(binding.name)?.to_string();
+        let range = ctx.stmt_range(stmt)?;
+        let usage = usage_index.usage_after(&name, range.end);
+        if usage.reads.len() != 1 || usage.writes != 0 || usage.redeclared || usage.captured {
+            return None;
+        }
+        entries.push((method_index + 1 + offset, name, init, range));
+    }
+    if entries.is_empty() {
         return None;
     }
+    entries.sort_by_key(|(index, _, _, _)| *index);
 
     let mut defs: HashMap<String, &Expr> = HashMap::new();
     let mut def_order = HashMap::new();
-    let mut gap_order = Vec::with_capacity(gap.len());
-    let mut effect_order = Vec::with_capacity(gap.len());
-    let mut removed = Vec::with_capacity(gap.len());
-    for (index, stmt) in gap.iter().enumerate() {
-        let (binding, init) = local_single(stmt)?;
-        let name = ctx.text(binding.name)?.to_string();
+    let mut gap_order = Vec::with_capacity(entries.len());
+    let mut effect_order = Vec::with_capacity(entries.len());
+    let mut removed = Vec::with_capacity(entries.len());
+    for (index, name, init, range) in entries {
         if defs.insert(name.clone(), init).is_some() {
             return None;
         }
@@ -5657,21 +5916,15 @@ fn reconstruct_namecall_with_gap_index_args<'a>(
         if !is_pure_literal(init) {
             effect_order.push(name.clone());
         }
-        let stmt_range = ctx.stmt_range(stmt)?;
-        let usage = usage_index.usage_after(&name, stmt_range.end);
-        if usage.reads.len() != 1 || usage.writes != 0 || usage.redeclared || usage.captured {
-            return None;
-        }
-        removed.push(stmt_range);
+        removed.push(range);
     }
 
-    // Prove that expanding the gap locals into the call evaluates every local
-    // initializer exactly once and in the same statement order. This handles the
-    // compiler's alias/index/decode chains without hardcoding any names or keys.
+    // Prove that expanding all selected compiler temporaries into the recovered call
+    // evaluates every initializer exactly once and preserves their relative order.
+    // Pure literals are allowed to move because they have no runtime observation.
     let mut eval_order = Vec::new();
     let mut eval_counts = HashMap::new();
     let mut stack = HashSet::new();
-    let call_args = &args[1..];
     for (arg_index, arg) in call_args.iter().enumerate() {
         let before = eval_order.len();
         if !collect_namecall_gap_eval_order(
@@ -5693,8 +5946,6 @@ fn reconstruct_namecall_with_gap_index_args<'a>(
                     .iter()
                     .any(|later| expr_contains_gap_def(ctx, later, &defs))
             {
-                // Keep the previous conservative barrier: a nested/partial use may
-                // only be the final gap-fed argument.
                 return None;
             }
         }
@@ -5942,6 +6193,7 @@ fn collect_block_with_tail(
     };
     collect_repeat_precheck(ctx, block, edits);
     collect_loop_short_circuit(ctx, block, edits);
+    collect_conditional_value_coalesce(ctx, block, structural_usage, edits);
     collect_value_short_circuit(ctx, block, structural_usage, edits);
 
     // Recurse after structural claims so overlapping child cleanup is refused.

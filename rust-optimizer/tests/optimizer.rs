@@ -163,6 +163,40 @@ end
 }
 
 #[test]
+fn namecall_recovery_inlines_prefix_and_suffix_argument_dependencies() {
+    let out = opt(r#"
+local function probe(game, service)
+    local base = service
+    local game_before = game
+    local place = game_before.PlaceId
+    local method = base.Teleport
+    local players = game.Players
+    method(base, place, players.LocalPlayer)
+end
+"#);
+    assert!(!out.contains("local place ="), "{out}");
+    assert!(!out.contains("local players ="), "{out}");
+    assert!(
+        out.contains("service:Teleport(game.PlaceId, game.Players.LocalPlayer)"),
+        "{out}"
+    );
+}
+
+#[test]
+fn namecall_prefix_argument_fusion_does_not_cross_effect() {
+    let out = opt(r#"
+local function probe(game, service)
+    local game_before = game
+    local place = game_before.PlaceId
+    touch()
+    local method = service.Teleport
+    method(service, place)
+end
+"#);
+    assert!(out.contains("local place ="), "{out}");
+}
+
+#[test]
 fn namecall_multi_use_is_blocked() {
     let out = opt(r#"
 local obj = make()
@@ -198,6 +232,75 @@ return mutate
     assert!(!out.contains(":Run()"));
     assert!(out.contains("local method") || out.contains("obj.Run(obj)"));
 }
+#[test]
+fn global_alias_indexed_callee_base_inlines() {
+    let out = opt(r#"
+local alias = task
+alias.wait()
+"#);
+    assert!(!out.contains("local alias = task"), "{out}");
+    assert!(out.contains("task.wait()"), "{out}");
+}
+
+#[test]
+fn global_alias_indexed_callee_base_does_not_cross_effect() {
+    let out = opt(r#"
+local alias = task
+touch()
+alias.wait()
+"#);
+    assert!(out.contains("local alias = task"), "{out}");
+    assert!(out.contains("alias.wait()"), "{out}");
+}
+
+#[test]
+fn conditional_value_coalesce_reuses_holder() {
+    let out = opt(r#"
+local function probe(base)
+    local holder = base
+    local seed = holder:FindFirstChild("RobloxPromptGui")
+    local result = seed
+    if seed then
+        holder = base.RobloxPromptGui
+        result = holder:FindFirstChild("promptOverlay")
+    end
+    holder = result
+    if holder then
+        consume(holder)
+    end
+end
+"#);
+    assert!(!out.contains("local seed ="), "{out}");
+    assert!(!out.contains("local result ="), "{out}");
+    assert!(
+        out.contains("local holder = base:FindFirstChild(\"RobloxPromptGui\")"),
+        "{out}"
+    );
+    assert!(
+        out.contains("holder = base.RobloxPromptGui:FindFirstChild(\"promptOverlay\")"),
+        "{out}"
+    );
+}
+
+#[test]
+fn conditional_value_coalesce_blocks_branch_source_self_reference() {
+    let out = opt(r#"
+local function probe(base)
+    local holder = base
+    local seed = holder:FindFirstChild("a")
+    local result = seed
+    if seed then
+        holder = holder.child
+        result = holder:FindFirstChild("b")
+    end
+    holder = result
+    consume(holder)
+end
+"#);
+    assert!(out.contains("local seed ="), "{out}");
+    assert!(out.contains("local result ="), "{out}");
+}
+
 #[test]
 fn second_pass_is_fixed_point() {
     let first = opt("local a = 1\nlocal b = a\nreturn b\n");
