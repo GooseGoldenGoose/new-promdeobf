@@ -6535,13 +6535,18 @@ fn collect_block_with_tail(
             }
             if let Some(call_expr) = unwrapped_call(init) {
                 if let Some(call) = ctx.expr_text(call_expr) {
+                    let replacement = if call.trim_start().starts_with('(') {
+                        format!(";{call}")
+                    } else {
+                        call.to_string()
+                    };
                     add_edit(
                         ctx,
                         edits,
                         Edit {
                             start: stmt_range.start,
                             end: stmt_range.end,
-                            replacement: call.to_string(),
+                            replacement,
                             kind: EditKind::DeadCallResult,
                         },
                     );

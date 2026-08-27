@@ -240,6 +240,19 @@ return 1
 }
 
 #[test]
+fn dead_parenthesized_namecall_result_gets_statement_separator() {
+    let out = opt(r#"
+local function probe(game, key)
+    local unused = (game:GetService(key)):Set3dRenderingEnabled(false)
+end
+"#);
+    assert!(
+        out.contains(";(game:GetService(key)):Set3dRenderingEnabled(false)"),
+        "{out}"
+    );
+}
+
+#[test]
 fn removes_only_function_root_bare_return() {
     let out = opt(r#"
 local function f(flag)
