@@ -453,9 +453,49 @@ print("hi")
 Current CF is one state / zero closures. Standalone beta optimizer reduces the live code to `print("hi")`; generated `--headers` / `--body` comments and blank formatting may remain. Stats for that probe: 9 rounds, 1 global fold, 1 global-alias inline, 2 other single-use inlines, 3 dead locals, 1 dead call-result lowering, 1 bare return removed.
 
 Safety regressions cover call-order preservation, dead call-result preservation, literal movement, mutable local aliases, repeated-evaluation loop snapshots, effect barriers for global aliases, `setfenv` blocking, nested clause-block cleanup, dead table removal, full/sparse/out-of-order multi-return slots, only-second/only-third results, method calls, placeholder-name collisions, shadow/capture barriers, table escape, dynamic indexes, duplicate slots, table writes, `#table` observation, generic-for tuple calls, `next, state, nil`, omitted control nil, method/custom factories, direct-global iterator aliases, later/body/captured tuple uses, reordered tuple values, effect gaps, unsupported tuple arities, short and long `and`/`or` ladders, `while`/`repeat` condition recovery, exact repeat precheck removal, and mismatch refusal. LuaJIT parity probes include only-second, sparse 1+3, side-effectful call ordering, five real iterator cases, side-effectful while/repeat conditions, and a 33-state deep mixed-condition loop probe; checked before/after output is identical. Real local-Prometheus iterator probes with EncryptStrings/AntiTamper disabled verify `pairs`, `ipairs`, `next`, a direct custom iterator triple, and a custom iterator factory. Real loop probes verify `while A() and (B() or C())`, side-effectful repeat, and long chained conditions; the side-effectful repeat previously exposed an extra pre-body condition call, now removed only by exact structural duplicate proof. Packed `pairs`/`ipairs`/factory triples collapse and inline into the generic-for header; `next` folds to direct `for ... in next, state, nil`. The direct custom triple remains conservative where post-loop compiler cleanup would make alias deletion require stronger lifetime proof.
+## Rust Beta Optimizer Port (Experimental)
+
+Standalone Rust optimizer lives at `rust-optimizer/`; it is not wired into `main.js`, `deobf.bat`, or canonical beta-CF. The JS optimizer remains the semantic oracle on small/normal samples only.
+
+Rust files:
+
+```text
+rust-optimizer/.gitignore
+rust-optimizer/Cargo.toml
+rust-optimizer/Cargo.lock
+rust-optimizer/src/lib.rs
+rust-optimizer/src/main.rs
+rust-optimizer/tests/optimizer.rs
+```
+
+Manual usage:
+
+```text
+rust-optimizer\target\release\prom-rust-optimizer.exe <final-cf.lua> [optimized.lua] --max-rounds 1000
+```
+
+The port uses `eclipse_luau` and byte-range AST edits. It runs to a parse-validated fixed point and ports the JS structural/fail-closed optimizer behavior rather than using textual substitutions. Dedicated Rust regressions are **86/86 PASS**; the full JS optimizer regression/oracle and full project gate are also passing.
+
+Important safety/parity rules:
+- nested functions distinguish stable captured lexical bindings from globals; read-only captures are allowed only where the JS proof allows them, while nested writers block movement
+- parenthesized binary `if` conditions use the narrow adjacent call-result proof; direct booleans and logical right arms remain barriers
+- deferred locals may cross unrelated loops only when the local is not observed there
+- repeat-body liveness includes the `until` expression and repeat bodies are always backedge contexts, so ancestor lifetime-release writes are not deleted unsafely
+- `_env` recovery requires proven getfenv provenance and respects rebind/shadow/setfenv barriers, including parenthesized string keys
+- value short-circuit recovery handles branch-local simple aliases, including the Prometheus `table and table["unpack"] or unpack` shape, while preserving evaluation order
+- packed final-argument forwarding accepts proven stable outer lexical locals/read-only captures but still blocks nested writers and effectful earlier prefixes
+
+Final small/normal parity gates:
+- fresh samples 14/20/23 and sample 63: Rust second pass = 0 edits and JS-after-Rust = 0 transforms
+- samples 14/20/23 LuaJIT runtime stdout/exit parity passes (14 against raw CF; 20/23 against readable source because raw 20 exceeds LuaJIT's 200-local limit)
+- sample 63 Rust optimization is ~0.7 s on the current fixture; JS-after-Rust completes well below 60 s and finds 0 transforms
+
+JS optimizer test policy from the user: do **not** run JS optimizer on `spacial6`. Sample 63 is allowed. For any other file, if a JS optimizer run exceeds 60 seconds, stop it and do not use that file with the JS optimizer again. Rust has no equivalent restriction.
+
+Fresh `spacial6` beta-CF remains 3799 states / 554 closures. With the current Rust optimizer, final `opti/spacial6.lua` is produced in **36 rounds / 37 parses**, **93,324 raw edits**, measured at **82,043 ms** on the final gate. Final size is **2,918,360 bytes**. Rust pass 2 performs 0 edits and is byte-for-byte identical; SHA-256 is `33033678EC5C7C5FC9B29BD41623BC62138CBCFF178167BB5883ED448944D266`. The final file passes the project Luau structural parser and has zero checked `RegisterOverflow[...]`, `createClosure`, `upvalueValues[...]`, `allocUpvalue(...)`, `ReturnVal =`, or `while state do` scaffold patterns.
 ## Current Immediate Beta Optimizer Checkpoint
 
-This is the exact current user-facing development focus as of the latest checkpoint. The optimizer remains experimental and standalone; do not connect it to `main.js`, canonical CF, or `deobf.bat` unless the user explicitly asks later.
+The JavaScript optimizer section below remains the semantic baseline/oracle for the active standalone optimizer work. Both JS and Rust optimizers remain experimental and standalone; do not connect either to `main.js`, canonical CF, or `deobf.bat` unless the user explicitly asks later.
 
 Latest relevant commits:
 
