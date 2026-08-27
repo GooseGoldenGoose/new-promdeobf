@@ -20,6 +20,19 @@ fn reconstruct_call_without_first(
     Some(format!("{}:{}({})", base, method, rest.join(", ")))
 }
 
+fn reconstruct_direct_pass_self_namecall(ctx: &Ctx<'_>, call: &Expr) -> Option<String> {
+    let (func, existing_method, _) = call_parts(call)?;
+    if existing_method.is_some() {
+        return None;
+    }
+    let Expr::Index { object, key, .. } = unwrap_parens(func) else {
+        return None;
+    };
+    let base = name_of_expr(ctx, object)?;
+    let method = index_key_identifier(ctx, key)?;
+    reconstruct_call_without_first(ctx, call, base, &method)
+}
+
 fn expr_contains_gap_def(
     ctx: &Ctx<'_>,
     expr: &Expr,

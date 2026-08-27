@@ -33,7 +33,7 @@ Treat this file as the authoritative handoff. If Git is newer, Git wins.
 - Reparse generated Lua after transformations.
 - Run focused regressions and runtime parity where executable.
 - Fail closed when structural proof is incomplete.
-- End every project-related turn with exactly: `Done for this turn โ€” you can prompt now.`
+- End every project-related turn with exactly: `Done for this turn — you can prompt now.`
 
 ### Commit Everything Rule
 
@@ -42,7 +42,7 @@ Treat this file as the authoritative handoff. If Git is newer, Git wins.
 - Keep conceptually separate changes in separate commits when practical, but all completed current-turn project changes must be pushed before the turn ends.
 - Pre-existing user edits, unrelated scratch/generated artifacts, secrets, and intentionally untracked fixtures are still preserved unless the user explicitly tells you to include them. Never use `git add .` blindly when unrelated files exist.
 
-### Communication Style โ€” Caveman Mode
+### Communication Style — Caveman Mode
 
 Use this mode by default for all project/technical work unless the user explicitly asks for a detailed explanation.
 
@@ -474,14 +474,14 @@ Manual usage:
 rust-optimizer\target\release\prom-rust-optimizer.exe <final-cf.lua> [optimized.lua] --max-rounds 1000
 ```
 
-The port uses `eclipse_luau` and byte-range AST edits. The attempted `full_moon` migration was reverted before commit; `eclipse_luau` remains authoritative. It runs to a parse-validated fixed point and ports the JS structural/fail-closed optimizer behavior rather than using textual substitutions. Dedicated Rust regressions are **173/173 PASS**.
+The port uses `eclipse_luau` and byte-range AST edits. The attempted `full_moon` migration was reverted before commit; `eclipse_luau` remains authoritative. It runs to a parse-validated fixed point and ports the JS structural/fail-closed optimizer behavior rather than using textual substitutions. Dedicated Rust regressions are **174/174 PASS**.
 
 Important safety/parity rules:
 - nested functions distinguish stable captured lexical bindings from globals; read-only captures are allowed only where the JS proof allows them, while nested writers block movement
 - parenthesized binary `if` conditions use the narrow adjacent call-result proof; direct booleans and logical right arms remain barriers
 - immediate generic-for header aliases may fold anywhere inside the iterator header, including a source argument whose spelling is shadowed by a loop variable; the read still occurs before loop variables enter scope, and later/body uses remain blockers
 - direct calls nested under an adjacent `if` condition may consume a sole-use callee alias and a sole-use argument snapshot when prior arguments are stable/effect-free; this recovers shapes such as `table.find(items, profile.field)` while effectful earlier arguments remain barriers
-- relaxed static-field policy: an adjacent sole-use dot-field snapshot may move into a stable `obj:Method(...)` argument when all earlier arguments are stable/effect-free; computed-index snapshots remain conservative. An adjacent call snapshot may also replace the base of a dot-field assignment target, with a statement separator emitted when a parenthesized call would be syntactically ambiguous. This now collapses the verified `getgenv()` / `T_Macro` / `macro_record` compiler shape to `getgenv().MacroRecordToggle = T_Macro:AddToggle(..., r_v40_42.macro_record, ...)`.
+- relaxed static-field policy: an adjacent sole-use dot-field snapshot may move into a stable `obj:Method(...)` argument when all earlier arguments are stable/effect-free; computed-index snapshots remain conservative. Direct pass-self `obj.Method(obj, ...)` recovers to `obj:Method(...)` for a noncaptured direct-name base, and an adjacent call snapshot may replace the base of a dot-field assignment target. Together these now collapse the verified fresh beta-CF `getgenv()` / `T_Macro` / `macro_record` compiler shape to `getgenv().MacroRecordToggle = T_Macro:AddToggle(..., r_v40_42.macro_record, ...)`.
 - deferred locals may cross unrelated loops only when the local is not observed there
 - repeat-body liveness includes the `until` expression and repeat bodies are always backedge contexts, so ancestor lifetime-release writes are not deleted unsafely
 - `_env` recovery requires proven getfenv provenance and respects rebind/shadow/setfenv barriers, including parenthesized string keys
@@ -855,3 +855,4 @@ Rust dynamic inline follow-up: generalized global-alias call-base recovery so ad
 
 Rust generalized snapshot/iterator/table follow-up: contiguous single-use dependency programs feeding one table constructor now inline as one ordered batch, with compiler one-call pack tables excluded for dedicated multi-return handling; this collapses the large Color3.fromRGB producer array without reordering calls. Adjacent indexed snapshots may inline into a leading direct assignment RHS, nested pass-self calls recover inside larger expressions, immediate generic-for iterator aliases respect loop-variable shadow scope, and compiler packed `{ call() } -> outer(unpack(pack))` forwarding now works in the first generic-for iterator expression. This recovers `pairs(obj:GetChildren())`, removes the `WaveValue` one-use snapshot, removes `local iterator=pairs` even when the loop variable reuses that spelling, and collapses packed generic-for args to direct `pairs(obj:GetChildren())`. Packed forwarding now also refuses lexical/parameter-shadowed `unpack`. Exact stale `opt/www2.lua` reoptimization reaches fixed point in 4 rounds/5 parses with every reported leftover temp gone; fresh `output/spacial6.beta.cf.lua` is ~5.78 s / 37 rounds / 6149 decoded strings, all reported iterator/WaveValue/Color3 leftovers are 0, and pass 2 is 0 edits. Rust suite 169/169 PASS.
 Rust optimizer modular split: the former ~8061-line `rust-optimizer/src/lib.rs` is now a tiny include shell with code physically split into `core.rs`, `steps/structural.rs`, `steps/multi_return.rs`, `steps/control_flow.rs`, `steps/private_table.rs`, `steps/namecall.rs`, and `pipeline.rs`. The split uses same-module `include!` files, so visibility/behavior is unchanged; Rust suite remains 169/169 PASS.
+Rust direct pass-self early-stage follow-up: exact `output/spacial6.beta.cf.lua` now produces `getgenv().MacroRecordToggle = T_Macro:AddToggle(..., r_v40_42.macro_record, ...)` with all three reported locals gone; full run 5502 ms / 37 rounds / 6149 decoded strings; pass 2 = 0 edits; Rust suite 174/174 PASS.

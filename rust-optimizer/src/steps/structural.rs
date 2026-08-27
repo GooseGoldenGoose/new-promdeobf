@@ -1113,6 +1113,47 @@ fn collect_low_risk_structural(
         );
     }
 
+    // Direct pass-self lowering after earlier cleanup: obj.Method(obj, ...) -> obj:Method(...).
+    // Restrict to a direct name base so collapsing the duplicate local/global read is harmless.
+    for stmt in &block.stmts {
+        let Some(call) = call_expr_whole(stmt) else {
+            continue;
+        };
+        let Some((func, existing_method, _)) = call_parts(call) else {
+            continue;
+        };
+        if existing_method.is_some() {
+            continue;
+        }
+        let Expr::Index { object, .. } = unwrap_parens(func) else {
+            continue;
+        };
+        let Some(base) = name_of_expr(ctx, object) else {
+            continue;
+        };
+        if usage_index.by_name.get(base).is_some_and(|items| {
+            items.iter().any(|item| item.kind == OccKind::Capture)
+        }) {
+            continue;
+        }
+        let Some(new_call) = reconstruct_direct_pass_self_namecall(ctx, call) else {
+            continue;
+        };
+        let Some(call_range) = ctx.range(call.span()) else {
+            continue;
+        };
+        add_edit(
+            ctx,
+            edits,
+            Edit {
+                start: call_range.start,
+                end: call_range.end,
+                replacement: new_call,
+                kind: EditKind::Namecall,
+            },
+        );
+    }
+
     // An immediate alias used in the first generic-for iterator expression is read
     // before the loop variables enter scope. Therefore a loop variable may legally
     // reuse the alias spelling without redeclaring the outer binding at that read.

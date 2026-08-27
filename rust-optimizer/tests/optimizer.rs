@@ -2513,3 +2513,21 @@ end
         "{out}"
     );
 }
+#[test]
+fn direct_pass_self_and_snapshot_aliases_collapse() {
+    let out = opt(r#"
+local function probe(profile)
+    local env = getgenv()
+    local ui = T_Macro
+    local wanted = profile.macro_record
+    env.MacroRecordToggle = ui.AddToggle(ui, "title", "desc", wanted, function() end)
+end
+"#);
+    assert!(!out.contains("local env = getgenv()"), "{out}");
+    assert!(!out.contains("local ui = T_Macro"), "{out}");
+    assert!(!out.contains("local wanted = profile.macro_record"), "{out}");
+    assert!(
+        out.contains("getgenv().MacroRecordToggle = T_Macro:AddToggle(\"title\", \"desc\", profile.macro_record, function()"),
+        "{out}"
+    );
+}
