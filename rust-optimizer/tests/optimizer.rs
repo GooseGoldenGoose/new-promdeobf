@@ -2531,3 +2531,113 @@ end
         "{out}"
     );
 }
+
+#[test]
+fn dead_parameter_nil_release_is_removed() {
+    let out = opt(r#"
+local function probe(value)
+    consume(value)
+    value = nil
+end
+return probe
+"#);
+    assert!(!out.contains("value = nil"), "{out}");
+}
+
+#[test]
+fn captured_parameter_nil_release_is_preserved() {
+    let out = opt(r#"
+local function probe(value)
+    local function read()
+        return value
+    end
+    value = nil
+    return read
+end
+return probe
+"#);
+    assert!(out.contains("value = nil"), "{out}");
+}
+
+#[test]
+fn captured_outer_nil_release_at_function_root_is_preserved() {
+    let out = opt(r#"
+local value = make()
+local function probe()
+    consume(value)
+    value = nil
+end
+return probe
+"#);
+    assert!(out.contains("value = nil"), "{out}");
+}
+#[test]
+fn loop_iteration_local_nested_nil_release_is_removed() {
+    let out = opt(r#"
+local function probe()
+    while running() do
+        local value = make()
+        if accept(value) then
+            consume(value)
+        else
+            value = nil
+        end
+    end
+end
+return probe
+"#);
+    assert!(!out.contains("value = nil"), "{out}");
+}
+#[test]
+fn loop_tail_nil_after_direct_reinit_is_removed() {
+    let out = opt(r#"
+local function probe()
+    local value
+    while true do
+        value = next_value()
+        if not value then
+            break
+        end
+        consume(value)
+        value = nil
+    end
+end
+return probe
+"#);
+    assert!(!out.contains("value = nil"), "{out}");
+}
+
+#[test]
+fn loop_tail_nil_with_conditional_reinit_is_preserved() {
+    let out = opt(r#"
+local function probe()
+    local value = seed()
+    while running() do
+        if should_reset() then
+            value = next_value()
+        end
+        consume(value)
+        value = nil
+    end
+end
+return probe
+"#);
+    assert!(out.contains("value = nil"), "{out}");
+}
+
+#[test]
+fn loop_tail_nil_with_after_loop_read_is_preserved() {
+    let out = opt(r#"
+local function probe()
+    local value
+    while running() do
+        value = next_value()
+        consume(value)
+        value = nil
+    end
+    return value
+end
+return probe
+"#);
+    assert!(out.contains("value = nil"), "{out}");
+}

@@ -1,16 +1,18 @@
+fn function_parameter_names(ctx: &Ctx<'_>, body: &FunctionBody) -> HashSet<String> {
+    body.params
+        .iter()
+        .filter(|param| !param.is_vararg)
+        .filter_map(|param| ctx.text(param.name).map(str::to_string))
+        .collect()
+}
+
 fn function_visible_scope(
     ctx: &Ctx<'_>,
     body: &FunctionBody,
     captured: &HashSet<String>,
 ) -> HashSet<String> {
     let mut scope = captured.clone();
-    for param in &body.params {
-        if !param.is_vararg {
-            if let Some(name) = ctx.text(param.name) {
-                scope.insert(name.to_string());
-            }
-        }
-    }
+    scope.extend(function_parameter_names(ctx, body));
     scope
 }
 
@@ -18,15 +20,21 @@ fn ancestor_release_safe(
     function_usage: &UsageIndex,
     name: &str,
     statement: &Range<usize>,
+    repeated_scope_start: Option<usize>,
 ) -> bool {
     let Some(items) = function_usage.by_name.get(name) else {
         return false;
     };
-    let declaration_count = items
+    let mut declarations = items
         .iter()
-        .filter(|item| item.kind == OccKind::Redeclare && item.pos < statement.start)
-        .count();
-    if declaration_count != 1 {
+        .filter(|item| item.kind == OccKind::Redeclare && item.pos < statement.start);
+    let Some(declaration) = declarations.next() else {
+        return false;
+    };
+    if declarations.next().is_some() {
+        return false;
+    }
+    if repeated_scope_start.is_some_and(|start| declaration.pos < start) {
         return false;
     }
     if items.iter().any(|item| item.kind == OccKind::Capture) {
@@ -41,6 +49,61 @@ fn ancestor_release_safe(
     })
 }
 
+fn assignment_reinitializes_name(ctx: &Ctx<'_>, stmt: &Stmt, name: &str) -> bool {
+    let Stmt::Assign(node) = stmt else {
+        return false;
+    };
+    let mut direct_target = false;
+    for target in &node.targets {
+        if name_of_expr(ctx, target) == Some(name) {
+            if direct_target {
+                return false;
+            }
+            direct_target = true;
+        } else if expr_contains_name(ctx, target, name) {
+            return false;
+        }
+    }
+    direct_target && !node.values.iter().any(|value| expr_contains_name(ctx, value, name))
+}
+
+fn loop_tail_release_safe(
+    ctx: &Ctx<'_>,
+    block: &Block,
+    statement_index: usize,
+    function_usage: &UsageIndex,
+    name: &str,
+    statement: &Range<usize>,
+    repeated_scope_start: Option<usize>,
+) -> bool {
+    if statement_index + 1 != block.stmts.len()
+        || repeated_scope_start
+            != ctx.range(block.span).map(|range| range.start)
+    {
+        return false;
+    }
+    let Some(items) = function_usage.by_name.get(name) else {
+        return false;
+    };
+    if items.iter().any(|item| item.kind == OccKind::Capture) {
+        return false;
+    }
+    if items.iter().any(|item| {
+        item.pos >= statement.end
+            && matches!(
+                item.kind,
+                OccKind::Read | OccKind::Write | OccKind::Redeclare | OccKind::Capture
+            )
+    }) {
+        return false;
+    }
+    for stmt in &block.stmts[..statement_index] {
+        if stmt_contains_name(ctx, stmt, name) {
+            return assignment_reinitializes_name(ctx, stmt, name);
+        }
+    }
+    false
+}
 fn collect_block(
     ctx: &Ctx<'_>,
     block: &Block,
@@ -48,8 +111,9 @@ fn collect_block(
     function_root: bool,
     env_start: Option<usize>,
     outer_lexical: &HashSet<String>,
+    function_params: &HashSet<String>,
     function_usage: &UsageIndex,
-    repeated_context: bool,
+    repeated_scope_start: Option<usize>,
 ) {
     collect_block_with_tail(
         ctx,
@@ -58,8 +122,9 @@ fn collect_block(
         function_root,
         env_start,
         outer_lexical,
+        function_params,
         function_usage,
-        repeated_context,
+        repeated_scope_start,
         None,
     );
 }
@@ -71,8 +136,9 @@ fn collect_block_with_tail(
     function_root: bool,
     env_start: Option<usize>,
     outer_lexical: &HashSet<String>,
+    function_params: &HashSet<String>,
     function_usage: &UsageIndex,
-    repeated_context: bool,
+    repeated_scope_start: Option<usize>,
     tail_expr: Option<&Expr>,
 ) {
     // Structural control-flow recovery must claim the compiler ladder before child cleanup can erase it.
@@ -106,8 +172,9 @@ fn collect_block_with_tail(
                 false,
                 env_start,
                 statement_visible,
+                function_params,
                 function_usage,
-                repeated_context,
+                repeated_scope_start,
             ),
             Stmt::While(n) => collect_block(
                 ctx,
@@ -116,8 +183,9 @@ fn collect_block_with_tail(
                 false,
                 env_start,
                 statement_visible,
+                function_params,
                 function_usage,
-                true,
+                ctx.range(n.block.span).map(|range| range.start),
             ),
             Stmt::Repeat(n) => {
                 collect_repeat_tail_inline(ctx, n, edits);
@@ -128,8 +196,9 @@ fn collect_block_with_tail(
                     false,
                     env_start,
                     statement_visible,
+                    function_params,
                     function_usage,
-                    true,
+                    ctx.range(n.block.span).map(|range| range.start),
                     Some(&n.cond),
                 );
             }
@@ -142,8 +211,9 @@ fn collect_block_with_tail(
                         false,
                         env_start,
                         statement_visible,
+                        function_params,
                         function_usage,
-                        repeated_context,
+                        repeated_scope_start,
                     );
                 }
                 if let Some(b) = &n.else_block {
@@ -154,8 +224,9 @@ fn collect_block_with_tail(
                         false,
                         env_start,
                         statement_visible,
+                        function_params,
                         function_usage,
-                        repeated_context,
+                        repeated_scope_start,
                     );
                 }
             }
@@ -166,8 +237,9 @@ fn collect_block_with_tail(
                 false,
                 env_start,
                 statement_visible,
+                function_params,
                 function_usage,
-                true,
+                ctx.range(n.block.span).map(|range| range.start),
             ),
             Stmt::GenericFor(n) => collect_block(
                 ctx,
@@ -176,13 +248,15 @@ fn collect_block_with_tail(
                 false,
                 env_start,
                 statement_visible,
+                function_params,
                 function_usage,
-                true,
+                ctx.range(n.block.span).map(|range| range.start),
             ),
             Stmt::Function(n) => {
                 collect_generated_vararg_recovery(ctx, &n.body, edits);
                 let child_env = resolve_env_start(ctx, &n.body.block, env_start.is_some());
                 let child_lexical = function_visible_scope(ctx, &n.body, statement_visible);
+                let child_params = function_parameter_names(ctx, &n.body);
                 let child_usage = build_usage_index(ctx, &n.body.block);
                 collect_block(
                     ctx,
@@ -191,14 +265,16 @@ fn collect_block_with_tail(
                     true,
                     child_env,
                     &child_lexical,
+                    &child_params,
                     &child_usage,
-                    false,
+                    None,
                 );
             }
             Stmt::LocalFunction(n) => {
                 collect_generated_vararg_recovery(ctx, &n.body, edits);
                 let child_env = resolve_env_start(ctx, &n.body.block, env_start.is_some());
                 let child_lexical = function_visible_scope(ctx, &n.body, statement_visible);
+                let child_params = function_parameter_names(ctx, &n.body);
                 let child_usage = build_usage_index(ctx, &n.body.block);
                 collect_block(
                     ctx,
@@ -207,8 +283,9 @@ fn collect_block_with_tail(
                     true,
                     child_env,
                     &child_lexical,
+                    &child_params,
                     &child_usage,
-                    false,
+                    None,
                 );
             }
             Stmt::Local(n) => {
@@ -263,7 +340,7 @@ fn collect_block_with_tail(
                     (name_of_expr(ctx, target), ctx.stmt_range(&block.stmts[i]))
                 {
                     let same_block = direct_local_declared_before(ctx, block, i, name);
-                    let safe = if same_block {
+                    let safe = if same_block || (function_root && function_params.contains(name)) {
                         let usage = usage_index.usage_after(name, stmt_range.end);
                         let captured_anywhere =
                             usage_index.by_name.get(name).is_some_and(|items| {
@@ -275,11 +352,24 @@ fn collect_block_with_tail(
                             && !usage.captured
                             && !captured_anywhere
                     } else {
-                        // Prometheus may release a register local declared in an ancestor
-                        // block from an if/do child. Never apply this across a loop backedge.
+                        // Ancestor releases are safe in ordinary child blocks, for locals
+                        // created inside the current loop iteration, or at a loop tail when
+                        // the next iteration directly overwrites the value before any read.
                         !function_root
-                            && !repeated_context
-                            && ancestor_release_safe(function_usage, name, &stmt_range)
+                            && (ancestor_release_safe(
+                                function_usage,
+                                name,
+                                &stmt_range,
+                                repeated_scope_start,
+                            ) || loop_tail_release_safe(
+                                ctx,
+                                block,
+                                i,
+                                function_usage,
+                                name,
+                                &stmt_range,
+                                repeated_scope_start,
+                            ))
                     };
                     if safe {
                         add_edit(
@@ -1095,6 +1185,7 @@ fn collect_expr_functions(
             collect_generated_vararg_recovery(ctx, body, edits);
             let child_env = resolve_env_start(ctx, &body.block, inherited_env);
             let child_lexical = function_visible_scope(ctx, body, outer_lexical);
+            let child_params = function_parameter_names(ctx, body);
             let child_usage = build_usage_index(ctx, &body.block);
             collect_block(
                 ctx,
@@ -1103,8 +1194,9 @@ fn collect_expr_functions(
                 true,
                 child_env,
                 &child_lexical,
+                &child_params,
                 &child_usage,
-                false,
+                None,
             );
         }
         Expr::Table { fields, .. } => {
@@ -1306,6 +1398,7 @@ pub fn optimize(source: &str, max_rounds: usize) -> Result<(String, Stats)> {
         } else {
             let root_env = resolve_env_start(&ctx, &parsed.chunk.block, false);
             let root_lexical = HashSet::new();
+            let root_params = HashSet::new();
             let root_usage = build_usage_index(&ctx, &parsed.chunk.block);
             collect_block(
                 &ctx,
@@ -1314,8 +1407,9 @@ pub fn optimize(source: &str, max_rounds: usize) -> Result<(String, Stats)> {
                 true,
                 root_env,
                 &root_lexical,
+                &root_params,
                 &root_usage,
-                false,
+                None,
             );
         }
         if edits.is_empty() {
