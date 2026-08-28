@@ -1849,126 +1849,132 @@ function betaOperationWritesName(operation, name) {
     return Array.isArray(operation?.emittedTargets) && operation.emittedTargets.includes(name);
 }
 
-function collectDeadStateInitializerCopies(graph, rootName) {
-    const operations = (graph.states || []).flatMap(state => state.operations || []);
-    const writers = new Map();
-    const readers = new Map();
-    for (const operation of operations) {
-        if (operation.emittedTarget) {
-            if (!writers.has(operation.emittedTarget)) writers.set(operation.emittedTarget, []);
-            writers.get(operation.emittedTarget).push(operation);
-        }
-        for (const target of operation.emittedTargets || []) {
-            if (!writers.has(target)) writers.set(target, []);
-            writers.get(target).push(operation);
-        }
-        for (const read of operation.reads || []) {
-            if (!readers.has(read)) readers.set(read, []);
-            readers.get(read).push(operation);
-        }
-    }
-
-    const rooted = new Set([rootName]);
-    const candidateCopies = new Set();
-    let changed = true;
-    while (changed) {
-        changed = false;
-        for (const operation of operations) {
-            const rhs = String(operation?.rhs || '').trim();
-            const target = operation?.emittedTarget;
-            if (!target || !rooted.has(rhs) || candidateCopies.has(operation)) continue;
-            if (!isDeadStateSnapshotCopyOperation(operation, rhs)) continue;
-            if ((writers.get(target) || []).length !== 1) continue;
-            candidateCopies.add(operation);
-            rooted.add(target);
-            changed = true;
-        }
-    }
-
-    const removable = new Set();
-    changed = true;
-    while (changed) {
-        changed = false;
-        for (const operation of candidateCopies) {
-            if (removable.has(operation)) continue;
-            const target = operation.emittedTarget;
-            const uses = readers.get(target) || [];
-            if (uses.every(reader => removable.has(reader))) {
-                removable.add(operation);
-                changed = true;
-            }
-        }
-    }
-    return removable;
-}
-function addReachedDeadCopyTree(operation, ignoredOperations, reachedCopies) {
-    if (!operation || reachedCopies.has(operation)) return;
-    reachedCopies.add(operation);
-    const target = operation.emittedTarget;
-    if (!target) return;
-    for (const candidate of ignoredOperations || []) {
-        if (String(candidate?.rhs || '').trim() === target) {
-            addReachedDeadCopyTree(candidate, ignoredOperations, reachedCopies);
-        }
-    }
+function isDeadStateInitializerDefinitionOperation(operation, stateName) {
+    if (!operation?.emittedTarget || typeof operation.rhs !== "string") return false;
+    if (operation.emittedTarget === stateName || operation.rhs.trim() !== stateName) return false;
+    if (!["version-define", "epoch-start", "epoch-mutate"].includes(operation.kind)) return false;
+    const text = String(operation.emittedText || "").trim();
+    return text === `local ${operation.emittedTarget} = ${stateName}` || text === `${operation.emittedTarget} = ${stateName}`;
 }
 
-function betaDefinitionDeadBeforeRead(graph, stateId, operationIndex, target, ignoredOperations, reachedCopies) {
+function isDeadStateInitializerTransparentCopy(operation, sourceName) {
+    if (!operation?.emittedTarget || typeof operation.rhs !== "string") return false;
+    if (operation.emittedTarget === sourceName || operation.rhs.trim() !== sourceName) return false;
+    if (!["version-define", "epoch-start", "epoch-mutate"].includes(operation.kind)) return false;
+    const reads = operation.reads || [];
+    if (reads.some(read => read !== sourceName)) return false;
+    const text = String(operation.emittedText || "").trim();
+    return text === `local ${operation.emittedTarget} = ${sourceName}` || text === `${operation.emittedTarget} = ${sourceName}`;
+}
+
+function betaDefinitionDeadTransitively(graph, stateId, operationIndex, target) {
     const stateById = new Map((graph.states || []).map(state => [state.id, state]));
-    const queue = [{ stateId, startIndex: operationIndex + 1 }];
+    const queue = [{ stateId, startIndex: operationIndex + 1, active: [target] }];
     const visited = new Set();
+    const copyOperations = new Set();
     while (queue.length) {
         const point = queue.pop();
-        const key = point.stateId + ':' + point.startIndex;
+        const active = new Set(point.active);
+        if (!active.size) continue;
+        const key = point.stateId + ':' + point.startIndex + ':' + [...active].sort().join(',');
         if (visited.has(key)) continue;
         visited.add(key);
         const state = stateById.get(point.stateId);
-        if (!state) return false;
+        if (!state) return { dead: false, copyOperations };
         const operations = state.operations || [];
-        let killed = false;
         for (let index = point.startIndex; index < operations.length; index++) {
+            if (!active.size) break;
             const operation = operations[index];
-            if (ignoredOperations?.has(operation)) {
-                addReachedDeadCopyTree(operation, ignoredOperations, reachedCopies);
+            const activeReads = [...new Set((operation.reads || []).filter(read => active.has(read)))];
+            if (activeReads.length) {
+                const rhs = String(operation?.rhs || '').trim();
+                if (activeReads.length !== 1 || !active.has(rhs) || !isDeadStateInitializerTransparentCopy(operation, rhs)) {
+                    return { dead: false, copyOperations };
+                }
+                copyOperations.add(operation);
+                for (const name of [...active]) {
+                    if (betaOperationWritesName(operation, name)) active.delete(name);
+                }
+                active.add(operation.emittedTarget);
                 continue;
             }
-            if ((operation.reads || []).includes(target)) return false;
-            if (betaOperationWritesName(operation, target)) {
-                killed = true;
-                break;
+            for (const name of [...active]) {
+                if (betaOperationWritesName(operation, name)) active.delete(name);
             }
         }
-        if (killed) continue;
-        if (!Array.isArray(state.successors)) return false;
+        if (!active.size) continue;
+        if (!Array.isArray(state.successors)) return { dead: false, copyOperations };
         for (const successor of state.successors) {
-            if (!Number.isInteger(successor) || !stateById.has(successor)) return false;
-            queue.push({ stateId: successor, startIndex: 0 });
+            if (!Number.isInteger(successor) || !stateById.has(successor)) return { dead: false, copyOperations };
+            queue.push({ stateId: successor, startIndex: 0, active: [...active] });
         }
     }
-    return true;
+    return { dead: true, copyOperations };
 }
 
 function finalizeBetaDeadStateInitializers(betaResult) {
     if (!betaResult?.graph || !betaResult.applied) return betaResult;
-    const stateName = betaResult.graph.stateName;
-    const candidates = [];
-    const removableCopies = new Set();
-    for (const state of betaResult.graph.states || []) {
+    const graph = betaResult.graph;
+    const stateName = graph.stateName;
+    const operationLocation = new Map();
+    const writersByName = new Map();
+    for (const state of graph.states || []) {
         const operations = state.operations || [];
         for (let index = 0; index < operations.length; index++) {
             const operation = operations[index];
-            if (!isDeadStateSnapshotCopyOperation(operation, stateName)) continue;
-            const target = operation.emittedTarget;
-            const deadCopies = collectDeadStateInitializerCopies(betaResult.graph, target);
-            const reachedCopies = new Set();
-            if (!betaDefinitionDeadBeforeRead(betaResult.graph, state.id, index, target, deadCopies, reachedCopies)) continue;
-            candidates.push({ state, operation, target });
-            for (const copy of reachedCopies) removableCopies.add(copy);
+            operationLocation.set(operation, { stateId: state.id, index });
+            const written = new Set();
+            if (operation.emittedTarget) written.add(operation.emittedTarget);
+            for (const target of operation.emittedTargets || []) written.add(target);
+            for (const target of written) {
+                if (!writersByName.has(target)) writersByName.set(target, new Set());
+                writersByName.get(target).add(operation);
+            }
+        }
+    }
+
+    const candidates = [];
+    const reachedCopies = new Set();
+    for (const state of graph.states || []) {
+        const operations = state.operations || [];
+        for (let index = 0; index < operations.length; index++) {
+            const operation = operations[index];
+            if (!isDeadStateInitializerDefinitionOperation(operation, stateName)) continue;
+            const analysis = betaDefinitionDeadTransitively(graph, state.id, index, operation.emittedTarget);
+            if (!analysis.dead) continue;
+            candidates.push(operation);
+            for (const copy of analysis.copyOperations) reachedCopies.add(copy);
         }
     }
     if (!candidates.length) {
-        betaResult.deadStateInitializers = { applied: false, safe: true, removedInitializers: 0, removedCopies: 0 };
+        betaResult.deadStateInitializers = { applied: false, safe: true, removedInitializers: 0, removedCopies: 0, clearedCopyInitializers: 0 };
         return betaResult;
+    }
+
+    // A copy reached by a dead state definition is removable only when the
+    // definition created by that copy is independently dead from that point
+    // forward. This makes removal safe even if the copy state is reachable from
+    // another predecessor carrying a different source value.
+    const removableReachedCopies = new Set();
+    for (const operation of reachedCopies) {
+        const location = operationLocation.get(operation);
+        if (!location) continue;
+        const analysis = betaDefinitionDeadTransitively(graph, location.stateId, location.index, operation.emittedTarget);
+        if (analysis.dead) removableReachedCopies.add(operation);
+    }
+
+    const transformations = new Map();
+    const chooseTransformation = operation => {
+        const text = String(operation.emittedText || '').trim();
+        const isLocal = text.startsWith('local ');
+        const writerCount = (writersByName.get(operation.emittedTarget) || new Set()).size;
+        // If later writes reuse this lexical local, retain only its declaration.
+        // Otherwise the dead identifier-copy statement can disappear entirely.
+        return isLocal && writerCount > 1 ? 'bare' : 'remove';
+    };
+    for (const operation of candidates) transformations.set(operation, chooseTransformation(operation));
+    for (const operation of removableReachedCopies) {
+        if (!transformations.has(operation)) transformations.set(operation, chooseTransformation(operation));
     }
 
     let ast;
@@ -1992,9 +1998,8 @@ function finalizeBetaDeadStateInitializers(betaResult) {
         leafByState.set(id, leaf);
     }
 
-    const candidateSet = new Set(candidates.map(candidate => candidate.operation));
     const edits = [];
-    for (const state of betaResult.graph.states || []) {
+    for (const state of graph.states || []) {
         const leaf = leafByState.get(state.id);
         if (!leaf) {
             betaResult.deadStateInitializers = { applied: false, safe: false, reason: 'Dead state initializer missing state ' + state.id };
@@ -2010,9 +2015,10 @@ function finalizeBetaDeadStateInitializers(betaResult) {
                 betaResult.deadStateInitializers = { applied: false, safe: false, reason: 'Dead state initializer lost source ownership in state ' + state.id };
                 return betaResult;
             }
-            if (candidateSet.has(operation)) {
+            const transform = transformations.get(operation);
+            if (transform === 'bare') {
                 edits.push({ start: first.range[0], end: last.range[1], replacement: 'local ' + operation.emittedTarget });
-            } else if (removableCopies.has(operation)) {
+            } else if (transform === 'remove') {
                 edits.push({ start: first.range[0], end: last.range[1], replacement: '' });
             }
             statementIndex += count;
@@ -2030,17 +2036,29 @@ function finalizeBetaDeadStateInitializers(betaResult) {
         return betaResult;
     }
 
-    for (const { operation } of candidates) {
-        operation.rhs = 'nil';
-        operation.reads = [];
-        operation.emittedText = 'local ' + operation.emittedTarget;
-        operation.returnSinkSafe = true;
-    }
     let removedCopies = 0;
-    for (const state of betaResult.graph.states || []) {
+    let clearedCopyInitializers = 0;
+    let removedAssignments = 0;
+    const candidateSet = new Set(candidates);
+    for (const state of graph.states || []) {
         const kept = [];
         for (const operation of state.operations || []) {
-            if (removableCopies.has(operation)) { removedCopies++; continue; }
+            const transform = transformations.get(operation);
+            if (transform === 'remove') {
+                if (candidateSet.has(operation)) {
+                    if (!String(operation.emittedText || '').trim().startsWith('local ')) removedAssignments++;
+                } else {
+                    removedCopies++;
+                }
+                continue;
+            }
+            if (transform === 'bare') {
+                if (!candidateSet.has(operation)) clearedCopyInitializers++;
+                operation.rhs = 'nil';
+                operation.reads = [];
+                operation.emittedText = 'local ' + operation.emittedTarget;
+                operation.returnSinkSafe = true;
+            }
             kept.push(operation);
         }
         state.operations = kept;
@@ -2051,7 +2069,9 @@ function finalizeBetaDeadStateInitializers(betaResult) {
         applied: true,
         safe: true,
         removedInitializers: candidates.length,
+        removedAssignments,
         removedCopies,
+        clearedCopyInitializers,
     };
     return betaResult;
 }

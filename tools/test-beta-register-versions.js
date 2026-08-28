@@ -1072,4 +1072,117 @@ const liveStateInitializerFinal = finalizeBetaDeadStateInitializers(liveStateIni
 assert.equal(liveStateInitializerFinal.deadStateInitializers.safe, true);
 assert.equal(liveStateInitializerFinal.deadStateInitializers.applied, false);
 assert(liveStateInitializerFinal.source.includes("local x = state"));
+
+const transitiveDeadStateInitializerGraph = {
+    found: true,
+    applied: true,
+    source: `vm = function(state, args, upvalues, gcProxy)
+    while state do
+        if state == 1 then
+            local x = state
+            local a = x
+            local b = a
+            b = 7
+            consume(b)
+            x = 5
+            state = nil
+        end
+    end
+end`,
+    graph: {
+        stateName: "state",
+        states: [{
+            id: 1,
+            successors: [],
+            operations: [
+                { index: 1, kind: "epoch-start", emittedTarget: "x", rhs: "state", reads: [], emittedText: "local x = state" },
+                { index: 2, kind: "version-define", emittedTarget: "a", rhs: "x", reads: ["x"], emittedText: "local a = x" },
+                { index: 3, kind: "epoch-start", emittedTarget: "b", rhs: "a", reads: ["a"], emittedText: "local b = a" },
+                { index: 4, kind: "epoch-mutate", emittedTarget: "b", rhs: "7", reads: [], emittedText: "b = 7" },
+                { index: 5, kind: "statement", reads: ["b"], emittedText: "consume(b)" },
+                { index: 6, kind: "epoch-mutate", emittedTarget: "x", rhs: "5", reads: [], emittedText: "x = 5" },
+                { index: 7, kind: "state-transition", emittedTarget: "state", rhs: "nil", reads: [], emittedText: "state = nil" },
+            ],
+        }],
+    },
+};
+const transitiveDeadStateInitializerFinal = finalizeBetaDeadStateInitializers(transitiveDeadStateInitializerGraph);
+assert.equal(transitiveDeadStateInitializerFinal.deadStateInitializers.safe, true);
+assert.equal(transitiveDeadStateInitializerFinal.deadStateInitializers.applied, true);
+assert(!transitiveDeadStateInitializerFinal.source.includes("local x = state"));
+assert(!transitiveDeadStateInitializerFinal.source.includes("local a = x"));
+assert(transitiveDeadStateInitializerFinal.source.includes("local b\n"));
+assert(transitiveDeadStateInitializerFinal.source.includes("b = 7"));
+assert(transitiveDeadStateInitializerFinal.source.includes("consume(b)"));
+parseLua(transitiveDeadStateInitializerFinal.source, "<transitive-dead-state-initializer-output>");
+
+const assignedDeadStateInitializerGraph = {
+    found: true,
+    applied: true,
+    source: `vm = function(state, args, upvalues, gcProxy)
+    local x
+    while state do
+        if state == 1 then
+            x = state
+            local dead = x
+            x = 9
+            consume(x)
+            state = nil
+        end
+    end
+end`,
+    graph: {
+        stateName: "state",
+        states: [{
+            id: 1,
+            successors: [],
+            operations: [
+                { index: 1, kind: "epoch-mutate", emittedTarget: "x", rhs: "state", reads: [], emittedText: "x = state" },
+                { index: 2, kind: "version-define", emittedTarget: "dead", rhs: "x", reads: ["x"], emittedText: "local dead = x" },
+                { index: 3, kind: "epoch-mutate", emittedTarget: "x", rhs: "9", reads: [], emittedText: "x = 9" },
+                { index: 4, kind: "statement", reads: ["x"], emittedText: "consume(x)" },
+                { index: 5, kind: "state-transition", emittedTarget: "state", rhs: "nil", reads: [], emittedText: "state = nil" },
+            ],
+        }],
+    },
+};
+const assignedDeadStateInitializerFinal = finalizeBetaDeadStateInitializers(assignedDeadStateInitializerGraph);
+assert.equal(assignedDeadStateInitializerFinal.deadStateInitializers.safe, true);
+assert.equal(assignedDeadStateInitializerFinal.deadStateInitializers.applied, true);
+assert(!assignedDeadStateInitializerFinal.source.includes("x = state"));
+assert(!assignedDeadStateInitializerFinal.source.includes("local dead = x"));
+assert(assignedDeadStateInitializerFinal.source.includes("x = 9"));
+assert(assignedDeadStateInitializerFinal.source.includes("consume(x)"));
+parseLua(assignedDeadStateInitializerFinal.source, "<assigned-dead-state-initializer-output>");
+
+const liveStateRestoreGraph = {
+    found: true,
+    applied: true,
+    source: `vm = function(state, args, upvalues, gcProxy)
+    while state do
+        if state == 1 then
+            local saved = state
+            local copy = saved
+            state = copy
+        end
+    end
+end`,
+    graph: {
+        stateName: "state",
+        states: [{
+            id: 1,
+            successors: [],
+            operations: [
+                { index: 1, kind: "epoch-start", emittedTarget: "saved", rhs: "state", reads: [], emittedText: "local saved = state" },
+                { index: 2, kind: "version-define", emittedTarget: "copy", rhs: "saved", reads: ["saved"], emittedText: "local copy = saved" },
+                { index: 3, kind: "state-transition", emittedTarget: "state", rhs: "copy", reads: ["copy"], emittedText: "state = copy" },
+            ],
+        }],
+    },
+};
+const liveStateRestoreFinal = finalizeBetaDeadStateInitializers(liveStateRestoreGraph);
+assert.equal(liveStateRestoreFinal.deadStateInitializers.safe, true);
+assert.equal(liveStateRestoreFinal.deadStateInitializers.applied, false);
+assert(liveStateRestoreFinal.source.includes("local saved = state"));
+assert(liveStateRestoreFinal.source.includes("state = copy"));
 console.log("beta register versioning tests passed");
