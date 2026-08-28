@@ -1575,11 +1575,6 @@ function finalizeBetaRegisterSchedule(betaResult) {
 
     const edits = [];
     let blocksChanged = 0;
-    let swaps = 0;
-    let producerSinks = 0;
-    let producerPulls = 0;
-    let unreadSinks = 0;
-    let safetyRejectedSegments = 0;
     let atomicStatesSkipped = 0;
     let stateTailMoves = 0;
     let returnTailMoves = 0;
@@ -1599,37 +1594,8 @@ function finalizeBetaRegisterSchedule(betaResult) {
         const sourceStatements = (leaf.body || []).filter(statement => statement?.type !== "CommentStatement");
         if (sourceStatements.length !== operations.length || sourceStatements.length < 2) continue;
 
-        const operationByProxy = new Map();
-        const proxyBySource = new Map();
-        const scheduledInput = [];
-        for (let index = 0; index < sourceStatements.length; index++) {
-            const sourceStatement = sourceStatements[index];
-            const proxy = betaScheduleStatementProxy(sourceStatement);
-            proxyBySource.set(proxy, sourceStatement);
-            operationByProxy.set(proxy, operations[index]);
-            scheduledInput.push(proxy);
-        }
-
-        const scheduled = scheduleStatementList(scheduledInput, betaResult.graph.stateName, null, null);
-        if (scheduled.safetyRejected) {
-            safetyRejectedSegments++;
-            continue;
-        }
-        const orderedOperations = [];
-        const orderedSourceStatements = [];
-        for (const proxy of scheduled.statements) {
-            const operation = operationByProxy.get(proxy);
-            const sourceStatement = proxyBySource.get(proxy);
-            if (!operation || !sourceStatement) {
-                betaResult.finalRegisterSchedule = { applied: false, safe: false, reason: `Final beta schedule lost statement ownership in state ${state.id}` };
-                return betaResult;
-            }
-            orderedOperations.push(operation);
-            orderedSourceStatements.push(sourceStatement);
-        }
-
-        const tail = canonicalizeBetaTailStatements(orderedSourceStatements, orderedOperations, betaResult.graph.stateName, betaResult.graph.returnName);
-        if (!scheduled.swaps && !tail.stateMoved && !tail.returnMoved) continue;
+        const tail = canonicalizeBetaTailStatements(sourceStatements, operations, betaResult.graph.stateName, betaResult.graph.returnName);
+        if (!tail.stateMoved && !tail.returnMoved) continue;
         if (tail.stateMoved) stateTailMoves++;
         if (tail.returnMoved) returnTailMoves++;
 
@@ -1649,10 +1615,6 @@ function finalizeBetaRegisterSchedule(betaResult) {
         state.operations = tail.operations;
         for (let index = 0; index < state.operations.length; index++) state.operations[index].index = index + 1;
         blocksChanged++;
-        swaps += scheduled.swaps;
-        producerSinks += scheduled.producerSinks || 0;
-        producerPulls += scheduled.producerPulls || 0;
-        unreadSinks += scheduled.unreadSinks || 0;
     }
 
     const result = {
@@ -1660,11 +1622,6 @@ function finalizeBetaRegisterSchedule(betaResult) {
         safe: true,
         reason: null,
         blocksChanged,
-        swaps,
-        producerSinks,
-        producerPulls,
-        unreadSinks,
-        safetyRejectedSegments,
         atomicStatesSkipped,
         stateTailMoves,
         returnTailMoves,

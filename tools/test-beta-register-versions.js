@@ -918,8 +918,8 @@ assert(recoveredExistingBinding.source.includes(`createClosure2(2, {})`));
 parseLua(recoveredExistingBinding.source, "<beta-upvalue-existing-binding-output>");
 const recoveredExistingBindingScheduled = finalizeBetaRegisterSchedule(recoveredExistingBinding);
 assert.equal(recoveredExistingBindingScheduled.finalRegisterSchedule.safe, true);
-assert.equal(recoveredExistingBindingScheduled.finalRegisterSchedule.applied, true);
-assert(recoveredExistingBindingScheduled.finalRegisterSchedule.swaps > 0);
+assert.equal(recoveredExistingBindingScheduled.finalRegisterSchedule.applied, false);
+assert.equal(recoveredExistingBindingScheduled.source, recoveredExistingBinding.source);
 parseLua(recoveredExistingBindingScheduled.source, "<beta-upvalue-existing-binding-scheduled-output>");
 
 const recoveredSyntheticBindingSource = `vm = function(state, args, upvalues, gcProxy)
