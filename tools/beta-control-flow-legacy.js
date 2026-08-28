@@ -1,7 +1,7 @@
 const fs = require("fs");
 const path = require("path");
 const { parseLuaStructural } = require("../main");
-const { versionVmBlockRegisters, finalizeBetaRegisterUpvalues, finalizeBetaRegisterSchedule, finalizeBetaDeadStateSnapshots, finalizeBetaDeadStateInitializers } = require("../passes/beta-register-versions");
+const { versionVmBlockRegisters, finalizeBetaRegisterUpvalues, finalizeBetaRegisterSchedule, finalizeBetaDeadStateSnapshots, finalizeBetaDeadStateInitializers, finalizeBetaWhitespaceCleanup } = require("../passes/beta-register-versions");
 const { solveBetaControlFlow } = require("../passes/beta-control-flow-legacy");
 
 function defaultOutputPath(inputPath) {
@@ -12,7 +12,7 @@ function defaultOutputPath(inputPath) {
 function generateBetaControlFlowFromSource(source, ast, outputPath) {
     const resolvedOutput = path.resolve(outputPath);
     let beta = finalizeBetaRegisterUpvalues(versionVmBlockRegisters(source, ast));
-    beta = finalizeBetaDeadStateInitializers(finalizeBetaDeadStateSnapshots(finalizeBetaRegisterSchedule(beta)));
+    beta = finalizeBetaWhitespaceCleanup(finalizeBetaDeadStateInitializers(finalizeBetaDeadStateSnapshots(finalizeBetaRegisterSchedule(beta))));
     if (!beta.found || !beta.applied) {
         throw new Error(beta.reason || "Beta register analysis did not apply");
     }
@@ -25,6 +25,10 @@ function generateBetaControlFlowFromSource(source, ast, outputPath) {
     }
     if (beta.deadStateInitializers && !beta.deadStateInitializers.safe) {
         throw new Error(beta.deadStateInitializers.reason || 'Dead state initializer cleanup failed closed');
+    }
+
+    if (beta.whitespaceCleanup && !beta.whitespaceCleanup.safe) {
+        throw new Error(beta.whitespaceCleanup.reason || "Beta whitespace cleanup failed closed");
     }
 
     if (beta.finalRegisterSchedule && !beta.finalRegisterSchedule.safe) {

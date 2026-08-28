@@ -2161,10 +2161,129 @@ function finalizeBetaRegisterUpvalues(betaResult) {
     return betaResult;
 }
 
+
+function betaProtectedMultilineLines(source) {
+    const protectedLines = new Set();
+    let line = 1;
+    let i = 0;
+    let quote = null;
+    let quoteStartLine = null;
+    let quoteMultiline = false;
+    let longClose = null;
+    let longStartLine = null;
+    const markLong = endLine => {
+        if (longStartLine === null) return;
+        for (let value = longStartLine; value <= endLine; value++) protectedLines.add(value);
+    };
+    const longOpenAt = index => {
+        if (source[index] !== '[') return null;
+        let cursor = index + 1;
+        while (source[cursor] === '=') cursor++;
+        if (source[cursor] !== '[') return null;
+        const equals = source.slice(index + 1, cursor);
+        return { end: cursor + 1, close: ']' + equals + ']' };
+    };
+    while (i < source.length) {
+        const ch = source[i];
+        if (ch === '\n') {
+            if (longClose !== null) protectedLines.add(line);
+            if (quote !== null) {
+                quoteMultiline = true;
+                for (let value = quoteStartLine; value <= line; value++) protectedLines.add(value);
+            }
+            line++;
+            i++;
+            continue;
+        }
+        if (longClose !== null) {
+            if (source.startsWith(longClose, i)) {
+                markLong(line);
+                i += longClose.length;
+                longClose = null;
+                longStartLine = null;
+                continue;
+            }
+            i++;
+            continue;
+        }
+        if (quote !== null) {
+            if (ch === '\\') {
+                i += Math.min(2, source.length - i);
+                continue;
+            }
+            if (ch === quote) { quote = null; quoteStartLine = null; quoteMultiline = false; }
+            i++;
+            continue;
+        }
+        if (ch === '"' || ch === "'" || ch === '`') {
+            quote = ch;
+            quoteStartLine = line;
+            i++;
+            continue;
+        }
+        if (source.startsWith('--', i)) {
+            const opened = longOpenAt(i + 2);
+            if (opened) {
+                longClose = opened.close;
+                longStartLine = line;
+                i = opened.end;
+                continue;
+            }
+            const newline = source.indexOf('\n', i + 2);
+            i = newline === -1 ? source.length : newline;
+            continue;
+        }
+        const opened = longOpenAt(i);
+        if (opened) {
+            longClose = opened.close;
+            longStartLine = line;
+            i = opened.end;
+            continue;
+        }
+        i++;
+    }
+    if (longClose !== null) markLong(line);
+    return protectedLines;
+}
+
+function finalizeBetaWhitespaceCleanup(betaResult) {
+    if (!betaResult?.graph || !betaResult.applied || typeof betaResult.source !== 'string') return betaResult;
+    const source = betaResult.source;
+    const protectedLines = betaProtectedMultilineLines(source);
+    const newline = source.includes('\r\n') ? '\r\n' : '\n';
+    const lines = source.split(/\r?\n/);
+    const kept = [];
+    let removedLines = 0;
+    for (let index = 0; index < lines.length; index++) {
+        const lineNumber = index + 1;
+        const lineText = lines[index];
+        if (lineText.trim() === '' && !protectedLines.has(lineNumber)) {
+            removedLines++;
+            continue;
+        }
+        kept.push(protectedLines.has(lineNumber) ? lineText : lineText.replace(/[\t ]+$/g, ''));
+    }
+    while (kept.length && kept[kept.length - 1] === '') kept.pop();
+    const output = kept.join(newline) + newline;
+    if (output === source) {
+        betaResult.whitespaceCleanup = { applied: false, safe: true, removedLines: 0 };
+        return betaResult;
+    }
+    try { parseBetaSource(output); }
+    catch (error) {
+        betaResult.whitespaceCleanup = { applied: false, safe: false, reason: 'Beta whitespace cleanup reparse failed: ' + error.message, removedLines: 0 };
+        return betaResult;
+    }
+    betaResult.source = output;
+    betaResult.whitespaceCleanup = { applied: true, safe: true, removedLines };
+    return betaResult;
+}
+
 module.exports = {
     versionVmBlockRegisters,
     finalizeBetaRegisterUpvalues,
     finalizeBetaRegisterSchedule,
     finalizeBetaDeadStateSnapshots,
     finalizeBetaDeadStateInitializers,
+    finalizeBetaWhitespaceCleanup,
 };

@@ -1,7 +1,7 @@
 const fs = require("fs");
 const path = require("path");
 const { parseLua, parseLuaStructural } = require("../main");
-const { versionVmBlockRegisters, finalizeBetaRegisterUpvalues, finalizeBetaRegisterSchedule, finalizeBetaDeadStateSnapshots, finalizeBetaDeadStateInitializers } = require("../passes/beta-register-versions");
+const { versionVmBlockRegisters, finalizeBetaRegisterUpvalues, finalizeBetaRegisterSchedule, finalizeBetaDeadStateSnapshots, finalizeBetaDeadStateInitializers, finalizeBetaWhitespaceCleanup } = require("../passes/beta-register-versions");
 const { solveBetaControlFlow } = require("../passes/beta-control-flow-overflow-experimental");
 const { recoverVmStateGraph } = require("../passes/vm-state");
 const { scheduleVmRegisterUses } = require("../passes/vm-register-scheduler");
@@ -47,7 +47,7 @@ function generateBetaControlFlowFromSource(source, ast, outputPath) {
     }
     let beta = remapOverflowBetaVersions(betaRaw, prepared);
     beta = finalizeBetaRegisterUpvalues(beta);
-    beta = finalizeBetaDeadStateInitializers(finalizeBetaDeadStateSnapshots(finalizeBetaRegisterSchedule(beta)));
+    beta = finalizeBetaWhitespaceCleanup(finalizeBetaDeadStateInitializers(finalizeBetaDeadStateSnapshots(finalizeBetaRegisterSchedule(beta))));
     if (beta.upvalueRecovery?.completed && !beta.upvalueRecovery.safe) {
         throw new Error(beta.upvalueRecovery.reason || "Beta upvalue recovery failed closed");
     }
@@ -56,6 +56,10 @@ function generateBetaControlFlowFromSource(source, ast, outputPath) {
     }
     if (beta.deadStateInitializers && !beta.deadStateInitializers.safe) {
         throw new Error(beta.deadStateInitializers.reason || 'Dead state initializer cleanup failed closed');
+    }
+
+    if (beta.whitespaceCleanup && !beta.whitespaceCleanup.safe) {
+        throw new Error(beta.whitespaceCleanup.reason || "Beta whitespace cleanup failed closed");
     }
 
     if (beta.finalRegisterSchedule && !beta.finalRegisterSchedule.safe) {

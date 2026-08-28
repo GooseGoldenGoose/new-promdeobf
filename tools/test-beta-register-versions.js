@@ -1,6 +1,6 @@
 const assert = require("assert");
 const { parseLua } = require("../main");
-const { versionVmBlockRegisters, finalizeBetaRegisterUpvalues, finalizeBetaRegisterSchedule, finalizeBetaDeadStateSnapshots, finalizeBetaDeadStateInitializers } = require("../passes/beta-register-versions");
+const { versionVmBlockRegisters, finalizeBetaRegisterUpvalues, finalizeBetaRegisterSchedule, finalizeBetaDeadStateSnapshots, finalizeBetaDeadStateInitializers, finalizeBetaWhitespaceCleanup } = require("../passes/beta-register-versions");
 
 const source = `vm = function(state, args, upvalues, gcProxy)
     local r1, r2, ReturnVal
@@ -1185,4 +1185,20 @@ assert.equal(liveStateRestoreFinal.deadStateInitializers.safe, true);
 assert.equal(liveStateRestoreFinal.deadStateInitializers.applied, false);
 assert(liveStateRestoreFinal.source.includes("local saved = state"));
 assert(liveStateRestoreFinal.source.includes("state = copy"));
+const whitespaceCleanupFixture = {
+    found: true,
+    applied: true,
+    source: "vm = function(state, args, upvalues, gcProxy)\n\n    -- keep comment\n    local a = 1\n    \n\n    local text = [=[first\n\nthird  \n]=]\n\n    --[[comment line\n\ncomment tail]]\n\n    if state == 1 then\n        \n        a = a + 1\n        \n    end\nend\n",
+    graph: { stateName: "state", states: [] },
+};
+const whitespaceCleanupFinal = finalizeBetaWhitespaceCleanup(whitespaceCleanupFixture);
+assert.equal(whitespaceCleanupFinal.whitespaceCleanup.safe, true);
+assert.equal(whitespaceCleanupFinal.whitespaceCleanup.applied, true);
+assert(whitespaceCleanupFinal.whitespaceCleanup.removedLines >= 5);
+assert(whitespaceCleanupFinal.source.includes("first\n\nthird  \n"));
+assert(whitespaceCleanupFinal.source.includes("comment line\n\ncomment tail"));
+assert(!whitespaceCleanupFinal.source.includes("    \n"));
+const outsideProtected = whitespaceCleanupFinal.source.replace("first\n\nthird  ", "first\nthird  ").replace("comment line\n\ncomment tail", "comment line\ncomment tail");
+assert(!/\n[ \t]*\n/.test(outsideProtected));
+parseLua(whitespaceCleanupFinal.source, "<beta-whitespace-cleanup-output>");
 console.log("beta register versioning tests passed");
