@@ -64,3 +64,72 @@ assert.equal(loop.crossesCycle, true);
 
 assert.equal(provePreCfTempUse(beta, "missing").safe, false);
 console.log("pre-CF temp proof index: PASS");
+const { finalizePreCfCopyTemps } = require("../passes/pre-cf-temp-recovery");
+
+const copySource = `vm = function(state, args, upvalues, gcProxy)
+    local ReturnVal
+    while state do
+        if state == 1 then
+            local source_v = args
+            local temp_v = source_v
+            local sink_v = temp_v
+            state = nil
+        end
+    end
+    return ReturnVal
+end`;
+const copyBeta = {
+    source: copySource,
+    graph: {
+        cfgComplete: true,
+        stateName: "state",
+        recoveredUpvalueBindings: [],
+        states: [{ id: 1, successors: [], operations: [
+            { index: 1, kind: "version-define", emittedTarget: "source_v", rhs: "args", reads: [], emittedText: "local source_v = args" },
+            { index: 2, kind: "version-define", emittedTarget: "temp_v", rhs: "source_v", reads: ["source_v"], emittedText: "local temp_v = source_v" },
+            { index: 3, kind: "version-define", emittedTarget: "sink_v", rhs: "temp_v", reads: ["temp_v"], emittedText: "local sink_v = temp_v" },
+            { index: 4, kind: "state-transition", emittedTarget: "state", rhs: "nil", reads: [], emittedText: "state = nil" },
+        ] }],
+    },
+};
+finalizePreCfCopyTemps(copyBeta);
+assert.equal(copyBeta.preCfCopyTemps.safe, true);
+assert.equal(copyBeta.preCfCopyTemps.folds, 1);
+assert(!copyBeta.source.includes("local temp_v"));
+assert(copyBeta.source.includes("local sink_v = source_v"));
+assert.equal(copyBeta.graph.states[0].operations.length, 3);
+assert.equal(copyBeta.graph.states[0].operations[1].rhs, "source_v");
+
+const barrierSource = `vm = function(state, args, upvalues, gcProxy)
+    local ReturnVal
+    while state do
+        if state == 1 then
+            local source_v = args
+            local temp_v = source_v
+            local barrier_v = 1
+            local sink_v = temp_v
+            state = nil
+        end
+    end
+    return ReturnVal
+end`;
+const barrierBeta = {
+    source: barrierSource,
+    graph: {
+        cfgComplete: true,
+        stateName: "state",
+        recoveredUpvalueBindings: [],
+        states: [{ id: 1, successors: [], operations: [
+            { index: 1, kind: "version-define", emittedTarget: "source_v", rhs: "args", reads: [], emittedText: "local source_v = args" },
+            { index: 2, kind: "version-define", emittedTarget: "temp_v", rhs: "source_v", reads: ["source_v"], emittedText: "local temp_v = source_v" },
+            { index: 3, kind: "version-define", emittedTarget: "barrier_v", rhs: "1", reads: [], emittedText: "local barrier_v = 1" },
+            { index: 4, kind: "version-define", emittedTarget: "sink_v", rhs: "temp_v", reads: ["temp_v"], emittedText: "local sink_v = temp_v" },
+            { index: 5, kind: "state-transition", emittedTarget: "state", rhs: "nil", reads: [], emittedText: "state = nil" },
+        ] }],
+    },
+};
+finalizePreCfCopyTemps(barrierBeta);
+assert.equal(barrierBeta.preCfCopyTemps.safe, true);
+assert.equal(barrierBeta.preCfCopyTemps.folds, 0);
+assert(barrierBeta.source.includes("local temp_v = source_v"));
+console.log("pre-CF copy transport: PASS");

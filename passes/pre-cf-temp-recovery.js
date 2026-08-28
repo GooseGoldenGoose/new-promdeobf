@@ -100,7 +100,106 @@ function provePreCfTempUse(betaResult, bindingName) {
     return { safe: facts.safeSameStateTransport, ...facts };
 }
 
+const luaparse = require("../parser/luaparse");
+const { findVmFunction } = require("./vm-state");
+
+function parsePreCfSource(source) {
+    return luaparse.parse(source, { luaVersion: "luau", comments: false, scope: false, locations: false, ranges: true });
+}
+function isAstNode(value) { return value && typeof value === "object" && typeof value.type === "string"; }
+function numericLiteralValue(node) {
+    if (node?.type !== "NumericLiteral") return null;
+    const value = typeof node.value === "number" ? node.value : Number(node.raw);
+    return Number.isInteger(value) ? value : null;
+}
+function collectStateLeaves(node, stateName, out = []) {
+    if (!isAstNode(node)) return out;
+    if (node.type === "IfStatement") {
+        for (const clause of node.clauses || []) {
+            const c = clause?.condition;
+            if (clause?.type !== "IfClause" || c?.type !== "BinaryExpression" || c.operator !== "==") continue;
+            const ls = c.left?.type === "Identifier" && c.left.name === stateName;
+            const rs = c.right?.type === "Identifier" && c.right.name === stateName;
+            if ((ls && numericLiteralValue(c.right) !== null) || (rs && numericLiteralValue(c.left) !== null)) out.push(clause);
+        }
+    }
+    for (const [key, value] of Object.entries(node)) {
+        if (key === "loc" || key === "range") continue;
+        if (Array.isArray(value)) for (const child of value) collectStateLeaves(child, stateName, out);
+        else if (isAstNode(value)) collectStateLeaves(value, stateName, out);
+    }
+    return out;
+}
+function mapPreCfOperationRanges(betaResult) {
+    let ast;
+    try { ast = parsePreCfSource(betaResult.source); } catch (error) { return { safe: false, reason: `PRE-CF source parse failed: ${error.message}` }; }
+    const vm = findVmFunction(ast);
+    if (!vm) return { safe: false, reason: "PRE-CF VM function not found" };
+    const statementsByState = new Map();
+    for (const leaf of collectStateLeaves(vm.functionNode, betaResult.graph.stateName, [])) {
+        const id = numericLiteralValue(leaf.condition.left) ?? numericLiteralValue(leaf.condition.right);
+        if (!Number.isInteger(id) || statementsByState.has(id)) return { safe: false, reason: `PRE-CF ambiguous state leaf ${id}` };
+        statementsByState.set(id, (leaf.body || []).filter(statement => statement?.type !== "CommentStatement"));
+    }
+    const ranges = new Map();
+    for (const state of betaResult.graph.states || []) {
+        const statements = statementsByState.get(state.id);
+        if (!statements || statements.length !== (state.operations || []).length) return { safe: false, reason: `PRE-CF state ${state.id} statement/operation mismatch` };
+        for (let i = 0; i < state.operations.length; i++) {
+            if (!Array.isArray(statements[i]?.range)) return { safe: false, reason: `PRE-CF state ${state.id} lost statement range` };
+            ranges.set(state.operations[i], statements[i].range);
+        }
+    }
+    return { safe: true, ranges };
+}
+function applySourceEdits(source, edits) {
+    let output = source;
+    for (const edit of [...edits].sort((a, b) => b.start - a.start)) output = output.slice(0, edit.start) + edit.replacement + output.slice(edit.end);
+    return output;
+}
+function isCopyOperation(operation) { return operation && (operation.kind === "version-define" || operation.kind === "epoch-start"); }
+function finalizePreCfCopyTemps(betaResult) {
+    if (!betaResult?.graph || typeof betaResult.source !== "string" || betaResult.graph.cfgComplete !== true) {
+        betaResult.preCfCopyTemps = { applied: false, safe: false, reason: "PRE-CF copy recovery requires a complete beta graph" };
+        return betaResult;
+    }
+    let folds = 0;
+    const maxRounds = (betaResult.graph.states || []).reduce((n, state) => n + (state.operations || []).length, 0) + 1;
+    for (let round = 0; round < maxRounds; round++) {
+        const proof = buildPreCfTempProofIndex(betaResult);
+        let candidate = null;
+        for (const facts of proof.byBinding.values()) {
+            if (!facts.safeSameStateTransport || !facts.adjacent) continue;
+            const producer = facts.producer.operation, consumer = facts.consumer.operation;
+            if (!isCopyOperation(producer) || !isCopyOperation(consumer) || consumer.rhs !== facts.name) continue;
+            if (!/^[A-Za-z_][A-Za-z0-9_]*$/.test(String(producer.rhs || ""))) continue;
+            if (!Array.isArray(producer.reads) || producer.reads.length !== 1 || producer.reads[0] !== producer.rhs) continue;
+            candidate = { facts, producer, consumer };
+            break;
+        }
+        if (!candidate) break;
+        const ownership = mapPreCfOperationRanges(betaResult);
+        if (!ownership.safe) { betaResult.preCfCopyTemps = { applied: folds > 0, safe: false, reason: ownership.reason, folds }; return betaResult; }
+        const pr = ownership.ranges.get(candidate.producer), cr = ownership.ranges.get(candidate.consumer);
+        if (!pr || !cr) { betaResult.preCfCopyTemps = { applied: folds > 0, safe: false, reason: "PRE-CF copy recovery lost exact source ownership", folds }; return betaResult; }
+        const prefix = String(candidate.consumer.emittedText || "").trim().startsWith("local ") ? "local " : "";
+        const emittedText = `${prefix}${candidate.consumer.emittedTarget} = ${candidate.producer.rhs}`;
+        const output = applySourceEdits(betaResult.source, [{ start: pr[0], end: pr[1], replacement: "" }, { start: cr[0], end: cr[1], replacement: emittedText }]);
+        try { parsePreCfSource(output); } catch (error) { betaResult.preCfCopyTemps = { applied: folds > 0, safe: false, reason: `PRE-CF copy recovery reparse failed: ${error.message}`, folds }; return betaResult; }
+        betaResult.source = output;
+        const state = betaResult.graph.states.find(item => item.id === candidate.facts.producer.stateId);
+        state.operations.splice(candidate.facts.producer.offset, 1);
+        candidate.consumer.rhs = candidate.producer.rhs;
+        candidate.consumer.reads = [...candidate.producer.reads];
+        candidate.consumer.emittedText = emittedText;
+        for (let i = 0; i < state.operations.length; i++) state.operations[i].index = i + 1;
+        folds++;
+    }
+    betaResult.preCfCopyTemps = { applied: folds > 0, safe: true, folds };
+    return betaResult;
+}
 module.exports = {
     buildPreCfTempProofIndex,
     provePreCfTempUse,
+    finalizePreCfCopyTemps,
 };
