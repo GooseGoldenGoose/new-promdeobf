@@ -269,9 +269,75 @@ function finalizePreCfScalarTemps(betaResult) {
     betaResult.preCfScalarTemps = { applied: folds > 0, safe: true, folds };
     return betaResult;
 }
+function isStaticLookupExpression(node) {
+    if (node?.type === "MemberExpression") {
+        return node.base?.type === "Identifier" && node.identifier?.type === "Identifier";
+    }
+    if (node?.type === "IndexExpression") {
+        return node.base?.type === "Identifier" && ["StringLiteral", "NumericLiteral", "BooleanLiteral"].includes(node.index?.type);
+    }
+    return false;
+}
+
+function finalizePreCfLookupTemps(betaResult) {
+    if (!betaResult?.graph || typeof betaResult.source !== "string" || betaResult.graph.cfgComplete !== true) {
+        betaResult.preCfLookupTemps = { applied: false, safe: false, reason: "PRE-CF lookup recovery requires a complete beta graph" };
+        return betaResult;
+    }
+    let folds = 0;
+    const maxRounds = (betaResult.graph.states || []).reduce((n, state) => n + (state.operations || []).length, 0) + 1;
+    for (let round = 0; round < maxRounds; round++) {
+        const proof = buildPreCfTempProofIndex(betaResult);
+        let candidate = null;
+        for (const facts of proof.byBinding.values()) {
+            if (!facts.safeSameStateTransport || !facts.adjacent) continue;
+            const producer = facts.producer.operation;
+            const consumer = facts.consumer.operation;
+            if (!isCopyOperation(producer) || !isCopyOperation(consumer) || consumer.rhs !== facts.name) continue;
+            const expression = parsePreCfRhs(producer.rhs);
+            if (!isStaticLookupExpression(expression)) continue;
+            candidate = { facts, producer, consumer };
+            break;
+        }
+        if (!candidate) break;
+        const ownership = mapPreCfOperationRanges(betaResult);
+        if (!ownership.safe) {
+            betaResult.preCfLookupTemps = { applied: folds > 0, safe: false, reason: ownership.reason, folds };
+            return betaResult;
+        }
+        const producerRange = ownership.ranges.get(candidate.producer);
+        const consumerRange = ownership.ranges.get(candidate.consumer);
+        if (!producerRange || !consumerRange) {
+            betaResult.preCfLookupTemps = { applied: folds > 0, safe: false, reason: "PRE-CF lookup recovery lost exact source ownership", folds };
+            return betaResult;
+        }
+        const prefix = String(candidate.consumer.emittedText || "").trim().startsWith("local ") ? "local " : "";
+        const emittedText = `${prefix}${candidate.consumer.emittedTarget} = ${candidate.producer.rhs}`;
+        const output = applySourceEdits(betaResult.source, [
+            { start: producerRange[0], end: producerRange[1], replacement: "" },
+            { start: consumerRange[0], end: consumerRange[1], replacement: emittedText },
+        ]);
+        try { parsePreCfSource(output); }
+        catch (error) {
+            betaResult.preCfLookupTemps = { applied: folds > 0, safe: false, reason: `PRE-CF lookup recovery reparse failed: ${error.message}`, folds };
+            return betaResult;
+        }
+        betaResult.source = output;
+        const state = betaResult.graph.states.find(item => item.id === candidate.facts.producer.stateId);
+        state.operations.splice(candidate.facts.producer.offset, 1);
+        candidate.consumer.rhs = candidate.producer.rhs;
+        candidate.consumer.reads = [...(candidate.producer.reads || [])];
+        candidate.consumer.emittedText = emittedText;
+        for (let i = 0; i < state.operations.length; i++) state.operations[i].index = i + 1;
+        folds++;
+    }
+    betaResult.preCfLookupTemps = { applied: folds > 0, safe: true, folds };
+    return betaResult;
+}
 module.exports = {
     buildPreCfTempProofIndex,
     provePreCfTempUse,
     finalizePreCfCopyTemps,
     finalizePreCfScalarTemps,
+    finalizePreCfLookupTemps,
 };
