@@ -178,6 +178,7 @@ normal output
 -> beta lifetimes / ownership
 -> beta upvalue resolve + binding recovery
 -> final beta register scheduling / local sinking
+-> dead state/POS snapshot cleanup
 -> beta control-flow structuring
 -> closure-region inlining
 -> final recovered source
@@ -188,6 +189,8 @@ Beta register/version analysis now owns captured-cell resolution before CF. For 
 The beta source emitter maps recovered graph operations back to their original beta statements by structural operation ownership. Atomic `multi-write` / `multi-call-write` semantics are unchanged; the mapper only accounts for their optional separate local-declaration statement so upvalue edits keep exact operation/source alignment.
 
 Final beta register scheduling now runs after upvalue resolution and before CF. It reuses the existing dependency scheduler on one-statement beta operations, treating a single `local r_v... = value` declaration as the same schedulable dependency shape as an assignment while preserving the original `local` syntax. Reordered source statements are written back to the same order in `beta.graph`, so CF consumes the sorted order. States containing a multi-statement atomic `multi-write` / `multi-call-write` operation are skipped by this final pass rather than risking separation. The earlier VM scheduling used by normal/source analysis remains in place because beta lifetime/version analysis consumes that normalized order; the new final pass is the presentation/order pass after upvalue recovery. Final scheduling also canonicalizes proven block tails: the final live `state = ...` transition is placed last when it can commute across only pure dependency-safe single-target statements, and the final proven `ReturnVal = ...` is placed immediately above that state write. Generic pure ReturnVal expressions use the same dependency proof; compiler-proven terminal return payloads may also use the existing stronger return-sink metadata so packed/unpack return payloads can move without weakening call/effect ordering. Ambiguous/effectful shapes fail closed.
+
+Dead state/POS snapshot cleanup runs immediately after final beta scheduling and before CF. It starts only from beta-version bindings whose exact RHS is the VM `state` value, follows only proven local beta copy edges, and removes a chain backward from zero-read leaves. Any semantic beta read keeps that binding and its ancestors live. Source operation ranges and `beta.graph` operations are deleted together, then operation indices are renumbered and the source reparsed. This is deliberately not generic dead-local cleanup.
 
 ### Structural helper recovery
 
@@ -318,6 +321,8 @@ Current beta-upvalue-stage verification: numeric 1-63 standalone beta finalizati
 
 
 Final beta scheduling verification: the state-1 `"debug"` literal producer is sunk directly beside `_env[...]` after upvalue resolution, focused project suites pass 14/14, canonical numeric CF passes 63/63, and `spacial6` still succeeds at 3799 states / 554 closures. Tail-order verification also confirms state-1 ends with its final `state = ...`, terminal return blocks emit `ReturnVal = ...` directly above `state = nil` when proven movable, focused suites remain 14/14, numeric CF remains 63/63, and spacial6 remains 3799 states / 554 closures.
+
+Dead state/POS cleanup verification: `output/input.beta.lua` state snapshots reduce from 9 to 0; `spacial6.beta.lua` reduces from 251 to 8, leaving only live/semantically-read beta bindings. Dedicated dead-chain and live-use regressions pass. Full project suites remain 14/14, canonical numeric CF remains 63/63, and `spacial6` remains 3799 states / 554 closures.
 
 During the earlier performance optimization, every regenerated normal and beta-CF output for 1-63 was compared against a frozen pre-optimization baseline, and that performance-only checkpoint was byte-for-byte identical. That byte-identity statement is historical: the current beta-upvalue ownership change intentionally changes recovered binding presentation (for example choosing the proven surviving `r_v...` source binding or a synthetic `u_vN`), so current final CF is not expected to be byte-identical to the pre-feature baseline. Current generation/parse/regression gates above are authoritative for this feature.
 

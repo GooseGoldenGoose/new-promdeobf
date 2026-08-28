@@ -1,6 +1,6 @@
 const assert = require("assert");
 const { parseLua } = require("../main");
-const { versionVmBlockRegisters, finalizeBetaRegisterUpvalues, finalizeBetaRegisterSchedule } = require("../passes/beta-register-versions");
+const { versionVmBlockRegisters, finalizeBetaRegisterUpvalues, finalizeBetaRegisterSchedule, finalizeBetaDeadStateSnapshots } = require("../passes/beta-register-versions");
 
 const source = `vm = function(state, args, upvalues, gcProxy)
     local r1, r2, ReturnVal
@@ -958,5 +958,45 @@ assert(!recoveredSyntheticBinding.source.includes("allocUpvalue("));
 assert(!recoveredSyntheticBinding.source.includes("upvalueValues["));
 assert.equal(recoveredSyntheticBinding.upvalueRecovery.captures.find(item => item.entry === 2)?.slots[0]?.bindingName, "u_v1");
 parseLua(recoveredSyntheticBinding.source, "<beta-upvalue-synthetic-binding-output>");
+
+const deadStateSnapshotSource = `vm = function(state, args, upvalues, gcProxy)
+    local r1, r2, ReturnVal
+    while state do
+        if state == 1 then
+            r1 = state
+            r2 = r1
+            state = nil
+        end
+    end
+    state = #gcProxy
+    return unpack(ReturnVal)
+end`;
+const deadStateSnapshotRaw = versionVmBlockRegisters(deadStateSnapshotSource, parseLua(deadStateSnapshotSource, "<dead-state-snapshot>"));
+const deadStateSnapshotFinal = finalizeBetaDeadStateSnapshots(finalizeBetaRegisterSchedule(finalizeBetaRegisterUpvalues(deadStateSnapshotRaw)));
+assert.equal(deadStateSnapshotFinal.deadStateSnapshots.safe, true);
+assert.equal(deadStateSnapshotFinal.deadStateSnapshots.applied, true);
+assert.equal(deadStateSnapshotFinal.deadStateSnapshots.removedRoots, 1);
+assert.equal(deadStateSnapshotFinal.deadStateSnapshots.removedCopies, 1);
+assert(!/local\s+\w+\s*=\s*state\b/.test(deadStateSnapshotFinal.source));
+parseLua(deadStateSnapshotFinal.source, "<dead-state-snapshot-output>");
+
+const liveStateSnapshotSource = `vm = function(state, args, upvalues, gcProxy)
+    local r1, ReturnVal
+    while state do
+        if state == 1 then
+            r1 = state
+            ReturnVal = { r1 }
+            state = nil
+        end
+    end
+    state = #gcProxy
+    return unpack(ReturnVal)
+end`;
+const liveStateSnapshotRaw = versionVmBlockRegisters(liveStateSnapshotSource, parseLua(liveStateSnapshotSource, "<live-state-snapshot>"));
+const liveStateSnapshotFinal = finalizeBetaDeadStateSnapshots(finalizeBetaRegisterSchedule(finalizeBetaRegisterUpvalues(liveStateSnapshotRaw)));
+assert.equal(liveStateSnapshotFinal.deadStateSnapshots.safe, true);
+assert.equal(liveStateSnapshotFinal.deadStateSnapshots.applied, false);
+assert(/local\s+\w+\s*=\s*state\b/.test(liveStateSnapshotFinal.source));
+parseLua(liveStateSnapshotFinal.source, "<live-state-snapshot-output>");
 
 console.log("beta register versioning tests passed");

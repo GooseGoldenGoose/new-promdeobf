@@ -1688,6 +1688,161 @@ function finalizeBetaRegisterSchedule(betaResult) {
     return betaResult;
 }
 
+function isDeadStateSnapshotCopyOperation(operation, sourceName) {
+    if (!operation?.emittedTarget || typeof operation.rhs !== "string") return false;
+    if (!["version-define", "epoch-start"].includes(operation.kind)) return false;
+    if (!String(operation.emittedText || "").trim().startsWith("local ")) return false;
+    return operation.rhs.trim() === sourceName;
+}
+
+function finalizeBetaDeadStateSnapshots(betaResult) {
+    if (!betaResult?.graph || !betaResult.applied) return betaResult;
+    const stateName = betaResult.graph.stateName;
+    let sourceAst;
+    try { sourceAst = parseBetaSource(betaResult.source); }
+    catch (error) {
+        betaResult.deadStateSnapshots = { applied: false, safe: false, reason: `Dead state snapshot source parse failed: ${error.message}` };
+        return betaResult;
+    }
+    const sourceVm = findVmFunction(sourceAst);
+    if (!sourceVm) {
+        betaResult.deadStateSnapshots = { applied: false, safe: false, reason: "Dead state snapshot VM function not found" };
+        return betaResult;
+    }
+    const unresolvedOriginalUseCount = new Map();
+    const allOperations = [];
+    const writerByName = new Map();
+    const useCount = new Map();
+    for (const state of betaResult.graph.states || []) {
+        for (const operation of state.operations || []) {
+            allOperations.push({ state, operation });
+            if (operation.emittedTarget) {
+                if (writerByName.has(operation.emittedTarget)) writerByName.set(operation.emittedTarget, null);
+                else writerByName.set(operation.emittedTarget, { state, operation });
+            }
+            for (const read of operation.reads || []) useCount.set(read, (useCount.get(read) || 0) + 1);
+        }
+    }
+
+    const stateRooted = new Set();
+    const parentByTarget = new Map();
+    let changed = true;
+    while (changed) {
+        changed = false;
+        for (const { operation } of allOperations) {
+            const target = operation.emittedTarget;
+            if (!target || stateRooted.has(target) || writerByName.get(target)?.operation !== operation) continue;
+            const rhs = String(operation.rhs || "").trim();
+            if (isDeadStateSnapshotCopyOperation(operation, stateName)) {
+                stateRooted.add(target);
+                parentByTarget.set(target, null);
+                changed = true;
+                continue;
+            }
+            if (stateRooted.has(rhs) && isDeadStateSnapshotCopyOperation(operation, rhs)) {
+                stateRooted.add(target);
+                parentByTarget.set(target, rhs);
+                changed = true;
+            }
+        }
+    }
+
+    const removableTargets = new Set();
+    const remainingUses = new Map(useCount);
+    changed = true;
+    while (changed) {
+        changed = false;
+        for (const target of stateRooted) {
+            if (removableTargets.has(target) || (remainingUses.get(target) || 0) !== 0) continue;
+            const owner = writerByName.get(target);
+            if (!owner?.operation) continue;
+            removableTargets.add(target);
+            const parent = parentByTarget.get(target);
+            if (parent) remainingUses.set(parent, Math.max(0, (remainingUses.get(parent) || 0) - 1));
+            changed = true;
+        }
+    }
+
+    const removableOperations = new Set();
+    for (const target of removableTargets) {
+        const owner = writerByName.get(target);
+        if (owner?.operation) removableOperations.add(owner.operation);
+    }
+    if (!removableOperations.size) {
+        betaResult.deadStateSnapshots = { applied: false, safe: true, removedOperations: 0, removedRoots: 0, removedCopies: 0 };
+        return betaResult;
+    }
+
+    let ast;
+    try { ast = parseBetaSource(betaResult.source); }
+    catch (error) {
+        betaResult.deadStateSnapshots = { applied: false, safe: false, reason: `Dead state snapshot source parse failed: ${error.message}` };
+        return betaResult;
+    }
+    const vm = findVmFunction(ast);
+    if (!vm) {
+        betaResult.deadStateSnapshots = { applied: false, safe: false, reason: "Dead state snapshot VM function not found" };
+        return betaResult;
+    }
+    const leafByState = new Map();
+    for (const leaf of collectStateLeafClauses(vm.functionNode, stateName, [])) {
+        const id = numericValue(leaf.condition.left) ?? numericValue(leaf.condition.right);
+        if (!Number.isInteger(id) || leafByState.has(id)) {
+            betaResult.deadStateSnapshots = { applied: false, safe: false, reason: `Dead state snapshot ambiguous state leaf ${id}` };
+            return betaResult;
+        }
+        leafByState.set(id, leaf);
+    }
+
+    const edits = [];
+    for (const state of betaResult.graph.states || []) {
+        const leaf = leafByState.get(state.id);
+        if (!leaf) {
+            betaResult.deadStateSnapshots = { applied: false, safe: false, reason: `Dead state snapshot missing state ${state.id}` };
+            return betaResult;
+        }
+        const statements = (leaf.body || []).filter(statement => statement?.type !== "CommentStatement");
+        let statementIndex = 0;
+        for (const operation of state.operations || []) {
+            const count = betaOperationSourceStatementCount(operation);
+            const first = statements[statementIndex];
+            const last = statements[statementIndex + count - 1];
+            if (!Array.isArray(first?.range) || !Array.isArray(last?.range)) {
+                betaResult.deadStateSnapshots = { applied: false, safe: false, reason: `Dead state snapshot lost source ownership in state ${state.id}` };
+                return betaResult;
+            }
+            if (removableOperations.has(operation)) edits.push({ start: first.range[0], end: last.range[1], replacement: "" });
+            statementIndex += count;
+        }
+        if (statementIndex !== statements.length) {
+            betaResult.deadStateSnapshots = { applied: false, safe: false, reason: `Dead state snapshot statement/operation mismatch in state ${state.id}` };
+            return betaResult;
+        }
+    }
+
+    const output = applyTextEdits(betaResult.source, edits);
+    try { parseBetaSource(output); }
+    catch (error) {
+        betaResult.deadStateSnapshots = { applied: false, safe: false, reason: `Dead state snapshot reparse failed: ${error.message}` };
+        return betaResult;
+    }
+
+    let removedRoots = 0;
+    let removedCopies = 0;
+    for (const state of betaResult.graph.states || []) {
+        const kept = [];
+        for (const operation of state.operations || []) {
+            if (!removableOperations.has(operation)) { kept.push(operation); continue; }
+            if (String(operation.rhs || "").trim() === stateName) removedRoots++;
+            else removedCopies++;
+        }
+        state.operations = kept;
+        for (let index = 0; index < kept.length; index++) kept[index].index = index + 1;
+    }
+    betaResult.source = output;
+    betaResult.deadStateSnapshots = { applied: true, safe: true, removedOperations: removableOperations.size, removedRoots, removedCopies };
+    return betaResult;
+}
 function finalizeBetaRegisterUpvalues(betaResult) {
     if (!betaResult?.graph || !betaResult.applied) return betaResult;
     assignBetaSourceOperationIds(betaResult.graph);
@@ -1777,4 +1932,5 @@ module.exports = {
     versionVmBlockRegisters,
     finalizeBetaRegisterUpvalues,
     finalizeBetaRegisterSchedule,
+    finalizeBetaDeadStateSnapshots,
 };

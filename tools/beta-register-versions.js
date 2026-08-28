@@ -1,7 +1,7 @@
 const fs = require("fs");
 const path = require("path");
 const { parseLuaStructural } = require("../main");
-const { versionVmBlockRegisters, finalizeBetaRegisterUpvalues, finalizeBetaRegisterSchedule } = require("../passes/beta-register-versions");
+const { versionVmBlockRegisters, finalizeBetaRegisterUpvalues, finalizeBetaRegisterSchedule, finalizeBetaDeadStateSnapshots } = require("../passes/beta-register-versions");
 
 function defaultOutputPath(inputPath) {
     const parsed = path.parse(path.resolve(inputPath));
@@ -17,7 +17,7 @@ function main() {
     const source = fs.readFileSync(inputPath, "utf8");
     const ast = parseLuaStructural(source, inputPath);
     const rawResult = versionVmBlockRegisters(source, ast);
-    const result = finalizeBetaRegisterSchedule(finalizeBetaRegisterUpvalues(rawResult));
+    const result = finalizeBetaDeadStateSnapshots(finalizeBetaRegisterSchedule(finalizeBetaRegisterUpvalues(rawResult)));
     if (!result.found || !result.applied) {
         throw new Error(result.reason || "Beta register versioning did not apply");
     }
