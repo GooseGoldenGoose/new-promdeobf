@@ -130,6 +130,13 @@ function collectStateLeaves(node, stateName, out = []) {
     }
     return out;
 }
+function preCfOperationSourceStatementCount(operation) {
+    if (operation?.kind !== "multi-write" && operation?.kind !== "multi-call-write") return 1;
+    const declarations = (operation.targetDeclarations || []).filter(Boolean).length;
+    if (!declarations) return 1;
+    if (operation.kind === "multi-call-write" && declarations === (operation.emittedTargets || []).length && (operation.targetDeclarations || []).every(Boolean)) return 1;
+    return 2;
+}
 function mapPreCfOperationRanges(betaResult) {
     let ast;
     try { ast = parsePreCfSource(betaResult.source); } catch (error) { return { safe: false, reason: `PRE-CF source parse failed: ${error.message}` }; }
@@ -144,11 +151,17 @@ function mapPreCfOperationRanges(betaResult) {
     const ranges = new Map();
     for (const state of betaResult.graph.states || []) {
         const statements = statementsByState.get(state.id);
-        if (!statements || statements.length !== (state.operations || []).length) return { safe: false, reason: `PRE-CF state ${state.id} statement/operation mismatch` };
-        for (let i = 0; i < state.operations.length; i++) {
-            if (!Array.isArray(statements[i]?.range)) return { safe: false, reason: `PRE-CF state ${state.id} lost statement range` };
-            ranges.set(state.operations[i], statements[i].range);
+        if (!statements) return { safe: false, reason: `PRE-CF state ${state.id} statement/operation mismatch` };
+        let statementIndex = 0;
+        for (const operation of state.operations || []) {
+            const count = preCfOperationSourceStatementCount(operation);
+            const first = statements[statementIndex];
+            const last = statements[statementIndex + count - 1];
+            if (!Array.isArray(first?.range) || !Array.isArray(last?.range)) return { safe: false, reason: `PRE-CF state ${state.id} lost statement range` };
+            ranges.set(operation, [first.range[0], last.range[1]]);
+            statementIndex += count;
         }
+        if (statementIndex !== statements.length) return { safe: false, reason: `PRE-CF state ${state.id} statement/operation mismatch ${statements.length}/${statementIndex}` };
     }
     return { safe: true, ranges };
 }
@@ -370,6 +383,13 @@ function rewriteDirectCallArgument(rhs, tempName, replacement) {
     };
 }
 
+function isPreCfClosureFactoryCall(expression, graph) {
+    if (expression?.type !== "CallExpression" || expression.base?.type !== "Identifier") return false;
+    if (!/^createClosure(?:\d+)?$/.test(expression.base.name)) return false;
+    const entry = numericLiteralValue((expression.arguments || [])[0]);
+    return Number.isInteger(entry) && new Set(graph?.entries || []).has(entry);
+}
+
 function finalizePreCfCallArgumentTemps(betaResult) {
     if (!betaResult?.graph || typeof betaResult.source !== "string" || betaResult.graph.cfgComplete !== true) {
         betaResult.preCfCallArgumentTemps = { applied: false, safe: false, reason: "PRE-CF call-argument recovery requires a complete beta graph" };
@@ -386,7 +406,7 @@ function finalizePreCfCallArgumentTemps(betaResult) {
             const consumer = facts.consumer.operation;
             if (!isCopyOperation(producer) || !isCopyOperation(consumer)) continue;
             const producerExpr = parsePreCfRhs(producer.rhs);
-            if (producerExpr?.type !== "CallExpression") continue;
+            if (producerExpr?.type !== "CallExpression" || isPreCfClosureFactoryCall(producerExpr, betaResult.graph)) continue;
             const rewritten = rewriteDirectCallArgument(consumer.rhs, facts.name, `(${producer.rhs})`);
             if (!rewritten) continue;
             if (!Array.isArray(consumer.reads) || !consumer.reads.includes(rewritten.baseName)) continue;
@@ -620,10 +640,13 @@ function finalizePreCfNamecalls(betaResult) {
     betaResult.preCfNamecalls = { applied: folds > 0, safe: true, folds };
     return betaResult;
 }
-function renderReturnTransportExpression(producer) {
+function renderReturnTransportExpression(producer, graph) {
     const expression = parsePreCfRhs(producer?.rhs);
     if (!expression) return null;
-    if (expression.type === "CallExpression") return `(${producer.rhs})`;
+    if (expression.type === "CallExpression") {
+        if (isPreCfClosureFactoryCall(expression, graph)) return null;
+        return `(${producer.rhs})`;
+    }
     if (isSafePreCfScalarExpression(expression)) return producer.rhs;
     if (isStaticLookupExpression(expression)) return producer.rhs;
     return null;
@@ -646,7 +669,7 @@ function finalizePreCfReturnTemps(betaResult) {
             if (!isCopyOperation(producer) || payload?.kind !== "return-payload" || payload.terminalCompilerReturnPayload !== true) continue;
             if (!Array.isArray(payload.returnExpressions) || payload.returnExpressions.length !== 1 || payload.returnExpressions[0] !== facts.name) continue;
             if (!Array.isArray(payload.reads) || payload.reads.length !== 1 || payload.reads[0] !== facts.name) continue;
-            const replacement = renderReturnTransportExpression(producer);
+            const replacement = renderReturnTransportExpression(producer, betaResult.graph);
             if (!replacement) continue;
             candidate = { facts, producer, payload, replacement };
             break;

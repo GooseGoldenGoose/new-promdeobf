@@ -67,4 +67,10 @@ for (const beta of [
     assert(beta.source.includes("local temp_v"));
 }
 
+const closureFactory = makeBeta("createClosure4(40, {})", [], ["temp_v"], ["temp_v"]);
+closureFactory.graph.entries = [1, 40];
+finalizePreCfReturnTemps(closureFactory);
+assert.equal(closureFactory.preCfReturnTemps.folds, 0);
+assert(closureFactory.source.includes("local temp_v = createClosure4(40, {})"));
+
 console.log("pre-CF return temps: PASS");

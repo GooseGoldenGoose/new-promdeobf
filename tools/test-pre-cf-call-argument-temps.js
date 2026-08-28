@@ -58,4 +58,15 @@ const doubleUse = makeBeta("sink_v(temp_v, temp_v)", ["sink_v", "temp_v"]);
 finalizePreCfCallArgumentTemps(doubleUse);
 assert.equal(doubleUse.preCfCallArgumentTemps.folds, 0);
 
+const closureFactory = makeBeta("sink_v(temp_v)", ["sink_v", "temp_v"]);
+closureFactory.source = closureFactory.source.replace("local temp_v = make_v()", "local temp_v = createClosure3(148, {})");
+const closureProducer = closureFactory.graph.states[0].operations.find(operation => operation.emittedTarget === "temp_v");
+closureProducer.rhs = "createClosure3(148, {})";
+closureProducer.reads = [];
+closureProducer.emittedText = "local temp_v = createClosure3(148, {})";
+closureFactory.graph.entries = [1, 148];
+finalizePreCfCallArgumentTemps(closureFactory);
+assert.equal(closureFactory.preCfCallArgumentTemps.folds, 0);
+assert(closureFactory.source.includes("local temp_v = createClosure3(148, {})"));
+
 console.log("pre-CF call argument temps: PASS");
