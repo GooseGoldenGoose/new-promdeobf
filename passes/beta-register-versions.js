@@ -1463,6 +1463,90 @@ function betaLineIndentAt(source, offset) {
     return match ? match[0] : "";
 }
 
+
+function betaTailExpressionIsPure(node) {
+    if (!node) return false;
+    if (isIdentifier(node) || ["NilLiteral", "BooleanLiteral", "NumericLiteral", "StringLiteral"].includes(node.type)) return true;
+    if (node.type === "ParenthesisExpression") return betaTailExpressionIsPure(node.expression);
+    if (node.type === "UnaryExpression") return betaTailExpressionIsPure(node.argument);
+    if (node.type === "BinaryExpression" || node.type === "LogicalExpression") return betaTailExpressionIsPure(node.left) && betaTailExpressionIsPure(node.right);
+    if (node.type === "TableConstructorExpression") return (node.fields || []).every(field => {
+        if (field?.type === "TableValue") return betaTailExpressionIsPure(field.value);
+        if (field?.type === "TableKeyString") return betaTailExpressionIsPure(field.value);
+        if (field?.type === "TableKey") return betaTailExpressionIsPure(field.key) && betaTailExpressionIsPure(field.value);
+        return false;
+    });
+    return false;
+}
+
+function collectBetaTailReads(node, out = new Set()) {
+    if (!node || typeof node !== "object") return out;
+    if (node.type === "Identifier") { out.add(node.name); return out; }
+    for (const key of Object.keys(node)) {
+        if (key === "range" || key === "loc") continue;
+        const value = node[key];
+        if (Array.isArray(value)) for (const child of value) collectBetaTailReads(child, out);
+        else if (value && typeof value === "object") collectBetaTailReads(value, out);
+    }
+    return out;
+}
+
+function betaSingleStatementAccess(statement) {
+    if (statement?.type !== "AssignmentStatement" && statement?.type !== "LocalStatement") return null;
+    const variables = statement.variables || [];
+    const init = statement.init || [];
+    if (variables.length !== 1 || init.length !== 1 || !isIdentifier(variables[0]) || !betaTailExpressionIsPure(init[0])) return null;
+    return { write: variables[0].name, reads: collectBetaTailReads(init[0]) };
+}
+
+function canCommuteBetaTailRight(candidate, crossed) {
+    const a = betaSingleStatementAccess(candidate);
+    const b = betaSingleStatementAccess(crossed);
+    if (!a || !b) return false;
+    if (a.write === b.write || a.reads.has(b.write) || b.reads.has(a.write)) return false;
+    return true;
+}
+
+function canonicalizeBetaTailStatements(statements, operations, stateName, returnName) {
+    const ss = [...statements];
+    const os = [...operations];
+    let stateMoved = false;
+    let returnMoved = false;
+    let stateIndex = -1;
+    for (let i = ss.length - 1; i >= 0; i--) {
+        if (betaSingleStatementAccess(ss[i])?.write === stateName) { stateIndex = i; break; }
+    }
+    if (stateIndex >= 0 && stateIndex !== ss.length - 1) {
+        const candidate = ss[stateIndex];
+        if (ss.slice(stateIndex + 1).every(x => canCommuteBetaTailRight(candidate, x))) {
+            const [st] = ss.splice(stateIndex, 1); const [op] = os.splice(stateIndex, 1);
+            ss.push(st); os.push(op); stateMoved = true;
+        }
+    }
+    stateIndex = ss.length - 1;
+    if (betaSingleStatementAccess(ss[stateIndex])?.write !== stateName) stateIndex = -1;
+    if (stateIndex >= 0 && returnName) {
+        let returnIndex = -1;
+        for (let i = stateIndex - 1; i >= 0; i--) {
+            if (os[i]?.kind === "return-payload" || os[i]?.emittedTarget === returnName) { returnIndex = i; break; }
+        }
+        if (returnIndex >= 0 && returnIndex !== stateIndex - 1) {
+            const payload = os[returnIndex];
+            const crossedOperations = os.slice(returnIndex + 1, stateIndex);
+            const sourceSafe = betaSingleStatementAccess(ss[returnIndex]) !== null &&
+                ss.slice(returnIndex + 1, stateIndex).every(x => canCommuteBetaTailRight(ss[returnIndex], x));
+            const compilerSafe = payload?.kind === "return-payload" &&
+                payload?.terminalCompilerReturnPayload === true &&
+                crossedOperations.every(operation => canSinkTerminalReturnAcross(payload, operation));
+            if (sourceSafe || compilerSafe) {
+                const [st] = ss.splice(returnIndex, 1); const [op] = os.splice(returnIndex, 1);
+                ss.splice(ss.length - 1, 0, st); os.splice(os.length - 1, 0, op); returnMoved = true;
+            }
+        }
+    }
+    return { statements: ss, operations: os, stateMoved, returnMoved };
+}
+
 function finalizeBetaRegisterSchedule(betaResult) {
     if (!betaResult?.graph || !betaResult.applied) return betaResult;
     let ast;
@@ -1497,6 +1581,8 @@ function finalizeBetaRegisterSchedule(betaResult) {
     let unreadSinks = 0;
     let safetyRejectedSegments = 0;
     let atomicStatesSkipped = 0;
+    let stateTailMoves = 0;
+    let returnTailMoves = 0;
 
     for (const state of betaResult.graph.states || []) {
         const leaf = leafByState.get(state.id);
@@ -1529,8 +1615,6 @@ function finalizeBetaRegisterSchedule(betaResult) {
             safetyRejectedSegments++;
             continue;
         }
-        if (!scheduled.swaps) continue;
-
         const orderedOperations = [];
         const orderedSourceStatements = [];
         for (const proxy of scheduled.statements) {
@@ -1544,6 +1628,11 @@ function finalizeBetaRegisterSchedule(betaResult) {
             orderedSourceStatements.push(sourceStatement);
         }
 
+        const tail = canonicalizeBetaTailStatements(orderedSourceStatements, orderedOperations, betaResult.graph.stateName, betaResult.graph.returnName);
+        if (!scheduled.swaps && !tail.stateMoved && !tail.returnMoved) continue;
+        if (tail.stateMoved) stateTailMoves++;
+        if (tail.returnMoved) returnTailMoves++;
+
         const first = sourceStatements[0];
         const last = sourceStatements[sourceStatements.length - 1];
         if (!Array.isArray(first?.range) || !Array.isArray(last?.range)) {
@@ -1552,12 +1641,12 @@ function finalizeBetaRegisterSchedule(betaResult) {
         }
         const indent = betaLineIndentAt(betaResult.source, first.range[0]);
         const newline = betaResult.source.includes("\r\n") ? "\r\n" : "\n";
-        const replacement = orderedSourceStatements
+        const replacement = tail.statements
             .map(statement => betaResult.source.slice(statement.range[0], statement.range[1]))
             .join(newline + indent);
         edits.push({ start: first.range[0], end: last.range[1], replacement });
 
-        state.operations = orderedOperations;
+        state.operations = tail.operations;
         for (let index = 0; index < state.operations.length; index++) state.operations[index].index = index + 1;
         blocksChanged++;
         swaps += scheduled.swaps;
@@ -1577,6 +1666,8 @@ function finalizeBetaRegisterSchedule(betaResult) {
         unreadSinks,
         safetyRejectedSegments,
         atomicStatesSkipped,
+        stateTailMoves,
+        returnTailMoves,
     };
     if (!edits.length) {
         betaResult.finalRegisterSchedule = result;
