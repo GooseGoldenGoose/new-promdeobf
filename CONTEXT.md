@@ -899,3 +899,4 @@ Rust stable-field / callback-chain follow-up: immediate sole-use static dot-fiel
 ## PRE-CF Temp Recovery Work
 
 Step 1 checkpoint: mapped local WeAreDevs compiler temp ownership in `docs/pre-cf-temp-map.md`. PRE-CF owns only proven transport/adjacent expression setup; branch/backedge-dependent `and/or`, if, while, repeat, numeric-for, generic-for, break/continue remain CF-owned. Dedicated probe: `sample/pre-cf/01-compiler-shapes.source.lua`, verified by local Medium compilation. Do not use generic one-use inlining.
+Step 2 checkpoint: added `passes/pre-cf-temp-recovery.js` proof/index infrastructure. It indexes beta writes/reads by emitted binding, exposes exact producer/consumer facts, capture status from recovered upvalue bindings, same-state/adjacency, and CFG cycle crossing. Initial safe transport proof is deliberately same-state only. Focused test: `tools/test-pre-cf-temp-recovery.js`.
