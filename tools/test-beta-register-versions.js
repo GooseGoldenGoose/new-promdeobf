@@ -1,6 +1,6 @@
 const assert = require("assert");
 const { parseLua } = require("../main");
-const { versionVmBlockRegisters, finalizeBetaRegisterUpvalues, finalizeBetaRegisterSchedule, finalizeBetaDeadStateSnapshots, finalizeBetaDeadStateInitializers, finalizeBetaWhitespaceCleanup } = require("../passes/beta-register-versions");
+const { versionVmBlockRegisters, finalizeBetaRegisterUpvalues, finalizeBetaRegisterSchedule, finalizeBetaDeadStateSnapshots, finalizeBetaDeadStateInitializers, finalizeBetaDeadRegisterClears, finalizeBetaWhitespaceCleanup } = require("../passes/beta-register-versions");
 
 const source = `vm = function(state, args, upvalues, gcProxy)
     local r1, r2, ReturnVal
@@ -1236,5 +1236,37 @@ assert.notEqual(unreadCleanupOps[2].emittedTarget, unreadCleanupOps[0].emittedTa
 assert(unreadCleanupResult.source.includes(`${unreadCleanupOps[0].emittedTarget} = nil`));
 assert(!unreadCleanupResult.source.includes(`local ${unreadCleanupOps[1].emittedTarget} = nil`));
 parseLua(unreadCleanupResult.source, "<beta-unread-cleanup-output>");
+
+const unreadCleanupFinal = finalizeBetaDeadRegisterClears(unreadCleanupResult);
+assert.equal(unreadCleanupFinal.deadRegisterClears.safe, true);
+assert.equal(unreadCleanupFinal.deadRegisterClears.applied, true);
+assert.equal(unreadCleanupFinal.deadRegisterClears.removedOperations, 1);
+assert(!unreadCleanupFinal.source.includes(`${unreadCleanupOps[0].emittedTarget} = nil`));
+assert.equal(unreadCleanupFinal.graph.states.flatMap(state => state.operations).filter(operation => operation.kind === "epoch-kill").length, 0);
+assert.equal(unreadCleanupFinal.graph.states.flatMap(state => state.operations).filter(operation => operation.originalTarget === "r1").length, 2);
+parseLua(unreadCleanupFinal.source, "<beta-unread-cleanup-final-output>");
+
+const semanticNilSource = `vm = function(state, args, upvalues, gcProxy)
+    local r1, r2, ReturnVal
+    while state do
+        if state == 1 then
+            r1 = nil
+            r2 = r1
+            ReturnVal = { r2 }
+            state = nil
+        end
+    end
+    state = #gcProxy
+    return unpack(ReturnVal)
+end`;
+const semanticNilRaw = versionVmBlockRegisters(semanticNilSource, parseLua(semanticNilSource, "<beta-semantic-nil-test>"));
+const semanticNilOps = semanticNilRaw.graph.states.flatMap(state => state.operations).filter(operation => operation.originalTarget === "r1");
+assert.equal(semanticNilOps.length, 1);
+assert.notEqual(semanticNilOps[0].kind, "epoch-kill");
+const semanticNilFinal = finalizeBetaDeadRegisterClears(semanticNilRaw);
+assert.equal(semanticNilFinal.deadRegisterClears.safe, true);
+assert.equal(semanticNilFinal.deadRegisterClears.applied, false);
+assert(/= nil/.test(semanticNilFinal.source));
+parseLua(semanticNilFinal.source, "<beta-semantic-nil-output>");
 
 console.log("beta register versioning tests passed");

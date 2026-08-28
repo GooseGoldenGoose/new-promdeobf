@@ -2033,6 +2033,101 @@ function finalizeBetaDeadStateInitializers(betaResult) {
     return betaResult;
 }
 
+
+function isProvenDeadRegisterClear(operation, graph) {
+    if (operation?.kind !== "epoch-kill" || operation?.registerEpoch == null) return false;
+    if (String(operation.rhs || "").trim() !== "nil") return false;
+    if (!operation.emittedTarget || !operation.originalTarget) return false;
+    if (operation.originalTarget === graph.stateName || operation.originalTarget === graph.returnName) return false;
+    if (!/^(?:r\d+|__overflow_phys_\d+)$/.test(operation.originalTarget)) return false;
+    if ((operation.reads || []).length !== 0) return false;
+    if ((graph.recoveredUpvalueBindings || []).includes(operation.emittedTarget)) return false;
+    return String(operation.emittedText || "").trim() === `${operation.emittedTarget} = nil`;
+}
+
+function finalizeBetaDeadRegisterClears(betaResult) {
+    if (!betaResult?.graph || !betaResult.applied) return betaResult;
+    const graph = betaResult.graph;
+    const removable = new Set();
+    for (const state of graph.states || []) {
+        for (const operation of state.operations || []) {
+            if (isProvenDeadRegisterClear(operation, graph)) removable.add(operation);
+        }
+    }
+    if (!removable.size) {
+        betaResult.deadRegisterClears = { applied: false, safe: true, removedOperations: 0 };
+        return betaResult;
+    }
+
+    let ast;
+    try { ast = parseBetaSource(betaResult.source); }
+    catch (error) {
+        betaResult.deadRegisterClears = { applied: false, safe: false, reason: `Dead register clear source parse failed: ${error.message}`, removedOperations: 0 };
+        return betaResult;
+    }
+    const vm = findVmFunction(ast);
+    if (!vm) {
+        betaResult.deadRegisterClears = { applied: false, safe: false, reason: "Dead register clear VM function not found", removedOperations: 0 };
+        return betaResult;
+    }
+    const leafByState = new Map();
+    for (const leaf of collectStateLeafClauses(vm.functionNode, graph.stateName, [])) {
+        const id = numericValue(leaf.condition.left) ?? numericValue(leaf.condition.right);
+        if (!Number.isInteger(id) || leafByState.has(id)) {
+            betaResult.deadRegisterClears = { applied: false, safe: false, reason: `Dead register clear ambiguous state leaf ${id}`, removedOperations: 0 };
+            return betaResult;
+        }
+        leafByState.set(id, leaf);
+    }
+
+    const edits = [];
+    for (const state of graph.states || []) {
+        const leaf = leafByState.get(state.id);
+        if (!leaf) {
+            betaResult.deadRegisterClears = { applied: false, safe: false, reason: `Dead register clear missing state ${state.id}`, removedOperations: 0 };
+            return betaResult;
+        }
+        const statements = (leaf.body || []).filter(statement => statement?.type !== "CommentStatement");
+        let statementIndex = 0;
+        for (const operation of state.operations || []) {
+            const count = betaOperationSourceStatementCount(operation);
+            const first = statements[statementIndex];
+            const last = statements[statementIndex + count - 1];
+            if (!Array.isArray(first?.range) || !Array.isArray(last?.range)) {
+                betaResult.deadRegisterClears = { applied: false, safe: false, reason: `Dead register clear lost source ownership in state ${state.id}`, removedOperations: 0 };
+                return betaResult;
+            }
+            if (removable.has(operation)) {
+                if (count !== 1) {
+                    betaResult.deadRegisterClears = { applied: false, safe: false, reason: `Dead register clear is not a single owned statement in state ${state.id}`, removedOperations: 0 };
+                    return betaResult;
+                }
+                edits.push({ start: first.range[0], end: last.range[1], replacement: "" });
+            }
+            statementIndex += count;
+        }
+        if (statementIndex !== statements.length) {
+            betaResult.deadRegisterClears = { applied: false, safe: false, reason: `Dead register clear statement/operation mismatch in state ${state.id}`, removedOperations: 0 };
+            return betaResult;
+        }
+    }
+
+    const output = applyTextEdits(betaResult.source, edits);
+    try { parseBetaSource(output); }
+    catch (error) {
+        betaResult.deadRegisterClears = { applied: false, safe: false, reason: `Dead register clear reparse failed: ${error.message}`, removedOperations: 0 };
+        return betaResult;
+    }
+
+    for (const state of graph.states || []) {
+        state.operations = (state.operations || []).filter(operation => !removable.has(operation));
+        for (let index = 0; index < state.operations.length; index++) state.operations[index].index = index + 1;
+    }
+    betaResult.source = output;
+    betaResult.deadRegisterClears = { applied: true, safe: true, removedOperations: removable.size };
+    return betaResult;
+}
+
 function finalizeBetaRegisterUpvalues(betaResult) {
     if (!betaResult?.graph || !betaResult.applied) return betaResult;
     assignBetaSourceOperationIds(betaResult.graph);
@@ -2242,5 +2337,6 @@ module.exports = {
     finalizeBetaRegisterSchedule,
     finalizeBetaDeadStateSnapshots,
     finalizeBetaDeadStateInitializers,
+    finalizeBetaDeadRegisterClears,
     finalizeBetaWhitespaceCleanup,
 };
