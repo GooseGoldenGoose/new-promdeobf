@@ -492,6 +492,40 @@ function transitionInfo(state, options = {}) {
     };
 }
 
+function recoverCfAdjacentConditionTemp(graph, state, info, bodyOperations) {
+    if (info?.kind !== "branch" || !info.conditionName || !Array.isArray(bodyOperations) || !bodyOperations.length) {
+        return { info, bodyOperations, recovered: false };
+    }
+    const producer = bodyOperations[bodyOperations.length - 1];
+    if (producer?.emittedTarget !== info.conditionName) return { info, bodyOperations, recovered: false };
+    if (producer.kind !== "version-define" && producer.kind !== "epoch-start" && producer.kind !== "epoch-mutate") {
+        return { info, bodyOperations, recovered: false };
+    }
+    const rhs = String(producer.rhs || "").trim();
+    if (!rhs || !parseTransitionExpression(rhs)?.expression) return { info, bodyOperations, recovered: false };
+    if ((graph?.recoveredUpvalueBindings || []).includes(info.conditionName)) return { info, bodyOperations, recovered: false };
+
+    let reads = 0;
+    for (const candidateState of graph?.states || []) {
+        for (const operation of candidateState.operations || []) {
+            reads += (operation?.reads || []).filter(name => name === info.conditionName).length;
+        }
+    }
+    if (reads !== 1) return { info, bodyOperations, recovered: false };
+
+    return {
+        info: {
+            ...info,
+            condition: `(${rhs})`,
+            conditionReads: [...(producer.reads || [])],
+            conditionTempRecovered: true,
+            conditionTempProducer: producer,
+        },
+        bodyOperations: bodyOperations.slice(0, -1),
+        recovered: true,
+    };
+}
+
 function setEquals(left, right) {
     if (left.size !== right.size) return false;
     for (const value of left) if (!right.has(value)) return false;
@@ -3421,6 +3455,7 @@ function solveAcyclicStructured(originalAst, graph) {
     const prepared = new Map();
     let terminalReturnPayloadSunkCount = 0;
     let terminalReturnCount = 0;
+    let ifConditionTempRecoveryCount = 0;
     for (const state of states) {
         if (hasUnsafeUnsupportedOperation(state.operations)) {
             return { applied: false, reason: `State ${state.id} contains unsupported beta operations` };
@@ -3455,11 +3490,18 @@ function solveAcyclicStructured(originalAst, graph) {
                 return { applied: false, reason: `State ${state.id} writes its branch condition after the state transition` };
             }
         }
-        const bodyOperations = state.operations.filter(operation => operation !== info.operation);
+        let bodyOperations = state.operations.filter(operation => operation !== info.operation);
+        let preparedInfo = info;
+        if (info.kind === "branch") {
+            const recovered = recoverCfAdjacentConditionTemp(graph, state, info, bodyOperations);
+            preparedInfo = recovered.info;
+            bodyOperations = recovered.bodyOperations;
+            if (recovered.recovered) ifConditionTempRecoveryCount++;
+        }
         if (bodyOperations.some(operation => !operationText(operation))) {
             return { applied: false, reason: `State ${state.id} has an unprintable beta operation` };
         }
-        prepared.set(state.id, { state, info, bodyOperations });
+        prepared.set(state.id, { state, info: preparedInfo, bodyOperations });
     }
 
     const exitNode = Symbol("beta-cf-exit");
@@ -3638,6 +3680,7 @@ function solveAcyclicStructured(originalAst, graph) {
         stateCount: states.length,
         statementCount: countStructuredStatements(structured.nodes),
         branchCount,
+        ifConditionTempRecoveryCount,
         joinCount,
         guardBranchCount,
         terminalReturnCount,
