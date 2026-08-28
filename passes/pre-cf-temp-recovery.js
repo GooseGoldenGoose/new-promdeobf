@@ -198,8 +198,80 @@ function finalizePreCfCopyTemps(betaResult) {
     betaResult.preCfCopyTemps = { applied: folds > 0, safe: true, folds };
     return betaResult;
 }
+function parsePreCfRhs(rhs) {
+    try {
+        const ast = parsePreCfSource(`return ${rhs}`);
+        const statement = ast.body?.[0];
+        return statement?.type === "ReturnStatement" && statement.arguments?.length === 1 ? statement.arguments[0] : null;
+    } catch { return null; }
+}
+
+function isSafePreCfScalarExpression(node) {
+    if (!node) return false;
+    if (["Identifier", "NumericLiteral", "StringLiteral", "BooleanLiteral", "NilLiteral"].includes(node.type)) return true;
+    if (node.type === "UnaryExpression") return isSafePreCfScalarExpression(node.argument);
+    if (node.type === "BinaryExpression") return isSafePreCfScalarExpression(node.left) && isSafePreCfScalarExpression(node.right);
+    return false;
+}
+
+function finalizePreCfScalarTemps(betaResult) {
+    if (!betaResult?.graph || typeof betaResult.source !== "string" || betaResult.graph.cfgComplete !== true) {
+        betaResult.preCfScalarTemps = { applied: false, safe: false, reason: "PRE-CF scalar recovery requires a complete beta graph" };
+        return betaResult;
+    }
+    let folds = 0;
+    const maxRounds = (betaResult.graph.states || []).reduce((n, state) => n + (state.operations || []).length, 0) + 1;
+    for (let round = 0; round < maxRounds; round++) {
+        const proof = buildPreCfTempProofIndex(betaResult);
+        let candidate = null;
+        for (const facts of proof.byBinding.values()) {
+            if (!facts.safeSameStateTransport || !facts.adjacent) continue;
+            const producer = facts.producer.operation;
+            const consumer = facts.consumer.operation;
+            if (!isCopyOperation(producer) || !isCopyOperation(consumer) || consumer.rhs !== facts.name) continue;
+            const expression = parsePreCfRhs(producer.rhs);
+            if (!expression || expression.type === "Identifier" || !isSafePreCfScalarExpression(expression)) continue;
+            candidate = { facts, producer, consumer };
+            break;
+        }
+        if (!candidate) break;
+        const ownership = mapPreCfOperationRanges(betaResult);
+        if (!ownership.safe) {
+            betaResult.preCfScalarTemps = { applied: folds > 0, safe: false, reason: ownership.reason, folds };
+            return betaResult;
+        }
+        const producerRange = ownership.ranges.get(candidate.producer);
+        const consumerRange = ownership.ranges.get(candidate.consumer);
+        if (!producerRange || !consumerRange) {
+            betaResult.preCfScalarTemps = { applied: folds > 0, safe: false, reason: "PRE-CF scalar recovery lost exact source ownership", folds };
+            return betaResult;
+        }
+        const prefix = String(candidate.consumer.emittedText || "").trim().startsWith("local ") ? "local " : "";
+        const emittedText = `${prefix}${candidate.consumer.emittedTarget} = ${candidate.producer.rhs}`;
+        const output = applySourceEdits(betaResult.source, [
+            { start: producerRange[0], end: producerRange[1], replacement: "" },
+            { start: consumerRange[0], end: consumerRange[1], replacement: emittedText },
+        ]);
+        try { parsePreCfSource(output); }
+        catch (error) {
+            betaResult.preCfScalarTemps = { applied: folds > 0, safe: false, reason: `PRE-CF scalar recovery reparse failed: ${error.message}`, folds };
+            return betaResult;
+        }
+        betaResult.source = output;
+        const state = betaResult.graph.states.find(item => item.id === candidate.facts.producer.stateId);
+        state.operations.splice(candidate.facts.producer.offset, 1);
+        candidate.consumer.rhs = candidate.producer.rhs;
+        candidate.consumer.reads = [...(candidate.producer.reads || [])];
+        candidate.consumer.emittedText = emittedText;
+        for (let i = 0; i < state.operations.length; i++) state.operations[i].index = i + 1;
+        folds++;
+    }
+    betaResult.preCfScalarTemps = { applied: folds > 0, safe: true, folds };
+    return betaResult;
+}
 module.exports = {
     buildPreCfTempProofIndex,
     provePreCfTempUse,
     finalizePreCfCopyTemps,
+    finalizePreCfScalarTemps,
 };
