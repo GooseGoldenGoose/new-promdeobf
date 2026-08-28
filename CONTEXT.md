@@ -699,6 +699,10 @@ Proves `pairs`, `next, table`, custom iterator factory, nested branches, break, 
 
 Broad control-flow smoke fixture covering mixed loops, closures, captures, methods/namecall, branches, break/continue, and generic/numeric loops. Beta-CF structures successfully. Runtime validation is constrained by native Luau/compiler re-obfuscation limitations.
 
+### Sample 64
+
+Lexical shadowing probe: `local a = 1`; inner `do` block redeclares `local a = 2`; final outer read must still see 1. Local WeAreDevs Medium obfuscation -> canonical full beta-CF succeeds at 20 states / 3 closure regions. LuaJIT runtime parity is exact for source, obfuscated input, and final CF: `1`, `2`, `1`. CF preserves semantics but does not currently recreate the original explicit `do ... end` presentation.
+
 ### Samples 61-63
 
 Large Roblox/UI/executor scale fixtures. Normal/beta/beta-CF generate successfully. Use for structural regression/scale testing, not standalone LuaJIT parity claims.
