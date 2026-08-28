@@ -1,6 +1,6 @@
 const assert = require("assert");
 const { parseLua } = require("../main");
-const { versionVmBlockRegisters, finalizeBetaRegisterUpvalues, finalizeBetaRegisterSchedule, finalizeBetaDeadStateSnapshots } = require("../passes/beta-register-versions");
+const { versionVmBlockRegisters, finalizeBetaRegisterUpvalues, finalizeBetaRegisterSchedule, finalizeBetaDeadStateSnapshots, finalizeBetaDeadStateInitializers } = require("../passes/beta-register-versions");
 
 const source = `vm = function(state, args, upvalues, gcProxy)
     local r1, r2, ReturnVal
@@ -972,7 +972,7 @@ const deadStateSnapshotSource = `vm = function(state, args, upvalues, gcProxy)
     return unpack(ReturnVal)
 end`;
 const deadStateSnapshotRaw = versionVmBlockRegisters(deadStateSnapshotSource, parseLua(deadStateSnapshotSource, "<dead-state-snapshot>"));
-const deadStateSnapshotFinal = finalizeBetaDeadStateSnapshots(finalizeBetaRegisterSchedule(finalizeBetaRegisterUpvalues(deadStateSnapshotRaw)));
+const deadStateSnapshotFinal = finalizeBetaDeadStateInitializers(finalizeBetaDeadStateSnapshots(finalizeBetaRegisterSchedule(finalizeBetaRegisterUpvalues(deadStateSnapshotRaw))));
 assert.equal(deadStateSnapshotFinal.deadStateSnapshots.safe, true);
 assert.equal(deadStateSnapshotFinal.deadStateSnapshots.applied, true);
 assert.equal(deadStateSnapshotFinal.deadStateSnapshots.removedRoots, 1);
@@ -993,10 +993,83 @@ const liveStateSnapshotSource = `vm = function(state, args, upvalues, gcProxy)
     return unpack(ReturnVal)
 end`;
 const liveStateSnapshotRaw = versionVmBlockRegisters(liveStateSnapshotSource, parseLua(liveStateSnapshotSource, "<live-state-snapshot>"));
-const liveStateSnapshotFinal = finalizeBetaDeadStateSnapshots(finalizeBetaRegisterSchedule(finalizeBetaRegisterUpvalues(liveStateSnapshotRaw)));
+const liveStateSnapshotFinal = finalizeBetaDeadStateInitializers(finalizeBetaDeadStateSnapshots(finalizeBetaRegisterSchedule(finalizeBetaRegisterUpvalues(liveStateSnapshotRaw))));
 assert.equal(liveStateSnapshotFinal.deadStateSnapshots.safe, true);
 assert.equal(liveStateSnapshotFinal.deadStateSnapshots.applied, false);
 assert(/local\s+\w+\s*=\s*state\b/.test(liveStateSnapshotFinal.source));
 parseLua(liveStateSnapshotFinal.source, "<live-state-snapshot-output>");
 
+const deadStateInitializerGraph = {
+    found: true,
+    applied: true,
+    source: `vm = function(state, args, upvalues, gcProxy)
+    while state do
+        if state == 1 then
+            local x = state
+            local dead = x
+            x = 5
+            local sink = x
+            state = nil
+        end
+    end
+end`,
+    graph: {
+        stateName: "state",
+        states: [{
+            id: 1,
+            successors: [],
+            operations: [
+                { index: 1, kind: "epoch-start", emittedTarget: "x", rhs: "state", reads: [], emittedText: "local x = state" },
+                { index: 2, kind: "version-define", emittedTarget: "dead", rhs: "x", reads: ["x"], emittedText: "local dead = x" },
+                { index: 3, kind: "epoch-mutate", emittedTarget: "x", rhs: "5", reads: [], emittedText: "x = 5" },
+                { index: 4, kind: "version-define", emittedTarget: "sink", rhs: "x", reads: ["x"], emittedText: "local sink = x" },
+                { index: 5, kind: "state-transition", emittedTarget: "state", rhs: "nil", reads: [], emittedText: "state = nil" },
+            ],
+        }],
+    },
+};
+const deadStateInitializerFinal = finalizeBetaDeadStateInitializers(deadStateInitializerGraph);
+assert.equal(deadStateInitializerFinal.deadStateInitializers.safe, true);
+assert.equal(deadStateInitializerFinal.deadStateInitializers.applied, true);
+assert.equal(deadStateInitializerFinal.deadStateInitializers.removedInitializers, 1);
+assert.equal(deadStateInitializerFinal.deadStateInitializers.removedCopies, 1);
+assert(deadStateInitializerFinal.source.includes("local x\n"));
+assert(!deadStateInitializerFinal.source.includes("local x = state"));
+assert(!deadStateInitializerFinal.source.includes("local dead = x"));
+assert(deadStateInitializerFinal.source.includes("x = 5"));
+parseLua(deadStateInitializerFinal.source, "<dead-state-initializer-output>");
+
+const liveStateInitializerGraph = {
+    found: true,
+    applied: true,
+    source: `vm = function(state, args, upvalues, gcProxy)
+    while state do
+        if state == 1 then
+            local x = state
+            local keep = x
+            consume(keep)
+            x = 5
+            state = nil
+        end
+    end
+end`,
+    graph: {
+        stateName: "state",
+        states: [{
+            id: 1,
+            successors: [],
+            operations: [
+                { index: 1, kind: "epoch-start", emittedTarget: "x", rhs: "state", reads: [], emittedText: "local x = state" },
+                { index: 2, kind: "version-define", emittedTarget: "keep", rhs: "x", reads: ["x"], emittedText: "local keep = x" },
+                { index: 3, kind: "statement", reads: ["keep"], emittedText: "consume(keep)" },
+                { index: 4, kind: "epoch-mutate", emittedTarget: "x", rhs: "5", reads: [], emittedText: "x = 5" },
+                { index: 5, kind: "state-transition", emittedTarget: "state", rhs: "nil", reads: [], emittedText: "state = nil" },
+            ],
+        }],
+    },
+};
+const liveStateInitializerFinal = finalizeBetaDeadStateInitializers(liveStateInitializerGraph);
+assert.equal(liveStateInitializerFinal.deadStateInitializers.safe, true);
+assert.equal(liveStateInitializerFinal.deadStateInitializers.applied, false);
+assert(liveStateInitializerFinal.source.includes("local x = state"));
 console.log("beta register versioning tests passed");

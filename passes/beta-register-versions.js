@@ -1843,6 +1843,219 @@ function finalizeBetaDeadStateSnapshots(betaResult) {
     betaResult.deadStateSnapshots = { applied: true, safe: true, removedOperations: removableOperations.size, removedRoots, removedCopies };
     return betaResult;
 }
+
+function betaOperationWritesName(operation, name) {
+    if (operation?.emittedTarget === name) return true;
+    return Array.isArray(operation?.emittedTargets) && operation.emittedTargets.includes(name);
+}
+
+function collectDeadStateInitializerCopies(graph, rootName) {
+    const operations = (graph.states || []).flatMap(state => state.operations || []);
+    const writers = new Map();
+    const readers = new Map();
+    for (const operation of operations) {
+        if (operation.emittedTarget) {
+            if (!writers.has(operation.emittedTarget)) writers.set(operation.emittedTarget, []);
+            writers.get(operation.emittedTarget).push(operation);
+        }
+        for (const target of operation.emittedTargets || []) {
+            if (!writers.has(target)) writers.set(target, []);
+            writers.get(target).push(operation);
+        }
+        for (const read of operation.reads || []) {
+            if (!readers.has(read)) readers.set(read, []);
+            readers.get(read).push(operation);
+        }
+    }
+
+    const rooted = new Set([rootName]);
+    const candidateCopies = new Set();
+    let changed = true;
+    while (changed) {
+        changed = false;
+        for (const operation of operations) {
+            const rhs = String(operation?.rhs || '').trim();
+            const target = operation?.emittedTarget;
+            if (!target || !rooted.has(rhs) || candidateCopies.has(operation)) continue;
+            if (!isDeadStateSnapshotCopyOperation(operation, rhs)) continue;
+            if ((writers.get(target) || []).length !== 1) continue;
+            candidateCopies.add(operation);
+            rooted.add(target);
+            changed = true;
+        }
+    }
+
+    const removable = new Set();
+    changed = true;
+    while (changed) {
+        changed = false;
+        for (const operation of candidateCopies) {
+            if (removable.has(operation)) continue;
+            const target = operation.emittedTarget;
+            const uses = readers.get(target) || [];
+            if (uses.every(reader => removable.has(reader))) {
+                removable.add(operation);
+                changed = true;
+            }
+        }
+    }
+    return removable;
+}
+function addReachedDeadCopyTree(operation, ignoredOperations, reachedCopies) {
+    if (!operation || reachedCopies.has(operation)) return;
+    reachedCopies.add(operation);
+    const target = operation.emittedTarget;
+    if (!target) return;
+    for (const candidate of ignoredOperations || []) {
+        if (String(candidate?.rhs || '').trim() === target) {
+            addReachedDeadCopyTree(candidate, ignoredOperations, reachedCopies);
+        }
+    }
+}
+
+function betaDefinitionDeadBeforeRead(graph, stateId, operationIndex, target, ignoredOperations, reachedCopies) {
+    const stateById = new Map((graph.states || []).map(state => [state.id, state]));
+    const queue = [{ stateId, startIndex: operationIndex + 1 }];
+    const visited = new Set();
+    while (queue.length) {
+        const point = queue.pop();
+        const key = point.stateId + ':' + point.startIndex;
+        if (visited.has(key)) continue;
+        visited.add(key);
+        const state = stateById.get(point.stateId);
+        if (!state) return false;
+        const operations = state.operations || [];
+        let killed = false;
+        for (let index = point.startIndex; index < operations.length; index++) {
+            const operation = operations[index];
+            if (ignoredOperations?.has(operation)) {
+                addReachedDeadCopyTree(operation, ignoredOperations, reachedCopies);
+                continue;
+            }
+            if ((operation.reads || []).includes(target)) return false;
+            if (betaOperationWritesName(operation, target)) {
+                killed = true;
+                break;
+            }
+        }
+        if (killed) continue;
+        if (!Array.isArray(state.successors)) return false;
+        for (const successor of state.successors) {
+            if (!Number.isInteger(successor) || !stateById.has(successor)) return false;
+            queue.push({ stateId: successor, startIndex: 0 });
+        }
+    }
+    return true;
+}
+
+function finalizeBetaDeadStateInitializers(betaResult) {
+    if (!betaResult?.graph || !betaResult.applied) return betaResult;
+    const stateName = betaResult.graph.stateName;
+    const candidates = [];
+    const removableCopies = new Set();
+    for (const state of betaResult.graph.states || []) {
+        const operations = state.operations || [];
+        for (let index = 0; index < operations.length; index++) {
+            const operation = operations[index];
+            if (!isDeadStateSnapshotCopyOperation(operation, stateName)) continue;
+            const target = operation.emittedTarget;
+            const deadCopies = collectDeadStateInitializerCopies(betaResult.graph, target);
+            const reachedCopies = new Set();
+            if (!betaDefinitionDeadBeforeRead(betaResult.graph, state.id, index, target, deadCopies, reachedCopies)) continue;
+            candidates.push({ state, operation, target });
+            for (const copy of reachedCopies) removableCopies.add(copy);
+        }
+    }
+    if (!candidates.length) {
+        betaResult.deadStateInitializers = { applied: false, safe: true, removedInitializers: 0, removedCopies: 0 };
+        return betaResult;
+    }
+
+    let ast;
+    try { ast = parseBetaSource(betaResult.source); }
+    catch (error) {
+        betaResult.deadStateInitializers = { applied: false, safe: false, reason: 'Dead state initializer source parse failed: ' + error.message };
+        return betaResult;
+    }
+    const vm = findVmFunction(ast);
+    if (!vm) {
+        betaResult.deadStateInitializers = { applied: false, safe: false, reason: 'Dead state initializer VM function not found' };
+        return betaResult;
+    }
+    const leafByState = new Map();
+    for (const leaf of collectStateLeafClauses(vm.functionNode, stateName, [])) {
+        const id = numericValue(leaf.condition.left) ?? numericValue(leaf.condition.right);
+        if (!Number.isInteger(id) || leafByState.has(id)) {
+            betaResult.deadStateInitializers = { applied: false, safe: false, reason: 'Dead state initializer ambiguous state leaf ' + id };
+            return betaResult;
+        }
+        leafByState.set(id, leaf);
+    }
+
+    const candidateSet = new Set(candidates.map(candidate => candidate.operation));
+    const edits = [];
+    for (const state of betaResult.graph.states || []) {
+        const leaf = leafByState.get(state.id);
+        if (!leaf) {
+            betaResult.deadStateInitializers = { applied: false, safe: false, reason: 'Dead state initializer missing state ' + state.id };
+            return betaResult;
+        }
+        const statements = (leaf.body || []).filter(statement => statement?.type !== 'CommentStatement');
+        let statementIndex = 0;
+        for (const operation of state.operations || []) {
+            const count = betaOperationSourceStatementCount(operation);
+            const first = statements[statementIndex];
+            const last = statements[statementIndex + count - 1];
+            if (!Array.isArray(first?.range) || !Array.isArray(last?.range)) {
+                betaResult.deadStateInitializers = { applied: false, safe: false, reason: 'Dead state initializer lost source ownership in state ' + state.id };
+                return betaResult;
+            }
+            if (candidateSet.has(operation)) {
+                edits.push({ start: first.range[0], end: last.range[1], replacement: 'local ' + operation.emittedTarget });
+            } else if (removableCopies.has(operation)) {
+                edits.push({ start: first.range[0], end: last.range[1], replacement: '' });
+            }
+            statementIndex += count;
+        }
+        if (statementIndex !== statements.length) {
+            betaResult.deadStateInitializers = { applied: false, safe: false, reason: 'Dead state initializer statement/operation mismatch in state ' + state.id };
+            return betaResult;
+        }
+    }
+
+    const output = applyTextEdits(betaResult.source, edits);
+    try { parseBetaSource(output); }
+    catch (error) {
+        betaResult.deadStateInitializers = { applied: false, safe: false, reason: 'Dead state initializer reparse failed: ' + error.message };
+        return betaResult;
+    }
+
+    for (const { operation } of candidates) {
+        operation.rhs = 'nil';
+        operation.reads = [];
+        operation.emittedText = 'local ' + operation.emittedTarget;
+        operation.returnSinkSafe = true;
+    }
+    let removedCopies = 0;
+    for (const state of betaResult.graph.states || []) {
+        const kept = [];
+        for (const operation of state.operations || []) {
+            if (removableCopies.has(operation)) { removedCopies++; continue; }
+            kept.push(operation);
+        }
+        state.operations = kept;
+        for (let index = 0; index < kept.length; index++) kept[index].index = index + 1;
+    }
+    betaResult.source = output;
+    betaResult.deadStateInitializers = {
+        applied: true,
+        safe: true,
+        removedInitializers: candidates.length,
+        removedCopies,
+    };
+    return betaResult;
+}
+
 function finalizeBetaRegisterUpvalues(betaResult) {
     if (!betaResult?.graph || !betaResult.applied) return betaResult;
     assignBetaSourceOperationIds(betaResult.graph);
@@ -1933,4 +2146,5 @@ module.exports = {
     finalizeBetaRegisterUpvalues,
     finalizeBetaRegisterSchedule,
     finalizeBetaDeadStateSnapshots,
+    finalizeBetaDeadStateInitializers,
 };
