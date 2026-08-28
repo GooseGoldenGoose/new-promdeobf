@@ -1,7 +1,7 @@
 const fs = require("fs");
 const path = require("path");
 const { parseLuaStructural } = require("../main");
-const { versionVmBlockRegisters, finalizeBetaRegisterUpvalues } = require("../passes/beta-register-versions");
+const { versionVmBlockRegisters, finalizeBetaRegisterUpvalues, finalizeBetaRegisterSchedule } = require("../passes/beta-register-versions");
 
 function defaultOutputPath(inputPath) {
     const parsed = path.parse(path.resolve(inputPath));
@@ -17,12 +17,15 @@ function main() {
     const source = fs.readFileSync(inputPath, "utf8");
     const ast = parseLuaStructural(source, inputPath);
     const rawResult = versionVmBlockRegisters(source, ast);
-    const result = finalizeBetaRegisterUpvalues(rawResult);
+    const result = finalizeBetaRegisterSchedule(finalizeBetaRegisterUpvalues(rawResult));
     if (!result.found || !result.applied) {
         throw new Error(result.reason || "Beta register versioning did not apply");
     }
     if (result.upvalueRecovery?.completed && !result.upvalueRecovery.safe) {
         throw new Error(result.upvalueRecovery.reason || "Beta upvalue recovery failed closed");
+    }
+    if (result.finalRegisterSchedule && !result.finalRegisterSchedule.safe) {
+        throw new Error(result.finalRegisterSchedule.reason || "Final beta register scheduling failed closed");
     }
 
     parseLuaStructural(result.source, `${outputPath} <beta register versions>`);

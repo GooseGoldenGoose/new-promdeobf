@@ -1,7 +1,7 @@
 const fs = require("fs");
 const path = require("path");
 const { parseLuaStructural } = require("../main");
-const { versionVmBlockRegisters, finalizeBetaRegisterUpvalues } = require("../passes/beta-register-versions");
+const { versionVmBlockRegisters, finalizeBetaRegisterUpvalues, finalizeBetaRegisterSchedule } = require("../passes/beta-register-versions");
 const { solveBetaControlFlow } = require("../passes/beta-control-flow-legacy");
 
 function defaultOutputPath(inputPath) {
@@ -11,7 +11,8 @@ function defaultOutputPath(inputPath) {
 
 function generateBetaControlFlowFromSource(source, ast, outputPath) {
     const resolvedOutput = path.resolve(outputPath);
-    const beta = finalizeBetaRegisterUpvalues(versionVmBlockRegisters(source, ast));
+    let beta = finalizeBetaRegisterUpvalues(versionVmBlockRegisters(source, ast));
+    beta = finalizeBetaRegisterSchedule(beta);
     if (!beta.found || !beta.applied) {
         throw new Error(beta.reason || "Beta register analysis did not apply");
     }
@@ -19,7 +20,11 @@ function generateBetaControlFlowFromSource(source, ast, outputPath) {
         throw new Error(beta.upvalueRecovery.reason || "Beta upvalue recovery failed closed");
     }
 
-    const controlFlow = solveBetaControlFlow(ast, beta);
+    if (beta.finalRegisterSchedule && !beta.finalRegisterSchedule.safe) {
+        throw new Error(beta.finalRegisterSchedule.reason || "Final beta register scheduling failed closed");
+    }
+    const betaAst = parseLuaStructural(beta.source, "<after final beta register scheduling>");
+    const controlFlow = solveBetaControlFlow(betaAst, beta);
     if (!controlFlow.applied) throw new Error(controlFlow.reason || "Beta control-flow solving did not apply");
 
     parseLuaStructural(controlFlow.source, `${resolvedOutput} <beta control flow>`);

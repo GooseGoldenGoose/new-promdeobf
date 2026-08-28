@@ -1,6 +1,6 @@
 const assert = require("assert");
 const { parseLua } = require("../main");
-const { versionVmBlockRegisters, finalizeBetaRegisterUpvalues } = require("../passes/beta-register-versions");
+const { versionVmBlockRegisters, finalizeBetaRegisterUpvalues, finalizeBetaRegisterSchedule } = require("../passes/beta-register-versions");
 
 const source = `vm = function(state, args, upvalues, gcProxy)
     local r1, r2, ReturnVal
@@ -916,6 +916,11 @@ assert(!recoveredExistingBinding.source.includes("upvalueValues["));
 assert(recoveredExistingBinding.source.includes(`local ${r3BindingBase}_1 = `));
 assert(recoveredExistingBinding.source.includes(`createClosure2(2, {})`));
 parseLua(recoveredExistingBinding.source, "<beta-upvalue-existing-binding-output>");
+const recoveredExistingBindingScheduled = finalizeBetaRegisterSchedule(recoveredExistingBinding);
+assert.equal(recoveredExistingBindingScheduled.finalRegisterSchedule.safe, true);
+assert.equal(recoveredExistingBindingScheduled.finalRegisterSchedule.applied, true);
+assert(recoveredExistingBindingScheduled.finalRegisterSchedule.swaps > 0);
+parseLua(recoveredExistingBindingScheduled.source, "<beta-upvalue-existing-binding-scheduled-output>");
 
 const recoveredSyntheticBindingSource = `vm = function(state, args, upvalues, gcProxy)
     local r1, r2, ReturnVal

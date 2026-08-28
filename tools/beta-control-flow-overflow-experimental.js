@@ -1,7 +1,7 @@
 const fs = require("fs");
 const path = require("path");
 const { parseLua, parseLuaStructural } = require("../main");
-const { versionVmBlockRegisters, finalizeBetaRegisterUpvalues } = require("../passes/beta-register-versions");
+const { versionVmBlockRegisters, finalizeBetaRegisterUpvalues, finalizeBetaRegisterSchedule } = require("../passes/beta-register-versions");
 const { solveBetaControlFlow } = require("../passes/beta-control-flow-overflow-experimental");
 const { recoverVmStateGraph } = require("../passes/vm-state");
 const { scheduleVmRegisterUses } = require("../passes/vm-register-scheduler");
@@ -47,10 +47,15 @@ function generateBetaControlFlowFromSource(source, ast, outputPath) {
     }
     let beta = remapOverflowBetaVersions(betaRaw, prepared);
     beta = finalizeBetaRegisterUpvalues(beta);
+    beta = finalizeBetaRegisterSchedule(beta);
     if (beta.upvalueRecovery?.completed && !beta.upvalueRecovery.safe) {
         throw new Error(beta.upvalueRecovery.reason || "Beta upvalue recovery failed closed");
     }
+    if (beta.finalRegisterSchedule && !beta.finalRegisterSchedule.safe) {
+        throw new Error(beta.finalRegisterSchedule.reason || "Final beta register scheduling failed closed");
+    }
 
+    betaAst = parseLuaStructural(beta.source, "<after final beta register scheduling>");
     const controlFlow = solveBetaControlFlow(betaAst, beta);
     if (!controlFlow.applied) throw new Error(controlFlow.reason || "Beta control-flow solving did not apply");
 

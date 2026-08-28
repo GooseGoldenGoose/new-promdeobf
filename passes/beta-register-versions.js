@@ -3,6 +3,7 @@ const { findVmReturnRegister, findRegisterDeclaration } = require("./vm-register
 const { applyTextEdits } = require("./text-edits");
 const { analyzeBetaRegisterLifetimes } = require("./beta-register-lifetimes");
 const { recoverBetaUpvalues } = require("./beta-upvalues");
+const { scheduleStatementList } = require("./vm-register-scheduler");
 
 const NUMERIC_NAME_COLLATOR = new Intl.Collator(undefined, { numeric: true });
 const luaparse = require("../parser/luaparse");
@@ -1444,6 +1445,158 @@ function mapBetaSourceOperationRanges(betaResult) {
     return { safe: true, ranges };
 }
 
+function betaScheduleStatementProxy(statement) {
+    if (statement?.type !== "LocalStatement") return statement;
+    const variables = statement.variables || [];
+    const init = statement.init || [];
+    if (variables.length !== 1 || init.length !== 1 || !isIdentifier(variables[0])) return statement;
+    // The VM scheduler operates on assignment statements. A beta local with one
+    // target/value has the same dependency shape for scheduling; keep the original
+    // source range so only order changes, never declaration syntax.
+    return { ...statement, type: "AssignmentStatement", betaLocalScheduleProxy: true };
+}
+
+function betaLineIndentAt(source, offset) {
+    const lineStart = Math.max(source.lastIndexOf("\n", Math.max(0, offset - 1)) + 1, 0);
+    const prefix = source.slice(lineStart, offset);
+    const match = prefix.match(/^[ \t]*/);
+    return match ? match[0] : "";
+}
+
+function finalizeBetaRegisterSchedule(betaResult) {
+    if (!betaResult?.graph || !betaResult.applied) return betaResult;
+    let ast;
+    try {
+        ast = parseBetaSource(betaResult.source);
+    } catch (error) {
+        betaResult.finalRegisterSchedule = { applied: false, safe: false, reason: `Final beta schedule parse failed: ${error.message}` };
+        return betaResult;
+    }
+    const vm = findVmFunction(ast);
+    if (!vm) {
+        betaResult.finalRegisterSchedule = { applied: false, safe: false, reason: "Final beta schedule VM function not found" };
+        return betaResult;
+    }
+
+    const leaves = collectStateLeafClauses(vm.functionNode, betaResult.graph.stateName, []);
+    const leafByState = new Map();
+    for (const leaf of leaves) {
+        const stateId = numericValue(leaf.condition.left) ?? numericValue(leaf.condition.right);
+        if (!Number.isInteger(stateId) || leafByState.has(stateId)) {
+            betaResult.finalRegisterSchedule = { applied: false, safe: false, reason: `Final beta schedule has ambiguous state leaf ${stateId}` };
+            return betaResult;
+        }
+        leafByState.set(stateId, leaf);
+    }
+
+    const edits = [];
+    let blocksChanged = 0;
+    let swaps = 0;
+    let producerSinks = 0;
+    let producerPulls = 0;
+    let unreadSinks = 0;
+    let safetyRejectedSegments = 0;
+    let atomicStatesSkipped = 0;
+
+    for (const state of betaResult.graph.states || []) {
+        const leaf = leafByState.get(state.id);
+        if (!leaf) {
+            betaResult.finalRegisterSchedule = { applied: false, safe: false, reason: `Final beta schedule is missing state ${state.id}` };
+            return betaResult;
+        }
+        const operations = state.operations || [];
+        if (operations.some(operation => betaOperationSourceStatementCount(operation) !== 1)) {
+            atomicStatesSkipped++;
+            continue;
+        }
+
+        const sourceStatements = (leaf.body || []).filter(statement => statement?.type !== "CommentStatement");
+        if (sourceStatements.length !== operations.length || sourceStatements.length < 2) continue;
+
+        const operationByProxy = new Map();
+        const proxyBySource = new Map();
+        const scheduledInput = [];
+        for (let index = 0; index < sourceStatements.length; index++) {
+            const sourceStatement = sourceStatements[index];
+            const proxy = betaScheduleStatementProxy(sourceStatement);
+            proxyBySource.set(proxy, sourceStatement);
+            operationByProxy.set(proxy, operations[index]);
+            scheduledInput.push(proxy);
+        }
+
+        const scheduled = scheduleStatementList(scheduledInput, betaResult.graph.stateName, null, null);
+        if (scheduled.safetyRejected) {
+            safetyRejectedSegments++;
+            continue;
+        }
+        if (!scheduled.swaps) continue;
+
+        const orderedOperations = [];
+        const orderedSourceStatements = [];
+        for (const proxy of scheduled.statements) {
+            const operation = operationByProxy.get(proxy);
+            const sourceStatement = proxyBySource.get(proxy);
+            if (!operation || !sourceStatement) {
+                betaResult.finalRegisterSchedule = { applied: false, safe: false, reason: `Final beta schedule lost statement ownership in state ${state.id}` };
+                return betaResult;
+            }
+            orderedOperations.push(operation);
+            orderedSourceStatements.push(sourceStatement);
+        }
+
+        const first = sourceStatements[0];
+        const last = sourceStatements[sourceStatements.length - 1];
+        if (!Array.isArray(first?.range) || !Array.isArray(last?.range)) {
+            betaResult.finalRegisterSchedule = { applied: false, safe: false, reason: `Final beta schedule lost source range in state ${state.id}` };
+            return betaResult;
+        }
+        const indent = betaLineIndentAt(betaResult.source, first.range[0]);
+        const newline = betaResult.source.includes("\r\n") ? "\r\n" : "\n";
+        const replacement = orderedSourceStatements
+            .map(statement => betaResult.source.slice(statement.range[0], statement.range[1]))
+            .join(newline + indent);
+        edits.push({ start: first.range[0], end: last.range[1], replacement });
+
+        state.operations = orderedOperations;
+        for (let index = 0; index < state.operations.length; index++) state.operations[index].index = index + 1;
+        blocksChanged++;
+        swaps += scheduled.swaps;
+        producerSinks += scheduled.producerSinks || 0;
+        producerPulls += scheduled.producerPulls || 0;
+        unreadSinks += scheduled.unreadSinks || 0;
+    }
+
+    const result = {
+        applied: edits.length > 0,
+        safe: true,
+        reason: null,
+        blocksChanged,
+        swaps,
+        producerSinks,
+        producerPulls,
+        unreadSinks,
+        safetyRejectedSegments,
+        atomicStatesSkipped,
+    };
+    if (!edits.length) {
+        betaResult.finalRegisterSchedule = result;
+        return betaResult;
+    }
+
+    const output = applyTextEdits(betaResult.source, edits);
+    try {
+        parseBetaSource(output);
+    } catch (error) {
+        result.safe = false;
+        result.reason = `Final beta schedule reparse failed: ${error.message}`;
+        betaResult.finalRegisterSchedule = result;
+        return betaResult;
+    }
+    betaResult.source = output;
+    betaResult.finalRegisterSchedule = result;
+    return betaResult;
+}
+
 function finalizeBetaRegisterUpvalues(betaResult) {
     if (!betaResult?.graph || !betaResult.applied) return betaResult;
     assignBetaSourceOperationIds(betaResult.graph);
@@ -1532,4 +1685,5 @@ function finalizeBetaRegisterUpvalues(betaResult) {
 module.exports = {
     versionVmBlockRegisters,
     finalizeBetaRegisterUpvalues,
+    finalizeBetaRegisterSchedule,
 };

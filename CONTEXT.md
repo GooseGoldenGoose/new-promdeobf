@@ -177,6 +177,7 @@ normal output
 -> beta register versions
 -> beta lifetimes / ownership
 -> beta upvalue resolve + binding recovery
+-> final beta register scheduling / local sinking
 -> beta control-flow structuring
 -> closure-region inlining
 -> final recovered source
@@ -185,6 +186,8 @@ normal output
 Beta register/version analysis now owns captured-cell resolution before CF. For a proven compiler shape `cell = allocUpvalue(); upvalueValues[cell] = temp; local sourceBinding = temp`, the cell maps to the surviving `sourceBinding`. When no proven source binding exists, recovery creates a deterministic collision-free `u_vN` binding. Capture lists propagate `(closure entry, slot) -> recovered binding` through nested closures. Proven `upvalueValues[cell]` / `upvalueValues[upvalues[N]]` reads and writes are rewritten to that binding, and resolved alloc/release/cell bookkeeping is removed from standalone `.beta.lua`. CF consumes this pre-resolved graph/metadata; its direct recovery fallback remains only for raw/handcrafted compatibility callers.
 
 The beta source emitter maps recovered graph operations back to their original beta statements by structural operation ownership. Atomic `multi-write` / `multi-call-write` semantics are unchanged; the mapper only accounts for their optional separate local-declaration statement so upvalue edits keep exact operation/source alignment.
+
+Final beta register scheduling now runs after upvalue resolution and before CF. It reuses the existing dependency scheduler on one-statement beta operations, treating a single `local r_v... = value` declaration as the same schedulable dependency shape as an assignment while preserving the original `local` syntax. Reordered source statements are written back to the same order in `beta.graph`, so CF consumes the sorted order. States containing a multi-statement atomic `multi-write` / `multi-call-write` operation are skipped by this final pass rather than risking separation. The earlier VM scheduling used by normal/source analysis remains in place because beta lifetime/version analysis consumes that normalized order; the new final pass is the presentation/order pass after upvalue recovery.
 
 ### Structural helper recovery
 
@@ -311,7 +314,10 @@ focused regression suites: 14/14 pass
 
 Final-CF scaffold scan found no surviving dispatcher/state loop, `createClosure*`, `upvalueValues[...]`, `allocUpvalue(...)`, or `ReturnVal =` scaffolding in the checked numeric outputs.
 
-Current beta-upvalue-stage verification: numeric 1-63 standalone beta finalization passes 63/63; canonical normal->CF passes 63/63 with `upvalueRecovery.completed=true` before CF. Across the 63 resolved beta outputs, dispatcher `allocUpvalue(...)` and `releaseUpvalue(...)` counts are zero; at most two `upvalueValues[...]` references remain, both generic helper-definition cleanup references outside recovered dispatcher cells. Eleven numeric fixtures require synthetic `u_vN` bindings. `spacial6` also passes the canonical overflow path at 3799 states / 554 closures / 220 overflow slots with 362 recovered cells and 2539 capture slots.
+Current beta-upvalue-stage verification: numeric 1-63 standalone beta finalization passes 63/63; canonical normal->CF passes 63/63 with `upvalueRecovery.completed=true` before final beta scheduling and CF. Across the 63 resolved beta outputs, dispatcher `allocUpvalue(...)` and `releaseUpvalue(...)` counts are zero; at most two `upvalueValues[...]` references remain, both generic helper-definition cleanup references outside recovered dispatcher cells. Eleven numeric fixtures require synthetic `u_vN` bindings. `spacial6` also passes the canonical overflow path at 3799 states / 554 closures / 220 overflow slots with 362 recovered cells and 2539 capture slots.
+
+
+Final beta scheduling verification: the state-1 `"debug"` literal producer is sunk directly beside `_env[...]` after upvalue resolution, focused project suites pass 14/14, canonical numeric CF passes 63/63, and `spacial6` still succeeds at 3799 states / 554 closures.
 
 During the earlier performance optimization, every regenerated normal and beta-CF output for 1-63 was compared against a frozen pre-optimization baseline, and that performance-only checkpoint was byte-for-byte identical. That byte-identity statement is historical: the current beta-upvalue ownership change intentionally changes recovered binding presentation (for example choosing the proven surviving `r_v...` source binding or a synthetic `u_vN`), so current final CF is not expected to be byte-identical to the pre-feature baseline. Current generation/parse/regression gates above are authoritative for this feature.
 
