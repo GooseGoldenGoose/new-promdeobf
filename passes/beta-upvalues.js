@@ -698,11 +698,10 @@ function recoverBetaUpvaluesImpl(betaResult) {
             if (isIdentifier(node)) usedBindingNames.add(node.name);
         });
     }
-    let nextOverflowCellBindingId = 1;
-    function allocateCellStorageBindingName(storageName) {
-        if (/^[A-Za-z_][A-Za-z0-9_]*$/.test(String(storageName || ""))) return storageName;
-        while (usedBindingNames.has(`r_overflow_cell_${nextOverflowCellBindingId}`)) nextOverflowCellBindingId++;
-        const name = `r_overflow_cell_${nextOverflowCellBindingId++}`;
+    let nextSyntheticUpvalueBindingId = 1;
+    function allocateCellStorageBindingName() {
+        while (usedBindingNames.has(`u_v${nextSyntheticUpvalueBindingId}`)) nextSyntheticUpvalueBindingId++;
+        const name = `u_v${nextSyntheticUpvalueBindingId++}`;
         usedBindingNames.add(name);
         return name;
     }
@@ -717,7 +716,7 @@ function recoverBetaUpvaluesImpl(betaResult) {
         cells.set(allocation.cellName, {
             id: allocation.cellName,
             registerName: allocation.cellName,
-            storageBindingName: allocateCellStorageBindingName(allocation.cellName),
+            storageBindingName: null,
             ownerEntry: position.ownerEntry,
             allocation: position,
             initialization: null,
@@ -914,9 +913,27 @@ function recoverBetaUpvaluesImpl(betaResult) {
             ) {
                 cell.bindingName = candidateName;
                 cell.bindingMode = "existing-beta-binding";
+            } else {
+                // Prometheus often stores a compiler value into the cell and then
+                // immediately copies that value into the actual source register.
+                // Prefer that adjacent surviving beta binding when the copy is exact.
+                const postInitCopies = candidateReads.filter(position =>
+                    position.ownerEntry === cell.ownerEntry &&
+                    position.stateId === cell.initialization.stateId &&
+                    position.operationIndex === cell.initialization.operationIndex + 1 &&
+                    position.operation?.rhs === candidateName &&
+                    typeof position.operation?.emittedTarget === "string" &&
+                    position.operation.emittedTarget !== cell.registerName &&
+                    String(position.operation.emittedText || "").trimStart().startsWith("local ")
+                );
+                if (postInitCopies.length === 1) {
+                    cell.bindingName = postInitCopies[0].operation.emittedTarget;
+                    cell.bindingMode = "post-init-beta-binding";
+                }
             }
         }
         if (!cell.bindingName) {
+            cell.storageBindingName ||= allocateCellStorageBindingName();
             cell.bindingName = cell.storageBindingName;
             cell.bindingMode = "cell-register-binding";
         }
@@ -947,6 +964,7 @@ function recoverBetaUpvaluesImpl(betaResult) {
             return { applied: false, safe: false, reason: `Captured cell ${cellId} has a factory capture with ambiguous order relative to initialization` };
         }
         if (captureBeforeInitialization) {
+            cell.storageBindingName ||= allocateCellStorageBindingName();
             cell.bindingName = cell.storageBindingName;
             cell.bindingMode = "hoisted-cell-binding";
         }
@@ -1040,7 +1058,7 @@ function recoverBetaUpvaluesImpl(betaResult) {
             removals.add(cell.allocation.operation);
         }
 
-        if (cell.bindingMode === "existing-beta-binding") {
+        if (cell.bindingMode === "existing-beta-binding" || cell.bindingMode === "post-init-beta-binding") {
             removals.add(cell.initialization.operation);
         } else {
             const initRhsText = cell.initialization.parsed.source.slice(cell.initialization.value.range[0], cell.initialization.value.range[1]);
@@ -1241,6 +1259,14 @@ function recoverBetaUpvaluesImpl(betaResult) {
                 bindingMode: cell.bindingMode,
             };
         }),
+        captures: [...captureCellsByEntry.entries()]
+            .sort((left, right) => left[0] - right[0])
+            .map(([entry, slots]) => ({
+                entry,
+                slots: [...slots.entries()]
+                    .sort((left, right) => left[0] - right[0])
+                    .map(([slot, cellId]) => ({ slot, cellId, bindingName: bindingByCell.get(cellId) || null })),
+            })),
     };
 }
 

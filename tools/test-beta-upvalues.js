@@ -159,12 +159,12 @@ const liveInitializationTemporary = recoverBetaUpvalues({
 assert.equal(liveInitializationTemporary.safe, true);
 const liveCell = liveInitializationTemporary.cells[0];
 assert.equal(liveCell.bindingMode, "cell-register-binding");
-assert.equal(liveCell.bindingName, "r_v1_1");
+assert.match(liveCell.bindingName, /^u_v\d+$/);
 const liveRoot = liveInitializationTemporary.graph.states.find(state => state.id === 1).operations;
 const liveChild = liveInitializationTemporary.graph.states.find(state => state.id === 2).operations;
-assert(liveRoot.some(op => op.emittedText === "local r_v1_1 = r_v2_1"));
+assert(liveRoot.some(op => op.emittedText === `local ${liveCell.bindingName} = r_v2_1`));
 assert(liveRoot.some(op => op.rhs === "observe(r_v2_1)"));
-assert(liveChild.some(op => op.emittedText === "r_v1_1 = 9"));
+assert(liveChild.some(op => op.emittedText === `${liveCell.bindingName} = 9`));
 
 const captureBeforeInitialization = recoverBetaUpvalues({
     applied: true,
@@ -200,9 +200,11 @@ const captureBeforeInitialization = recoverBetaUpvalues({
 assert.equal(captureBeforeInitialization.safe, true);
 assert.equal(captureBeforeInitialization.applied, true);
 const captureBeforeRoot = captureBeforeInitialization.graph.states.find(state => state.id === 1).operations;
-assert.equal(captureBeforeInitialization.cells[0].bindingMode, "hoisted-cell-binding");
-assert.equal(captureBeforeRoot[0].emittedText, "local r_v1_1");
-assert(captureBeforeRoot.some(op => op.emittedText === "r_v1_1 = args[1]"));
+const captureBeforeCell = captureBeforeInitialization.cells[0];
+assert.equal(captureBeforeCell.bindingMode, "hoisted-cell-binding");
+assert.match(captureBeforeCell.bindingName, /^u_v\d+$/);
+assert.equal(captureBeforeRoot[0].emittedText, `local ${captureBeforeCell.bindingName}`);
+assert(captureBeforeRoot.some(op => op.emittedText === `${captureBeforeCell.bindingName} = args[1]`));
 assert(captureBeforeRoot.some(op => op.rhs === "createClosure2(2, {})"));
 
 
@@ -236,10 +238,12 @@ const dominatedMultiStateCell = recoverBetaUpvalues({
 });
 assert.equal(dominatedMultiStateCell.safe, true);
 assert.equal(dominatedMultiStateCell.applied, true);
-assert.equal(dominatedMultiStateCell.cells[0].bindingMode, "hoisted-cell-binding");
+const dominatedCell = dominatedMultiStateCell.cells[0];
+assert.equal(dominatedCell.bindingMode, "hoisted-cell-binding");
+assert.match(dominatedCell.bindingName, /^u_v\d+$/);
 const dominatedBody = dominatedMultiStateCell.graph.states.find(state => state.id === 3).operations;
-assert(dominatedBody.some(op => op.emittedText === "local cell"));
-assert(dominatedBody.some(op => op.emittedText === "cell = current"));
+assert(dominatedBody.some(op => op.emittedText === `local ${dominatedCell.bindingName}`));
+assert(dominatedBody.some(op => op.emittedText === `${dominatedCell.bindingName} = current`));
 assert(dominatedBody.some(op => op.rhs === "createClosure2(5, {})"));
 assert(!dominatedBody.some(op => String(op.emittedText || "").includes("releaseUpvalue")));
 
@@ -337,10 +341,12 @@ assert.equal(compoundCapturedWrite.applied, true);
 assert.equal(compoundCapturedWrite.stats.writeRewriteCount, 1);
 const compoundCapturedRoot = compoundCapturedWrite.graph.states.find(state => state.id === 1).operations;
 const compoundCapturedChild = compoundCapturedWrite.graph.states.find(state => state.id === 2).operations;
-assert(compoundCapturedRoot.some(op => op.emittedText === "cell += delta" && op.reads.includes("cell")));
+const compoundBinding = compoundCapturedWrite.cells[0].bindingName;
+assert.match(compoundBinding, /^u_v\d+$/);
+assert(compoundCapturedRoot.some(op => op.emittedText === `${compoundBinding} += delta` && op.reads.includes(compoundBinding)));
 assert(compoundCapturedRoot.some(op => op.rhs === "createClosure2(2, {})"));
 assert(!compoundCapturedRoot.some(op => String(op.emittedText || "").includes("releaseUpvalue")));
-assert(compoundCapturedChild.some(op => op.emittedTarget === "captured" && op.rhs === "cell"));
+assert(compoundCapturedChild.some(op => op.emittedTarget === "captured" && op.rhs === compoundBinding));
 
 const effectWriteCapturedRead = recoverBetaUpvalues({
     applied: true,

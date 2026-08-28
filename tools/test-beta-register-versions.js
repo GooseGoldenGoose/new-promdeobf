@@ -1,6 +1,6 @@
 const assert = require("assert");
 const { parseLua } = require("../main");
-const { versionVmBlockRegisters } = require("../passes/beta-register-versions");
+const { versionVmBlockRegisters, finalizeBetaRegisterUpvalues } = require("../passes/beta-register-versions");
 
 const source = `vm = function(state, args, upvalues, gcProxy)
     local r1, r2, ReturnVal
@@ -875,5 +875,83 @@ assert(repeatedParallelTargetOp);
 assert.equal(new Set(repeatedParallelTargetOp.emittedTargets).size, 1);
 assert.equal(repeatedParallelTargetResult.versions.filter(item => item.originalName === "r1").length, 1);
 parseLua(repeatedParallelTargetResult.source, "<beta-repeated-parallel-target-output>");
+
+
+const recoveredExistingBindingSource = `vm = function(state, args, upvalues, gcProxy)
+    local r1, r2, r3, ReturnVal
+    while state do
+        if state == 1 then
+            r1 = true
+            r2 = allocUpvalue()
+            upvalueValues[r2] = r1
+            r3 = r1
+            r1 = createClosure2(2, { r2 })
+            ReturnVal = { r1 }
+            state = nil
+        end
+        if state == 2 then
+            r1 = upvalueValues[upvalues[1]]
+            ReturnVal = { r1 }
+            state = nil
+        end
+    end
+    state = #gcProxy
+    return unpack(ReturnVal)
+end
+root = createClosure(1, {})`;
+const recoveredExistingBinding = finalizeBetaRegisterUpvalues(versionVmBlockRegisters(
+    recoveredExistingBindingSource,
+    parseLua(recoveredExistingBindingSource, "<beta-upvalue-existing-binding-test>")
+));
+assert.equal(recoveredExistingBinding.upvalueRecovery.safe, true);
+assert.equal(recoveredExistingBinding.upvalueRecovery.applied, true);
+assert.equal(recoveredExistingBinding.upvalueRecovery.cells.length, 1);
+const existingBindingCell = recoveredExistingBinding.upvalueRecovery.cells[0];
+assert.equal(existingBindingCell.bindingMode, "post-init-beta-binding");
+const r3BindingBase = recoveredExistingBinding.mapping.find(item => item.originalName === "r3")?.baseName;
+assert(r3BindingBase);
+assert.equal(existingBindingCell.bindingName, `${r3BindingBase}_1`);
+assert(!recoveredExistingBinding.source.includes("allocUpvalue("));
+assert(!recoveredExistingBinding.source.includes("upvalueValues["));
+assert(recoveredExistingBinding.source.includes(`local ${r3BindingBase}_1 = `));
+assert(recoveredExistingBinding.source.includes(`createClosure2(2, {})`));
+parseLua(recoveredExistingBinding.source, "<beta-upvalue-existing-binding-output>");
+
+const recoveredSyntheticBindingSource = `vm = function(state, args, upvalues, gcProxy)
+    local r1, r2, ReturnVal
+    while state do
+        if state == 1 then
+            r2 = allocUpvalue()
+            upvalueValues[r2] = args[1]
+            r1 = createClosure2(2, { r2 })
+            ReturnVal = { r1 }
+            state = nil
+        end
+        if state == 2 then
+            r1 = upvalueValues[upvalues[1]]
+            upvalueValues[upvalues[1]] = r1
+            ReturnVal = { r1 }
+            state = nil
+        end
+    end
+    state = #gcProxy
+    return unpack(ReturnVal)
+end
+root = createClosure(1, {})`;
+const recoveredSyntheticBinding = finalizeBetaRegisterUpvalues(versionVmBlockRegisters(
+    recoveredSyntheticBindingSource,
+    parseLua(recoveredSyntheticBindingSource, "<beta-upvalue-synthetic-binding-test>")
+));
+assert.equal(recoveredSyntheticBinding.upvalueRecovery.safe, true);
+assert.equal(recoveredSyntheticBinding.upvalueRecovery.applied, true);
+const syntheticBindingCell = recoveredSyntheticBinding.upvalueRecovery.cells[0];
+assert.equal(syntheticBindingCell.bindingMode, "cell-register-binding");
+assert.equal(syntheticBindingCell.bindingName, "u_v1");
+assert(recoveredSyntheticBinding.source.includes("local u_v1 = args[1]"));
+assert(recoveredSyntheticBinding.source.includes("createClosure2(2, {})"));
+assert(!recoveredSyntheticBinding.source.includes("allocUpvalue("));
+assert(!recoveredSyntheticBinding.source.includes("upvalueValues["));
+assert.equal(recoveredSyntheticBinding.upvalueRecovery.captures.find(item => item.entry === 2)?.slots[0]?.bindingName, "u_v1");
+parseLua(recoveredSyntheticBinding.source, "<beta-upvalue-synthetic-binding-output>");
 
 console.log("beta register versioning tests passed");

@@ -2,6 +2,7 @@ const { findVmFunction, analyzeBlockTerminator } = require("./vm-state");
 const { findVmReturnRegister, findRegisterDeclaration } = require("./vm-register-names");
 const { applyTextEdits } = require("./text-edits");
 const { analyzeBetaRegisterLifetimes } = require("./beta-register-lifetimes");
+const { recoverBetaUpvalues } = require("./beta-upvalues");
 
 const NUMERIC_NAME_COLLATOR = new Intl.Collator(undefined, { numeric: true });
 const luaparse = require("../parser/luaparse");
@@ -1366,6 +1367,169 @@ function versionVmBlockRegisters(source, ast) {
     };
 }
 
+function betaOperationSourceStatementCount(operation) {
+    if (operation?.kind !== "multi-write" && operation?.kind !== "multi-call-write") return 1;
+    const declarations = (operation.targetDeclarations || []).filter(Boolean).length;
+    if (!declarations) return 1;
+    if (
+        operation.kind === "multi-call-write" &&
+        declarations === (operation.emittedTargets || []).length &&
+        (operation.targetDeclarations || []).every(Boolean)
+    ) return 1;
+    return 2;
+}
+
+function renderRecoveredBetaOperation(operation) {
+    const text = String(operation?.emittedText || "").trim();
+    if (!text) return "";
+    if (operation.kind !== "multi-write" && operation.kind !== "multi-call-write") return text;
+    const targets = operation.emittedTargets || [];
+    const declarationNames = targets.filter((_, index) => operation.targetDeclarations?.[index]);
+    if (!declarationNames.length) return text;
+    if (
+        operation.kind === "multi-call-write" &&
+        declarationNames.length === targets.length &&
+        (operation.targetDeclarations || []).every(Boolean)
+    ) return `local ${text}`;
+    return `local ${[...new Set(declarationNames)].join(", ")}\n${text}`;
+}
+
+function assignBetaSourceOperationIds(graph) {
+    for (const state of graph.states || []) {
+        for (let index = 0; index < (state.operations || []).length; index++) {
+            state.operations[index].betaSourceOperationId = `${state.id}:${index + 1}`;
+        }
+    }
+}
+
+function mapBetaSourceOperationRanges(betaResult) {
+    const source = betaResult.source;
+    let ast;
+    try {
+        ast = parseBetaSource(source);
+    } catch (error) {
+        return { safe: false, reason: `Beta upvalue source parse failed: ${error.message}` };
+    }
+    const vm = findVmFunction(ast);
+    if (!vm) return { safe: false, reason: "Beta upvalue source VM function not found" };
+    const leaves = collectStateLeafClauses(vm.functionNode, betaResult.graph.stateName, []);
+    const statementsByState = new Map();
+    for (const leaf of leaves) {
+        const stateId = numericValue(leaf.condition.left) ?? numericValue(leaf.condition.right);
+        if (!Number.isInteger(stateId) || statementsByState.has(stateId)) {
+            return { safe: false, reason: `Beta upvalue source has ambiguous state leaf ${stateId}` };
+        }
+        statementsByState.set(stateId, (leaf.body || []).filter(statement => statement?.type !== "CommentStatement"));
+    }
+
+    const ranges = new Map();
+    for (const state of betaResult.graph.states || []) {
+        const statements = statementsByState.get(state.id);
+        if (!statements) return { safe: false, reason: `Beta upvalue source is missing state ${state.id}` };
+        let statementIndex = 0;
+        for (const operation of state.operations || []) {
+            const count = betaOperationSourceStatementCount(operation);
+            const first = statements[statementIndex];
+            const last = statements[statementIndex + count - 1];
+            if (!operation.betaSourceOperationId || !Array.isArray(first?.range) || !Array.isArray(last?.range)) {
+                return { safe: false, reason: `Beta upvalue source state ${state.id} lost operation ownership at ${operation.index}` };
+            }
+            ranges.set(operation.betaSourceOperationId, [first.range[0], last.range[1]]);
+            statementIndex += count;
+        }
+        if (statementIndex !== statements.length) {
+            return { safe: false, reason: `Beta upvalue source state ${state.id} statement/operation mismatch ${statements.length}/${statementIndex}` };
+        }
+    }
+    return { safe: true, ranges };
+}
+
+function finalizeBetaRegisterUpvalues(betaResult) {
+    if (!betaResult?.graph || !betaResult.applied) return betaResult;
+    assignBetaSourceOperationIds(betaResult.graph);
+    const ownership = mapBetaSourceOperationRanges(betaResult);
+    if (!ownership.safe) {
+        betaResult.upvalueRecovery = { completed: true, applied: false, safe: false, reason: ownership.reason };
+        return betaResult;
+    }
+
+    const recovered = recoverBetaUpvalues(betaResult);
+    const recovery = {
+        completed: true,
+        applied: Boolean(recovered.applied),
+        safe: Boolean(recovered.safe),
+        reason: recovered.reason || null,
+        stats: recovered.stats || null,
+        cells: recovered.cells || [],
+        captures: recovered.captures || [],
+        sourceEditCount: 0,
+    };
+    if (!recovered.safe) {
+        betaResult.upvalueRecovery = recovery;
+        return betaResult;
+    }
+    if (!recovered.applied) {
+        betaResult.upvalueRecovery = recovery;
+        return betaResult;
+    }
+
+    const recoveredById = new Map();
+    for (const state of recovered.graph.states || []) {
+        for (const operation of state.operations || []) {
+            if (!operation.betaSourceOperationId || recoveredById.has(operation.betaSourceOperationId)) {
+                recovery.safe = false;
+                recovery.reason = `Recovered beta upvalue graph has ambiguous operation ownership in state ${state.id}`;
+                betaResult.upvalueRecovery = recovery;
+                return betaResult;
+            }
+            recoveredById.set(operation.betaSourceOperationId, operation);
+        }
+    }
+
+    const edits = [];
+    for (const state of betaResult.graph.states || []) {
+        for (const operation of state.operations || []) {
+            const id = operation.betaSourceOperationId;
+            const range = ownership.ranges.get(id);
+            const next = recoveredById.get(id);
+            if (!range) {
+                recovery.safe = false;
+                recovery.reason = `Recovered beta upvalue source lost operation ${id}`;
+                betaResult.upvalueRecovery = recovery;
+                return betaResult;
+            }
+            if (!next) {
+                edits.push({ start: range[0], end: range[1], replacement: "" });
+                continue;
+            }
+            const before = renderRecoveredBetaOperation(operation);
+            const after = renderRecoveredBetaOperation(next);
+            if (before !== after) edits.push({ start: range[0], end: range[1], replacement: after });
+        }
+    }
+
+    let output = applyTextEdits(betaResult.source, edits);
+    const cleanup = pruneUnusedPhysicalRegisterDeclaration(output);
+    output = cleanup.source;
+    try {
+        parseBetaSource(output);
+    } catch (error) {
+        recovery.safe = false;
+        recovery.reason = `Recovered beta upvalue source reparse failed: ${error.message}`;
+        betaResult.upvalueRecovery = recovery;
+        return betaResult;
+    }
+
+    recovery.sourceEditCount = edits.length;
+    betaResult.source = output;
+    betaResult.graph = recovered.graph;
+    betaResult.upvalueRecovery = recovery;
+    betaResult.prunedPhysicalRegisterDeclarations =
+        (betaResult.prunedPhysicalRegisterDeclarations || 0) + (cleanup.pruned || 0);
+    return betaResult;
+}
+
 module.exports = {
     versionVmBlockRegisters,
+    finalizeBetaRegisterUpvalues,
 };

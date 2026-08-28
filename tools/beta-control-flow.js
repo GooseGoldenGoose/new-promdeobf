@@ -1,7 +1,7 @@
 const fs = require("fs");
 const path = require("path");
 const { parseLua, parseLuaStructural } = require("../main");
-const { versionVmBlockRegisters } = require("../passes/beta-register-versions");
+const { versionVmBlockRegisters, finalizeBetaRegisterUpvalues } = require("../passes/beta-register-versions");
 const { solveBetaControlFlow } = require("../passes/beta-control-flow");
 const { recoverVmStateGraph } = require("../passes/vm-state");
 const { scheduleVmRegisterUses } = require("../passes/vm-register-scheduler");
@@ -45,7 +45,11 @@ function generateBetaControlFlowFromSource(source, ast, outputPath) {
     if (!betaRaw.found || !betaRaw.applied) {
         throw new Error(betaRaw.reason || "Beta register analysis did not apply");
     }
-    const beta = remapOverflowBetaVersions(betaRaw, prepared);
+    let beta = remapOverflowBetaVersions(betaRaw, prepared);
+    beta = finalizeBetaRegisterUpvalues(beta);
+    if (beta.upvalueRecovery?.completed && !beta.upvalueRecovery.safe) {
+        throw new Error(beta.upvalueRecovery.reason || "Beta upvalue recovery failed closed");
+    }
 
     const controlFlow = solveBetaControlFlow(betaAst, beta);
     if (!controlFlow.applied) throw new Error(controlFlow.reason || "Beta control-flow solving did not apply");

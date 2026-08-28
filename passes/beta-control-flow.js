@@ -4214,7 +4214,15 @@ function solveBetaControlFlowImpl(originalAst, betaResult) {
     if (!betaResult?.graph || !betaResult.applied) {
         return { applied: false, reason: "Beta register analysis is unavailable" };
     }
-    const upvalues = recoverBetaUpvalues(betaResult);
+    const upvalues = betaResult.upvalueRecovery?.completed
+        ? {
+            applied: Boolean(betaResult.upvalueRecovery.applied),
+            safe: Boolean(betaResult.upvalueRecovery.safe),
+            reason: betaResult.upvalueRecovery.reason || null,
+            stats: betaResult.upvalueRecovery.stats || null,
+            graph: betaResult.graph,
+        }
+        : recoverBetaUpvalues(betaResult);
     if (!upvalues.safe) {
         return { applied: false, reason: upvalues.reason || "Beta upvalue recovery failed closed" };
     }

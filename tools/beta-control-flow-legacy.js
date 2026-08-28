@@ -1,7 +1,7 @@
 const fs = require("fs");
 const path = require("path");
 const { parseLuaStructural } = require("../main");
-const { versionVmBlockRegisters } = require("../passes/beta-register-versions");
+const { versionVmBlockRegisters, finalizeBetaRegisterUpvalues } = require("../passes/beta-register-versions");
 const { solveBetaControlFlow } = require("../passes/beta-control-flow-legacy");
 
 function defaultOutputPath(inputPath) {
@@ -11,9 +11,12 @@ function defaultOutputPath(inputPath) {
 
 function generateBetaControlFlowFromSource(source, ast, outputPath) {
     const resolvedOutput = path.resolve(outputPath);
-    const beta = versionVmBlockRegisters(source, ast);
+    const beta = finalizeBetaRegisterUpvalues(versionVmBlockRegisters(source, ast));
     if (!beta.found || !beta.applied) {
         throw new Error(beta.reason || "Beta register analysis did not apply");
+    }
+    if (beta.upvalueRecovery?.completed && !beta.upvalueRecovery.safe) {
+        throw new Error(beta.upvalueRecovery.reason || "Beta upvalue recovery failed closed");
     }
 
     const controlFlow = solveBetaControlFlow(ast, beta);
