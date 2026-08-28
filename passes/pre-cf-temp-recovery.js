@@ -334,10 +334,105 @@ function finalizePreCfLookupTemps(betaResult) {
     betaResult.preCfLookupTemps = { applied: folds > 0, safe: true, folds };
     return betaResult;
 }
+function collectIdentifierCount(node, name) {
+    if (!isAstNode(node)) return 0;
+    let count = node.type === "Identifier" && node.name === name ? 1 : 0;
+    for (const [key, value] of Object.entries(node)) {
+        if (key === "loc" || key === "range") continue;
+        if (Array.isArray(value)) for (const child of value) count += collectIdentifierCount(child, name);
+        else if (isAstNode(value)) count += collectIdentifierCount(value, name);
+    }
+    return count;
+}
+
+function isStableCallPrefixExpression(node) {
+    return ["Identifier", "NumericLiteral", "StringLiteral", "BooleanLiteral", "NilLiteral"].includes(node?.type);
+}
+
+function rewriteDirectCallArgument(rhs, tempName, replacement) {
+    const expression = parsePreCfRhs(rhs);
+    if (expression?.type !== "CallExpression" || expression.base?.type !== "Identifier") return null;
+    if (collectIdentifierCount(expression, tempName) !== 1) return null;
+    const args = expression.arguments || [];
+    const argIndex = args.findIndex(arg => arg?.type === "Identifier" && arg.name === tempName);
+    if (argIndex < 0) return null;
+    for (let i = 0; i < argIndex; i++) if (!isStableCallPrefixExpression(args[i])) return null;
+    const arg = args[argIndex];
+    if (!Array.isArray(arg.range)) return null;
+    const prefixLength = "return ".length;
+    const start = arg.range[0] - prefixLength;
+    const end = arg.range[1] - prefixLength;
+    if (start < 0 || end < start || rhs.slice(start, end) !== tempName) return null;
+    return {
+        rhs: rhs.slice(0, start) + replacement + rhs.slice(end),
+        baseName: expression.base.name,
+        argIndex,
+    };
+}
+
+function finalizePreCfCallArgumentTemps(betaResult) {
+    if (!betaResult?.graph || typeof betaResult.source !== "string" || betaResult.graph.cfgComplete !== true) {
+        betaResult.preCfCallArgumentTemps = { applied: false, safe: false, reason: "PRE-CF call-argument recovery requires a complete beta graph" };
+        return betaResult;
+    }
+    let folds = 0;
+    const maxRounds = (betaResult.graph.states || []).reduce((n, state) => n + (state.operations || []).length, 0) + 1;
+    for (let round = 0; round < maxRounds; round++) {
+        const proof = buildPreCfTempProofIndex(betaResult);
+        let candidate = null;
+        for (const facts of proof.byBinding.values()) {
+            if (!facts.safeSameStateTransport || !facts.adjacent) continue;
+            const producer = facts.producer.operation;
+            const consumer = facts.consumer.operation;
+            if (!isCopyOperation(producer) || !isCopyOperation(consumer)) continue;
+            const producerExpr = parsePreCfRhs(producer.rhs);
+            if (producerExpr?.type !== "CallExpression") continue;
+            const rewritten = rewriteDirectCallArgument(consumer.rhs, facts.name, `(${producer.rhs})`);
+            if (!rewritten) continue;
+            if (!Array.isArray(consumer.reads) || !consumer.reads.includes(rewritten.baseName)) continue;
+            candidate = { facts, producer, consumer, rewritten };
+            break;
+        }
+        if (!candidate) break;
+        const ownership = mapPreCfOperationRanges(betaResult);
+        if (!ownership.safe) {
+            betaResult.preCfCallArgumentTemps = { applied: folds > 0, safe: false, reason: ownership.reason, folds };
+            return betaResult;
+        }
+        const producerRange = ownership.ranges.get(candidate.producer);
+        const consumerRange = ownership.ranges.get(candidate.consumer);
+        if (!producerRange || !consumerRange) {
+            betaResult.preCfCallArgumentTemps = { applied: folds > 0, safe: false, reason: "PRE-CF call-argument recovery lost exact source ownership", folds };
+            return betaResult;
+        }
+        const prefix = String(candidate.consumer.emittedText || "").trim().startsWith("local ") ? "local " : "";
+        const emittedText = `${prefix}${candidate.consumer.emittedTarget} = ${candidate.rewritten.rhs}`;
+        const output = applySourceEdits(betaResult.source, [
+            { start: producerRange[0], end: producerRange[1], replacement: "" },
+            { start: consumerRange[0], end: consumerRange[1], replacement: emittedText },
+        ]);
+        try { parsePreCfSource(output); }
+        catch (error) {
+            betaResult.preCfCallArgumentTemps = { applied: folds > 0, safe: false, reason: `PRE-CF call-argument recovery reparse failed: ${error.message}`, folds };
+            return betaResult;
+        }
+        betaResult.source = output;
+        const state = betaResult.graph.states.find(item => item.id === candidate.facts.producer.stateId);
+        state.operations.splice(candidate.facts.producer.offset, 1);
+        candidate.consumer.rhs = candidate.rewritten.rhs;
+        candidate.consumer.reads = [...new Set([...(candidate.consumer.reads || []).filter(name => name !== candidate.facts.name), ...(candidate.producer.reads || [])])];
+        candidate.consumer.emittedText = emittedText;
+        for (let i = 0; i < state.operations.length; i++) state.operations[i].index = i + 1;
+        folds++;
+    }
+    betaResult.preCfCallArgumentTemps = { applied: folds > 0, safe: true, folds };
+    return betaResult;
+}
 module.exports = {
     buildPreCfTempProofIndex,
     provePreCfTempUse,
     finalizePreCfCopyTemps,
     finalizePreCfScalarTemps,
     finalizePreCfLookupTemps,
+    finalizePreCfCallArgumentTemps,
 };
