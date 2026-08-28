@@ -816,16 +816,16 @@ const whileGuardStructured = solveBetaControlFlow(ast, {
 assert.equal(whileGuardStructured.applied, true);
 assert.equal(whileGuardStructured.whileLoopCount, 1);
 assert.equal(whileGuardStructured.numericForLoopCount, 0);
-assert(whileGuardStructured.source.includes("while true do"));
-assert(whileGuardStructured.source.includes("if not (cond) then"));
-assert(whileGuardStructured.source.includes("break"));
+assert(whileGuardStructured.source.includes("while (predicate()) do"));
+assert(!whileGuardStructured.source.includes("if not (cond) then"));
+assert(!whileGuardStructured.source.includes("local cond = predicate()"));
 assert(whileGuardStructured.source.includes("local sink = consume()"));
 assert(!whileGuardStructured.source.includes("state ="));
-const whileIndex = whileGuardStructured.source.indexOf("while true do");
-const conditionIndex = whileGuardStructured.source.indexOf("local cond = predicate()");
-const guardIndex = whileGuardStructured.source.indexOf("if not (cond) then");
+const whileIndex = whileGuardStructured.source.indexOf("while (predicate()) do");
+
+
 const bodyIndex = whileGuardStructured.source.indexOf("local sink = consume()");
-assert(whileIndex >= 0 && whileIndex < conditionIndex && conditionIndex < guardIndex && guardIndex < bodyIndex);
+assert(whileIndex >= 0 && whileIndex < bodyIndex);
 parseLua(whileGuardStructured.source, "<beta-cf-while-guard-output>");
 
 

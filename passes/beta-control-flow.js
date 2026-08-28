@@ -526,6 +526,65 @@ function recoverCfAdjacentConditionTemp(graph, state, info, bodyOperations) {
     };
 }
 
+function structuredNodesReadName(nodes, name) {
+    for (const node of nodes || []) {
+        if ((node.reads || []).includes(name)) return true;
+        if (node.type === "if") {
+            if (structuredNodesReadName(node.thenBody, name) || structuredNodesReadName(node.elseBody, name)) return true;
+        } else if (node.type === "while-guard" || node.type === "repeat-until") {
+            if (structuredNodesReadName(node.conditionBody, name) || structuredNodesReadName(node.body, name)) return true;
+        } else if (node.type === "numeric-for" || node.type === "generic-for") {
+            if (structuredNodesReadName(node.body, name)) return true;
+        }
+    }
+    return false;
+}
+
+function conditionPolarityForName(condition, name) {
+    const text = String(condition || "").trim();
+    if (text === name || text === `(${name})`) return "and";
+    const escaped = name.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+    if (new RegExp(`^not\\s+${escaped}$`).test(text) || new RegExp(`^not\\s*\\(\\s*${escaped}\\s*\\)$`).test(text)) return "or";
+    return null;
+}
+
+function recoverCfLogicalValueProgram(nodes, resultName, capturedBindings = []) {
+    const work = [...(nodes || [])];
+    const captured = new Set(capturedBindings || []);
+    if (work[0]?.type === "raw" && String(work[0].text || "").trim() === `local ${resultName}`) work.shift();
+
+    if (work.length >= 3 && work[work.length - 1]?.type === "raw") {
+        const bridge = work[work.length - 1].operation || {};
+        const innerName = String(bridge.rhs || "").trim();
+        if (bridge.emittedTarget === resultName && /^[A-Za-z_][A-Za-z0-9_]*$/.test(innerName) && innerName !== resultName && !captured.has(innerName)) {
+            const nested = recoverCfLogicalValueProgram(work.slice(0, -1), innerName, capturedBindings);
+            if (nested) return nested;
+        }
+    }
+
+    if (work.length < 2 || work[0]?.type !== "raw" || work[1]?.type !== "raw") return null;
+    const producerNode = work[0];
+    const assignNode = work[1];
+    const producer = producerNode.operation || {};
+    const assignment = assignNode.operation || {};
+    const seedName = producer.emittedTarget;
+    const seedRhs = String(producer.rhs || "").trim();
+    if (!seedName || seedName === resultName || captured.has(seedName) || !seedRhs || !parseTransitionExpression(seedRhs)?.expression) return null;
+    if (assignment.emittedTarget !== resultName || String(assignment.rhs || "").trim() !== seedName) return null;
+    if (producer.kind !== "version-define" && producer.kind !== "epoch-start" && producer.kind !== "epoch-mutate") return null;
+    if (assignment.kind !== "version-define" && assignment.kind !== "epoch-start" && assignment.kind !== "epoch-mutate") return null;
+    const reads = new Set(producer.reads || []);
+    if (work.length === 2) return { expression: `(${seedRhs})`, reads: [...reads] };
+    if (work.length !== 3 || work[2]?.type !== "if" || work[2].elseBody) return null;
+    const branch = work[2];
+    const operator = conditionPolarityForName(branch.condition, seedName);
+    if (!operator || structuredNodesReadName(branch.thenBody, seedName)) return null;
+    const nested = recoverCfLogicalValueProgram(branch.thenBody, resultName, capturedBindings);
+    if (!nested) return null;
+    for (const read of nested.reads || []) reads.add(read);
+    return { expression: `(${seedRhs}) ${operator} (${nested.expression})`, reads: [...reads] };
+}
+
 function setEquals(left, right) {
     if (left.size !== right.size) return false;
     for (const value of left) if (!right.has(value)) return false;
@@ -771,8 +830,15 @@ function formatStructuredNodes(nodes, depth = 0) {
         }
         if (node.type === "while-guard") {
             const indent = "    ".repeat(depth);
+            if (!node.conditionBody.length) {
+                const lines = [`${indent}while ${node.condition} do`];
+                if (node.body.length) lines.push("", formatStructuredNodes(node.body, depth + 1));
+                lines.push("", `${indent}end`);
+                parts.push(lines.join("\n"));
+                continue;
+            }
             const lines = [`${indent}while true do`];
-            if (node.conditionBody.length) lines.push("", formatStructuredNodes(node.conditionBody, depth + 1));
+            lines.push("", formatStructuredNodes(node.conditionBody, depth + 1));
             lines.push("", `${indent}    if not (${node.condition}) then`, `${indent}        break`, `${indent}    end`);
             if (node.body.length) lines.push("", formatStructuredNodes(node.body, depth + 1));
             lines.push("", `${indent}end`);
@@ -1143,10 +1209,16 @@ function validateStructuredLocalScopes(nodes) {
             if (node.type === "while-guard") {
                 const bodyScope = nextScopeId++;
                 parentScope.set(bodyScope, scopeId);
+                if (!node.conditionBody.length) {
+                    sequence++;
+                    for (const name of node.reads || []) reads.push({ name, scopeId, sequence });
+                }
                 const conditionError = visit(node.conditionBody, bodyScope);
                 if (conditionError) return conditionError;
-                sequence++;
-                for (const name of node.reads || []) reads.push({ name, scopeId: bodyScope, sequence });
+                if (node.conditionBody.length) {
+                    sequence++;
+                    for (const name of node.reads || []) reads.push({ name, scopeId: bodyScope, sequence });
+                }
                 const bodyError = visit(node.body, bodyScope);
                 if (bodyError) return bodyError;
                 continue;
@@ -2242,12 +2314,21 @@ function matchCompilerWhileConditionRegion(graph, decisionStateId) {
             bodyId,
             bodyStateIds: [...bodyRegion.ids],
             exitId,
-            condition: decisionInfo.condition,
-            conditionReads: decisionInfo.conditionReads,
-            conditionNodes: [
-                ...conditionStructured.nodes,
-                ...decisionOperations.map(operation => operationNode(operation, decision.id)),
-            ],
+            condition: (() => {
+                const nodes = [...conditionStructured.nodes, ...decisionOperations.map(operation => operationNode(operation, decision.id))];
+                const logical = recoverCfLogicalValueProgram(nodes, decisionInfo.conditionName, graph.recoveredUpvalueBindings);
+                return logical && decisionInfo.condition === decisionInfo.conditionName ? logical.expression : decisionInfo.condition;
+            })(),
+            conditionReads: (() => {
+                const nodes = [...conditionStructured.nodes, ...decisionOperations.map(operation => operationNode(operation, decision.id))];
+                const logical = recoverCfLogicalValueProgram(nodes, decisionInfo.conditionName, graph.recoveredUpvalueBindings);
+                return logical && decisionInfo.condition === decisionInfo.conditionName ? logical.reads : decisionInfo.conditionReads;
+            })(),
+            conditionNodes: (() => {
+                const nodes = [...conditionStructured.nodes, ...decisionOperations.map(operation => operationNode(operation, decision.id))];
+                const logical = recoverCfLogicalValueProgram(nodes, decisionInfo.conditionName, graph.recoveredUpvalueBindings);
+                return logical && decisionInfo.condition === decisionInfo.conditionName ? [] : nodes;
+            })(),
             bodyNodes: bodyStructured.nodes,
             bodyBranchCount: (bodyStructured.branchCount || 0) + (conditionStructured.branchCount || 0),
             bodyJoinCount: (bodyStructured.joinCount || 0) + (conditionStructured.joinCount || 0),
@@ -2299,9 +2380,18 @@ function matchCompilerWhile(graph, checkStateId) {
     const preTransition = preOps[preTransitionIndex];
     if (directNumericOperationValue({ expression: parseOperationExpression(preTransition) }) !== check.id) return null;
 
-    const conditionOperations = (check.operations || []).filter(operation => operation !== checkInfo.operation);
+    let conditionOperations = (check.operations || []).filter(operation => operation !== checkInfo.operation);
+    let recoveredCheckInfo = checkInfo;
+    const adjacentCondition = recoverCfAdjacentConditionTemp(graph, check, checkInfo, conditionOperations);
+    recoveredCheckInfo = adjacentCondition.info;
+    conditionOperations = adjacentCondition.bodyOperations;
     if (conditionOperations.some(operation => !operationText(operation))) return null;
-    const conditionNodes = conditionOperations.map(operation => operationNode(operation, check.id));
+    let conditionNodes = conditionOperations.map(operation => operationNode(operation, check.id));
+    const logicalCondition = recoverCfLogicalValueProgram(conditionNodes, recoveredCheckInfo.conditionName, graph.recoveredUpvalueBindings);
+    if (logicalCondition && recoveredCheckInfo.condition === recoveredCheckInfo.conditionName) {
+        recoveredCheckInfo = { ...recoveredCheckInfo, condition: logicalCondition.expression, conditionReads: logicalCondition.reads, conditionTempRecovered: true };
+        conditionNodes = [];
+    }
 
     const structuredBody = structureLoopBodyRegion(stateById, region, bodyId, check.id, new Set(), null, exitId, true);
     if (!structuredBody) return null;
@@ -2312,8 +2402,8 @@ function matchCompilerWhile(graph, checkStateId) {
         bodyId,
         bodyStateIds: [...region.ids],
         exitId,
-        condition: checkInfo.condition,
-        conditionReads: checkInfo.conditionReads,
+        condition: recoveredCheckInfo.condition,
+        conditionReads: recoveredCheckInfo.conditionReads,
         conditionNodes,
         bodyNodes: structuredBody.nodes,
         bodyBranchCount: structuredBody.branchCount,
