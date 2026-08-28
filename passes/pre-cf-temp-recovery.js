@@ -506,6 +506,120 @@ function finalizePreCfCallBaseTemps(betaResult) {
     betaResult.preCfCallBaseTemps = { applied: folds > 0, safe: true, folds };
     return betaResult;
 }
+const LUA_KEYWORDS = new Set(["and","break","do","else","elseif","end","false","for","function","goto","if","in","local","nil","not","or","repeat","return","then","true","until","while","continue"]);
+
+function luaStringLiteralValue(rhs) {
+    const expression = parsePreCfRhs(rhs);
+    if (expression?.type !== "StringLiteral") return null;
+    if (typeof expression.value === "string") return expression.value;
+    const raw = String(expression.raw || "");
+    const match = raw.match(/^(["'])([A-Za-z_][A-Za-z0-9_]*)\1$/);
+    return match ? match[2] : null;
+}
+
+function isValidNamecallMethod(name) {
+    return typeof name === "string" && /^[A-Za-z_][A-Za-z0-9_]*$/.test(name) && !LUA_KEYWORDS.has(name);
+}
+
+function sourceForExpressionNode(rhs, node) {
+    if (!Array.isArray(node?.range)) return null;
+    const offset = "return ".length;
+    const start = node.range[0] - offset;
+    const end = node.range[1] - offset;
+    if (start < 0 || end < start || end > rhs.length) return null;
+    return rhs.slice(start, end);
+}
+
+function matchNamecallTriple(state, offset, proof) {
+    const operations = state.operations || [];
+    const keyOp = operations[offset];
+    const methodOp = operations[offset + 1];
+    const callOp = operations[offset + 2];
+    if (!isCopyOperation(keyOp) || !isCopyOperation(methodOp) || !isCopyOperation(callOp)) return null;
+    const keyName = keyOp.emittedTarget;
+    const methodNameBinding = methodOp.emittedTarget;
+    if (!keyName || !methodNameBinding) return null;
+    const keyFacts = proof.byBinding.get(keyName);
+    const methodFacts = proof.byBinding.get(methodNameBinding);
+    if (!keyFacts?.safeSameStateTransport || !methodFacts?.safeSameStateTransport) return null;
+    if (keyFacts.consumer?.operation !== methodOp || methodFacts.consumer?.operation !== callOp) return null;
+    if (keyFacts.producer?.offset !== offset || methodFacts.producer?.offset !== offset + 1) return null;
+    const method = luaStringLiteralValue(keyOp.rhs);
+    if (!isValidNamecallMethod(method) || (keyOp.reads || []).length !== 0) return null;
+
+    const lookup = parsePreCfRhs(methodOp.rhs);
+    if (lookup?.type !== "IndexExpression" || lookup.base?.type !== "Identifier" || lookup.index?.type !== "Identifier") return null;
+    if (lookup.index.name !== keyName) return null;
+    const baseName = lookup.base.name;
+    if (!(methodOp.reads || []).includes(baseName) || !(methodOp.reads || []).includes(keyName)) return null;
+
+    const call = parsePreCfRhs(callOp.rhs);
+    if (call?.type !== "CallExpression" || call.base?.type !== "Identifier" || call.base.name !== methodNameBinding) return null;
+    if (collectIdentifierCount(call, methodNameBinding) !== 1) return null;
+    const args = call.arguments || [];
+    if (args.length < 1 || args[0]?.type !== "Identifier" || args[0].name !== baseName) return null;
+    const renderedArgs = [];
+    for (let i = 1; i < args.length; i++) {
+        const text = sourceForExpressionNode(callOp.rhs, args[i]);
+        if (text === null) return null;
+        renderedArgs.push(text);
+    }
+    return { keyOp, methodOp, callOp, keyName, methodNameBinding, baseName, method, rhs: `${baseName}:${method}(${renderedArgs.join(", ")})` };
+}
+
+function finalizePreCfNamecalls(betaResult) {
+    if (!betaResult?.graph || typeof betaResult.source !== "string" || betaResult.graph.cfgComplete !== true) {
+        betaResult.preCfNamecalls = { applied: false, safe: false, reason: "PRE-CF namecall recovery requires a complete beta graph" };
+        return betaResult;
+    }
+    let folds = 0;
+    const maxRounds = (betaResult.graph.states || []).reduce((n, state) => n + (state.operations || []).length, 0) + 1;
+    for (let round = 0; round < maxRounds; round++) {
+        const proof = buildPreCfTempProofIndex(betaResult);
+        let candidate = null;
+        for (const state of betaResult.graph.states || []) {
+            for (let offset = 0; offset + 2 < (state.operations || []).length; offset++) {
+                const match = matchNamecallTriple(state, offset, proof);
+                if (match) { candidate = { state, offset, ...match }; break; }
+            }
+            if (candidate) break;
+        }
+        if (!candidate) break;
+        const ownership = mapPreCfOperationRanges(betaResult);
+        if (!ownership.safe) {
+            betaResult.preCfNamecalls = { applied: folds > 0, safe: false, reason: ownership.reason, folds };
+            return betaResult;
+        }
+        const keyRange = ownership.ranges.get(candidate.keyOp);
+        const methodRange = ownership.ranges.get(candidate.methodOp);
+        const callRange = ownership.ranges.get(candidate.callOp);
+        if (!keyRange || !methodRange || !callRange) {
+            betaResult.preCfNamecalls = { applied: folds > 0, safe: false, reason: "PRE-CF namecall recovery lost exact source ownership", folds };
+            return betaResult;
+        }
+        const prefix = String(candidate.callOp.emittedText || "").trim().startsWith("local ") ? "local " : "";
+        const emittedText = `${prefix}${candidate.callOp.emittedTarget} = ${candidate.rhs}`;
+        const output = applySourceEdits(betaResult.source, [
+            { start: keyRange[0], end: keyRange[1], replacement: "" },
+            { start: methodRange[0], end: methodRange[1], replacement: "" },
+            { start: callRange[0], end: callRange[1], replacement: emittedText },
+        ]);
+        try { parsePreCfSource(output); }
+        catch (error) {
+            betaResult.preCfNamecalls = { applied: folds > 0, safe: false, reason: `PRE-CF namecall recovery reparse failed: ${error.message}`, folds };
+            return betaResult;
+        }
+        betaResult.source = output;
+        candidate.state.operations.splice(candidate.offset, 2);
+        candidate.callOp.rhs = candidate.rhs;
+        candidate.callOp.reads = [...new Set((candidate.callOp.reads || []).filter(name => name !== candidate.keyName && name !== candidate.methodNameBinding))];
+        candidate.callOp.emittedText = emittedText;
+        for (let i = 0; i < candidate.state.operations.length; i++) candidate.state.operations[i].index = i + 1;
+        folds++;
+    }
+    betaResult.preCfNamecalls = { applied: folds > 0, safe: true, folds };
+    return betaResult;
+}
 module.exports = {
     buildPreCfTempProofIndex,
     provePreCfTempUse,
@@ -514,4 +628,5 @@ module.exports = {
     finalizePreCfLookupTemps,
     finalizePreCfCallArgumentTemps,
     finalizePreCfCallBaseTemps,
+    finalizePreCfNamecalls,
 };
