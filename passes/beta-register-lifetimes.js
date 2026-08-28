@@ -517,10 +517,11 @@ function analyzeBetaRegisterLifetimes({
     }
 
     // Cleanup is only accepted after def/use proof: direct nil, nil value never read,
-    // all reaching prior values are known non-nil ordinary definitions, and at least
-    // one prior value was actually used. Explicit source `x = nil` normally compiles
-    // through a temporary then a copy into x, so the nil temporary itself has a use and
-    // does not satisfy this rule.
+    // and all reaching prior values are known non-nil ordinary definitions. The prior
+    // value does not need to have been read: Prometheus also releases reserved/scratch
+    // registers whose current value was never consumed. Explicit source `x = nil`
+    // normally compiles through a temporary then a copy into x, so the nil temporary
+    // itself has a use and does not satisfy this direct-cleanup rule.
     const cleanupCandidates = [];
     const cleanupByStatement = new Map();
     let nextCleanupId = 1;
@@ -544,7 +545,6 @@ function analyzeBetaRegisterLifetimes({
             priorDefinitions.push(prior);
         }
         if (blocked || !priorDefinitions.length) continue;
-        if (!priorDefinitions.some(prior => prior.useCount > 0)) continue;
 
         const cleanup = {
             id: `k${nextCleanupId++}`,

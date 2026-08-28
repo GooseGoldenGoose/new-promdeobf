@@ -211,6 +211,7 @@ VM parameters are recovered structurally as:
 - one physical register may hold multiple source lifetimes
 - transitive value provenance alone must not merge unrelated ordinary register lifetimes
 - captured-cell identity is stronger evidence because it is shared mutable storage
+- proven direct `rN = nil` register cleanup stays attached to the single existing reaching beta epoch even when the previous value had zero reads; it must not consume a fresh beta suffix. Ambiguous/multi-epoch reaches remain conservative.
 - terminal ReturnVal lowering is restricted to compiler-proven terminal shapes
 - POS/state cleanup removes only proven dead compiler save/restore scaffolding
 

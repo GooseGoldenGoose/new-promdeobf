@@ -1201,4 +1201,40 @@ assert(!whitespaceCleanupFinal.source.includes("    \n"));
 const outsideProtected = whitespaceCleanupFinal.source.replace("first\n\nthird  ", "first\nthird  ").replace("comment line\n\ncomment tail", "comment line\ncomment tail");
 assert(!/\n[ \t]*\n/.test(outsideProtected));
 parseLua(whitespaceCleanupFinal.source, "<beta-whitespace-cleanup-output>");
+const unreadCleanupSource = `vm = function(state, args, upvalues, gcProxy)
+    local r1, ReturnVal
+    while state do
+        if state == 1 then
+            r1 = {}
+            state = 2
+        end
+        if state == 2 then
+            r1 = nil
+            state = 3
+        end
+        if state == 3 then
+            r1 = make()
+            ReturnVal = { r1 }
+            state = nil
+        end
+    end
+    state = #gcProxy
+    return unpack(ReturnVal)
+end
+root = createClosure(1, {})`;
+const unreadCleanupResult = versionVmBlockRegisters(
+    unreadCleanupSource,
+    parseLua(unreadCleanupSource, "<beta-unread-cleanup-test>")
+);
+const unreadCleanupOps = unreadCleanupResult.graph.states.flatMap(state => state.operations).filter(operation => operation.originalTarget === "r1");
+assert.equal(unreadCleanupOps.length, 3);
+assert.equal(unreadCleanupOps[0].kind, "epoch-start");
+assert.equal(unreadCleanupOps[1].kind, "epoch-kill");
+assert.equal(unreadCleanupOps[1].emittedTarget, unreadCleanupOps[0].emittedTarget);
+assert.equal(unreadCleanupOps[2].kind, "epoch-start");
+assert.notEqual(unreadCleanupOps[2].emittedTarget, unreadCleanupOps[0].emittedTarget);
+assert(unreadCleanupResult.source.includes(`${unreadCleanupOps[0].emittedTarget} = nil`));
+assert(!unreadCleanupResult.source.includes(`local ${unreadCleanupOps[1].emittedTarget} = nil`));
+parseLua(unreadCleanupResult.source, "<beta-unread-cleanup-output>");
+
 console.log("beta register versioning tests passed");
