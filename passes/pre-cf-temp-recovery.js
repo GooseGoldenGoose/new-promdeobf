@@ -620,6 +620,72 @@ function finalizePreCfNamecalls(betaResult) {
     betaResult.preCfNamecalls = { applied: folds > 0, safe: true, folds };
     return betaResult;
 }
+function renderReturnTransportExpression(producer) {
+    const expression = parsePreCfRhs(producer?.rhs);
+    if (!expression) return null;
+    if (expression.type === "CallExpression") return `(${producer.rhs})`;
+    if (isSafePreCfScalarExpression(expression)) return producer.rhs;
+    if (isStaticLookupExpression(expression)) return producer.rhs;
+    return null;
+}
+
+function finalizePreCfReturnTemps(betaResult) {
+    if (!betaResult?.graph || typeof betaResult.source !== "string" || betaResult.graph.cfgComplete !== true) {
+        betaResult.preCfReturnTemps = { applied: false, safe: false, reason: "PRE-CF return recovery requires a complete beta graph" };
+        return betaResult;
+    }
+    let folds = 0;
+    const maxRounds = (betaResult.graph.states || []).reduce((n, state) => n + (state.operations || []).length, 0) + 1;
+    for (let round = 0; round < maxRounds; round++) {
+        const proof = buildPreCfTempProofIndex(betaResult);
+        let candidate = null;
+        for (const facts of proof.byBinding.values()) {
+            if (!facts.safeSameStateTransport || !facts.adjacent) continue;
+            const producer = facts.producer.operation;
+            const payload = facts.consumer.operation;
+            if (!isCopyOperation(producer) || payload?.kind !== "return-payload" || payload.terminalCompilerReturnPayload !== true) continue;
+            if (!Array.isArray(payload.returnExpressions) || payload.returnExpressions.length !== 1 || payload.returnExpressions[0] !== facts.name) continue;
+            if (!Array.isArray(payload.reads) || payload.reads.length !== 1 || payload.reads[0] !== facts.name) continue;
+            const replacement = renderReturnTransportExpression(producer);
+            if (!replacement) continue;
+            candidate = { facts, producer, payload, replacement };
+            break;
+        }
+        if (!candidate) break;
+        const ownership = mapPreCfOperationRanges(betaResult);
+        if (!ownership.safe) {
+            betaResult.preCfReturnTemps = { applied: folds > 0, safe: false, reason: ownership.reason, folds };
+            return betaResult;
+        }
+        const producerRange = ownership.ranges.get(candidate.producer);
+        const payloadRange = ownership.ranges.get(candidate.payload);
+        if (!producerRange || !payloadRange) {
+            betaResult.preCfReturnTemps = { applied: folds > 0, safe: false, reason: "PRE-CF return recovery lost exact source ownership", folds };
+            return betaResult;
+        }
+        const emittedText = `${candidate.payload.emittedTarget || betaResult.graph.returnName || "ReturnVal"} = { ${candidate.replacement} }`;
+        const output = applySourceEdits(betaResult.source, [
+            { start: producerRange[0], end: producerRange[1], replacement: "" },
+            { start: payloadRange[0], end: payloadRange[1], replacement: emittedText },
+        ]);
+        try { parsePreCfSource(output); }
+        catch (error) {
+            betaResult.preCfReturnTemps = { applied: folds > 0, safe: false, reason: `PRE-CF return recovery reparse failed: ${error.message}`, folds };
+            return betaResult;
+        }
+        betaResult.source = output;
+        const state = betaResult.graph.states.find(item => item.id === candidate.facts.producer.stateId);
+        state.operations.splice(candidate.facts.producer.offset, 1);
+        candidate.payload.rhs = `{ ${candidate.replacement} }`;
+        candidate.payload.returnExpressions = [candidate.replacement];
+        candidate.payload.reads = [...new Set(candidate.producer.reads || [])];
+        candidate.payload.emittedText = emittedText;
+        for (let i = 0; i < state.operations.length; i++) state.operations[i].index = i + 1;
+        folds++;
+    }
+    betaResult.preCfReturnTemps = { applied: folds > 0, safe: true, folds };
+    return betaResult;
+}
 module.exports = {
     buildPreCfTempProofIndex,
     provePreCfTempUse,
@@ -629,4 +695,5 @@ module.exports = {
     finalizePreCfCallArgumentTemps,
     finalizePreCfCallBaseTemps,
     finalizePreCfNamecalls,
+    finalizePreCfReturnTemps,
 };
