@@ -794,6 +794,32 @@ function finalizePreCfMultiReturnTemps(betaResult) {
     betaResult.preCfMultiReturnTemps = { applied: folds > 0, safe: true, folds };
     return betaResult;
 }
+function finalizePreCfTempRecovery(betaResult) {
+    const stages = [
+        finalizePreCfCopyTemps,
+        finalizePreCfScalarTemps,
+        finalizePreCfLookupTemps,
+        finalizePreCfCallArgumentTemps,
+        finalizePreCfCallBaseTemps,
+        finalizePreCfNamecalls,
+        finalizePreCfReturnTemps,
+        finalizePreCfMultiReturnTemps,
+    ];
+    const stageNames = [];
+    for (const stage of stages) {
+        betaResult = stage(betaResult);
+        const failedKey = Object.keys(betaResult).find(name => name.startsWith("preCf") && name !== "preCfTempRecovery" && betaResult[name]?.safe === false);
+        if (failedKey) {
+            betaResult.preCfTempRecovery = { applied: stageNames.length > 0, safe: false, failedStage: stage.name, reason: betaResult[failedKey]?.reason || "PRE-CF stage failed closed", stages: stageNames };
+            return betaResult;
+        }
+        stageNames.push(stage.name);
+    }
+    const foldKeys = ["preCfCopyTemps", "preCfScalarTemps", "preCfLookupTemps", "preCfCallArgumentTemps", "preCfCallBaseTemps", "preCfNamecalls", "preCfReturnTemps", "preCfMultiReturnTemps"];
+    const folds = foldKeys.reduce((sum, key) => sum + Number(betaResult[key]?.folds || 0), 0);
+    betaResult.preCfTempRecovery = { applied: folds > 0, safe: true, folds, stages: stageNames };
+    return betaResult;
+}
 module.exports = {
     buildPreCfTempProofIndex,
     provePreCfTempUse,
@@ -805,4 +831,5 @@ module.exports = {
     finalizePreCfNamecalls,
     finalizePreCfReturnTemps,
     finalizePreCfMultiReturnTemps,
+    finalizePreCfTempRecovery,
 };

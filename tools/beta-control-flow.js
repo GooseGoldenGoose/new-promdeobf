@@ -3,6 +3,7 @@ const path = require("path");
 const { parseLua, parseLuaStructural } = require("../main");
 const { versionVmBlockRegisters, finalizeBetaRegisterUpvalues, finalizeBetaRegisterSchedule, finalizeBetaDeadStateSnapshots, finalizeBetaDeadStateInitializers, finalizeBetaDeadRegisterClears, finalizeBetaWhitespaceCleanup } = require("../passes/beta-register-versions");
 const { solveBetaControlFlow } = require("../passes/beta-control-flow");
+const { finalizePreCfTempRecovery } = require("../passes/pre-cf-temp-recovery");
 const { recoverVmStateGraph } = require("../passes/vm-state");
 const { scheduleVmRegisterUses } = require("../passes/vm-register-scheduler");
 const { prepareOverflowAsScalarRegisters, remapOverflowBetaVersions } = require("../passes/beta-overflow-register");
@@ -48,6 +49,7 @@ function generateBetaControlFlowFromSource(source, ast, outputPath) {
     let beta = remapOverflowBetaVersions(betaRaw, prepared);
     beta = finalizeBetaRegisterUpvalues(beta);
     beta = finalizeBetaWhitespaceCleanup(finalizeBetaDeadRegisterClears(finalizeBetaDeadStateInitializers(finalizeBetaDeadStateSnapshots(finalizeBetaRegisterSchedule(beta)))));
+    beta = finalizePreCfTempRecovery(beta);
     if (beta.upvalueRecovery?.completed && !beta.upvalueRecovery.safe) {
         throw new Error(beta.upvalueRecovery.reason || "Beta upvalue recovery failed closed");
     }
@@ -59,6 +61,10 @@ function generateBetaControlFlowFromSource(source, ast, outputPath) {
     }
     if (beta.deadRegisterClears && !beta.deadRegisterClears.safe) {
         throw new Error(beta.deadRegisterClears.reason || 'Dead register clear cleanup failed closed');
+    }
+
+    if (beta.preCfTempRecovery && !beta.preCfTempRecovery.safe) {
+        throw new Error(beta.preCfTempRecovery.reason || "PRE-CF temp recovery failed closed");
     }
 
     if (beta.whitespaceCleanup && !beta.whitespaceCleanup.safe) {
