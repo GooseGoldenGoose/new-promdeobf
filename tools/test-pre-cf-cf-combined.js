@@ -25,6 +25,7 @@ const focused = [
     "test-beta-cf-loop-control-temps.js",
     "test-beta-cf-post-copy-scalar.js",
     "test-beta-control-flow.js",
+    "test-production-pipeline.js",
 ];
 
 for (const file of focused) {

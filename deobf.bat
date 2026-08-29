@@ -14,8 +14,8 @@ for %%F in ("%sampleName%") do (
 
 if not defined inputExt set "inputFile=%inputFile%.txt"
 set "inputPath=sample\%inputFile%"
-set "normalPath=output\%outputName%.lua"
-set "cfPath=output\%outputName%.beta.cf.lua"
+set "normalPath=output\%outputName%.normal.lua"
+set "productionPath=output\%outputName%.lua"
 
 if not exist "%inputPath%" (
     echo [ERROR] "%inputPath%" not found.
@@ -25,16 +25,17 @@ if not exist "%inputPath%" (
 if not exist "output" mkdir "output"
 
 echo.
-echo [1] Normal
-echo [2] CF
+echo [1] Normal intermediate
+echo [2] Production
 set "mode=%~2"
-if not defined mode set /p "mode=Select deobf mode [normal/cf]: "
+if not defined mode set /p "mode=Select deobf mode [normal/production]: "
 if /i "%mode%"=="1" set "mode=normal"
-if /i "%mode%"=="2" set "mode=cf"
-
-echo.
+if /i "%mode%"=="2" set "mode=production"
+if /i "%mode%"=="prod" set "mode=production"
+if /i "%mode%"=="cf" set "mode=production"
 echo Input: "%inputPath%"
 
+echo.
 if /i "%mode%"=="normal" (
     node main.js "%inputPath%" "%normalPath%"
     if errorlevel 1 goto :failed
@@ -43,11 +44,11 @@ if /i "%mode%"=="normal" (
     exit /b 0
 )
 
-if /i "%mode%"=="cf" (
-    node tools\deobfuscate-beta-control-flow.js "%inputPath%" "%normalPath%" "%cfPath%"
+if /i "%mode%"=="production" (
+    node tools\deobfuscate.js "%inputPath%" "%productionPath%"
     if errorlevel 1 goto :failed
     echo.
-    echo Done: "%cfPath%"
+    echo Done: "%productionPath%"
     exit /b 0
 )
 
