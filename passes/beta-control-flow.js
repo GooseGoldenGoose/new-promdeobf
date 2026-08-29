@@ -1173,7 +1173,7 @@ function recoverStructuredPostCfCopyScalarTemps(nodes, graph) {
         if (node.type === "Identifier" || node.type === "NumericLiteral" || node.type === "StringLiteral" ||
             node.type === "BooleanLiteral" || node.type === "NilLiteral") return true;
         if (node.type === "UnaryExpression") return isScalarExpression(node.argument);
-        if (node.type === "BinaryExpression") return isScalarExpression(node.left) && isScalarExpression(node.right);
+        if (node.type === "BinaryExpression" || node.type === "LogicalExpression") return isScalarExpression(node.left) && isScalarExpression(node.right);
         return false;
     }
 
@@ -1181,7 +1181,7 @@ function recoverStructuredPostCfCopyScalarTemps(nodes, graph) {
         if (!node) return false;
         if (node.type === "Identifier") return node.name === name;
         if (node.type === "UnaryExpression") return isLeadingUse(node.argument, name);
-        if (node.type === "BinaryExpression") return isLeadingUse(node.left, name);
+        if (node.type === "BinaryExpression" || node.type === "LogicalExpression") return isLeadingUse(node.left, name);
         return false;
     }
 
@@ -1207,25 +1207,74 @@ function recoverStructuredPostCfCopyScalarTemps(nodes, graph) {
                     const rhs = String(consumer.rhs || "").trim();
                     const parsed = rhs ? parseTransitionExpression(rhs) : null;
                     const expression = parsed?.expression;
+
+                    if (target && consumerTarget === target && !captured.has(target) &&
+                        expression?.type === "LogicalExpression" && isLeadingUse(expression, target) &&
+                        collectExpressionVariableIdentifierRanges(expression, target).length === 1) {
+                        const producerExpression = source ? parseTransitionExpression(source)?.expression : null;
+                        const localProducerPattern = new RegExp(`^\\s*local\\s+${escapeRegex(target)}\\s*=\\s*${escapeRegex(source)}\\s*;?\\s*$`);
+                        const consumerPattern = new RegExp(`^\\s*${escapeRegex(target)}\\s*=\\s*${escapeRegex(rhs)}\\s*;?\\s*$`);
+                        const rewritten = producerExpression && isScalarExpression(producerExpression)
+                            ? substituteSingleExpressionIdentifier(rhs, target, source)
+                            : null;
+                        if (rewritten && localProducerPattern.test(String(producerNode.text || "")) &&
+                            consumerPattern.test(String(consumerNode.text || ""))) {
+                            const nextReads = [];
+                            for (const name of consumerNode.reads || []) {
+                                if (name === target) nextReads.push(...(producer.reads || []));
+                                else nextReads.push(name);
+                            }
+                            producer.rhs = rewritten;
+                            producer.reads = [...nextReads];
+                            producer.emittedText = `local ${target} = ${rewritten}`;
+                            producerNode.text = producer.emittedText;
+                            producerNode.reads = [...nextReads];
+                            body.splice(index, 1);
+                            folds++;
+                            changed = true;
+                            return true;
+                        }
+                    }
                     const targetUses = expression && target
                         ? collectExpressionVariableIdentifierRanges(expression, target)
                         : [];
-                    const sourceIsLocal = (facts.definitions.get(source) || 0) > 0 || captured.has(source);
+                    const producerExpression = source ? parseTransitionExpression(source)?.expression : null;
+                    const sourceIsIdentifier = /^[A-Za-z_][A-Za-z0-9_]*$/.test(source);
+                    const sourceIsLocal = sourceIsIdentifier && ((facts.definitions.get(source) || 0) > 0 || captured.has(source));
+                    const producerIsSafeCopy = sourceIsIdentifier && source !== target && sourceIsLocal;
+                    const producerIsDirectRightLiteral = producerExpression &&
+                        (producerExpression.type === "NumericLiteral" || producerExpression.type === "StringLiteral" ||
+                         producerExpression.type === "BooleanLiteral" || producerExpression.type === "NilLiteral") &&
+                        (expression?.type === "BinaryExpression" || expression?.type === "LogicalExpression") &&
+                        isIdentifier(expression.right) && expression.right.name === target;
+                    const producerIsSafeScalar = producerExpression &&
+                        (producerExpression.type === "BinaryExpression" || producerExpression.type === "UnaryExpression" ||
+                         producerExpression.type === "LogicalExpression" || producerIsDirectRightLiteral) &&
+                        isScalarExpression(producerExpression);
                     if (target && consumerTarget &&
-                        /^[A-Za-z_][A-Za-z0-9_]*$/.test(source) && source !== target && sourceIsLocal &&
+                        (producerIsSafeCopy || producerIsSafeScalar) &&
                         !captured.has(target) &&
                         (facts.reads.get(target) || 0) === 1 &&
                         (facts.definitions.get(target) || 0) === 1 &&
                         (producer.kind === "version-define" || producer.kind === "epoch-start" || producer.kind === "epoch-mutate") &&
                         (consumer.kind === "version-define" || consumer.kind === "epoch-start" || consumer.kind === "epoch-mutate") &&
-                        expression && isScalarExpression(expression) && isLeadingUse(expression, target) && targetUses.length === 1) {
+                        expression && isScalarExpression(expression) && (isLeadingUse(expression, target) || producerIsDirectRightLiteral) && targetUses.length === 1) {
                         const localPattern = new RegExp(`^\\s*local\\s+${escapeRegex(target)}\\s*=\\s*${escapeRegex(source)}\\s*;?\\s*$`);
                         const consumerPattern = new RegExp(`^\\s*(local\\s+)?${escapeRegex(consumerTarget)}\\s*=\\s*${escapeRegex(rhs)}\\s*;?\\s*$`);
                         const consumerMatch = String(consumerNode.text || "").match(consumerPattern);
                         const rewritten = substituteSingleExpressionIdentifier(rhs, target, source);
                         if (localPattern.test(String(producerNode.text || "")) && consumerMatch && rewritten) {
+                            const replacementReads = producerIsSafeCopy ? [source] : [...(producer.reads || [])];
+                            const nextReads = [];
+                            for (const name of consumerNode.reads || []) {
+                                if (name === target) nextReads.push(...replacementReads);
+                                else nextReads.push(name);
+                            }
                             consumerNode.text = `${consumerMatch[1] || ""}${consumerTarget} = ${rewritten}`;
-                            consumerNode.reads = (consumerNode.reads || []).map(name => name === target ? source : name);
+                            consumerNode.reads = nextReads;
+                            consumer.rhs = rewritten;
+                            consumer.reads = [...nextReads];
+                            consumer.emittedText = consumerNode.text;
                             body.splice(index - 1, 1);
                             folds++;
                             changed = true;
