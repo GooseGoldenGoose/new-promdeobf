@@ -1032,6 +1032,108 @@ function formatStructuredNodes(nodes, depth = 0) {
     return parts.join("\n\n");
 }
 
+function recoverStructuredLoopBranchConditionTemps(nodes, graph) {
+    const captured = new Set(graph?.recoveredUpvalueBindings || []);
+    let folds = 0;
+
+    function collectFacts(root) {
+        const reads = new Map();
+        const definitions = new Map();
+        function visit(body) {
+            for (const node of body || []) {
+                for (const name of node.reads || []) reads.set(name, (reads.get(name) || 0) + 1);
+                if (node.type === "raw" && node.operation?.emittedTarget) {
+                    const name = node.operation.emittedTarget;
+                    definitions.set(name, (definitions.get(name) || 0) + 1);
+                }
+                if (node.type === "if") {
+                    visit(node.thenBody);
+                    visit(node.elseBody);
+                } else if (node.type === "numeric-for" || node.type === "generic-for") {
+                    visit(node.body);
+                } else if (node.type === "while-guard") {
+                    visit(node.conditionBody);
+                    visit(node.body);
+                } else if (node.type === "repeat-until") {
+                    visit(node.body);
+                    visit(node.conditionBody);
+                }
+            }
+        }
+        visit(root);
+        return { reads, definitions };
+    }
+
+    function exactConditionName(condition) {
+        const text = String(condition || "").trim();
+        let match = text.match(/^\(?\s*([A-Za-z_][A-Za-z0-9_]*)\s*\)?$/);
+        if (match) return match[1];
+        match = text.match(/^not\s*\(\s*([A-Za-z_][A-Za-z0-9_]*)\s*\)$/);
+        return match ? match[1] : null;
+    }
+
+    function rewriteCondition(condition, name, rhs) {
+        return substituteSingleExpressionIdentifier(String(condition || ""), name, rhs);
+    }
+
+    let changed = true;
+    while (changed) {
+        changed = false;
+        const facts = collectFacts(nodes);
+
+        function visitBody(body, inLoop) {
+            for (let index = 0; index < (body || []).length; index++) {
+                const node = body[index];
+                if (node.type === "if") {
+                    if (inLoop && index > 0) {
+                        const name = exactConditionName(node.condition);
+                        const producerNode = body[index - 1];
+                        const producer = producerNode?.type === "raw" ? producerNode.operation : null;
+                        if (name && producer?.emittedTarget === name &&
+                            !captured.has(name) &&
+                            (facts.reads.get(name) || 0) === 1 &&
+                            (facts.definitions.get(name) || 0) === 1 &&
+                            (producer.kind === "version-define" || producer.kind === "epoch-start" || producer.kind === "epoch-mutate")) {
+                            const rhs = String(producer.rhs || "").trim();
+                            const rewritten = rhs && parseTransitionExpression(rhs)?.expression
+                                ? rewriteCondition(node.condition, name, rhs)
+                                : null;
+                            if (rewritten) {
+                                node.condition = rewritten;
+                                node.reads = [...(producer.reads || [])];
+                                body.splice(index - 1, 1);
+                                folds++;
+                                changed = true;
+                                return true;
+                            }
+                        }
+                    }
+                    if (visitBody(node.thenBody, inLoop)) return true;
+                    if (visitBody(node.elseBody, inLoop)) return true;
+                    continue;
+                }
+                if (node.type === "numeric-for" || node.type === "generic-for") {
+                    if (visitBody(node.body, true)) return true;
+                    continue;
+                }
+                if (node.type === "while-guard") {
+                    if (visitBody(node.conditionBody, false)) return true;
+                    if (visitBody(node.body, true)) return true;
+                    continue;
+                }
+                if (node.type === "repeat-until") {
+                    if (visitBody(node.body, true)) return true;
+                    if (visitBody(node.conditionBody, false)) return true;
+                }
+            }
+            return false;
+        }
+
+        visitBody(nodes, false);
+    }
+    return folds;
+}
+
 function countStructuredStatements(nodes) {
     let count = 0;
     for (const node of nodes) {
@@ -4134,6 +4236,8 @@ function solveAcyclicStructured(originalAst, graph) {
         return { applied: false, reason: `Acyclic structuring emitted ${emittedStates.size}/${states.length} reachable states` };
     }
 
+    const loopControlConditionTempRecoveryCount = recoverStructuredLoopBranchConditionTemps(structured.nodes, graph);
+
     const epochHoisting = hoistEscapingEpochDeclarations(structured.nodes);
     if (!epochHoisting.safe) return { applied: false, reason: epochHoisting.reason || "Beta epoch declaration hoisting failed closed" };
     const scopeError = validateStructuredLocalScopes(structured.nodes);
@@ -4152,6 +4256,7 @@ function solveAcyclicStructured(originalAst, graph) {
         statementCount: countStructuredStatements(structured.nodes),
         branchCount,
         ifConditionTempRecoveryCount,
+        loopControlConditionTempRecoveryCount,
         joinCount,
         guardBranchCount,
         terminalReturnCount,
