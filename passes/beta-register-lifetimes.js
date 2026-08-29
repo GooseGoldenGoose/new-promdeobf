@@ -667,6 +667,22 @@ function analyzeBetaRegisterLifetimes({
         }
         dependencyClosureByDefinitionId.set(definition.id, seen);
     }
+    function expressionContainsCall(node) {
+        if (!node || typeof node !== "object") return false;
+        if (node.type === "CallExpression") return true;
+        for (const [key, value] of Object.entries(node)) {
+            if (key === "loc" || key === "range") continue;
+            if (Array.isArray(value)) {
+                for (const child of value) {
+                    if (expressionContainsCall(child)) return true;
+                }
+            } else if (value && typeof value === "object" && expressionContainsCall(value)) {
+                return true;
+            }
+        }
+        return false;
+    }
+
     function dependencyPathCrossesCall(fromId, targetId) {
         const queue = [...(dependenciesByDefinitionId.get(fromId) || [])].map(id => ({ id, crossedCall: false }));
         const seen = new Set();
@@ -678,7 +694,7 @@ function analyzeBetaRegisterLifetimes({
             seen.add(seenKey);
             const dependency = definitionById.get(item.id);
             if (!dependency?.supported) continue;
-            const crossedCall = item.crossedCall || dependency.rhs?.type === "CallExpression";
+            const crossedCall = item.crossedCall || expressionContainsCall(dependency.rhs);
             if (item.id === targetId) {
                 if (crossedCall) return true;
                 continue;

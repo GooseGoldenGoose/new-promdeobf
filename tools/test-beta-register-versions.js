@@ -268,6 +268,39 @@ assert(cleanupAnchoredCallReuseResult.source.includes(`${cleanupCallR2Base}_2 = 
 assert(!cleanupAnchoredCallReuseResult.source.includes(`${cleanupCallR2Base}_1 = r_v`));
 parseLua(cleanupAnchoredCallReuseResult.source, "<beta-cleanup-call-reuse-output>");
 
+const cleanupAnchoredPackedCallReuseSource = `vm = function(state, args, upvalues, gcProxy)
+    local r1, r2, r3, ReturnVal
+    while state do
+        if state == 1 then
+            r1 = "tostring"
+            r3 = _env[r1]
+            r1 = {}
+            r2 = { call(r3, r1) }
+            ReturnVal = r2[1]
+            r3 = ReturnVal
+            ReturnVal = consume(r3)
+            r3 = nil
+            ReturnVal = {}
+            state = nil
+        end
+    end
+    state = #gcProxy
+    return unpack(ReturnVal)
+end
+root = createClosure(1, {})`;
+const cleanupAnchoredPackedCallReuseResult = versionVmBlockRegisters(
+    cleanupAnchoredPackedCallReuseSource,
+    parseLua(cleanupAnchoredPackedCallReuseSource, "<beta-cleanup-packed-call-reuse-test>")
+);
+const cleanupPackedCallR3Base = cleanupAnchoredPackedCallReuseResult.mapping.find(item => item.originalName === "r3")?.baseName;
+assert(cleanupPackedCallR3Base);
+assert(cleanupAnchoredPackedCallReuseResult.source.includes(`local ${cleanupPackedCallR3Base}_1 =`));
+assert(cleanupAnchoredPackedCallReuseResult.source.match(new RegExp(`local ${cleanupPackedCallR3Base}_2 = r_v\\d+_\\d+`)));
+assert(cleanupAnchoredPackedCallReuseResult.source.includes(`consume(${cleanupPackedCallR3Base}_2)`));
+assert(cleanupAnchoredPackedCallReuseResult.source.includes(`${cleanupPackedCallR3Base}_2 = nil`));
+assert(!cleanupAnchoredPackedCallReuseResult.source.includes(`${cleanupPackedCallR3Base}_1 = r_v`));
+parseLua(cleanupAnchoredPackedCallReuseResult.source, "<beta-cleanup-packed-call-reuse-output>");
+
 const cleanupAnchoredArithmeticReuseSource = `vm = function(state, args, upvalues, gcProxy)
     local r1, r2, ReturnVal
     while state do
