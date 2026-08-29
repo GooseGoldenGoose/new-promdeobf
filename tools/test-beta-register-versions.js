@@ -237,6 +237,68 @@ assert(transitiveScratchReuseResult.source.match(new RegExp(`local ${transitiveS
 assert(!transitiveScratchReuseResult.source.includes(`${transitiveScratchBase}_1 = r_v`));
 parseLua(transitiveScratchReuseResult.source, "<beta-transitive-scratch-reuse-output>");
 
+const cleanupAnchoredCallReuseSource = `vm = function(state, args, upvalues, gcProxy)
+    local r1, r2, ReturnVal
+    while state do
+        if state == 1 then
+            r1 = 2
+            r2 = 1
+            ReturnVal = call(r2, r1)
+            r2 = ReturnVal
+            ReturnVal = consume(r2)
+            r2 = nil
+            ReturnVal = {}
+            state = nil
+        end
+    end
+    state = #gcProxy
+    return unpack(ReturnVal)
+end
+root = createClosure(1, {})`;
+const cleanupAnchoredCallReuseResult = versionVmBlockRegisters(
+    cleanupAnchoredCallReuseSource,
+    parseLua(cleanupAnchoredCallReuseSource, "<beta-cleanup-call-reuse-test>")
+);
+const cleanupCallR2Base = cleanupAnchoredCallReuseResult.mapping.find(item => item.originalName === "r2")?.baseName;
+assert(cleanupCallR2Base);
+assert(cleanupAnchoredCallReuseResult.source.includes(`local ${cleanupCallR2Base}_1 = 1`));
+assert(cleanupAnchoredCallReuseResult.source.match(new RegExp(`local ${cleanupCallR2Base}_2 = r_v\\d+_\\d+`)));
+assert(cleanupAnchoredCallReuseResult.source.includes(`consume(${cleanupCallR2Base}_2)`));
+assert(cleanupAnchoredCallReuseResult.source.includes(`${cleanupCallR2Base}_2 = nil`));
+assert(!cleanupAnchoredCallReuseResult.source.includes(`${cleanupCallR2Base}_1 = r_v`));
+parseLua(cleanupAnchoredCallReuseResult.source, "<beta-cleanup-call-reuse-output>");
+
+const cleanupAnchoredArithmeticReuseSource = `vm = function(state, args, upvalues, gcProxy)
+    local r1, r2, ReturnVal
+    while state do
+        if state == 1 then
+            r1 = 10
+            r2 = r1 + 1
+            r1 = r2
+            ReturnVal = consume(r1)
+            r1 = nil
+            ReturnVal = {}
+            state = nil
+        end
+    end
+    state = #gcProxy
+    return unpack(ReturnVal)
+end
+root = createClosure(1, {})`;
+const cleanupAnchoredArithmeticReuseResult = versionVmBlockRegisters(
+    cleanupAnchoredArithmeticReuseSource,
+    parseLua(cleanupAnchoredArithmeticReuseSource, "<beta-cleanup-arithmetic-reuse-test>")
+);
+const cleanupArithmeticR1Base = cleanupAnchoredArithmeticReuseResult.mapping.find(item => item.originalName === "r1")?.baseName;
+assert(cleanupArithmeticR1Base);
+assert(cleanupAnchoredArithmeticReuseResult.source.includes(`local ${cleanupArithmeticR1Base}_1 = 10`));
+assert(cleanupAnchoredArithmeticReuseResult.source.match(new RegExp(`${cleanupArithmeticR1Base}_1 = r_v\\d+_\\d+`)));
+assert(cleanupAnchoredArithmeticReuseResult.source.includes(`consume(${cleanupArithmeticR1Base}_1)`));
+assert(cleanupAnchoredArithmeticReuseResult.source.includes(`${cleanupArithmeticR1Base}_1 = nil`));
+parseLua(cleanupAnchoredArithmeticReuseResult.source, "<beta-cleanup-arithmetic-reuse-output>");
+
+
+
 const compilerReturnPayloadSource = `vm = function(state, args, upvalues, gcProxy)
     local r1, r2, ReturnVal
     while state do

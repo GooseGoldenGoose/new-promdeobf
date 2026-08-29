@@ -667,11 +667,35 @@ function analyzeBetaRegisterLifetimes({
         }
         dependencyClosureByDefinitionId.set(definition.id, seen);
     }
+    function dependencyPathCrossesCall(fromId, targetId) {
+        const queue = [...(dependenciesByDefinitionId.get(fromId) || [])].map(id => ({ id, crossedCall: false }));
+        const seen = new Set();
+        let cursor = 0;
+        while (cursor < queue.length) {
+            const item = queue[cursor++];
+            const seenKey = item.id + "\0" + (item.crossedCall ? "1" : "0");
+            if (seen.has(seenKey)) continue;
+            seen.add(seenKey);
+            const dependency = definitionById.get(item.id);
+            if (!dependency?.supported) continue;
+            const crossedCall = item.crossedCall || dependency.rhs?.type === "CallExpression";
+            if (item.id === targetId) {
+                if (crossedCall) return true;
+                continue;
+            }
+            for (const parentId of dependenciesByDefinitionId.get(item.id) || []) {
+                queue.push({ id: parentId, crossedCall });
+            }
+        }
+        return false;
+    }
 
     // Compiler-backed ownership signal: after a physical register is reserved as a
     // VAR_REGISTER, later source assignments write it from another register. Use
     // only proven anchors, then walk backward through same-register writes that are
     // linked by value provenance or where both writes are simple identifier copies.
+    // A call result copied back into a reused physical register is a lifetime barrier:
+    // argument scratch reaching the call does not prove ownership of the returned value.
     function mergeBackwardCopyChain(seedIds) {
         let mergeCount = 0;
         const queue = [...seedIds];
@@ -697,6 +721,8 @@ function analyzeBetaRegisterLifetimes({
                 const provenanceLinked = dependencyClosureByDefinitionId.get(currentId)?.has(priorId) === true;
                 const copyLinked = isIdentifier(current.rhs) && isIdentifier(prior.rhs);
                 const alreadyLinked = unionFind.find(currentId) === unionFind.find(priorId);
+                const crossesCallBoundary = provenanceLinked && dependencyPathCrossesCall(currentId, priorId);
+                if (crossesCallBoundary && !copyLinked && !alreadyLinked) continue;
                 if (!provenanceLinked && !copyLinked && !alreadyLinked) continue;
                 const beforeRoot = unionFind.find(currentId);
                 const priorRoot = unionFind.find(priorId);
