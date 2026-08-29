@@ -576,6 +576,39 @@ function isPreCfClosureFactoryCall(expression, graph) {
     return Number.isInteger(entry) && new Set(graph?.entries || []).has(entry);
 }
 
+function isMovableCallArgumentScalarExpression(node) {
+    if (!node) return false;
+    if (["NumericLiteral", "StringLiteral", "BooleanLiteral", "NilLiteral"].includes(node.type)) return true;
+    if (node.type === "UnaryExpression") return isMovableCallArgumentScalarExpression(node.argument);
+    if (node.type === "BinaryExpression") {
+        return isMovableCallArgumentScalarExpression(node.left) && isMovableCallArgumentScalarExpression(node.right);
+    }
+    return false;
+}
+
+function rewriteDirectCallArguments(rhs, replacements) {
+    const expression = parsePreCfRhs(rhs);
+    if (expression?.type !== "CallExpression" || expression.base?.type !== "Identifier") return null;
+    const edits = [];
+    const consumed = [];
+    const prefixLength = "return ".length;
+    for (const arg of expression.arguments || []) {
+        if (arg?.type !== "Identifier" || !replacements.has(arg.name)) continue;
+        if (collectIdentifierCount(expression, arg.name) !== 1 || !Array.isArray(arg.range)) return null;
+        const start = arg.range[0] - prefixLength;
+        const end = arg.range[1] - prefixLength;
+        if (start < 0 || end < start || rhs.slice(start, end) !== arg.name) return null;
+        edits.push({ start, end, replacement: replacements.get(arg.name) });
+        consumed.push(arg.name);
+    }
+    if (!consumed.length) return null;
+    let rewritten = rhs;
+    for (const edit of edits.sort((a, b) => b.start - a.start)) {
+        rewritten = rewritten.slice(0, edit.start) + edit.replacement + rewritten.slice(edit.end);
+    }
+    return { rhs: rewritten, baseName: expression.base.name, consumed };
+}
+
 function finalizePreCfCallArgumentTemps(betaResult) {
     if (!betaResult?.graph || typeof betaResult.source !== "string" || betaResult.graph.cfgComplete !== true) {
         betaResult.preCfCallArgumentTemps = { applied: false, safe: false, reason: "PRE-CF call-argument recovery requires a complete beta graph" };
@@ -586,6 +619,7 @@ function finalizePreCfCallArgumentTemps(betaResult) {
     for (let round = 0; round < maxRounds; round++) {
         const proof = buildPreCfTempProofIndex(betaResult);
         let candidate = null;
+
         for (const facts of proof.byBinding.values()) {
             if (!facts.safeSameStateTransport || !facts.adjacent) continue;
             const producer = facts.producer.operation;
@@ -596,25 +630,59 @@ function finalizePreCfCallArgumentTemps(betaResult) {
             const rewritten = rewriteDirectCallArgument(consumer.rhs, facts.name, `(${producer.rhs})`);
             if (!rewritten) continue;
             if (!Array.isArray(consumer.reads) || !consumer.reads.includes(rewritten.baseName)) continue;
-            candidate = { facts, producer, consumer, rewritten };
+            candidate = { consumer, producerItems: [{ facts, producer }], rewritten };
             break;
         }
+
+        if (!candidate) {
+            for (const state of betaResult.graph.states || []) {
+                const operations = state.operations || [];
+                for (let consumerOffset = 0; consumerOffset < operations.length; consumerOffset++) {
+                    const consumer = operations[consumerOffset];
+                    if (!isCopyOperation(consumer)) continue;
+                    const consumerExpr = parsePreCfRhs(consumer.rhs);
+                    if (consumerExpr?.type !== "CallExpression" || consumerExpr.base?.type !== "Identifier") continue;
+                    if (!Array.isArray(consumer.reads) || !consumer.reads.includes(consumerExpr.base.name)) continue;
+
+                    const replacements = new Map();
+                    const producerItems = [];
+                    for (let producerOffset = consumerOffset - 1; producerOffset >= 0; producerOffset--) {
+                        const producer = operations[producerOffset];
+                        if (!isCopyOperation(producer)) break;
+                        const facts = proof.byBinding.get(producer.emittedTarget);
+                        if (!facts || !facts.safeSameStateTransport) break;
+                        if (facts.producer.operation !== producer || facts.consumer.operation !== consumer) break;
+                        const producerExpr = parsePreCfRhs(producer.rhs);
+                        if (!isMovableCallArgumentScalarExpression(producerExpr)) break;
+                        replacements.set(facts.name, producer.rhs);
+                        producerItems.push({ facts, producer });
+                    }
+                    if (!producerItems.length) continue;
+                    const rewritten = rewriteDirectCallArguments(consumer.rhs, replacements);
+                    if (!rewritten || rewritten.consumed.length !== producerItems.length) continue;
+                    candidate = { consumer, producerItems, rewritten };
+                    break;
+                }
+                if (candidate) break;
+            }
+        }
+
         if (!candidate) break;
         const ownership = mapPreCfOperationRanges(betaResult);
         if (!ownership.safe) {
             betaResult.preCfCallArgumentTemps = { applied: folds > 0, safe: false, reason: ownership.reason, folds };
             return betaResult;
         }
-        const producerRange = ownership.ranges.get(candidate.producer);
+        const producerRanges = candidate.producerItems.map(item => ownership.ranges.get(item.producer));
         const consumerRange = ownership.ranges.get(candidate.consumer);
-        if (!producerRange || !consumerRange) {
+        if (producerRanges.some(range => !range) || !consumerRange) {
             betaResult.preCfCallArgumentTemps = { applied: folds > 0, safe: false, reason: "PRE-CF call-argument recovery lost exact source ownership", folds };
             return betaResult;
         }
         const prefix = String(candidate.consumer.emittedText || "").trim().startsWith("local ") ? "local " : "";
         const emittedText = `${prefix}${candidate.consumer.emittedTarget} = ${candidate.rewritten.rhs}`;
         const output = applySourceEdits(betaResult.source, [
-            { start: producerRange[0], end: producerRange[1], replacement: "" },
+            ...producerRanges.map(range => ({ start: range[0], end: range[1], replacement: "" })),
             { start: consumerRange[0], end: consumerRange[1], replacement: emittedText },
         ]);
         try { parsePreCfSource(output); }
@@ -623,17 +691,23 @@ function finalizePreCfCallArgumentTemps(betaResult) {
             return betaResult;
         }
         betaResult.source = output;
-        const state = betaResult.graph.states.find(item => item.id === candidate.facts.producer.stateId);
-        state.operations.splice(candidate.facts.producer.offset, 1);
+        const stateId = candidate.producerItems[0].facts.producer.stateId;
+        const state = betaResult.graph.states.find(item => item.id === stateId);
+        const removedNames = new Set(candidate.producerItems.map(item => item.facts.name));
+        const addedReads = candidate.producerItems.flatMap(item => item.producer.reads || []);
         candidate.consumer.rhs = candidate.rewritten.rhs;
-        candidate.consumer.reads = [...new Set([...(candidate.consumer.reads || []).filter(name => name !== candidate.facts.name), ...(candidate.producer.reads || [])])];
+        candidate.consumer.reads = [...new Set([...(candidate.consumer.reads || []).filter(name => !removedNames.has(name)), ...addedReads])];
         candidate.consumer.emittedText = emittedText;
+        for (const offset of candidate.producerItems.map(item => item.facts.producer.offset).sort((a, b) => b - a)) {
+            state.operations.splice(offset, 1);
+        }
         for (let i = 0; i < state.operations.length; i++) state.operations[i].index = i + 1;
-        folds++;
+        folds += candidate.producerItems.length;
     }
     betaResult.preCfCallArgumentTemps = { applied: folds > 0, safe: true, folds };
     return betaResult;
 }
+
 function rewriteDirectCallBase(rhs, tempName, replacement) {
     const expression = parsePreCfRhs(rhs);
     if (expression?.type !== "CallExpression" || expression.base?.type !== "Identifier" || expression.base.name !== tempName) return null;

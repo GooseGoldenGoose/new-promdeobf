@@ -69,4 +69,35 @@ finalizePreCfCallArgumentTemps(closureFactory);
 assert.equal(closureFactory.preCfCallArgumentTemps.folds, 0);
 assert(closureFactory.source.includes("local temp_v = createClosure3(148, {})"));
 
+
+{
+    const source = `vm = function(state, args, upvalues, gcProxy)
+    local ReturnVal
+    while state do
+        if state == 1 then
+            local sink_v = args
+            local arg2_v = 2
+            local arg1_v = 1
+            local out_v = sink_v(arg1_v, arg2_v)
+            state = nil
+        end
+    end
+    return ReturnVal
+end`;
+    const operations = [
+        { index: 1, kind: "version-define", emittedTarget: "sink_v", rhs: "args", reads: [], emittedText: "local sink_v = args" },
+        { index: 2, kind: "version-define", emittedTarget: "arg2_v", rhs: "2", reads: [], emittedText: "local arg2_v = 2" },
+        { index: 3, kind: "version-define", emittedTarget: "arg1_v", rhs: "1", reads: [], emittedText: "local arg1_v = 1" },
+        { index: 4, kind: "version-define", emittedTarget: "out_v", rhs: "sink_v(arg1_v, arg2_v)", reads: ["sink_v", "arg1_v", "arg2_v"], emittedText: "local out_v = sink_v(arg1_v, arg2_v)" },
+        { index: 5, kind: "state-transition", emittedTarget: "state", rhs: "nil", reads: [], emittedText: "state = nil" },
+    ];
+    const beta = { source, graph: { cfgComplete: true, stateName: "state", recoveredUpvalueBindings: [], states: [{ id: 1, successors: [], operations }] } };
+    finalizePreCfCallArgumentTemps(beta);
+    assert.equal(beta.preCfCallArgumentTemps.safe, true);
+    assert.equal(beta.preCfCallArgumentTemps.folds, 2);
+    assert(!beta.source.includes("local arg2_v = 2"));
+    assert(!beta.source.includes("local arg1_v = 1"));
+    assert(beta.source.includes("local out_v = sink_v(1, 2)"), beta.source);
+}
+
 console.log("pre-CF call argument temps: PASS");
