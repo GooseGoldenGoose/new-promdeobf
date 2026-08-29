@@ -19,6 +19,7 @@ assert.deepEqual(result.beta.preCfTempRecovery.stages, [
     "finalizePreCfCopyTemps",
     "finalizePreCfClosureTemps",
     "finalizePreCfCallResultDestinations",
+    "finalizePreCfTableDestinations",
     "finalizePreCfScalarTemps",
     "finalizePreCfGlobalLookups",
     "finalizePreCfLookupTemps",

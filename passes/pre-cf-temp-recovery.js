@@ -355,6 +355,67 @@ function finalizePreCfCallResultDestinations(betaResult) {
 }
 
 
+
+function isCompilerTableResultOperation(operation, graph) {
+    if (!operation || operation.kind !== "version-define" || operation.registerEpoch) return false;
+    if (operation.originalTarget !== graph?.stateName && operation.originalTarget !== graph?.returnName) return false;
+    return parsePreCfRhs(operation.rhs)?.type === "TableConstructorExpression";
+}
+
+function finalizePreCfTableDestinations(betaResult) {
+    if (!betaResult?.graph || typeof betaResult.source !== "string" || betaResult.graph.cfgComplete !== true) {
+        betaResult.preCfTableDestinations = { applied: false, safe: false, reason: "PRE-CF table destination recovery requires a complete beta graph" };
+        return betaResult;
+    }
+    let folds = 0;
+    const maxRounds = (betaResult.graph.states || []).reduce((n, state) => n + (state.operations || []).length, 0) + 1;
+    for (let round = 0; round < maxRounds; round++) {
+        const proof = buildPreCfTempProofIndex(betaResult);
+        let candidate = null;
+        for (const facts of proof.byBinding.values()) {
+            if (!facts.singleDefinition || !facts.singleUse || facts.captured || !facts.sameState) continue;
+            const producer = facts.producer?.operation, consumer = facts.consumer?.operation;
+            if (!isCompilerTableResultOperation(producer, betaResult.graph)) continue;
+            if (!["version-define", "epoch-start", "epoch-mutate"].includes(consumer?.kind) || consumer.rhs !== facts.name) continue;
+            if (!consumer.registerEpoch || !/^(?:r\d+|__overflow_phys_\d+)$/.test(String(consumer.originalTarget || ""))) continue;
+            const state = betaResult.graph.states.find(item => item.id === facts.producer.stateId);
+            if (!state) continue;
+            const producerOffset = facts.producer.offset, consumerOffset = facts.consumer.offset;
+            if (!(consumerOffset > producerOffset)) continue;
+            const actualTarget = consumer.emittedTarget;
+            if (!actualTarget || betaResult.graph.recoveredUpvalueBindings?.includes(actualTarget)) continue;
+            let unsafeGap = false;
+            for (let i = producerOffset + 1; i < consumerOffset; i++) {
+                const op = state.operations[i];
+                if ((op.reads || []).includes(actualTarget) || operationWrites(op).includes(actualTarget) || (op.reads || []).includes(facts.name) || operationWrites(op).includes(facts.name)) { unsafeGap = true; break; }
+            }
+            if (unsafeGap) continue;
+            candidate = { facts, state, producer, consumer, consumerOffset, actualTarget };
+            break;
+        }
+        if (!candidate) break;
+        const ownership = mapPreCfOperationRanges(betaResult);
+        if (!ownership.safe) { betaResult.preCfTableDestinations = { applied: folds > 0, safe: false, reason: ownership.reason, folds }; return betaResult; }
+        const pr = ownership.ranges.get(candidate.producer), cr = ownership.ranges.get(candidate.consumer);
+        if (!pr || !cr) { betaResult.preCfTableDestinations = { applied: folds > 0, safe: false, reason: "PRE-CF table destination recovery lost exact source ownership", folds }; return betaResult; }
+        const prefix = String(candidate.consumer.emittedText || "").trim().startsWith("local ") ? "local " : "";
+        const emittedText = `${prefix}${candidate.actualTarget} = ${candidate.producer.rhs}`;
+        const output = applySourceEdits(betaResult.source, [{ start: pr[0], end: pr[1], replacement: emittedText }, { start: cr[0], end: cr[1], replacement: "" }]);
+        try { parsePreCfSource(output); } catch (error) { betaResult.preCfTableDestinations = { applied: folds > 0, safe: false, reason: `PRE-CF table destination recovery reparse failed: ${error.message}`, folds }; return betaResult; }
+        betaResult.source = output;
+        candidate.producer.emittedTarget = candidate.actualTarget;
+        candidate.producer.originalTarget = candidate.consumer.originalTarget;
+        candidate.producer.registerEpoch = candidate.consumer.registerEpoch;
+        candidate.producer.kind = candidate.consumer.kind;
+        candidate.producer.emittedText = emittedText;
+        candidate.state.operations.splice(candidate.consumerOffset, 1);
+        for (let i = 0; i < candidate.state.operations.length; i++) candidate.state.operations[i].index = i + 1;
+        folds++;
+    }
+    betaResult.preCfTableDestinations = { applied: folds > 0, safe: true, folds };
+    return betaResult;
+}
+
 function finalizePreCfDiscardedCallResults(betaResult) {
     if (!betaResult?.graph || typeof betaResult.source !== "string" || betaResult.graph.cfgComplete !== true) {
         betaResult.preCfDiscardedCallResults = { applied: false, safe: false, reason: "PRE-CF discarded call-result recovery requires a complete beta graph" };
@@ -1468,6 +1529,7 @@ function finalizePreCfTempRecovery(betaResult) {
         finalizePreCfCopyTemps,
         finalizePreCfClosureTemps,
         finalizePreCfCallResultDestinations,
+        finalizePreCfTableDestinations,
         finalizePreCfScalarTemps,
         finalizePreCfGlobalLookups,
         finalizePreCfLookupTemps,
@@ -1489,7 +1551,7 @@ function finalizePreCfTempRecovery(betaResult) {
         }
         stageNames.push(stage.name);
     }
-    const foldKeys = ["preCfCopyTemps", "preCfClosureTemps", "preCfCallResultDestinations", "preCfScalarTemps", "preCfGlobalLookups", "preCfLookupTemps", "preCfCallArgumentTemps", "preCfCallBaseTemps", "preCfNamecalls", "preCfDiscardedCallResults", "preCfReturnTemps", "preCfReturnAllTemps", "preCfMultiReturnTemps"];
+    const foldKeys = ["preCfCopyTemps", "preCfClosureTemps", "preCfCallResultDestinations", "preCfTableDestinations", "preCfScalarTemps", "preCfGlobalLookups", "preCfLookupTemps", "preCfCallArgumentTemps", "preCfCallBaseTemps", "preCfNamecalls", "preCfDiscardedCallResults", "preCfReturnTemps", "preCfReturnAllTemps", "preCfMultiReturnTemps"];
     const folds = foldKeys.reduce((sum, key) => sum + Number(betaResult[key]?.folds || 0), 0);
     betaResult.preCfTempRecovery = { applied: folds > 0, safe: true, folds, stages: stageNames };
     return betaResult;
@@ -1500,6 +1562,7 @@ module.exports = {
     finalizePreCfCopyTemps,
     finalizePreCfClosureTemps,
     finalizePreCfCallResultDestinations,
+    finalizePreCfTableDestinations,
     finalizePreCfScalarTemps,
     finalizePreCfGlobalLookups,
     finalizePreCfLookupTemps,
