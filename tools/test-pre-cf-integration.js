@@ -24,6 +24,7 @@ assert.deepEqual(result.beta.preCfTempRecovery.stages, [
     "finalizePreCfCallBaseTemps",
     "finalizePreCfNamecalls",
     "finalizePreCfReturnTemps",
+    "finalizePreCfReturnAllTemps",
     "finalizePreCfMultiReturnTemps",
 ]);
 assert.equal(result.controlFlow.applied, true);

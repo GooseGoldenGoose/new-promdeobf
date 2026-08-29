@@ -1014,6 +1014,96 @@ function parsePackedSingleCall(rhs) {
     return sourceForExpressionNode(rhs, field.value);
 }
 
+function rewriteReturnAllFinalCallArgument(rhs, packName, replacement) {
+    const expression = parsePreCfRhs(rhs);
+    if (expression?.type !== "CallExpression" || expression.base?.type !== "Identifier") return null;
+    if (collectIdentifierCount(expression, packName) !== 1) return null;
+    const args = expression.arguments || [];
+    if (!args.length) return null;
+    const tail = args[args.length - 1];
+    if (tail?.type !== "CallExpression" || tail.base?.type !== "Identifier" || tail.base.name !== "unpack") return null;
+    if ((tail.arguments || []).length !== 1 || tail.arguments[0]?.type !== "Identifier" || tail.arguments[0].name !== packName) return null;
+    if (!Array.isArray(tail.range)) return null;
+    const prefixLength = "return ".length;
+    const start = tail.range[0] - prefixLength;
+    const end = tail.range[1] - prefixLength;
+    if (start < 0 || end < start) return null;
+    return {
+        rhs: rhs.slice(0, start) + replacement + rhs.slice(end),
+        baseName: expression.base.name,
+    };
+}
+
+function finalizePreCfReturnAllTemps(betaResult) {
+    if (!betaResult?.graph || typeof betaResult.source !== "string" || betaResult.graph.cfgComplete !== true) {
+        betaResult.preCfReturnAllTemps = { applied: false, safe: false, reason: "PRE-CF RETURN_ALL recovery requires a complete beta graph" };
+        return betaResult;
+    }
+    let folds = 0;
+    const maxRounds = (betaResult.graph.states || []).reduce((n, state) => n + (state.operations || []).length, 0) + 1;
+    for (let round = 0; round < maxRounds; round++) {
+        const proof = buildPreCfTempProofIndex(betaResult);
+        let candidate = null;
+        for (const state of betaResult.graph.states || []) {
+            const ops = state.operations || [];
+            for (let offset = 0; offset + 1 < ops.length; offset++) {
+                const packOp = ops[offset];
+                const consumer = ops[offset + 1];
+                if (!isCopyOperation(packOp) || !packOp.emittedTarget || !isCopyOperation(consumer) || !consumer.emittedTarget) continue;
+                const packName = packOp.emittedTarget;
+                if (betaResult.graph.recoveredUpvalueBindings?.includes(packName)) continue;
+                const packFacts = proof.byBinding.get(packName);
+                if (!packFacts?.singleDefinition || packFacts.captured || packFacts.readCount !== 1 || packFacts.producer?.operation !== packOp || packFacts.consumer?.operation !== consumer) continue;
+                if (!packFacts.safeSameStateTransport || !packFacts.adjacent) continue;
+                const innerCall = parsePackedSingleCall(packOp.rhs);
+                if (!innerCall) continue;
+                const rewritten = rewriteReturnAllFinalCallArgument(consumer.rhs, packName, innerCall);
+                if (!rewritten) continue;
+                candidate = { state, offset, packOp, consumer, packName, rewritten };
+                break;
+            }
+            if (candidate) break;
+        }
+        if (!candidate) break;
+        const ownership = mapPreCfOperationRanges(betaResult);
+        if (!ownership.safe) {
+            betaResult.preCfReturnAllTemps = { applied: folds > 0, safe: false, reason: ownership.reason, folds };
+            return betaResult;
+        }
+        const packRange = ownership.ranges.get(candidate.packOp);
+        const consumerRange = ownership.ranges.get(candidate.consumer);
+        if (!packRange || !consumerRange) {
+            betaResult.preCfReturnAllTemps = { applied: folds > 0, safe: false, reason: "PRE-CF RETURN_ALL recovery lost exact source ownership", folds };
+            return betaResult;
+        }
+        const isLocal = String(candidate.consumer.emittedText || "").trim().startsWith("local ");
+        const emittedText = `${isLocal ? "local " : ""}${candidate.consumer.emittedTarget} = ${candidate.rewritten.rhs}`;
+        const output = applySourceEdits(betaResult.source, [
+            { start: packRange[0], end: packRange[1], replacement: "" },
+            { start: consumerRange[0], end: consumerRange[1], replacement: emittedText },
+        ]);
+        try { parsePreCfSource(output); }
+        catch (error) {
+            betaResult.preCfReturnAllTemps = { applied: folds > 0, safe: false, reason: `PRE-CF RETURN_ALL recovery reparse failed: ${error.message}`, folds };
+            return betaResult;
+        }
+        betaResult.source = output;
+        candidate.consumer.rhs = candidate.rewritten.rhs;
+        candidate.consumer.emittedText = emittedText;
+        const rewrittenExpression = parsePreCfRhs(candidate.rewritten.rhs);
+        const stillReadsUnpack = collectIdentifierCount(rewrittenExpression, "unpack") > 0;
+        candidate.consumer.reads = [...new Set([
+            ...(candidate.consumer.reads || []).filter(name => name !== candidate.packName && (name !== "unpack" || stillReadsUnpack)),
+            ...(candidate.packOp.reads || []),
+        ])];
+        candidate.state.operations.splice(candidate.offset, 1);
+        for (let i = 0; i < candidate.state.operations.length; i++) candidate.state.operations[i].index = i + 1;
+        folds++;
+    }
+    betaResult.preCfReturnAllTemps = { applied: folds > 0, safe: true, folds };
+    return betaResult;
+}
+
 function parseStaticPackSlot(rhs, packName) {
     const expression = parsePreCfRhs(rhs);
     if (expression?.type !== "IndexExpression" || expression.base?.type !== "Identifier" || expression.base.name !== packName) return null;
@@ -1128,6 +1218,7 @@ function finalizePreCfTempRecovery(betaResult) {
         finalizePreCfCallBaseTemps,
         finalizePreCfNamecalls,
         finalizePreCfReturnTemps,
+        finalizePreCfReturnAllTemps,
         finalizePreCfMultiReturnTemps,
     ];
     const stageNames = [];
@@ -1140,7 +1231,7 @@ function finalizePreCfTempRecovery(betaResult) {
         }
         stageNames.push(stage.name);
     }
-    const foldKeys = ["preCfCopyTemps", "preCfScalarTemps", "preCfGlobalLookups", "preCfLookupTemps", "preCfCallArgumentTemps", "preCfCallBaseTemps", "preCfNamecalls", "preCfReturnTemps", "preCfMultiReturnTemps"];
+    const foldKeys = ["preCfCopyTemps", "preCfScalarTemps", "preCfGlobalLookups", "preCfLookupTemps", "preCfCallArgumentTemps", "preCfCallBaseTemps", "preCfNamecalls", "preCfReturnTemps", "preCfReturnAllTemps", "preCfMultiReturnTemps"];
     const folds = foldKeys.reduce((sum, key) => sum + Number(betaResult[key]?.folds || 0), 0);
     betaResult.preCfTempRecovery = { applied: folds > 0, safe: true, folds, stages: stageNames };
     return betaResult;
@@ -1156,6 +1247,7 @@ module.exports = {
     finalizePreCfCallBaseTemps,
     finalizePreCfNamecalls,
     finalizePreCfReturnTemps,
+    finalizePreCfReturnAllTemps,
     finalizePreCfMultiReturnTemps,
     finalizePreCfTempRecovery,
 };
