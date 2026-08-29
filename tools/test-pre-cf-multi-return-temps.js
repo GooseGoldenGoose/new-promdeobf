@@ -34,6 +34,16 @@ function makeBeta({ packRhs = "{ f() }", extracts = [["a_v", 1], ["b_v", 2]], ex
 }
 
 {
+    const beta = makeBeta({ extracts: [["b_v", 2], ["a_v", 1]] });
+    finalizePreCfMultiReturnTemps(beta);
+    assert.equal(beta.preCfMultiReturnTemps.safe, true);
+    assert.equal(beta.preCfMultiReturnTemps.folds, 1);
+    assert(beta.source.includes("local a_v, b_v = f()"), beta.source);
+    assert(!beta.source.includes("pack_v"));
+    assert.deepEqual(beta.graph.states[0].operations[0].emittedTargets, ["a_v", "b_v"]);
+}
+
+{
     const beta = makeBeta({ packRhs: "{ obj:Pair(1) }" });
     beta.graph.states[0].operations[0].reads = ["obj"];
     finalizePreCfMultiReturnTemps(beta);
@@ -44,6 +54,7 @@ function makeBeta({ packRhs = "{ f() }", extracts = [["a_v", 1], ["b_v", 2]], ex
 for (const beta of [
     makeBeta({ extracts: [["b_v", 2]] }),
     makeBeta({ extracts: [["a_v", 1], ["c_v", 3]] }),
+    makeBeta({ extracts: [["a_v", 1], ["b_v", 1]] }),
     makeBeta({ extraRead: true }),
     makeBeta({ localExtracts: false }),
     makeBeta({ packRhs: "{ f(), 1 }" }),

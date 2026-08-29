@@ -1054,7 +1054,10 @@ function finalizePreCfMultiReturnTemps(betaResult) {
                 }
                 if (extracts.length === 0) continue;
                 const slots = extracts.map(item => item.slot);
-                if (slots.some((slot, index) => slot !== index + 1)) continue;
+                const uniqueSlots = new Set(slots);
+                if (uniqueSlots.size !== slots.length) continue;
+                const sortedSlots = [...slots].sort((a, b) => a - b);
+                if (sortedSlots.some((slot, index) => slot !== index + 1)) continue;
                 if (packFacts.readCount !== extracts.length) continue;
                 const exactPackReaders = new Set(extracts.map(item => item.op));
                 if ((packFacts.consumer ? [packFacts.consumer] : []).length && packFacts.readCount === 1 && !exactPackReaders.has(packFacts.consumer?.operation)) continue;
@@ -1085,7 +1088,8 @@ function finalizePreCfMultiReturnTemps(betaResult) {
             betaResult.preCfMultiReturnTemps = { applied: folds > 0, safe: false, reason: "PRE-CF multi-return recovery lost exact source ownership", folds };
             return betaResult;
         }
-        const targets = candidate.extracts.map(item => item.op.emittedTarget);
+        const orderedExtracts = [...candidate.extracts].sort((a, b) => a.slot - b.slot);
+        const targets = orderedExtracts.map(item => item.op.emittedTarget);
         const emittedText = `local ${targets.join(", ")} = ${candidate.call}`;
         const first = ranges[0][0], last = ranges[ranges.length - 1][1];
         const output = applySourceEdits(betaResult.source, [{ start: first, end: last, replacement: emittedText }]);
@@ -1101,7 +1105,7 @@ function finalizePreCfMultiReturnTemps(betaResult) {
             kind: "multi-call-write",
             emittedTargets: targets,
             targetDeclarations: targets.map(() => true),
-            targetRegisterEpochs: candidate.extracts.map(item => item.op.registerEpoch || null),
+            targetRegisterEpochs: orderedExtracts.map(item => item.op.registerEpoch || null),
             rhs: candidate.call,
             reads,
             emittedText,
