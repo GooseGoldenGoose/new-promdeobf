@@ -340,8 +340,9 @@ function solveSingleState(originalAst, graph) {
 
     const sunk = sinkTerminalReturnPayload(state.operations);
     const lowered = lowerTerminalReturn(sunk.operations);
-    const bodyLines = lowered.operations.map(operationText);
-    const bodyText = bodyLines.join("\n\n");
+    const structuredNodes = lowered.operations.map(operation => rawNode(operation, state.id));
+    const postCfCopyScalarRecoveryCount = recoverStructuredPostCfCopyScalarTemps(structuredNodes, graph);
+    const bodyText = formatStructuredNodes(structuredNodes);
     const presented = buildPresentedSource(originalAst, bodyText, { registerOverflowUsed: graph.registerOverflowUsed === true });
     if (!presented.applied) return presented;
 
@@ -351,8 +352,9 @@ function solveSingleState(originalAst, graph) {
         mode: "single-state",
         entryState: state.id,
         stateCount: graph.states.length,
-        statementCount: lowered.operations.length,
+        statementCount: countStructuredStatements(structuredNodes),
         branchCount: 0,
+        postCfCopyScalarRecoveryCount,
         terminalReturnCount: lowered.lowered ? 1 : 0,
         terminalReturnPayloadSunk: sunk.moved,
         terminalReturnPayloadSunkCount: sunk.moved ? 1 : 0,
@@ -1134,6 +1136,129 @@ function recoverStructuredLoopBranchConditionTemps(nodes, graph) {
     return folds;
 }
 
+function recoverStructuredPostCfCopyScalarTemps(nodes, graph) {
+    const captured = new Set(graph?.recoveredUpvalueBindings || []);
+    let folds = 0;
+
+    function collectFacts(root) {
+        const reads = new Map();
+        const definitions = new Map();
+        function visit(body) {
+            for (const node of body || []) {
+                for (const name of node.reads || []) reads.set(name, (reads.get(name) || 0) + 1);
+                if (node.type === "raw" && node.operation?.emittedTarget) {
+                    const name = node.operation.emittedTarget;
+                    definitions.set(name, (definitions.get(name) || 0) + 1);
+                }
+                if (node.type === "if") {
+                    visit(node.thenBody);
+                    visit(node.elseBody);
+                } else if (node.type === "numeric-for" || node.type === "generic-for") {
+                    visit(node.body);
+                } else if (node.type === "while-guard") {
+                    visit(node.conditionBody);
+                    visit(node.body);
+                } else if (node.type === "repeat-until") {
+                    visit(node.body);
+                    visit(node.conditionBody);
+                }
+            }
+        }
+        visit(root);
+        return { reads, definitions };
+    }
+
+    function isScalarExpression(node) {
+        if (!node) return false;
+        if (node.type === "Identifier" || node.type === "NumericLiteral" || node.type === "StringLiteral" ||
+            node.type === "BooleanLiteral" || node.type === "NilLiteral") return true;
+        if (node.type === "UnaryExpression") return isScalarExpression(node.argument);
+        if (node.type === "BinaryExpression") return isScalarExpression(node.left) && isScalarExpression(node.right);
+        return false;
+    }
+
+    function isLeadingUse(node, name) {
+        if (!node) return false;
+        if (node.type === "Identifier") return node.name === name;
+        if (node.type === "UnaryExpression") return isLeadingUse(node.argument, name);
+        if (node.type === "BinaryExpression") return isLeadingUse(node.left, name);
+        return false;
+    }
+
+    function escapeRegex(text) {
+        return String(text).replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+    }
+
+    let changed = true;
+    while (changed) {
+        changed = false;
+        const facts = collectFacts(nodes);
+
+        function visitBody(body) {
+            for (let index = 1; index < (body || []).length; index++) {
+                const producerNode = body[index - 1];
+                const consumerNode = body[index];
+                if (producerNode?.type === "raw" && consumerNode?.type === "raw") {
+                    const producer = producerNode.operation || {};
+                    const consumer = consumerNode.operation || {};
+                    const target = producer.emittedTarget;
+                    const source = String(producer.rhs || "").trim();
+                    const consumerTarget = consumer.emittedTarget;
+                    const rhs = String(consumer.rhs || "").trim();
+                    const parsed = rhs ? parseTransitionExpression(rhs) : null;
+                    const expression = parsed?.expression;
+                    const targetUses = expression && target
+                        ? collectExpressionVariableIdentifierRanges(expression, target)
+                        : [];
+                    const sourceIsLocal = (facts.definitions.get(source) || 0) > 0 || captured.has(source);
+                    if (target && consumerTarget &&
+                        /^[A-Za-z_][A-Za-z0-9_]*$/.test(source) && source !== target && sourceIsLocal &&
+                        !captured.has(target) &&
+                        (facts.reads.get(target) || 0) === 1 &&
+                        (facts.definitions.get(target) || 0) === 1 &&
+                        (producer.kind === "version-define" || producer.kind === "epoch-start" || producer.kind === "epoch-mutate") &&
+                        (consumer.kind === "version-define" || consumer.kind === "epoch-start" || consumer.kind === "epoch-mutate") &&
+                        expression && isScalarExpression(expression) && isLeadingUse(expression, target) && targetUses.length === 1) {
+                        const localPattern = new RegExp(`^\\s*local\\s+${escapeRegex(target)}\\s*=\\s*${escapeRegex(source)}\\s*;?\\s*$`);
+                        const consumerPattern = new RegExp(`^\\s*(local\\s+)?${escapeRegex(consumerTarget)}\\s*=\\s*${escapeRegex(rhs)}\\s*;?\\s*$`);
+                        const consumerMatch = String(consumerNode.text || "").match(consumerPattern);
+                        const rewritten = substituteSingleExpressionIdentifier(rhs, target, source);
+                        if (localPattern.test(String(producerNode.text || "")) && consumerMatch && rewritten) {
+                            consumerNode.text = `${consumerMatch[1] || ""}${consumerTarget} = ${rewritten}`;
+                            consumerNode.reads = (consumerNode.reads || []).map(name => name === target ? source : name);
+                            body.splice(index - 1, 1);
+                            folds++;
+                            changed = true;
+                            return true;
+                        }
+                    }
+                }
+
+                const node = body[index];
+                if (node?.type === "if") {
+                    if (visitBody(node.thenBody) || visitBody(node.elseBody)) return true;
+                } else if (node?.type === "numeric-for" || node?.type === "generic-for") {
+                    if (visitBody(node.body)) return true;
+                } else if (node?.type === "while-guard") {
+                    if (visitBody(node.conditionBody) || visitBody(node.body)) return true;
+                } else if (node?.type === "repeat-until") {
+                    if (visitBody(node.body) || visitBody(node.conditionBody)) return true;
+                }
+            }
+            if ((body || []).length === 1) {
+                const node = body[0];
+                if (node?.type === "if") return visitBody(node.thenBody) || visitBody(node.elseBody);
+                if (node?.type === "numeric-for" || node?.type === "generic-for") return visitBody(node.body);
+                if (node?.type === "while-guard") return visitBody(node.conditionBody) || visitBody(node.body);
+                if (node?.type === "repeat-until") return visitBody(node.body) || visitBody(node.conditionBody);
+            }
+            return false;
+        }
+
+        visitBody(nodes);
+    }
+    return folds;
+}
 function countStructuredStatements(nodes) {
     let count = 0;
     for (const node of nodes) {
@@ -4237,6 +4362,7 @@ function solveAcyclicStructured(originalAst, graph) {
     }
 
     const loopControlConditionTempRecoveryCount = recoverStructuredLoopBranchConditionTemps(structured.nodes, graph);
+    const postCfCopyScalarRecoveryCount = recoverStructuredPostCfCopyScalarTemps(structured.nodes, graph);
 
     const epochHoisting = hoistEscapingEpochDeclarations(structured.nodes);
     if (!epochHoisting.safe) return { applied: false, reason: epochHoisting.reason || "Beta epoch declaration hoisting failed closed" };
@@ -4257,6 +4383,7 @@ function solveAcyclicStructured(originalAst, graph) {
         branchCount,
         ifConditionTempRecoveryCount,
         loopControlConditionTempRecoveryCount,
+        postCfCopyScalarRecoveryCount,
         joinCount,
         guardBranchCount,
         terminalReturnCount,
@@ -4822,6 +4949,7 @@ function solveClosureRegions(originalAst, graph) {
         terminalReturnCount: sum("terminalReturnCount"),
         terminalReturnPayloadSunk: results.some(result => result.terminalReturnPayloadSunk),
         terminalReturnPayloadSunkCount: sum("terminalReturnPayloadSunkCount"),
+        postCfCopyScalarRecoveryCount: sum("postCfCopyScalarRecoveryCount"),
         terminalReturnLowered: results.every(result => result.terminalReturnLowered),
         terminalReturnText: null,
         closureRegionCount: graph.entries.length,
