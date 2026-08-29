@@ -2271,6 +2271,98 @@ function matchCompilerNumericFor(graph, checkStateId) {
     };
 }
 
+function sourceTextForParsedExpressionNode(rhs, node) {
+    if (!node || !Array.isArray(node.range)) return null;
+    const parsed = parseTransitionExpression(rhs);
+    if (!parsed?.expression) return null;
+    const prefixLength = parsed.source.length - String(rhs).length;
+    const start = node.range[0] - prefixLength;
+    const end = node.range[1] - prefixLength;
+    if (start < 0 || end < start || end > String(rhs).length) return null;
+    return String(rhs).slice(start, end);
+}
+
+function recoverGenericForPackedIterator(graph, preOps, preTransitionIndex, iteratorRoots, iteratorStep, preTransition, structuralOperations = []) {
+    if (!Array.isArray(iteratorRoots) || iteratorRoots.length !== 3) return null;
+    const captured = new Set(graph.recoveredUpvalueBindings || []);
+    const definitionsByName = new Map();
+    for (let index = 0; index < preTransitionIndex; index++) {
+        const operation = preOps[index];
+        if (!operation?.emittedTarget) continue;
+        if (!definitionsByName.has(operation.emittedTarget)) definitionsByName.set(operation.emittedTarget, []);
+        definitionsByName.get(operation.emittedTarget).push({ operation, index });
+    }
+    function priorDefinition(name, beforeIndex) {
+        const list = definitionsByName.get(name) || [];
+        const prior = list.filter(item => item.index < beforeIndex);
+        return prior.length === 1 ? prior[0] : null;
+    }
+    function traceSlot(rootOperation, expectedSlot) {
+        let current = rootOperation;
+        let currentIndex = preOps.indexOf(current);
+        if (currentIndex < 0) return null;
+        const chain = [];
+        const seen = new Set();
+        for (let depth = 0; depth < 12; depth++) {
+            if (!current?.emittedTarget || captured.has(current.emittedTarget) || seen.has(current)) return null;
+            seen.add(current);
+            chain.push(current);
+            const expression = parseOperationExpression(current);
+            if (expression?.type === 'IndexExpression' && expression.base?.type === 'Identifier') {
+                const slot = numericValue(expression.index);
+                if (slot !== expectedSlot) return null;
+                return { packName: expression.base.name, chain };
+            }
+            if (expression?.type !== 'Identifier') return null;
+            const next = priorDefinition(expression.name, currentIndex);
+            if (!next) return null;
+            current = next.operation;
+            currentIndex = next.index;
+        }
+        return null;
+    }
+
+    const traced = iteratorRoots.map((operation, index) => traceSlot(operation, index + 1));
+    if (traced.some(item => !item)) return null;
+    const packName = traced[0].packName;
+    if (!packName || traced.some(item => item.packName !== packName)) return null;
+    const firstChainIndex = Math.min(...traced.flatMap(item => item.chain.map(operation => preOps.indexOf(operation))));
+    const packDefItem = priorDefinition(packName, firstChainIndex);
+    if (!packDefItem || captured.has(packName)) return null;
+    const packDef = packDefItem.operation;
+    const packExpression = parseOperationExpression(packDef);
+    if (packExpression?.type !== 'TableConstructorExpression' || packExpression.fields?.length !== 1) return null;
+    const field = packExpression.fields[0];
+    if (field?.type !== 'TableValue' || field.value?.type !== 'CallExpression') return null;
+    const callText = sourceTextForParsedExpressionNode(String(packDef.rhs || ''), field.value);
+    if (!callText) return null;
+
+    const removeOperations = new Set([packDef, ...traced.flatMap(item => item.chain)]);
+    const removedNames = new Set([...removeOperations].map(operation => operation.emittedTarget).filter(Boolean));
+    const allowedReaders = new Set([...removeOperations, iteratorStep, preTransition, ...(structuralOperations || [])]);
+    for (const state of graph.states || []) {
+        for (const operation of state.operations || []) {
+            for (const name of removedNames) {
+                if ((operation.reads || []).includes(name) && !allowedReaders.has(operation)) return null;
+            }
+        }
+    }
+
+    const callReads = new Set(packDef.reads || []);
+    for (let index = packDefItem.index + 1; index < preTransitionIndex; index++) {
+        const operation = preOps[index];
+        if (removeOperations.has(operation)) continue;
+        if (operation?.returnSinkSafe !== true || !operation?.emittedTarget) return null;
+        if ((operation.reads || []).some(name => removedNames.has(name))) return null;
+        if (betaOperationWrites(operation).some(name => removedNames.has(name) || callReads.has(name))) return null;
+    }
+
+    return {
+        expressions: [callText],
+        reads: [...callReads],
+        removeOperations,
+    };
+}
 function matchCompilerGenericFor(graph, checkStateId) {
     const states = graph.states || [];
     const stateById = new Map(states.map(state => [state.id, state]));
@@ -2417,6 +2509,19 @@ function matchCompilerGenericFor(graph, checkStateId) {
     const structuredBody = structureLoopBodyRegion(stateById, region, bodyId, check.id, skipOperations, null, exitId, true);
     if (!structuredBody) return null;
 
+    const packedIterator = recoverGenericForPackedIterator(
+        graph,
+        preOps,
+        preTransitionIndex,
+        [iteratorDef, iteratorStateDef, controlDef],
+        iteratorStep,
+        preInfo.operation,
+        [checkInfo.operation, firstCopy, ...(secondBinding ? [secondBinding] : []), ...cleanupOperations]
+    );
+    const iteratorExpressions = packedIterator?.expressions || [iteratorDef.emittedTarget, iteratorStateDef.emittedTarget, controlDef.emittedTarget];
+    const iteratorReads = packedIterator?.reads || [iteratorDef.emittedTarget, iteratorStateDef.emittedTarget, controlDef.emittedTarget];
+    const removedSetupOperations = packedIterator?.removeOperations || new Set();
+
     return {
         preheaderId,
         checkId: check.id,
@@ -2424,8 +2529,10 @@ function matchCompilerGenericFor(graph, checkStateId) {
         bodyStateIds: [...region.ids],
         exitId,
         loopVariables: [firstVariable, secondVariable],
-        iteratorExpressions: [iteratorDef.emittedTarget, iteratorStateDef.emittedTarget, controlDef.emittedTarget],
-        retainedPreheaderOperations: preOps.filter(operation => operation !== preInfo.operation),
+        iteratorExpressions,
+        iteratorReads,
+        iteratorSetupRecoveryCount: packedIterator ? removedSetupOperations.size : 0,
+        retainedPreheaderOperations: preOps.filter(operation => operation !== preInfo.operation && !removedSetupOperations.has(operation)),
         bodyNodes: structuredBody.nodes,
         bodyBranchCount: structuredBody.branchCount,
         bodyJoinCount: structuredBody.joinCount,
@@ -3751,12 +3858,12 @@ function collapseCompilerGenericForLoops(graph) {
         }
         if (!match) break;
 
-        const loopNode = genericForNode(match.loopVariables, match.iteratorExpressions, match.bodyNodes, match.iteratorExpressions);
+        const loopNode = genericForNode(match.loopVariables, match.iteratorExpressions, match.bodyNodes, match.iteratorReads);
         const structuredOperation = {
             kind: "structured-generic-for",
             structuredNode: loopNode,
             emittedText: formatStructuredNodes([loopNode]),
-            reads: [...match.iteratorExpressions],
+            reads: [...match.iteratorReads],
             returnSinkSafe: false,
         };
         const stateName = graph.stateName || "state";
