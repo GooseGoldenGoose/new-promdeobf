@@ -354,6 +354,63 @@ function finalizePreCfCallResultDestinations(betaResult) {
     return betaResult;
 }
 
+
+function finalizePreCfDiscardedCallResults(betaResult) {
+    if (!betaResult?.graph || typeof betaResult.source !== "string" || betaResult.graph.cfgComplete !== true) {
+        betaResult.preCfDiscardedCallResults = { applied: false, safe: false, reason: "PRE-CF discarded call-result recovery requires a complete beta graph" };
+        return betaResult;
+    }
+    const proof = buildPreCfTempProofIndex(betaResult);
+    if (!proof.safe) {
+        betaResult.preCfDiscardedCallResults = { applied: false, safe: false, reason: proof.reason || "PRE-CF discarded call-result proof failed" };
+        return betaResult;
+    }
+    const candidates = [];
+    for (const facts of proof.byBinding.values()) {
+        if (!facts.singleDefinition || facts.readCount !== 0 || facts.captured) continue;
+        const producer = facts.producer?.operation;
+        if (!isCompilerCallResultOperation(producer, betaResult.graph)) continue;
+        const expression = parsePreCfRhs(producer.rhs);
+        if (expression?.type !== "CallExpression") continue;
+        candidates.push({ facts, producer });
+    }
+    if (!candidates.length) {
+        betaResult.preCfDiscardedCallResults = { applied: false, safe: true, folds: 0 };
+        return betaResult;
+    }
+    const ownership = mapPreCfOperationRanges(betaResult);
+    if (!ownership.safe) {
+        betaResult.preCfDiscardedCallResults = { applied: false, safe: false, reason: ownership.reason, folds: 0 };
+        return betaResult;
+    }
+    const edits = [];
+    for (const candidate of candidates) {
+        const range = ownership.ranges.get(candidate.producer);
+        if (!range) {
+            betaResult.preCfDiscardedCallResults = { applied: false, safe: false, reason: "PRE-CF discarded call-result recovery lost exact source ownership", folds: 0 };
+            return betaResult;
+        }
+        edits.push({ start: range[0], end: range[1], replacement: candidate.producer.rhs });
+    }
+    const output = applySourceEdits(betaResult.source, edits);
+    try { parsePreCfSource(output); }
+    catch (error) {
+        betaResult.preCfDiscardedCallResults = { applied: false, safe: false, reason: `PRE-CF discarded call-result recovery reparse failed: ${error.message}`, folds: 0 };
+        return betaResult;
+    }
+    betaResult.source = output;
+    for (const candidate of candidates) {
+        candidate.producer.kind = "effect-call";
+        candidate.producer.emittedTarget = null;
+        candidate.producer.originalTarget = null;
+        candidate.producer.registerEpoch = null;
+        candidate.producer.emittedText = candidate.producer.rhs;
+        candidate.producer.returnSinkSafe = false;
+    }
+    betaResult.preCfDiscardedCallResults = { applied: true, safe: true, folds: candidates.length };
+    return betaResult;
+}
+
 function parsePreCfRhs(rhs) {
     try {
         const ast = parsePreCfSource(`return ${rhs}`);
@@ -1417,6 +1474,7 @@ function finalizePreCfTempRecovery(betaResult) {
         finalizePreCfCallArgumentTemps,
         finalizePreCfCallBaseTemps,
         finalizePreCfNamecalls,
+        finalizePreCfDiscardedCallResults,
         finalizePreCfReturnTemps,
         finalizePreCfReturnAllTemps,
         finalizePreCfMultiReturnTemps,
@@ -1431,7 +1489,7 @@ function finalizePreCfTempRecovery(betaResult) {
         }
         stageNames.push(stage.name);
     }
-    const foldKeys = ["preCfCopyTemps", "preCfClosureTemps", "preCfCallResultDestinations", "preCfScalarTemps", "preCfGlobalLookups", "preCfLookupTemps", "preCfCallArgumentTemps", "preCfCallBaseTemps", "preCfNamecalls", "preCfReturnTemps", "preCfReturnAllTemps", "preCfMultiReturnTemps"];
+    const foldKeys = ["preCfCopyTemps", "preCfClosureTemps", "preCfCallResultDestinations", "preCfScalarTemps", "preCfGlobalLookups", "preCfLookupTemps", "preCfCallArgumentTemps", "preCfCallBaseTemps", "preCfNamecalls", "preCfDiscardedCallResults", "preCfReturnTemps", "preCfReturnAllTemps", "preCfMultiReturnTemps"];
     const folds = foldKeys.reduce((sum, key) => sum + Number(betaResult[key]?.folds || 0), 0);
     betaResult.preCfTempRecovery = { applied: folds > 0, safe: true, folds, stages: stageNames };
     return betaResult;
@@ -1448,6 +1506,7 @@ module.exports = {
     finalizePreCfCallArgumentTemps,
     finalizePreCfCallBaseTemps,
     finalizePreCfNamecalls,
+    finalizePreCfDiscardedCallResults,
     finalizePreCfReturnTemps,
     finalizePreCfReturnAllTemps,
     finalizePreCfMultiReturnTemps,

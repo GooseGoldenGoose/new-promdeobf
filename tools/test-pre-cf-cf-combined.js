@@ -12,6 +12,7 @@ const focused = [
     "test-pre-cf-temp-recovery.js",
     "test-pre-cf-closure-temps.js",
     "test-pre-cf-call-result-destinations.js",
+    "test-pre-cf-discarded-call-results.js",
     "test-pre-cf-scalar-temps.js",
     "test-pre-cf-global-lookups.js",
     "test-pre-cf-lookup-temps.js",

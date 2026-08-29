@@ -25,6 +25,7 @@ assert.deepEqual(result.beta.preCfTempRecovery.stages, [
     "finalizePreCfCallArgumentTemps",
     "finalizePreCfCallBaseTemps",
     "finalizePreCfNamecalls",
+    "finalizePreCfDiscardedCallResults",
     "finalizePreCfReturnTemps",
     "finalizePreCfReturnAllTemps",
     "finalizePreCfMultiReturnTemps",
