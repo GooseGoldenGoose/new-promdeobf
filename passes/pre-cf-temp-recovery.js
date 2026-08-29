@@ -307,25 +307,6 @@ function isValidGlobalIdentifierName(name) {
 function parseScopedPreCfSource(source) {
     return luaparse.parse(source, { luaVersion: "luau", comments: false, scope: true, locations: false, ranges: true });
 }
-function collectDeclaredBindingNames(node, out = new Set()) {
-    if (!isAstNode(node)) return out;
-    if (node.type === "LocalStatement") {
-        for (const variable of node.variables || []) if (variable?.type === "Identifier") out.add(variable.name);
-    } else if (node.type === "FunctionDeclaration") {
-        if (node.isLocal && node.identifier?.type === "Identifier") out.add(node.identifier.name);
-        for (const parameter of node.parameters || []) if (parameter?.type === "Identifier") out.add(parameter.name);
-    } else if (node.type === "ForNumericStatement") {
-        if (node.variable?.type === "Identifier") out.add(node.variable.name);
-    } else if (node.type === "ForGenericStatement") {
-        for (const variable of node.variables || []) if (variable?.type === "Identifier") out.add(variable.name);
-    }
-    for (const [key, value] of Object.entries(node)) {
-        if (key === "loc" || key === "range") continue;
-        if (Array.isArray(value)) for (const child of value) collectDeclaredBindingNames(child, out);
-        else if (isAstNode(value)) collectDeclaredBindingNames(value, out);
-    }
-    return out;
-}
 function stringLiteralIdentifierValue(node) {
     if (node?.type !== "StringLiteral") return null;
     if (typeof node.value === "string") return node.value;
@@ -394,8 +375,6 @@ function finalizePreCfGlobalLookups(betaResult) {
         betaResult.preCfGlobalLookups = { applied: false, safe: true, folds: 0, keyTempsRemoved: 0, refused: 0, environmentProven: true, environmentShadowed: true, sourceKind: environment.sourceKind };
         return betaResult;
     }
-    const declaredNames = collectDeclaredBindingNames(scopedAst);
-    declaredNames.delete("_env");
     const proof = buildPreCfTempProofIndex(betaResult);
     const ownership = mapPreCfOperationRanges(betaResult);
     if (!ownership.safe) {
@@ -422,7 +401,7 @@ function finalizePreCfGlobalLookups(betaResult) {
                 if (!keyProducer || !["version-define","epoch-start"].includes(keyProducer.kind) || !keyName) { refused++; continue; }
                 globalName = keyName;
             }
-            if (!isValidGlobalIdentifierName(globalName) || declaredNames.has(globalName)) { refused++; continue; }
+            if (!isValidGlobalIdentifierName(globalName)) { refused++; continue; }
             if (claimed.has(operation) || (keyProducer && claimed.has(keyProducer))) continue;
             const opRange = ownership.ranges.get(operation);
             const keyRange = keyProducer ? ownership.ranges.get(keyProducer) : null;

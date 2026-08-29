@@ -40,8 +40,8 @@ function stmt(text, reads = []) { return { kind: "statement", emittedText: text,
 {
     const source = `return (function(_env)\n    local print = fakePrint\n    local vm\n    vm = function(state)\n        if state == 1 then\n            local fn = _env["print"]\n            return\n        end\n    end\nend)(getfenv())\n`;
     const result = finalizePreCfGlobalLookups(beta(source, [def("fn", '_env["print"]', ["_env"]), stmt("return")]));
-    assert.equal(result.preCfGlobalLookups.folds, 0);
-    assert(result.source.includes('_env["print"]'));
+    assert.equal(result.preCfGlobalLookups.folds, 1);
+    assert(result.source.includes("local fn = print"));
 }
 {
     const source = wrap('local fn = _env["foo-bar"]\nreturn');
