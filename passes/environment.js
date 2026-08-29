@@ -361,6 +361,22 @@ function renameFunctionParameterBinding(source, candidate, replacementName = "_e
     };
 }
 
+function proveEnvironmentBinding(ast, expectedName = "_env") {
+    const candidate = findEnvironmentBinding(ast);
+    if (!candidate) return { proven: false, reason: "No structurally proven environment binding was found" };
+    if (candidate.parameter?.name !== expectedName) {
+        return { proven: false, reason: `Environment binding is ${candidate.parameter?.name || "<unknown>"}, not ${expectedName}` };
+    }
+    return {
+        proven: true,
+        name: expectedName,
+        sourceKind: candidate.sourceKind,
+        parameter: candidate.parameter,
+        functionNode: candidate.fn,
+        argument: candidate.argument,
+    };
+}
+
 function renameEnvironmentBinding(source, ast, replacementName = "_env") {
     const candidate = findEnvironmentBinding(ast);
     if (!candidate) {
@@ -387,6 +403,7 @@ function renameEnvironmentBinding(source, ast, replacementName = "_env") {
 module.exports = {
     environmentSourceKind,
     findEnvironmentBinding,
+    proveEnvironmentBinding,
     renameFunctionParameterBinding,
     renameEnvironmentBinding,
 };

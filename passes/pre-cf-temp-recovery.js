@@ -102,6 +102,7 @@ function provePreCfTempUse(betaResult, bindingName) {
 
 const luaparse = require("../parser/luaparse");
 const { findVmFunction } = require("./vm-state");
+const { proveEnvironmentBinding } = require("./environment");
 
 function parsePreCfSource(source) {
     return luaparse.parse(source, { luaVersion: "luau", comments: false, scope: false, locations: false, ranges: true });
@@ -299,6 +300,182 @@ function finalizePreCfScalarTemps(betaResult) {
     betaResult.preCfScalarTemps = { applied: folds > 0, safe: true, folds, parseRounds };
     return betaResult;
 }
+const LUA_KEYWORDS = new Set(["and","break","do","else","elseif","end","false","for","function","goto","if","in","local","nil","not","or","repeat","return","then","true","until","while","continue"]);
+function isValidGlobalIdentifierName(name) {
+    return /^[A-Za-z_][A-Za-z0-9_]*$/.test(String(name || "")) && !LUA_KEYWORDS.has(String(name));
+}
+function parseScopedPreCfSource(source) {
+    return luaparse.parse(source, { luaVersion: "luau", comments: false, scope: true, locations: false, ranges: true });
+}
+function collectDeclaredBindingNames(node, out = new Set()) {
+    if (!isAstNode(node)) return out;
+    if (node.type === "LocalStatement") {
+        for (const variable of node.variables || []) if (variable?.type === "Identifier") out.add(variable.name);
+    } else if (node.type === "FunctionDeclaration") {
+        if (node.isLocal && node.identifier?.type === "Identifier") out.add(node.identifier.name);
+        for (const parameter of node.parameters || []) if (parameter?.type === "Identifier") out.add(parameter.name);
+    } else if (node.type === "ForNumericStatement") {
+        if (node.variable?.type === "Identifier") out.add(node.variable.name);
+    } else if (node.type === "ForGenericStatement") {
+        for (const variable of node.variables || []) if (variable?.type === "Identifier") out.add(variable.name);
+    }
+    for (const [key, value] of Object.entries(node)) {
+        if (key === "loc" || key === "range") continue;
+        if (Array.isArray(value)) for (const child of value) collectDeclaredBindingNames(child, out);
+        else if (isAstNode(value)) collectDeclaredBindingNames(value, out);
+    }
+    return out;
+}
+function stringLiteralIdentifierValue(node) {
+    if (node?.type !== "StringLiteral") return null;
+    if (typeof node.value === "string") return node.value;
+    const raw = String(node.raw || "");
+    const match = raw.match(/^(["\'])([A-Za-z_][A-Za-z0-9_]*)\1$/);
+    return match ? match[2] : null;
+}
+function hasEnvironmentShadowBinding(environment, expectedName = "_env") {
+    let shadowed = false;
+    function walk(node) {
+        if (shadowed || !isAstNode(node)) return;
+        if (node.type === "LocalStatement") {
+            for (const variable of node.variables || []) {
+                if (variable?.type === "Identifier" && variable.name === expectedName && variable !== environment.parameter) { shadowed = true; return; }
+            }
+        } else if (node.type === "FunctionDeclaration") {
+            if (node.isLocal && node.identifier?.type === "Identifier" && node.identifier.name === expectedName) { shadowed = true; return; }
+            for (const parameter of node.parameters || []) {
+                if (parameter?.type === "Identifier" && parameter.name === expectedName && parameter !== environment.parameter) { shadowed = true; return; }
+            }
+        } else if (node.type === "ForNumericStatement") {
+            if (node.variable?.type === "Identifier" && node.variable.name === expectedName) { shadowed = true; return; }
+        } else if (node.type === "ForGenericStatement") {
+            for (const variable of node.variables || []) {
+                if (variable?.type === "Identifier" && variable.name === expectedName) { shadowed = true; return; }
+            }
+        }
+        for (const [key, value] of Object.entries(node)) {
+            if (key === "loc" || key === "range") continue;
+            if (Array.isArray(value)) for (const child of value) walk(child);
+            else if (isAstNode(value)) walk(value);
+            if (shadowed) return;
+        }
+    }
+    walk(environment.functionNode);
+    return shadowed;
+}
+function globalLookupInfo(operation) {
+    const expression = parsePreCfRhs(operation?.rhs);
+    if (!expression) return null;
+    if (expression.type === "MemberExpression" && expression.base?.type === "Identifier" && expression.base.name === "_env" && expression.identifier?.type === "Identifier") {
+        return { globalName: expression.identifier.name, keyBinding: null };
+    }
+    if (expression.type !== "IndexExpression" || expression.base?.type !== "Identifier" || expression.base.name !== "_env") return null;
+    if (expression.index?.type === "StringLiteral") return { globalName: stringLiteralIdentifierValue(expression.index), keyBinding: null };
+    if (expression.index?.type === "Identifier") return { globalName: null, keyBinding: expression.index.name };
+    return null;
+}
+function finalizePreCfGlobalLookups(betaResult) {
+    if (!betaResult?.graph || typeof betaResult.source !== "string" || betaResult.graph.cfgComplete !== true) {
+        betaResult.preCfGlobalLookups = { applied: false, safe: false, reason: "PRE-CF global lookup recovery requires a complete beta graph" };
+        return betaResult;
+    }
+    let scopedAst;
+    try { scopedAst = parseScopedPreCfSource(betaResult.source); }
+    catch (error) {
+        betaResult.preCfGlobalLookups = { applied: false, safe: false, reason: `PRE-CF global lookup source parse failed: ${error.message}` };
+        return betaResult;
+    }
+    const environment = proveEnvironmentBinding(scopedAst, "_env");
+    if (!environment.proven) {
+        betaResult.preCfGlobalLookups = { applied: false, safe: true, folds: 0, keyTempsRemoved: 0, refused: 0, environmentProven: false };
+        return betaResult;
+    }
+    if (hasEnvironmentShadowBinding(environment, "_env")) {
+        betaResult.preCfGlobalLookups = { applied: false, safe: true, folds: 0, keyTempsRemoved: 0, refused: 0, environmentProven: true, environmentShadowed: true, sourceKind: environment.sourceKind };
+        return betaResult;
+    }
+    const declaredNames = collectDeclaredBindingNames(scopedAst);
+    declaredNames.delete("_env");
+    const proof = buildPreCfTempProofIndex(betaResult);
+    const ownership = mapPreCfOperationRanges(betaResult);
+    if (!ownership.safe) {
+        betaResult.preCfGlobalLookups = { applied: false, safe: false, reason: ownership.reason };
+        return betaResult;
+    }
+    const candidates = [];
+    const claimed = new Set();
+    let refused = 0;
+    for (const state of betaResult.graph.states || []) {
+        for (let offset = 0; offset < (state.operations || []).length; offset++) {
+            const operation = state.operations[offset];
+            if (!operation || !["version-define","epoch-start","epoch-mutate"].includes(operation.kind) || !operation.emittedTarget) continue;
+            const info = globalLookupInfo(operation);
+            if (!info) continue;
+            let globalName = info.globalName;
+            let keyProducer = null;
+            let keyFacts = null;
+            if (info.keyBinding) {
+                keyFacts = proof.byBinding.get(info.keyBinding);
+                if (!keyFacts?.cfgComplete || !keyFacts.singleDefinition || !keyFacts.singleUse || keyFacts.captured || !keyFacts.sameState || keyFacts.producer.offset >= keyFacts.consumer.offset) { refused++; continue; }
+                keyProducer = keyFacts.producer.operation;
+                const keyName = luaStringLiteralValue(keyProducer?.rhs);
+                if (!keyProducer || !["version-define","epoch-start"].includes(keyProducer.kind) || !keyName) { refused++; continue; }
+                globalName = keyName;
+            }
+            if (!isValidGlobalIdentifierName(globalName) || declaredNames.has(globalName)) { refused++; continue; }
+            if (claimed.has(operation) || (keyProducer && claimed.has(keyProducer))) continue;
+            const opRange = ownership.ranges.get(operation);
+            const keyRange = keyProducer ? ownership.ranges.get(keyProducer) : null;
+            if (!opRange || (keyProducer && !keyRange)) {
+                betaResult.preCfGlobalLookups = { applied: false, safe: false, reason: "PRE-CF global lookup recovery lost exact source ownership" };
+                return betaResult;
+            }
+            const prefix = String(operation.emittedText || "").trim().startsWith("local ") ? "local " : "";
+            candidates.push({ state, operation, offset, globalName, keyProducer, keyFacts, opRange, keyRange, emittedText: `${prefix}${operation.emittedTarget} = ${globalName}` });
+            claimed.add(operation);
+            if (keyProducer) claimed.add(keyProducer);
+        }
+    }
+    if (!candidates.length) {
+        betaResult.preCfGlobalLookups = { applied: false, safe: true, folds: 0, keyTempsRemoved: 0, refused, environmentProven: true, sourceKind: environment.sourceKind };
+        return betaResult;
+    }
+    const edits = [];
+    for (const candidate of candidates) {
+        if (candidate.keyRange) edits.push({ start: candidate.keyRange[0], end: candidate.keyRange[1], replacement: "" });
+        edits.push({ start: candidate.opRange[0], end: candidate.opRange[1], replacement: candidate.emittedText });
+    }
+    const output = applySourceEdits(betaResult.source, edits);
+    try { parsePreCfSource(output); }
+    catch (error) {
+        betaResult.preCfGlobalLookups = { applied: false, safe: false, reason: `PRE-CF global lookup recovery reparse failed: ${error.message}` };
+        return betaResult;
+    }
+    betaResult.source = output;
+    const removalsByState = new Map();
+    let keyTempsRemoved = 0;
+    for (const candidate of candidates) {
+        candidate.operation.rhs = candidate.globalName;
+        candidate.operation.reads = (candidate.operation.reads || []).filter(name => name !== "_env" && name !== candidate.keyFacts?.name);
+        candidate.operation.emittedText = candidate.emittedText;
+        if (candidate.keyProducer) {
+            const location = proof.locations.get(candidate.keyProducer);
+            if (location) {
+                if (!removalsByState.has(location.stateId)) removalsByState.set(location.stateId, []);
+                removalsByState.get(location.stateId).push(location.offset);
+                keyTempsRemoved++;
+            }
+        }
+    }
+    for (const [stateId, offsets] of removalsByState) {
+        const state = betaResult.graph.states.find(item => item.id === stateId);
+        for (const offset of [...new Set(offsets)].sort((a,b)=>b-a)) state.operations.splice(offset, 1);
+        for (let i = 0; i < state.operations.length; i++) state.operations[i].index = i + 1;
+    }
+    betaResult.preCfGlobalLookups = { applied: true, safe: true, folds: candidates.length, keyTempsRemoved, refused, environmentProven: true, sourceKind: environment.sourceKind };
+    return betaResult;
+}
+
 function isStaticLookupExpression(node) {
     if (node?.type === "MemberExpression") {
         return node.base?.type === "Identifier" && node.identifier?.type === "Identifier";
@@ -569,7 +746,7 @@ function finalizePreCfCallBaseTemps(betaResult) {
     betaResult.preCfCallBaseTemps = { applied: folds > 0, safe: true, folds, parseRounds };
     return betaResult;
 }
-const LUA_KEYWORDS = new Set(["and","break","do","else","elseif","end","false","for","function","goto","if","in","local","nil","not","or","repeat","return","then","true","until","while","continue"]);
+
 
 function luaStringLiteralValue(rhs) {
     const expression = parsePreCfRhs(rhs);
@@ -888,6 +1065,7 @@ function finalizePreCfTempRecovery(betaResult) {
     const stages = [
         finalizePreCfCopyTemps,
         finalizePreCfScalarTemps,
+        finalizePreCfGlobalLookups,
         finalizePreCfLookupTemps,
         finalizePreCfCallArgumentTemps,
         finalizePreCfCallBaseTemps,
@@ -905,7 +1083,7 @@ function finalizePreCfTempRecovery(betaResult) {
         }
         stageNames.push(stage.name);
     }
-    const foldKeys = ["preCfCopyTemps", "preCfScalarTemps", "preCfLookupTemps", "preCfCallArgumentTemps", "preCfCallBaseTemps", "preCfNamecalls", "preCfReturnTemps", "preCfMultiReturnTemps"];
+    const foldKeys = ["preCfCopyTemps", "preCfScalarTemps", "preCfGlobalLookups", "preCfLookupTemps", "preCfCallArgumentTemps", "preCfCallBaseTemps", "preCfNamecalls", "preCfReturnTemps", "preCfMultiReturnTemps"];
     const folds = foldKeys.reduce((sum, key) => sum + Number(betaResult[key]?.folds || 0), 0);
     betaResult.preCfTempRecovery = { applied: folds > 0, safe: true, folds, stages: stageNames };
     return betaResult;
@@ -915,6 +1093,7 @@ module.exports = {
     provePreCfTempUse,
     finalizePreCfCopyTemps,
     finalizePreCfScalarTemps,
+    finalizePreCfGlobalLookups,
     finalizePreCfLookupTemps,
     finalizePreCfCallArgumentTemps,
     finalizePreCfCallBaseTemps,
