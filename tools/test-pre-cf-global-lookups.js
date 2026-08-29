@@ -70,4 +70,20 @@ function stmt(text, reads = []) { return { kind: "statement", emittedText: text,
     assert(result.source.includes('_env["print"]'));
 }
 
+{
+    const source = wrap('local fn = _env["print"]\nfn("hi")\nreturn');
+    const result = finalizePreCfGlobalLookups(beta(source, [def("fn", '_env["print"]', ["_env"]), stmt('fn("hi")', ["fn"]), stmt("return")]));
+    assert.equal(result.preCfGlobalLookups.folds, 1);
+    assert(result.source.includes("local fn = print"));
+    assert(result.source.includes('fn("hi")'));
+    assert(!result.source.includes('print("hi")'));
+}
+{
+    const source = `return (function(_env)\n    local vm\n    vm = function(state)\n        local _env = {}\n        if state == 1 then\n            local fn = _env["print"]\n            return\n        end\n    end\nend)(getfenv())\n`;
+    const result = finalizePreCfGlobalLookups(beta(source, [def("fn", '_env["print"]', ["_env"]), stmt("return")]));
+    assert.equal(result.preCfGlobalLookups.folds, 0);
+    assert.equal(result.preCfGlobalLookups.environmentShadowed, true);
+    assert(result.source.includes('_env["print"]'));
+}
+
 console.log("PRE-CF global lookups: PASS");
