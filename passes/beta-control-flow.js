@@ -977,7 +977,8 @@ function formatStructuredNodes(nodes, depth = 0) {
             continue;
         }
         if (node.type === "numeric-for") {
-            const header = `${"    ".repeat(depth)}for ${node.variable} = ${node.initial}, ${node.limit}, ${node.step} do`;
+            const stepText = node.step === null || node.step === undefined ? "" : `, ${node.step}`;
+            const header = `${"    ".repeat(depth)}for ${node.variable} = ${node.initial}, ${node.limit}${stepText} do`;
             const lines = [header];
             if (node.body.length) lines.push("", formatStructuredNodes(node.body, depth + 1));
             lines.push("", `${"    ".repeat(depth)}end`);
@@ -1964,6 +1965,71 @@ function structureLoopBodyRegion(stateById, region, bodyId, checkId, skipOperati
     return { nodes: structured.nodes, branchCount, joinCount };
 }
 
+function isMovableNumericForHeaderConstant(expression) {
+    if (!expression) return false;
+    if (expression.type === "NumericLiteral" || expression.type === "StringLiteral" || expression.type === "BooleanLiteral" || expression.type === "NilLiteral") return true;
+    if (expression.type === "UnaryExpression" && (expression.operator === "-" || expression.operator === "not")) {
+        return isMovableNumericForHeaderConstant(expression.argument);
+    }
+    if (expression.type === "ParenthesizedExpression") return isMovableNumericForHeaderConstant(expression.expression);
+    return false;
+}
+
+function numericForHeaderExpressionText(operation) {
+    const rhs = String(operation?.rhs || "").trim();
+    return rhs && parseTransitionExpression(rhs)?.expression ? rhs : null;
+}
+
+function recoverNumericForHeaderTemps(graph, preOps, headerNames, internalOperations) {
+    const roots = headerNames.map(name => {
+        const matches = preOps.map((operation, index) => ({ operation, index })).filter(item => item.operation?.emittedTarget === name);
+        if (matches.length !== 1) return null;
+        const item = matches[0];
+        const expression = parseOperationExpression(item.operation);
+        const text = numericForHeaderExpressionText(item.operation);
+        if (!text || !expression) return null;
+        if (item.operation.kind !== "version-define" && item.operation.kind !== "epoch-start" && item.operation.kind !== "epoch-mutate") return null;
+        return { name, ...item, expression, text };
+    });
+    if (roots.some(root => !root)) return null;
+
+    const internal = new Set(internalOperations || []);
+    for (const root of roots) internal.add(root.operation);
+    for (const root of roots) {
+        for (const state of graph.states || []) {
+            for (const operation of state.operations || []) {
+                if (!(operation.reads || []).includes(root.name)) continue;
+                if (!internal.has(operation)) return null;
+            }
+        }
+    }
+
+    const allConstant = roots.every(root => isMovableNumericForHeaderConstant(root.expression));
+    if (!allConstant) {
+        // Effectful/mutable header producers may move only as one ordered group.
+        // Numeric-for evaluates start, final, step once, left-to-right.
+        if (!(roots[0].index < roots[1].index && roots[1].index < roots[2].index)) return null;
+        const rootOps = new Set(roots.map(root => root.operation));
+        const lastRoot = roots[2].index;
+        for (let index = roots[0].index; index <= lastRoot; index++) {
+            const operation = preOps[index];
+            if (rootOps.has(operation)) continue;
+            if (operation?.returnSinkSafe !== true || !operation?.emittedTarget) return null;
+            const rootNames = new Set(headerNames);
+            if ((operation.reads || []).some(name => rootNames.has(name))) return null;
+            if (betaOperationWrites(operation).some(name => rootNames.has(name))) return null;
+        }
+    }
+
+    return {
+        initial: roots[0].text,
+        limit: roots[1].text,
+        step: roots[2].text,
+        removeOperations: new Set(roots.map(root => root.operation)),
+        reads: [...new Set(roots.flatMap(root => root.operation.reads || []))],
+        defaultStep: roots[2].expression.type === "NumericLiteral" && Number(roots[2].expression.value) === 1,
+    };
+}
 function matchCompilerNumericFor(graph, checkStateId) {
     const states = graph.states || [];
     const stateById = new Map(states.map(state => [state.id, state]));
@@ -2170,7 +2236,14 @@ function matchCompilerNumericFor(graph, checkStateId) {
     const structuredBody = structureLoopBodyRegion(stateById, region, bodyId, check.id, skipOperations, currentName, exitId, true);
     if (!structuredBody) return null;
 
+    const numericHeader = recoverNumericForHeaderTemps(
+        graph,
+        preOps,
+        [startName, finalName, stepName],
+        new Set([...matchedCheckOperations, currentInit.operation, negativeFlag.operation, preTransition])
+    );
     const removeFromPreheader = new Set([currentInit.operation, negativeFlag.operation, zeroDef.operation, preTransition]);
+    if (numericHeader) for (const operation of numericHeader.removeOperations) removeFromPreheader.add(operation);
     const retainedPreheaderOperations = preOps.filter(operation => !removeFromPreheader.has(operation));
     if (retainedPreheaderOperations.some(operation =>
         (operation.reads || []).includes(negativeFlagName) || (operation.reads || []).includes(zeroName)
@@ -2185,6 +2258,11 @@ function matchCompilerNumericFor(graph, checkStateId) {
         startName,
         finalName,
         stepName,
+        headerInitial: numericHeader?.initial || startName,
+        headerLimit: numericHeader?.limit || finalName,
+        headerStep: numericHeader ? (numericHeader.defaultStep ? null : numericHeader.step) : stepName,
+        headerReads: numericHeader?.reads || [startName, finalName, stepName],
+        headerTempRecoveryCount: numericHeader ? 3 : 0,
         loopVariable,
         retainedPreheaderOperations,
         bodyNodes: structuredBody.nodes,
@@ -3608,17 +3686,17 @@ function collapseCompilerNumericForLoops(graph) {
         const bodyNodes = match.bodyNodes;
         const loopNode = numericForNode(
             match.loopVariable,
-            match.startName,
-            match.finalName,
-            match.stepName,
+            match.headerInitial,
+            match.headerLimit,
+            match.headerStep,
             bodyNodes,
-            [match.startName, match.finalName, match.stepName]
+            match.headerReads
         );
         const structuredOperation = {
             kind: "structured-numeric-for",
             structuredNode: loopNode,
             emittedText: formatStructuredNodes([loopNode]),
-            reads: [match.startName, match.finalName, match.stepName],
+            reads: [...match.headerReads],
             returnSinkSafe: false,
         };
         const stateName = graph.stateName || "state";
