@@ -1034,6 +1034,31 @@ function rewriteReturnAllFinalCallArgument(rhs, packName, replacement) {
     };
 }
 
+function isExactReturnAllUnpackExpression(expression, packName) {
+    return expression?.type === "CallExpression" &&
+        expression.base?.type === "Identifier" && expression.base.name === "unpack" &&
+        (expression.arguments || []).length === 1 &&
+        expression.arguments[0]?.type === "Identifier" && expression.arguments[0].name === packName;
+}
+
+function rewriteReturnAllReturnPayload(payload, packName, replacement) {
+    if (payload?.kind !== "return-payload" || payload.terminalCompilerReturnPayload !== true) return null;
+    if (!Array.isArray(payload.returnExpressions) || payload.returnExpressions.length === 0) return null;
+    if (!Array.isArray(payload.reads) || payload.reads.filter(name => name === packName).length !== 1) return null;
+    const expressions = [...payload.returnExpressions];
+    const tail = parsePreCfRhs(expressions[expressions.length - 1]);
+    if (!isExactReturnAllUnpackExpression(tail, packName)) return null;
+    for (let i = 0; i + 1 < expressions.length; i++) {
+        const expression = parsePreCfRhs(expressions[i]);
+        if (!expression || collectIdentifierCount(expression, packName) !== 0) return null;
+    }
+    expressions[expressions.length - 1] = replacement;
+    return {
+        returnExpressions: expressions,
+        rhs: `{ ${expressions.join(", ")} }`,
+    };
+}
+
 function finalizePreCfReturnAllTemps(betaResult) {
     if (!betaResult?.graph || typeof betaResult.source !== "string" || betaResult.graph.cfgComplete !== true) {
         betaResult.preCfReturnAllTemps = { applied: false, safe: false, reason: "PRE-CF RETURN_ALL recovery requires a complete beta graph" };
@@ -1049,7 +1074,7 @@ function finalizePreCfReturnAllTemps(betaResult) {
             for (let offset = 0; offset + 1 < ops.length; offset++) {
                 const packOp = ops[offset];
                 const consumer = ops[offset + 1];
-                if (!isCopyOperation(packOp) || !packOp.emittedTarget || !isCopyOperation(consumer) || !consumer.emittedTarget) continue;
+                if (!isCopyOperation(packOp) || !packOp.emittedTarget) continue;
                 const packName = packOp.emittedTarget;
                 if (betaResult.graph.recoveredUpvalueBindings?.includes(packName)) continue;
                 const packFacts = proof.byBinding.get(packName);
@@ -1057,9 +1082,17 @@ function finalizePreCfReturnAllTemps(betaResult) {
                 if (!packFacts.safeSameStateTransport || !packFacts.adjacent) continue;
                 const innerCall = parsePackedSingleCall(packOp.rhs);
                 if (!innerCall) continue;
-                const rewritten = rewriteReturnAllFinalCallArgument(consumer.rhs, packName, innerCall);
-                if (!rewritten) continue;
-                candidate = { state, offset, packOp, consumer, packName, rewritten };
+                let rewritten = null;
+                let consumerKind = null;
+                if (isCopyOperation(consumer) && consumer.emittedTarget) {
+                    rewritten = rewriteReturnAllFinalCallArgument(consumer.rhs, packName, innerCall);
+                    consumerKind = rewritten ? "call-argument" : null;
+                } else if (consumer?.kind === "return-payload") {
+                    rewritten = rewriteReturnAllReturnPayload(consumer, packName, innerCall);
+                    consumerKind = rewritten ? "return-payload" : null;
+                }
+                if (!rewritten || !consumerKind) continue;
+                candidate = { state, offset, packOp, consumer, packName, rewritten, consumerKind };
                 break;
             }
             if (candidate) break;
@@ -1077,7 +1110,9 @@ function finalizePreCfReturnAllTemps(betaResult) {
             return betaResult;
         }
         const isLocal = String(candidate.consumer.emittedText || "").trim().startsWith("local ");
-        const emittedText = `${isLocal ? "local " : ""}${candidate.consumer.emittedTarget} = ${candidate.rewritten.rhs}`;
+        const emittedText = candidate.consumerKind === "return-payload"
+            ? `${candidate.consumer.emittedTarget || betaResult.graph.returnName || "ReturnVal"} = ${candidate.rewritten.rhs}`
+            : `${isLocal ? "local " : ""}${candidate.consumer.emittedTarget} = ${candidate.rewritten.rhs}`;
         const output = applySourceEdits(betaResult.source, [
             { start: packRange[0], end: packRange[1], replacement: "" },
             { start: consumerRange[0], end: consumerRange[1], replacement: emittedText },
@@ -1089,6 +1124,7 @@ function finalizePreCfReturnAllTemps(betaResult) {
         }
         betaResult.source = output;
         candidate.consumer.rhs = candidate.rewritten.rhs;
+        if (candidate.consumerKind === "return-payload") candidate.consumer.returnExpressions = candidate.rewritten.returnExpressions;
         candidate.consumer.emittedText = emittedText;
         const rewrittenExpression = parsePreCfRhs(candidate.rewritten.rhs);
         const stillReadsUnpack = collectIdentifierCount(rewrittenExpression, "unpack") > 0;
