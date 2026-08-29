@@ -1167,37 +1167,54 @@ function finalizePreCfMultiReturnTemps(betaResult) {
                 if (!call) continue;
                 const packName = packOp.emittedTarget;
                 const packFacts = proof.byBinding.get(packName);
-                if (!packFacts?.singleDefinition || packFacts.captured || packFacts.producer?.operation !== packOp) continue;
+                if (!packFacts?.singleDefinition || packFacts.captured || packFacts.producer?.operation !== packOp || packFacts.readCount === 0) continue;
+
                 const extracts = [];
-                let nextOffset = offset + 1;
-                while (nextOffset < ops.length) {
-                    const op = ops[nextOffset];
-                    if (!isCopyOperation(op) || !op.emittedTarget || !String(op.emittedText || '').trim().startsWith('local ')) break;
-                    const slot = parseStaticPackSlot(op.rhs, packName);
-                    if (slot === null) break;
-                    extracts.push({ op, slot });
-                    nextOffset++;
+                let invalidPackRead = false;
+                for (const state2 of betaResult.graph.states || []) {
+                    const ops2 = state2.operations || [];
+                    for (let offset2 = 0; offset2 < ops2.length; offset2++) {
+                        const op2 = ops2[offset2];
+                        if (!(op2.reads || []).includes(packName)) continue;
+                        if (state2 !== state || offset2 <= offset || !isCopyOperation(op2) || !op2.emittedTarget || !String(op2.emittedText || "").trim().startsWith("local ")) {
+                            invalidPackRead = true;
+                            break;
+                        }
+                        const slot = parseStaticPackSlot(op2.rhs, packName);
+                        if (slot === null) {
+                            invalidPackRead = true;
+                            break;
+                        }
+                        extracts.push({ op: op2, slot, offset: offset2 });
+                    }
+                    if (invalidPackRead) break;
                 }
-                if (extracts.length === 0) continue;
+                if (invalidPackRead || extracts.length !== packFacts.readCount || extracts.length === 0) continue;
+
                 const slots = extracts.map(item => item.slot);
                 const uniqueSlots = new Set(slots);
                 if (uniqueSlots.size !== slots.length) continue;
                 const sortedSlots = [...slots].sort((a, b) => a - b);
                 if (sortedSlots.some((slot, index) => slot !== index + 1)) continue;
-                if (packFacts.readCount !== extracts.length) continue;
-                const exactPackReaders = new Set(extracts.map(item => item.op));
-                if ((packFacts.consumer ? [packFacts.consumer] : []).length && packFacts.readCount === 1 && !exactPackReaders.has(packFacts.consumer?.operation)) continue;
-                let allReadsExact = true;
-                for (const state2 of betaResult.graph.states || []) {
-                    for (const op2 of state2.operations || []) {
-                        if ((op2.reads || []).includes(packName) && !exactPackReaders.has(op2)) allReadsExact = false;
-                    }
-                }
-                if (!allReadsExact) continue;
                 if (extracts.some(item => {
                     const facts = proof.byBinding.get(item.op.emittedTarget);
                     return !facts?.singleDefinition || facts.producer?.operation !== item.op || facts.captured;
                 })) continue;
+
+                const targetNames = new Set(extracts.map(item => item.op.emittedTarget));
+                const lastExtractOffset = Math.max(...extracts.map(item => item.offset));
+                const extractOps = new Set(extracts.map(item => item.op));
+                let targetVisibleTooEarly = false;
+                for (let gapOffset = offset + 1; gapOffset <= lastExtractOffset; gapOffset++) {
+                    const gapOp = ops[gapOffset];
+                    if (extractOps.has(gapOp)) continue;
+                    if ((gapOp.reads || []).some(name => targetNames.has(name)) || operationWrites(gapOp).some(name => targetNames.has(name))) {
+                        targetVisibleTooEarly = true;
+                        break;
+                    }
+                }
+                if (targetVisibleTooEarly) continue;
+
                 candidate = { state, offset, packOp, call, extracts };
                 break;
             }
@@ -1209,23 +1226,27 @@ function finalizePreCfMultiReturnTemps(betaResult) {
             betaResult.preCfMultiReturnTemps = { applied: folds > 0, safe: false, reason: ownership.reason, folds };
             return betaResult;
         }
-        const ranges = [ownership.ranges.get(candidate.packOp), ...candidate.extracts.map(item => ownership.ranges.get(item.op))];
-        if (ranges.some(range => !range)) {
+        const packRange = ownership.ranges.get(candidate.packOp);
+        const extractRanges = candidate.extracts.map(item => ownership.ranges.get(item.op));
+        if (!packRange || extractRanges.some(range => !range)) {
             betaResult.preCfMultiReturnTemps = { applied: folds > 0, safe: false, reason: "PRE-CF multi-return recovery lost exact source ownership", folds };
             return betaResult;
         }
         const orderedExtracts = [...candidate.extracts].sort((a, b) => a.slot - b.slot);
         const targets = orderedExtracts.map(item => item.op.emittedTarget);
         const emittedText = `local ${targets.join(", ")} = ${candidate.call}`;
-        const first = ranges[0][0], last = ranges[ranges.length - 1][1];
-        const output = applySourceEdits(betaResult.source, [{ start: first, end: last, replacement: emittedText }]);
+        const edits = [
+            { start: packRange[0], end: packRange[1], replacement: emittedText },
+            ...extractRanges.map(range => ({ start: range[0], end: range[1], replacement: "" })),
+        ];
+        const output = applySourceEdits(betaResult.source, edits);
         try { parsePreCfSource(output); }
         catch (error) {
             betaResult.preCfMultiReturnTemps = { applied: folds > 0, safe: false, reason: `PRE-CF multi-return recovery reparse failed: ${error.message}`, folds };
             return betaResult;
         }
         betaResult.source = output;
-        const reads = [...new Set([...(candidate.packOp.reads || []), ...candidate.extracts.flatMap(item => item.op.reads || []).filter(name => name !== candidate.packOp.emittedTarget)])];
+        const reads = [...new Set(candidate.packOp.reads || [])];
         const multiOp = {
             index: candidate.offset + 1,
             kind: "multi-call-write",
@@ -1237,13 +1258,16 @@ function finalizePreCfMultiReturnTemps(betaResult) {
             emittedText,
             returnSinkSafe: false,
         };
-        candidate.state.operations.splice(candidate.offset, candidate.extracts.length + 1, multiOp);
+        candidate.state.operations[candidate.offset] = multiOp;
+        const extractOps = new Set(candidate.extracts.map(item => item.op));
+        candidate.state.operations = candidate.state.operations.filter(operation => !extractOps.has(operation));
         for (let i = 0; i < candidate.state.operations.length; i++) candidate.state.operations[i].index = i + 1;
         folds++;
     }
     betaResult.preCfMultiReturnTemps = { applied: folds > 0, safe: true, folds };
     return betaResult;
 }
+
 function finalizePreCfTempRecovery(betaResult) {
     const stages = [
         finalizePreCfCopyTemps,
