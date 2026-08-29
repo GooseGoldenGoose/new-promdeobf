@@ -216,6 +216,64 @@ function finalizePreCfCopyTemps(betaResult) {
     betaResult.preCfCopyTemps={applied:folds>0,safe:true,folds,parseRounds};
     return betaResult;
 }
+
+function finalizePreCfClosureTemps(betaResult) {
+    if (!betaResult?.graph || typeof betaResult.source !== "string" || betaResult.graph.cfgComplete !== true) {
+        betaResult.preCfClosureTemps = { applied: false, safe: false, reason: "PRE-CF closure temp recovery requires a complete beta graph" };
+        return betaResult;
+    }
+    let folds = 0;
+    const maxRounds = (betaResult.graph.states || []).reduce((n, state) => n + (state.operations || []).length, 0) + 1;
+    for (let round = 0; round < maxRounds; round++) {
+        const proof = buildPreCfTempProofIndex(betaResult);
+        let candidate = null;
+        for (const facts of proof.byBinding.values()) {
+            if (!facts.singleDefinition || !facts.singleUse || facts.captured || !facts.sameState) continue;
+            const producer = facts.producer?.operation, consumer = facts.consumer?.operation;
+            if (!isCopyOperation(producer) || !isCopyOperation(consumer) || consumer.rhs !== facts.name) continue;
+            const expression = parsePreCfRhs(producer.rhs);
+            if (!isPreCfClosureFactoryCall(expression, betaResult.graph)) continue;
+            const state = betaResult.graph.states.find(item => item.id === facts.producer.stateId);
+            if (!state) continue;
+            const producerOffset = facts.producer.offset, consumerOffset = facts.consumer.offset;
+            if (!(consumerOffset > producerOffset)) continue;
+            const actualTarget = consumer.emittedTarget;
+            if (!actualTarget || betaResult.graph.recoveredUpvalueBindings?.includes(actualTarget)) continue;
+            let targetVisibleTooEarly = false;
+            for (let i = producerOffset + 1; i < consumerOffset; i++) {
+                const op = state.operations[i];
+                if ((op.reads || []).includes(actualTarget) || operationWrites(op).includes(actualTarget)) { targetVisibleTooEarly = true; break; }
+            }
+            if (targetVisibleTooEarly) continue;
+            candidate = { facts, state, producer, consumer, producerOffset, consumerOffset, actualTarget };
+            break;
+        }
+        if (!candidate) break;
+        const ownership = mapPreCfOperationRanges(betaResult);
+        if (!ownership.safe) { betaResult.preCfClosureTemps = { applied: folds > 0, safe: false, reason: ownership.reason, folds }; return betaResult; }
+        const pr = ownership.ranges.get(candidate.producer), cr = ownership.ranges.get(candidate.consumer);
+        if (!pr || !cr) { betaResult.preCfClosureTemps = { applied: folds > 0, safe: false, reason: "PRE-CF closure temp recovery lost exact source ownership", folds }; return betaResult; }
+        const prefix = String(candidate.consumer.emittedText || "").trim().startsWith("local ") ? "local " : "";
+        const emittedText = `${prefix}${candidate.actualTarget} = ${candidate.producer.rhs}`;
+        const output = applySourceEdits(betaResult.source, [
+            { start: pr[0], end: pr[1], replacement: emittedText },
+            { start: cr[0], end: cr[1], replacement: "" },
+        ]);
+        try { parsePreCfSource(output); } catch (error) {
+            betaResult.preCfClosureTemps = { applied: folds > 0, safe: false, reason: `PRE-CF closure temp recovery reparse failed: ${error.message}`, folds };
+            return betaResult;
+        }
+        betaResult.source = output;
+        candidate.producer.emittedTarget = candidate.actualTarget;
+        candidate.producer.emittedText = emittedText;
+        candidate.state.operations.splice(candidate.consumerOffset, 1);
+        for (let i = 0; i < candidate.state.operations.length; i++) candidate.state.operations[i].index = i + 1;
+        folds++;
+    }
+    betaResult.preCfClosureTemps = { applied: folds > 0, safe: true, folds };
+    return betaResult;
+}
+
 function parsePreCfRhs(rhs) {
     try {
         const ast = parsePreCfSource(`return ${rhs}`);
@@ -1271,6 +1329,7 @@ function finalizePreCfMultiReturnTemps(betaResult) {
 function finalizePreCfTempRecovery(betaResult) {
     const stages = [
         finalizePreCfCopyTemps,
+        finalizePreCfClosureTemps,
         finalizePreCfScalarTemps,
         finalizePreCfGlobalLookups,
         finalizePreCfLookupTemps,
@@ -1291,7 +1350,7 @@ function finalizePreCfTempRecovery(betaResult) {
         }
         stageNames.push(stage.name);
     }
-    const foldKeys = ["preCfCopyTemps", "preCfScalarTemps", "preCfGlobalLookups", "preCfLookupTemps", "preCfCallArgumentTemps", "preCfCallBaseTemps", "preCfNamecalls", "preCfReturnTemps", "preCfReturnAllTemps", "preCfMultiReturnTemps"];
+    const foldKeys = ["preCfCopyTemps", "preCfClosureTemps", "preCfScalarTemps", "preCfGlobalLookups", "preCfLookupTemps", "preCfCallArgumentTemps", "preCfCallBaseTemps", "preCfNamecalls", "preCfReturnTemps", "preCfReturnAllTemps", "preCfMultiReturnTemps"];
     const folds = foldKeys.reduce((sum, key) => sum + Number(betaResult[key]?.folds || 0), 0);
     betaResult.preCfTempRecovery = { applied: folds > 0, safe: true, folds, stages: stageNames };
     return betaResult;
@@ -1300,6 +1359,7 @@ module.exports = {
     buildPreCfTempProofIndex,
     provePreCfTempUse,
     finalizePreCfCopyTemps,
+    finalizePreCfClosureTemps,
     finalizePreCfScalarTemps,
     finalizePreCfGlobalLookups,
     finalizePreCfLookupTemps,

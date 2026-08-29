@@ -17,6 +17,7 @@ assert.equal(result.beta.preCfScalarTemps.folds, 1);
 assert.equal(result.beta.preCfReturnTemps.folds, 1);
 assert.deepEqual(result.beta.preCfTempRecovery.stages, [
     "finalizePreCfCopyTemps",
+    "finalizePreCfClosureTemps",
     "finalizePreCfScalarTemps",
     "finalizePreCfGlobalLookups",
     "finalizePreCfLookupTemps",
