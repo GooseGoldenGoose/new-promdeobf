@@ -496,8 +496,20 @@ function recoverCfAdjacentConditionTemp(graph, state, info, bodyOperations) {
     if (info?.kind !== "branch" || !info.conditionName || !Array.isArray(bodyOperations) || !bodyOperations.length) {
         return { info, bodyOperations, recovered: false };
     }
-    const producer = bodyOperations[bodyOperations.length - 1];
-    if (producer?.emittedTarget !== info.conditionName) return { info, bodyOperations, recovered: false };
+    const operations = state?.operations || [];
+    const transitionIndex = operations.indexOf(info.operation);
+    if (transitionIndex <= 0) return { info, bodyOperations, recovered: false };
+
+    let producerIndex = -1;
+    let producer = null;
+    for (let index = transitionIndex - 1; index >= 0; index--) {
+        const candidate = operations[index];
+        if (candidate?.emittedTarget !== info.conditionName) continue;
+        producerIndex = index;
+        producer = candidate;
+        break;
+    }
+    if (!producer) return { info, bodyOperations, recovered: false };
     if (producer.kind !== "version-define" && producer.kind !== "epoch-start" && producer.kind !== "epoch-mutate") {
         return { info, bodyOperations, recovered: false };
     }
@@ -506,13 +518,39 @@ function recoverCfAdjacentConditionTemp(graph, state, info, bodyOperations) {
     if ((graph?.recoveredUpvalueBindings || []).includes(info.conditionName)) return { info, bodyOperations, recovered: false };
 
     let reads = 0;
+    let writes = 0;
     for (const candidateState of graph?.states || []) {
         for (const operation of candidateState.operations || []) {
             reads += (operation?.reads || []).filter(name => name === info.conditionName).length;
+            if (betaOperationWrites(operation).includes(info.conditionName)) writes++;
         }
     }
-    if (reads !== 1) return { info, bodyOperations, recovered: false };
+    if (reads !== 1 || writes !== 1) return { info, bodyOperations, recovered: false };
 
+    // Final beta scheduling may leave pure compiler bookkeeping between the
+    // condition producer and the state transition, or after that transition.
+    // Structured emission removes the state write and prints every remaining
+    // operation before the `if`; folding therefore moves the producer across all
+    // later non-transition operations in this state. Cross only operations already
+    // proven effect-free and independent from the producer's inputs/output.
+    const producerReads = new Set(producer.reads || []);
+    for (let index = producerIndex + 1; index < operations.length; index++) {
+        const operation = operations[index];
+        if (operation === info.operation) continue;
+        if (operation?.returnSinkSafe !== true || !operation?.emittedTarget) {
+            return { info, bodyOperations, recovered: false };
+        }
+        const crossedWrites = betaOperationWrites(operation);
+        if (crossedWrites.some(name => name === info.conditionName || producerReads.has(name))) {
+            return { info, bodyOperations, recovered: false };
+        }
+        if ((operation.reads || []).includes(info.conditionName)) {
+            return { info, bodyOperations, recovered: false };
+        }
+    }
+
+    const producerBodyIndex = bodyOperations.indexOf(producer);
+    if (producerBodyIndex < 0) return { info, bodyOperations, recovered: false };
     return {
         info: {
             ...info,
@@ -521,7 +559,7 @@ function recoverCfAdjacentConditionTemp(graph, state, info, bodyOperations) {
             conditionTempRecovered: true,
             conditionTempProducer: producer,
         },
-        bodyOperations: bodyOperations.slice(0, -1),
+        bodyOperations: bodyOperations.filter((operation, index) => index !== producerBodyIndex),
         recovered: true,
     };
 }
@@ -583,6 +621,69 @@ function recoverCfLogicalValueProgram(nodes, resultName, capturedBindings = []) 
     if (!nested) return null;
     for (const read of nested.reads || []) reads.add(read);
     return { expression: `(${seedRhs}) ${operator} (${nested.expression})`, reads: [...reads] };
+}
+
+function recoverCfLogicalConditionSuffix(nodes, resultName, capturedBindings = [], graph = null) {
+    if (!resultName || !Array.isArray(nodes) || nodes.length < 2) return null;
+    const exactMatches = [];
+    for (let start = 0; start < nodes.length; start++) {
+        const recovered = recoverCfLogicalValueProgram(nodes.slice(start), resultName, capturedBindings);
+        if (recovered) exactMatches.push({ start, retainedNodes: [], ...recovered });
+    }
+    if (exactMatches.length === 1) return exactMatches[0];
+    if (exactMatches.length > 1 || !graph) return null;
+
+    // Final beta scheduling can insert unrelated pure snapshots inside the
+    // compiler short-circuit value program. Hoisting such a snapshot before the
+    // recovered condition is safe only when the snapshot itself is effect-free
+    // and every beta binding it reads has exactly one immutable definition.
+    const writeCounts = new Map();
+    for (const state of graph.states || []) {
+        for (const operation of state.operations || []) {
+            for (const name of betaOperationWrites(operation)) writeCounts.set(name, (writeCounts.get(name) || 0) + 1);
+        }
+    }
+    const captured = new Set(capturedBindings || []);
+    function movableBookkeeping(node, protectedNames) {
+        if (node?.type !== "raw") return false;
+        const operation = node.operation || {};
+        if (operation.returnSinkSafe !== true || !operation.emittedTarget || protectedNames.has(operation.emittedTarget)) return false;
+        if (captured.has(operation.emittedTarget) || (writeCounts.get(operation.emittedTarget) || 0) !== 1) return false;
+        if (operation.kind !== "version-define" && operation.kind !== "epoch-start" && operation.kind !== "epoch-mutate") return false;
+        for (const read of operation.reads || []) {
+            if (protectedNames.has(read) || captured.has(read) || (writeCounts.get(read) || 0) !== 1) return false;
+        }
+        return true;
+    }
+
+    const branchIndex = nodes.length - 1;
+    const branch = nodes[branchIndex];
+    if (branch?.type !== "if" || branch.elseBody) return null;
+    for (let assignmentIndex = branchIndex - 1; assignmentIndex >= 1; assignmentIndex--) {
+        const assignmentNode = nodes[assignmentIndex];
+        if (assignmentNode?.type !== "raw") continue;
+        const assignment = assignmentNode.operation || {};
+        const seedName = String(assignment.rhs || "").trim();
+        if (assignment.emittedTarget !== resultName || !/^[A-Za-z_][A-Za-z0-9_]*$/.test(seedName) || seedName === resultName) continue;
+        const protectedNames = new Set([resultName, seedName]);
+        for (let producerIndex = assignmentIndex - 1; producerIndex >= 0; producerIndex--) {
+            const producerNode = nodes[producerIndex];
+            if (producerNode?.type !== "raw" || producerNode.operation?.emittedTarget !== seedName) continue;
+            const retainedNodes = [];
+            let safe = true;
+            for (let index = producerIndex + 1; index < branchIndex; index++) {
+                if (index === assignmentIndex) continue;
+                const node = nodes[index];
+                if (!movableBookkeeping(node, protectedNames)) { safe = false; break; }
+                retainedNodes.push(node);
+            }
+            if (!safe) continue;
+            const recovered = recoverCfLogicalValueProgram([producerNode, assignmentNode, branch], resultName, capturedBindings);
+            if (!recovered) continue;
+            return { start: producerIndex, retainedNodes, ...recovered };
+        }
+    }
+    return null;
 }
 
 function setEquals(left, right) {
@@ -3663,13 +3764,27 @@ function solveAcyclicStructured(originalAst, graph) {
             emittedStates.add(current);
             for (const operation of item.bodyOperations) nodes.push(operationNode(operation, current));
 
-            const info = item.info;
+            let info = item.info;
             if (info.kind === "return") return { nodes, reachesStop: false };
             if (info.kind === "jump") {
                 current = info.target;
                 continue;
             }
             if (info.kind !== "branch") throw new Error("Unsupported prepared terminator in state " + current);
+
+            if (info.condition === info.conditionName) {
+                const logicalCondition = recoverCfLogicalConditionSuffix(nodes, info.conditionName, graph.recoveredUpvalueBindings, graph);
+                if (logicalCondition) {
+                    nodes.splice(logicalCondition.start, nodes.length - logicalCondition.start, ...(logicalCondition.retainedNodes || []));
+                    info = {
+                        ...info,
+                        condition: logicalCondition.expression,
+                        conditionReads: logicalCondition.reads,
+                        conditionTempRecovered: true,
+                    };
+                    ifConditionTempRecoveryCount++;
+                }
+            }
 
             branchCount++;
             if (info.onTrue === info.onFalse) {

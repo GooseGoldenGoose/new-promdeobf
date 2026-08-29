@@ -13,11 +13,12 @@ function terminal(id, label) {
     ] };
 }
 
-function solve({ rhs, reads = [], gap = [], captured = [], extraReads = [] }) {
+function solve({ rhs, reads = [], gap = [], tail = [], captured = [], extraReads = [] }) {
     const operations = [
         { kind: "version-define", emittedTarget: "cond_v", rhs, emittedText: `local cond_v = ${rhs}`, reads },
         ...gap,
         { kind: "state-transition", emittedTarget: "state", rhs: "cond_v and 2 or 3", emittedText: "state = cond_v and 2 or 3", reads: ["cond_v", ...extraReads] },
+        ...tail,
     ];
     return solveBetaControlFlow(wrapper, {
         applied: true,
@@ -60,6 +61,36 @@ assert(gap.source.includes("local cond_v = check()"));
 assert(gap.source.indexOf("check()") < gap.source.indexOf("mark()"));
 assert(gap.source.indexOf("mark()") < gap.source.indexOf("if cond_v then"));
 
+const safeTail = solve({
+    rhs: "check()",
+    reads: ["check"],
+    tail: [{ kind: "epoch-start", emittedTarget: "args_v", rhs: "args", emittedText: "local args_v = args", reads: [], returnSinkSafe: true }],
+});
+assert.equal(safeTail.applied, true);
+assert.equal(safeTail.ifConditionTempRecoveryCount, 1);
+assert(safeTail.source.includes("local args_v = args"));
+assert(safeTail.source.includes("if (check()) then"));
+assert(safeTail.source.indexOf("local args_v = args") < safeTail.source.indexOf("if (check()) then"));
+assert(!safeTail.source.includes("local cond_v = check()"));
+
+const effectfulTail = solve({
+    rhs: "check()",
+    reads: ["check"],
+    tail: [{ kind: "statement", emittedText: "mark()", originalText: "mark()", reads: [], returnSinkSafe: false }],
+});
+assert.equal(effectfulTail.applied, true);
+assert.equal(effectfulTail.ifConditionTempRecoveryCount, 0);
+assert(effectfulTail.source.includes("local cond_v = check()"));
+
+const dependencyTail = solve({
+    rhs: "source_v == 1",
+    reads: ["source_v"],
+    tail: [{ kind: "epoch-mutate", emittedTarget: "source_v", rhs: "2", emittedText: "source_v = 2", reads: [], returnSinkSafe: true }],
+});
+assert.equal(dependencyTail.applied, true);
+assert.equal(dependencyTail.ifConditionTempRecoveryCount, 0);
+assert(dependencyTail.source.includes("local cond_v = source_v == 1"));
+
 const captured = solve({ rhs: "check()", reads: ["check"], captured: ["cond_v"] });
 assert.equal(captured.applied, true);
 assert.equal(captured.ifConditionTempRecoveryCount, 0);
@@ -73,5 +104,49 @@ const extraUse = solve({
 assert.equal(extraUse.applied, true);
 assert.equal(extraUse.ifConditionTempRecoveryCount, 0);
 assert(extraUse.source.includes("local cond_v = check()"));
+
+const logicalAnd = solveBetaControlFlow(wrapper, {
+    applied: true,
+    graph: {
+        cfgComplete: true,
+        stateName: "state",
+        entries: [1],
+        recoveredUpvalueBindings: [],
+        states: [
+            { id: 1, predecessors: [], successors: [2, 3], operations: [
+                { kind: "version-define", emittedTarget: "seed_v", rhs: "A()", emittedText: "local seed_v = A()", reads: ["A"] },
+                { kind: "epoch-start", emittedTarget: "result_v", rhs: "seed_v", emittedText: "local result_v = seed_v", reads: ["seed_v"], returnSinkSafe: true },
+                { kind: "state-transition", emittedTarget: "state", rhs: "seed_v and 2 or 3", emittedText: "state = seed_v and 2 or 3", reads: ["seed_v"] },
+            ] },
+            { id: 2, predecessors: [1], successors: [3], operations: [
+                { kind: "version-define", emittedTarget: "rhs_v", rhs: "B()", emittedText: "local rhs_v = B()", reads: ["B"] },
+                { kind: "epoch-mutate", emittedTarget: "result_v", rhs: "rhs_v", emittedText: "result_v = rhs_v", reads: ["rhs_v"], returnSinkSafe: true },
+                { kind: "state-transition", emittedTarget: "state", rhs: "3", emittedText: "state = 3", reads: [] },
+            ] },
+            { id: 3, predecessors: [1, 2], successors: [4, 5], operations: [
+                { kind: "state-transition", emittedTarget: "state", rhs: "result_v and 4 or 5", emittedText: "state = result_v and 4 or 5", reads: ["result_v"] },
+            ] },
+            { id: 4, predecessors: [3], successors: [], operations: [
+                { kind: "statement", emittedText: "yes()", originalText: "yes()", reads: [] },
+                { kind: "return-payload", terminalCompilerReturnPayload: true, returnExpressions: [], emittedText: "ReturnVal = {}", rhs: "{}", reads: [] },
+                { kind: "state-transition", emittedTarget: "state", rhs: "nil", emittedText: "state = nil", reads: [] },
+            ] },
+            { id: 5, predecessors: [3], successors: [], operations: [
+                { kind: "statement", emittedText: "no()", originalText: "no()", reads: [] },
+                { kind: "return-payload", terminalCompilerReturnPayload: true, returnExpressions: [], emittedText: "ReturnVal = {}", rhs: "{}", reads: [] },
+                { kind: "state-transition", emittedTarget: "state", rhs: "nil", emittedText: "state = nil", reads: [] },
+            ] },
+        ],
+    },
+});
+assert.equal(logicalAnd.applied, true, logicalAnd.reason);
+assert(logicalAnd.source.includes(" and "), logicalAnd.source);
+assert(logicalAnd.source.includes("A()"), logicalAnd.source);
+assert(logicalAnd.source.includes("B()"), logicalAnd.source);
+assert(!logicalAnd.source.includes("if seed_v then"), logicalAnd.source);
+assert(!logicalAnd.source.includes("if result_v then"), logicalAnd.source);
+assert.equal((logicalAnd.source.match(/A\(\)/g) || []).length, 1);
+assert.equal((logicalAnd.source.match(/B\(\)/g) || []).length, 1);
+parseLua(logicalAnd.source, "<cf-condition-logical-and>");
 
 console.log("beta CF if condition temps: PASS");
