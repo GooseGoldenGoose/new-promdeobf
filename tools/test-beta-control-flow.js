@@ -870,7 +870,8 @@ assert(repeatUntilStructured.source.includes("deadScratch = nil"));
 assert(repeatUntilStructured.source.includes("local setup = args"));
 assert(repeatUntilStructured.source.includes("repeat"));
 assert(repeatUntilStructured.source.includes("consume()"));
-assert(repeatUntilStructured.source.includes("until realCond"));
+assert(repeatUntilStructured.source.includes("until (realFn())"));
+assert(!repeatUntilStructured.source.includes("local realCond = realFn()"));
 assert(!repeatUntilStructured.source.includes("junkFn"));
 assert(!repeatUntilStructured.source.includes("junkCond"));
 assert(!repeatUntilStructured.source.includes("state ="));
@@ -913,7 +914,8 @@ assert.equal(reorderedRepeatCondition.repeatLoopCount, 1);
 assert.equal(reorderedRepeatCondition.removedRepeatCompilerConditionOperationCount, 4);
 assert(!reorderedRepeatCondition.source.includes("junkA"));
 assert(!reorderedRepeatCondition.source.includes("junkB"));
-assert(reorderedRepeatCondition.source.includes("until realCond"));
+assert(reorderedRepeatCondition.source.includes("until (realFn())"));
+assert(!reorderedRepeatCondition.source.includes("local realCond = realFn()"));
 parseLua(reorderedRepeatCondition.source, "<beta-cf-reordered-repeat-output>");
 
 const effectfulReorderedRepeatRejected = solveBetaControlFlow(ast, {

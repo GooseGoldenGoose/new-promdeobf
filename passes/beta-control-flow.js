@@ -586,41 +586,104 @@ function conditionPolarityForName(condition, name) {
     return null;
 }
 
+function collectExpressionVariableIdentifierRanges(node, name, out = [], parent = null, key = null) {
+    if (!node || typeof node !== "object") return out;
+    if (node.type === "Identifier" && node.name === name) {
+        const staticMemberKey = parent?.type === "MemberExpression" && key === "identifier";
+        const staticTableKey = parent?.type === "TableKeyString" && key === "key";
+        if (!staticMemberKey && !staticTableKey && Array.isArray(node.range)) out.push(node.range);
+        return out;
+    }
+    for (const [childKey, value] of Object.entries(node)) {
+        if (childKey === "range" || childKey === "loc") continue;
+        if (Array.isArray(value)) {
+            for (const child of value) if (child && typeof child === "object" && child.type) collectExpressionVariableIdentifierRanges(child, name, out, node, childKey);
+        } else if (value && typeof value === "object" && value.type) {
+            collectExpressionVariableIdentifierRanges(value, name, out, node, childKey);
+        }
+    }
+    return out;
+}
+
+function substituteSingleExpressionIdentifier(rhs, name, replacement) {
+    const parsed = parseTransitionExpression(rhs);
+    if (!parsed?.expression) return null;
+    const ranges = collectExpressionVariableIdentifierRanges(parsed.expression, name);
+    if (ranges.length !== 1) return null;
+    const prefixLength = parsed.source.length - String(rhs).length;
+    const start = ranges[0][0] - prefixLength;
+    const end = ranges[0][1] - prefixLength;
+    if (start < 0 || end < start || String(rhs).slice(start, end) !== name) return null;
+    return String(rhs).slice(0, start) + `(${replacement})` + String(rhs).slice(end);
+}
+
+function recoverCfLinearProducerChain(nodes, targetName, capturedBindings = []) {
+    if (!nodes?.length || nodes.some(node => node?.type !== "raw")) return null;
+    const captured = new Set(capturedBindings || []);
+    const temporaryNames = new Set();
+    let expression = null;
+    let previousName = null;
+    const externalReads = new Set();
+    for (let index = 0; index < nodes.length; index++) {
+        const operation = nodes[index].operation || {};
+        const name = operation.emittedTarget;
+        const rhs = String(operation.rhs || "").trim();
+        if (!name || captured.has(name) || !rhs || !parseTransitionExpression(rhs)?.expression) return null;
+        if (operation.kind !== "version-define" && operation.kind !== "epoch-start" && operation.kind !== "epoch-mutate") return null;
+        if (index === 0) {
+            expression = rhs;
+        } else {
+            if ((operation.reads || []).filter(read => read === previousName).length !== 1) return null;
+            for (const read of operation.reads || []) if (temporaryNames.has(read) && read !== previousName) return null;
+            expression = substituteSingleExpressionIdentifier(rhs, previousName, expression);
+            if (!expression) return null;
+        }
+        for (const read of operation.reads || []) if (!temporaryNames.has(read) && read !== previousName) externalReads.add(read);
+        temporaryNames.add(name);
+        previousName = name;
+    }
+    if (previousName !== targetName) return null;
+    return { expression: `(${expression})`, reads: [...externalReads] };
+}
+
 function recoverCfLogicalValueProgram(nodes, resultName, capturedBindings = []) {
     const work = [...(nodes || [])];
     const captured = new Set(capturedBindings || []);
     if (work[0]?.type === "raw" && String(work[0].text || "").trim() === `local ${resultName}`) work.shift();
+    if (!work.length) return null;
 
-    if (work.length >= 3 && work[work.length - 1]?.type === "raw") {
-        const bridge = work[work.length - 1].operation || {};
-        const innerName = String(bridge.rhs || "").trim();
-        if (bridge.emittedTarget === resultName && /^[A-Za-z_][A-Za-z0-9_]*$/.test(innerName) && innerName !== resultName && !captured.has(innerName)) {
-            const nested = recoverCfLogicalValueProgram(work.slice(0, -1), innerName, capturedBindings);
-            if (nested) return nested;
-        }
-    }
-
-    if (work.length < 2 || work[0]?.type !== "raw" || work[1]?.type !== "raw") return null;
-    const producerNode = work[0];
-    const assignNode = work[1];
-    const producer = producerNode.operation || {};
-    const assignment = assignNode.operation || {};
-    const seedName = producer.emittedTarget;
-    const seedRhs = String(producer.rhs || "").trim();
-    if (!seedName || seedName === resultName || captured.has(seedName) || !seedRhs || !parseTransitionExpression(seedRhs)?.expression) return null;
-    if (assignment.emittedTarget !== resultName || String(assignment.rhs || "").trim() !== seedName) return null;
-    if (producer.kind !== "version-define" && producer.kind !== "epoch-start" && producer.kind !== "epoch-mutate") return null;
+    const last = work[work.length - 1];
+    const branch = last?.type === "if" && !last.elseBody ? last : null;
+    const assignIndex = branch ? work.length - 2 : work.length - 1;
+    if (assignIndex < 0 || work[assignIndex]?.type !== "raw") return null;
+    const assignment = work[assignIndex].operation || {};
+    const seedName = String(assignment.rhs || "").trim();
+    if (assignment.emittedTarget !== resultName || !/^[A-Za-z_][A-Za-z0-9_]*$/.test(seedName) || seedName === resultName || captured.has(seedName)) return null;
     if (assignment.kind !== "version-define" && assignment.kind !== "epoch-start" && assignment.kind !== "epoch-mutate") return null;
-    const reads = new Set(producer.reads || []);
-    if (work.length === 2) return { expression: `(${seedRhs})`, reads: [...reads] };
-    if (work.length !== 3 || work[2]?.type !== "if" || work[2].elseBody) return null;
-    const branch = work[2];
+
+    const prefix = work.slice(0, assignIndex);
+    const linearSeed = recoverCfLinearProducerChain(prefix, seedName, capturedBindings);
+    const seed = linearSeed || recoverCfLogicalValueProgram(prefix, seedName, capturedBindings);
+    if (!seed) return null;
+    if (!branch) return seed;
+
     const operator = conditionPolarityForName(branch.condition, seedName);
     if (!operator || structuredNodesReadName(branch.thenBody, seedName)) return null;
     const nested = recoverCfLogicalValueProgram(branch.thenBody, resultName, capturedBindings);
     if (!nested) return null;
-    for (const read of nested.reads || []) reads.add(read);
-    return { expression: `(${seedRhs}) ${operator} (${nested.expression})`, reads: [...reads] };
+    return {
+        expression: `(${seed.expression}) ${operator} (${nested.expression})`,
+        reads: [...new Set([...(seed.reads || []), ...(nested.reads || [])])],
+    };
+}
+
+function recoverCfLogicalSuffix(nodes, resultName, capturedBindings = []) {
+    const matches = [];
+    for (let start = 0; start < (nodes || []).length; start++) {
+        const recovered = recoverCfLogicalValueProgram(nodes.slice(start), resultName, capturedBindings);
+        if (recovered) matches.push({ start, ...recovered });
+    }
+    return matches.length === 1 ? matches[0] : null;
 }
 
 function recoverCfLogicalConditionSuffix(nodes, resultName, capturedBindings = [], graph = null) {
@@ -3351,16 +3414,34 @@ function matchCompilerRepeat(graph, checkStateId) {
     const structuredBody = structureLoopBodyRegion(stateById, region, bodyId, check.id, new Set(), null, exitId, false);
     if (!structuredBody) return null;
 
+    let condition = checkInfo.condition;
+    let conditionReads = checkInfo.conditionReads;
+    let conditionNodes = conditionOperations.map(operation => operationNode(operation, check.id));
+    let bodyNodes = structuredBody.nodes;
+    const combinedConditionProgram = [...bodyNodes, ...conditionNodes];
+    const logicalSuffix = recoverCfLogicalSuffix(combinedConditionProgram, checkInfo.conditionName, graph.recoveredUpvalueBindings);
+    if (logicalSuffix) {
+        condition = logicalSuffix.expression;
+        conditionReads = logicalSuffix.reads;
+        bodyNodes = combinedConditionProgram.slice(0, logicalSuffix.start);
+        conditionNodes = [];
+    } else {
+        const adjacent = recoverCfAdjacentConditionTemp(graph, check, checkInfo, conditionOperations);
+        condition = adjacent.info.condition;
+        conditionReads = adjacent.info.conditionReads;
+        conditionNodes = adjacent.bodyOperations.map(operation => operationNode(operation, check.id));
+    }
+
     return {
         preheaderId: preheader.id,
         checkId: check.id,
         bodyId,
         bodyStateIds: [...region.ids],
         exitId,
-        condition: checkInfo.condition,
-        conditionReads: checkInfo.conditionReads,
-        conditionNodes: conditionOperations.map(operation => operationNode(operation, check.id)),
-        bodyNodes: structuredBody.nodes,
+        condition,
+        conditionReads,
+        conditionNodes,
+        bodyNodes,
         bodyBranchCount: structuredBody.branchCount,
         bodyJoinCount: structuredBody.joinCount,
         retainedPreheaderOperations,
