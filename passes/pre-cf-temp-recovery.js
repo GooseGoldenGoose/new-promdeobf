@@ -943,6 +943,83 @@ function finalizePreCfGlobalWrites(betaResult) {
     return betaResult;
 }
 
+function indexedWriteKeyInfo(operation) {
+    if (operation?.kind !== "effect-write") return null;
+    const text = String(operation.emittedText || "");
+    const statement = parsePreCfStatement(text);
+    if (statement?.type !== "AssignmentStatement" || statement.variables?.length !== 1 || statement.init?.length !== 1) return null;
+    const lhs = statement.variables[0];
+    if (lhs?.type !== "IndexExpression" || lhs.base?.type !== "Identifier" || lhs.base.name === "_env") return null;
+    if (lhs.index?.type !== "Identifier" || !Array.isArray(lhs.index.range)) return null;
+    return {
+        keyBinding: lhs.index.name,
+        keyStart: lhs.index.range[0],
+        keyEnd: lhs.index.range[1],
+    };
+}
+function finalizePreCfIndexedWriteTemps(betaResult) {
+    if (!betaResult?.graph || typeof betaResult.source !== "string" || betaResult.graph.cfgComplete !== true) {
+        betaResult.preCfIndexedWriteTemps = { applied: false, safe: false, reason: "PRE-CF indexed write recovery requires a complete beta graph" };
+        return betaResult;
+    }
+    let folds = 0;
+    const maxRounds = (betaResult.graph.states || []).reduce((n, state) => n + (state.operations || []).length, 0) + 1;
+    for (let round = 0; round < maxRounds; round++) {
+        const proof = buildPreCfTempProofIndex(betaResult);
+        let candidate = null;
+        for (const state of betaResult.graph.states || []) {
+            for (let offset = 0; offset < (state.operations || []).length; offset++) {
+                const operation = state.operations[offset];
+                const info = indexedWriteKeyInfo(operation);
+                if (!info) continue;
+                const facts = proof.byBinding.get(info.keyBinding);
+                if (!facts?.safeSameStateTransport || facts.consumer?.operation !== operation || facts.producer.offset >= offset) continue;
+                const producer = facts.producer.operation;
+                if (!isCopyOperation(producer) || !String(producer.emittedText || "").trim().startsWith("local ")) continue;
+                const keyExpression = parsePreCfRhs(producer.rhs);
+                if (!isLiteralOnlyPreCfScalarExpression(keyExpression)) continue;
+                let blocked = false;
+                for (let i = facts.producer.offset + 1; i < offset; i++) {
+                    const gap = state.operations[i];
+                    if ((gap.reads || []).includes(info.keyBinding) || operationWrites(gap).includes(info.keyBinding)) { blocked = true; break; }
+                }
+                if (blocked) continue;
+                const emittedText = String(operation.emittedText || "");
+                const rewrittenText = emittedText.slice(0, info.keyStart) + producer.rhs + emittedText.slice(info.keyEnd);
+                candidate = { state, operation, offset, producer, producerOffset: facts.producer.offset, facts, emittedText: rewrittenText };
+                break;
+            }
+            if (candidate) break;
+        }
+        if (!candidate) break;
+        const ownership = mapPreCfOperationRanges(betaResult);
+        if (!ownership.safe) { betaResult.preCfIndexedWriteTemps = { applied: folds > 0, safe: false, reason: ownership.reason, folds }; return betaResult; }
+        const producerRange = ownership.ranges.get(candidate.producer);
+        const consumerRange = ownership.ranges.get(candidate.operation);
+        if (!producerRange || !consumerRange) {
+            betaResult.preCfIndexedWriteTemps = { applied: folds > 0, safe: false, reason: "PRE-CF indexed write recovery lost exact source ownership", folds };
+            return betaResult;
+        }
+        const output = applySourceEdits(betaResult.source, [
+            { start: producerRange[0], end: producerRange[1], replacement: "" },
+            { start: consumerRange[0], end: consumerRange[1], replacement: candidate.emittedText },
+        ]);
+        try { parsePreCfSource(output); }
+        catch (error) {
+            betaResult.preCfIndexedWriteTemps = { applied: folds > 0, safe: false, reason: `PRE-CF indexed write recovery reparse failed: ${error.message}`, folds };
+            return betaResult;
+        }
+        betaResult.source = output;
+        candidate.operation.emittedText = candidate.emittedText;
+        candidate.operation.reads = (candidate.operation.reads || []).filter(name => name !== candidate.facts.name);
+        candidate.state.operations.splice(candidate.producerOffset, 1);
+        for (let i = 0; i < candidate.state.operations.length; i++) candidate.state.operations[i].index = i + 1;
+        folds++;
+    }
+    betaResult.preCfIndexedWriteTemps = { applied: folds > 0, safe: true, folds };
+    return betaResult;
+}
+
 function finalizePreCfGlobalLookups(betaResult) {
     if (!betaResult?.graph || typeof betaResult.source !== "string" || betaResult.graph.cfgComplete !== true) {
         betaResult.preCfGlobalLookups = { applied: false, safe: false, reason: "PRE-CF global lookup recovery requires a complete beta graph" };
@@ -1865,6 +1942,7 @@ function finalizePreCfTempRecovery(betaResult) {
         finalizePreCfTableEntryTemps,
         finalizePreCfIndexKeyTemps,
         finalizePreCfGlobalWrites,
+        finalizePreCfIndexedWriteTemps,
         finalizePreCfScalarTemps,
         finalizePreCfGlobalLookups,
         finalizePreCfLookupTemps,
@@ -1886,7 +1964,7 @@ function finalizePreCfTempRecovery(betaResult) {
         }
         stageNames.push(stage.name);
     }
-    const foldKeys = ["preCfCopyTemps", "preCfClosureTemps", "preCfCallResultDestinations", "preCfTableDestinations", "preCfTableEntryTemps", "preCfIndexKeyTemps", "preCfGlobalWrites", "preCfScalarTemps", "preCfGlobalLookups", "preCfLookupTemps", "preCfCallArgumentTemps", "preCfCallBaseTemps", "preCfNamecalls", "preCfDiscardedCallResults", "preCfReturnTemps", "preCfReturnAllTemps", "preCfMultiReturnTemps"];
+    const foldKeys = ["preCfCopyTemps", "preCfClosureTemps", "preCfCallResultDestinations", "preCfTableDestinations", "preCfTableEntryTemps", "preCfIndexKeyTemps", "preCfGlobalWrites", "preCfIndexedWriteTemps", "preCfScalarTemps", "preCfGlobalLookups", "preCfLookupTemps", "preCfCallArgumentTemps", "preCfCallBaseTemps", "preCfNamecalls", "preCfDiscardedCallResults", "preCfReturnTemps", "preCfReturnAllTemps", "preCfMultiReturnTemps"];
     const folds = foldKeys.reduce((sum, key) => sum + Number(betaResult[key]?.folds || 0), 0);
     betaResult.preCfTempRecovery = { applied: folds > 0, safe: true, folds, stages: stageNames };
     return betaResult;
@@ -1901,6 +1979,7 @@ module.exports = {
     finalizePreCfTableEntryTemps,
     finalizePreCfIndexKeyTemps,
     finalizePreCfGlobalWrites,
+    finalizePreCfIndexedWriteTemps,
     finalizePreCfScalarTemps,
     finalizePreCfGlobalLookups,
     finalizePreCfLookupTemps,
