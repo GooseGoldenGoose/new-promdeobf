@@ -1,6 +1,6 @@
 "use strict";
 const assert = require("assert");
-const { finalizePreCfCallArgumentTemps, finalizePreCfEffectCallArgumentTemps } = require("../passes/pre-cf-temp-recovery");
+const { finalizePreCfCallArgumentTemps, finalizePreCfEffectCallArgumentTemps, finalizePreCfEffectCallBaseTemps } = require("../passes/pre-cf-temp-recovery");
 
 function makeBeta(consumerRhs, consumerReads, extraOps = [], extraSource = "") {
     const source = `vm = function(state, args, upvalues, gcProxy)
@@ -221,6 +221,50 @@ end`;
     const beta={source,graph:{cfgComplete:true,stateName:"state",recoveredUpvalueBindings:[],states:[{id:1,successors:[],operations}]}};
     finalizePreCfEffectCallArgumentTemps(beta);
     assert.equal(beta.preCfEffectCallArgumentTemps.folds,0,beta.source);
+}
+
+// Only compiler-proven recovered global aliases may become direct effect-call bases.
+{
+    const source = `vm = function(state, args, upvalues, gcProxy)
+    local ReturnVal
+    while state do
+        if state == 1 then
+            local fn_v = print
+            fn_v("x")
+            state = nil
+        end
+    end
+    return ReturnVal
+end`;
+    const producer={ index:1, kind:"version-define", emittedTarget:"fn_v", rhs:"print", reads:[], emittedText:"local fn_v = print", compilerGlobalLookupRecovered:"print" };
+    const consumer={ index:2, kind:"effect-call", emittedTarget:null, rhs:'fn_v("x")', reads:["fn_v"], emittedText:'fn_v("x")' };
+    const transition={ index:3, kind:"state-transition", emittedTarget:"state", rhs:"nil", reads:[], emittedText:"state = nil" };
+    const beta={source,graph:{cfgComplete:true,stateName:"state",recoveredUpvalueBindings:[],states:[{id:1,successors:[],operations:[producer,consumer,transition]}]}};
+    finalizePreCfEffectCallBaseTemps(beta);
+    assert.equal(beta.preCfEffectCallBaseTemps.folds,1,beta.source);
+    assert(beta.source.includes('print("x")'),beta.source);
+    assert(!beta.source.includes("local fn_v = print"),beta.source);
+}
+// Genuine source aliases have no compiler-global provenance and stay local.
+{
+    const source = `vm = function(state, args, upvalues, gcProxy)
+    local ReturnVal
+    while state do
+        if state == 1 then
+            local fn_v = print
+            fn_v("x")
+            state = nil
+        end
+    end
+    return ReturnVal
+end`;
+    const producer={ index:1, kind:"version-define", emittedTarget:"fn_v", rhs:"print", reads:[], emittedText:"local fn_v = print" };
+    const consumer={ index:2, kind:"effect-call", emittedTarget:null, rhs:'fn_v("x")', reads:["fn_v"], emittedText:'fn_v("x")' };
+    const transition={ index:3, kind:"state-transition", emittedTarget:"state", rhs:"nil", reads:[], emittedText:"state = nil" };
+    const beta={source,graph:{cfgComplete:true,stateName:"state",recoveredUpvalueBindings:[],states:[{id:1,successors:[],operations:[producer,consumer,transition]}]}};
+    finalizePreCfEffectCallBaseTemps(beta);
+    assert.equal(beta.preCfEffectCallBaseTemps.folds,0,beta.source);
+    assert(beta.source.includes("local fn_v = print"),beta.source);
 }
 
 console.log("pre-CF call argument temps: PASS");
