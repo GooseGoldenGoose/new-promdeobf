@@ -4817,7 +4817,6 @@ function recoverNestedFunctionSignature(bodyText, factoryName) {
     const varargFactory = factoryName === "createClosure";
     const fixedMatch = /^createClosure(\d+)$/.exec(String(factoryName || ""));
     if (!varargFactory && !fixedMatch) return { recovered: false, bodyText };
-    const fixedFactoryArity = fixedMatch ? Number(fixedMatch[1]) : null;
 
     const parameterLoads = new Map();
     const tailCandidates = [];
@@ -4834,55 +4833,134 @@ function recoverNestedFunctionSignature(bodyText, factoryName) {
         if (tail) tailCandidates.push({ ...binding, ...tail });
     }
 
-    let fixedCount;
     let tail = null;
+    let fixedCount = 0;
     if (varargFactory) {
-        if (tailCandidates.length !== 1) return { recovered: false, bodyText };
-        tail = tailCandidates[0];
-        fixedCount = tail.offset - 1;
-    } else {
-        if (tailCandidates.length !== 0) return { recovered: false, bodyText };
-        fixedCount = parameterLoads.size ? Math.max(...parameterLoads.keys()) : 0;
-        if (!Number.isInteger(fixedFactoryArity) || fixedCount > fixedFactoryArity) return { recovered: false, bodyText };
+        if (tailCandidates.length > 1) return { recovered: false, bodyText };
+        tail = tailCandidates[0] || null;
+        if (tail) fixedCount = tail.offset - 1;
+    } else if (tailCandidates.length !== 0) {
+        return { recovered: false, bodyText };
     }
 
-    if (parameterLoads.size !== fixedCount) return { recovered: false, bodyText };
-    for (let index = 1; index <= fixedCount; index++) if (!parameterLoads.has(index)) return { recovered: false, bodyText };
-
-    const allowedArgsRanges = [];
-    for (const binding of parameterLoads.values()) {
-        if (!Array.isArray(binding.init.range)) return { recovered: false, bodyText };
-        allowedArgsRanges.push(binding.init.range);
-    }
-    if (tail) {
-        if (!Array.isArray(tail.unpackCall.range)) return { recovered: false, bodyText };
-        allowedArgsRanges.push(tail.unpackCall.range);
-    }
-    const rangeInsideAllowed = range => Array.isArray(range) && allowedArgsRanges.some(allowed => range[0] >= allowed[0] && range[1] <= allowed[1]);
+    const directSlots = new Set();
+    const directSlotRanges = [];
     let argsSafe = true;
-    function scanArgs(node, root = false) {
+    function scanDirectArgs(node, parent = null, key = null) {
         if (!isNode(node) || !argsSafe) return;
         if (node.type === "FunctionDeclaration") return;
-        if (isIdentifier(node, "args") && !rangeInsideAllowed(node.range)) {
+        if (node.type === "IndexExpression" && isIdentifier(node.base, "args")) {
+            const slot = numericValue(node.index);
+            const isWriteTarget = parent &&
+                (parent.type === "AssignmentStatement" || parent.type === "CompoundAssignmentStatement") &&
+                key === "variables";
+            if (!Number.isInteger(slot) || slot < 1 || isWriteTarget || !Array.isArray(node.range)) {
+                argsSafe = false;
+                return;
+            }
+            directSlots.add(slot);
+            directSlotRanges.push(node.range);
+            return;
+        }
+        if (isIdentifier(node, "args")) {
             argsSafe = false;
             return;
         }
-        for (const key of Object.keys(node)) {
-            if (key === "loc" || key === "range") continue;
-            const value = node[key];
-            if (Array.isArray(value)) for (const child of value) scanArgs(child, false);
-            else if (isNode(value)) scanArgs(value, false);
+        for (const childKey of Object.keys(node)) {
+            if (childKey === "loc" || childKey === "range") continue;
+            const value = node[childKey];
+            if (Array.isArray(value)) {
+                for (const child of value) scanDirectArgs(child, node, childKey);
+            } else if (isNode(value)) scanDirectArgs(value, node, childKey);
         }
     }
-    for (const statement of body) scanArgs(statement, true);
+
+    const excludedArgsRanges = [];
+    for (const binding of parameterLoads.values()) {
+        if (!Array.isArray(binding.init.range)) return { recovered: false, bodyText };
+        excludedArgsRanges.push(binding.init.range);
+    }
+    if (tail) {
+        if (!Array.isArray(tail.unpackCall.range)) return { recovered: false, bodyText };
+        excludedArgsRanges.push(tail.unpackCall.range);
+    }
+    const rangeInsideExcluded = range => Array.isArray(range) && excludedArgsRanges.some(excluded => range[0] >= excluded[0] && range[1] <= excluded[1]);
+    function scanStatementArgs(node, parent = null, key = null) {
+        if (!isNode(node) || !argsSafe) return;
+        if (node.type === "FunctionDeclaration") return;
+        if (rangeInsideExcluded(node.range)) return;
+        if (node.type === "IndexExpression" && isIdentifier(node.base, "args")) {
+            const slot = numericValue(node.index);
+            const isWriteTarget = parent &&
+                (parent.type === "AssignmentStatement" || parent.type === "CompoundAssignmentStatement") &&
+                key === "variables";
+            if (!Number.isInteger(slot) || slot < 1 || isWriteTarget || !Array.isArray(node.range)) {
+                argsSafe = false;
+                return;
+            }
+            directSlots.add(slot);
+            directSlotRanges.push(node.range);
+            return;
+        }
+        if (isIdentifier(node, "args")) {
+            argsSafe = false;
+            return;
+        }
+        for (const childKey of Object.keys(node)) {
+            if (childKey === "loc" || childKey === "range") continue;
+            const value = node[childKey];
+            if (Array.isArray(value)) for (const child of value) scanStatementArgs(child, node, childKey);
+            else if (isNode(value)) scanStatementArgs(value, node, childKey);
+        }
+    }
+    for (const statement of body) scanStatementArgs(statement);
     if (!argsSafe) return { recovered: false, bodyText };
+
+    const highestUsedSlot = Math.max(0, ...parameterLoads.keys(), ...directSlots);
+    if (tail) {
+        if (highestUsedSlot > fixedCount) return { recovered: false, bodyText };
+    } else {
+        fixedCount = highestUsedSlot;
+    }
+
+    const usedNames = new Set();
+    function collectNames(node) {
+        if (!isNode(node)) return;
+        if (node.type === "Identifier" && typeof node.name === "string") usedNames.add(node.name);
+        for (const childKey of Object.keys(node)) {
+            if (childKey === "loc" || childKey === "range") continue;
+            const value = node[childKey];
+            if (Array.isArray(value)) for (const child of value) collectNames(child);
+            else if (isNode(value)) collectNames(value);
+        }
+    }
+    for (const statement of body) collectNames(statement);
 
     const edits = [];
     const parameterNames = [];
     const removedStatements = new Set();
+    const slotNames = new Map();
+    function freshParameterName(index) {
+        const base = `arg${index}`;
+        if (!usedNames.has(base)) {
+            usedNames.add(base);
+            return base;
+        }
+        for (let suffix = 2; ; suffix++) {
+            const name = `${base}_${suffix}`;
+            if (!usedNames.has(name)) {
+                usedNames.add(name);
+                return name;
+            }
+        }
+    }
+
     for (let index = 1; index <= fixedCount; index++) {
-        const binding = parameterLoads.get(index);
-        parameterNames.push(binding.target.name);
+        const binding = parameterLoads.get(index) || null;
+        const name = binding ? binding.target.name : freshParameterName(index);
+        slotNames.set(index, name);
+        parameterNames.push(name);
+        if (!binding) continue;
         edits.push({ start: binding.statement.range[0], end: binding.statement.range[1], replacement: "" });
         removedStatements.add(binding.statement);
         if (!binding.declares) {
@@ -4891,6 +4969,15 @@ function recoverNestedFunctionSignature(bodyText, factoryName) {
             edits.push({ start: declaration.statement.range[0], end: declaration.statement.range[1], replacement: "" });
             removedStatements.add(declaration.statement);
         }
+    }
+
+    for (const range of directSlotRanges) {
+        const source = String(bodyText || "").slice(range[0], range[1]);
+        const parsed = parseTransitionExpression(source);
+        const slot = parsed?.expression?.type === "IndexExpression" ? numericValue(parsed.expression.index) : null;
+        const name = slotNames.get(slot);
+        if (!name) return { recovered: false, bodyText };
+        edits.push({ start: range[0], end: range[1], replacement: name });
     }
 
     if (tail) {
@@ -4904,8 +4991,7 @@ function recoverNestedFunctionSignature(bodyText, factoryName) {
         }
 
         let tailSafe = true;
-        let recoveredTailReads = 0;
-        function scanTail(node, parent = null, key = null, root = false) {
+        function scanTail(node) {
             if (!isNode(node) || !tailSafe) return;
             if (node.type === "FunctionDeclaration") return;
             if (node.type === "CallExpression" && isIdentifier(node.base, "unpack")) {
@@ -4913,7 +4999,6 @@ function recoverNestedFunctionSignature(bodyText, factoryName) {
                 if (callArgs.length === 1 && isIdentifier(callArgs[0], tail.target.name)) {
                     if (!Array.isArray(node.range)) { tailSafe = false; return; }
                     edits.push({ start: node.range[0], end: node.range[1], replacement: "..." });
-                    recoveredTailReads++;
                     return;
                 }
             }
@@ -4921,35 +5006,33 @@ function recoverNestedFunctionSignature(bodyText, factoryName) {
                 const slot = numericValue(node.index);
                 if (slot === null || slot < 1 || !Array.isArray(node.range)) { tailSafe = false; return; }
                 edits.push({ start: node.range[0], end: node.range[1], replacement: `(select(${slot}, ...))` });
-                recoveredTailReads++;
                 return;
             }
             if (isIdentifier(node, tail.target.name)) {
-                // The defining/declaration statements were already skipped above.
-                // Any remaining bare read, write, alias, or redeclaration means the
-                // compiler vararg storage is observable and cannot be removed.
                 tailSafe = false;
                 return;
             }
             for (const childKey of Object.keys(node)) {
                 if (childKey === "loc" || childKey === "range") continue;
                 const value = node[childKey];
-                if (Array.isArray(value)) for (const child of value) scanTail(child, node, childKey, false);
-                else if (isNode(value)) scanTail(value, node, childKey, false);
+                if (Array.isArray(value)) for (const child of value) scanTail(child);
+                else if (isNode(value)) scanTail(value);
             }
         }
         for (const statement of body) {
             if (removedStatements.has(statement)) continue;
-            scanTail(statement, null, null, true);
+            scanTail(statement);
         }
         if (!tailSafe) return { recovered: false, bodyText };
     }
 
+    const rewrittenBody = applyTextEdits(String(bodyText || ""), edits);
+    if (!parseNestedBody(rewrittenBody)) return { recovered: false, bodyText };
     return {
         recovered: true,
-        bodyText: applyTextEdits(String(bodyText || ""), edits),
+        bodyText: rewrittenBody,
         parameters: parameterNames,
-        vararg: varargFactory,
+        vararg: Boolean(tail),
         fixedParameterCount: fixedCount,
     };
 }
@@ -5277,6 +5360,7 @@ module.exports = {
     removeCompilerPosPreservationOperations,
     normalizeRegisterOverflowGraph,
     recoverStructuredPostCfClosureDestinationTemps,
+    recoverNestedFunctionSignature,
     recoverStructuredPostCfDeadClosureTemps,
     solveBetaControlFlow,
 };
