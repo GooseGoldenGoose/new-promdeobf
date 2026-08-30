@@ -436,6 +436,7 @@ assert.equal(nestedClosureRegions.inlinedClosureFactoryCount, 1);
 assert(!nestedClosureRegions.source.includes("--headers"));
 assert(!nestedClosureRegions.source.includes("--body"));
 assert(nestedClosureRegions.source.includes("local r_v1_1 = function(r_v3_1, r_v4_1)"));
+assert(!nestedClosureRegions.source.includes("function(r_v3_1, r_v4_1)\n\n"));
 assert(!nestedClosureRegions.source.includes("local r_v3_1 = args[1]"));
 assert(!nestedClosureRegions.source.includes("local r_v4_1 = args[2]"));
 assert(nestedClosureRegions.source.includes("return r_v5_1"));

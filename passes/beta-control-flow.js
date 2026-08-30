@@ -5285,7 +5285,7 @@ function nestedFunctionExpression(bodyText, options = {}) {
     const lines = [recoveredSignature ? `function(${parameters.join(", ")})` : "function(...)"];
     if (!recoveredSignature) lines.push("    local args = { ... }");
     if (options.registerOverflowUsed === true) lines.push("    local RegisterOverflow = {}");
-    if (body) lines.push("", indentText(body, 1));
+    if (body) lines.push(indentText(body, 1));
     lines.push("end");
     return lines.join("\n");
 }
