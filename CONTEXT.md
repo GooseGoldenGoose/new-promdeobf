@@ -769,3 +769,9 @@ Regression:
 - `tools/test-beta-cf-condition-temps.js` now includes a three-arm logical OR with an interposed proven `args[3]` compiler parameter snapshot.
 - focused condition suite PASS.
 - combined PRE-CF + CF gate PASS: 38 focused suites, 66/66 canonical samples.
+
+Latest post-Step-47 work - structured compiler global alias + logical presentation recovery:
+- `passes/beta-control-flow.js` now folds only `compilerGlobalLookupRecovered` aliases after structuring, grouped so compiler global snapshots are consumed by one structured/raw consumer in the same left-to-right order. It may cross only proven `args[N]` parameter snapshots; captures, source aliases, multiple reads/defs, reversed-use order, and other gaps refuse.
+- Recovered logical expressions are AST-normalized for `and`/`or`/`not` precedence, removing compiler-generated redundant grouping without regex-stripping semantic call parentheses.
+- Exact vararg/pcall fixture now emits direct `pcall(tostring, ...)`, `pcall(type, ...)`, `pcall(typeof, ...)`, `xpcall(..., print)` with no compiler global alias locals.
+- Focused `tools/test-beta-cf-global-aliases.js` added; combined gate is 39 focused suites + 66/66 canonical samples PASS.

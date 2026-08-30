@@ -32,6 +32,7 @@ const focused = [
     "test-pre-cf-multi-return-temps.js",
     "test-pre-cf-integration.js",
     "test-beta-cf-condition-temps.js",
+    "test-beta-cf-global-aliases.js",
     "test-beta-cf-numeric-for-temps.js",
     "test-beta-cf-generic-for-temps.js",
     "test-beta-cf-loop-control-temps.js",

@@ -347,6 +347,7 @@ function solveSingleState(originalAst, graph) {
     const postCfDeadClosureRecoveryCount = recoverStructuredPostCfDeadClosureTemps(structuredNodes, graph);
     const postCfDeadScalarLocalRecoveryCount = recoverStructuredPostCfDeadScalarLocals(structuredNodes, graph, { syntheticLocals: ["args"] });
     const postCfCopyScalarRecoveryCount = recoverStructuredPostCfCopyScalarTemps(structuredNodes, graph);
+    const postCfCompilerGlobalAliasRecoveryCount = recoverStructuredCompilerGlobalAliases(structuredNodes, graph);
     const postCfStaticMemberRecoveryCount = recoverStructuredPostCfStaticMembers(structuredNodes);
     const postCfFunctionDeclarationRecoveryCount = recoverStructuredPostCfFunctionDeclarations(structuredNodes);
     const bodyText = formatStructuredNodes(structuredNodes);
@@ -367,6 +368,7 @@ function solveSingleState(originalAst, graph) {
         postCfDeadClosureRecoveryCount,
         postCfDeadScalarLocalRecoveryCount,
         postCfCopyScalarRecoveryCount,
+        postCfCompilerGlobalAliasRecoveryCount,
         postCfStaticMemberRecoveryCount,
         postCfFunctionDeclarationRecoveryCount,
         terminalReturnCount: lowered.lowered ? 1 : 0,
@@ -1057,6 +1059,210 @@ function formatStructuredNodes(nodes, depth = 0) {
     return parts.join("\n\n");
 }
 
+
+function normalizeRecoveredLogicalExpression(text) {
+    const parsed = parseTransitionExpression(text);
+    if (!parsed?.expression) return String(text || "");
+    const prefixLength = parsed.source.length - String(text || "").length;
+    const precedence = node => {
+        if (node?.type === "LogicalExpression") return node.operator === "or" ? 1 : 2;
+        if (node?.type === "UnaryExpression" && node.operator === "not") return 3;
+        return 4;
+    };
+    const original = node => {
+        if (!Array.isArray(node?.range)) return null;
+        const start = node.range[0] - prefixLength;
+        const end = node.range[1] - prefixLength;
+        if (start < 0 || end < start) return null;
+        return String(text || "").slice(start, end);
+    };
+    function render(node, parentPrecedence = 0) {
+        if (!node) return null;
+        let output;
+        const ownPrecedence = precedence(node);
+        if (node.type === "LogicalExpression" && (node.operator === "and" || node.operator === "or")) {
+            const parts = [];
+            function flatten(child) {
+                if (child?.type === "LogicalExpression" && child.operator === node.operator) {
+                    flatten(child.left);
+                    flatten(child.right);
+                } else {
+                    const rendered = render(child, ownPrecedence);
+                    if (rendered == null) return false;
+                    parts.push(rendered);
+                }
+                return true;
+            }
+            if (!flatten(node.left) || !flatten(node.right)) return original(node);
+            output = parts.join(` ${node.operator} `);
+        } else if (node.type === "UnaryExpression" && node.operator === "not") {
+            const argument = render(node.argument, 0);
+            if (argument == null) return original(node);
+            output = node.argument?.type === "LogicalExpression" ? `not (${argument})` : `not ${argument}`;
+        } else {
+            output = original(node);
+        }
+        if (output == null) return null;
+        return ownPrecedence < parentPrecedence ? `(${output})` : output;
+    }
+    let rendered = render(parsed.expression, 0) || String(text || "");
+    rendered = rendered.replace(/\(([A-Za-z_][A-Za-z0-9_]*)\)(?=\s*\()/g, "$1");
+    rendered = rendered.replace(/([,(]\s*)\(([A-Za-z_][A-Za-z0-9_]*)\)(?=\s*[,)]|\s*\.\.\.)/g, "$1$2");
+    return rendered;
+}
+
+function recoverStructuredCompilerGlobalAliases(nodes, graph) {
+    const captured = new Set(graph?.recoveredUpvalueBindings || []);
+    let folds = 0;
+
+    function collectFacts(root) {
+        const reads = new Map();
+        const definitions = new Map();
+        function visit(body) {
+            for (const node of body || []) {
+                for (const name of node.reads || []) reads.set(name, (reads.get(name) || 0) + 1);
+                if (node.type === "raw" && node.operation?.emittedTarget) {
+                    const name = node.operation.emittedTarget;
+                    definitions.set(name, (definitions.get(name) || 0) + 1);
+                }
+                if (node.type === "if") {
+                    visit(node.thenBody);
+                    visit(node.elseBody);
+                } else if (node.type === "numeric-for" || node.type === "generic-for") {
+                    visit(node.body);
+                } else if (node.type === "while-guard" || node.type === "repeat-until") {
+                    visit(node.conditionBody);
+                    visit(node.body);
+                }
+            }
+        }
+        visit(root);
+        return { reads, definitions };
+    }
+
+    function aliasInfo(node) {
+        if (node?.type !== "raw") return null;
+        const operation = node.operation || {};
+        const name = operation.emittedTarget;
+        const globalName = operation.compilerGlobalLookupRecovered;
+        if (!name || captured.has(name) || typeof globalName !== "string") return null;
+        if (!/^[A-Za-z_][A-Za-z0-9_]*$/.test(globalName) || POST_CF_MEMBER_KEYWORDS.has(globalName)) return null;
+        if (String(operation.rhs || "").trim() !== globalName) return null;
+        if (!String(operation.emittedText || node.text || "").trim().startsWith("local ")) return null;
+        return { node, operation, name, globalName };
+    }
+
+    function expressionIdentifierOffset(text, name) {
+        const parsed = parseTransitionExpression(text);
+        if (!parsed?.expression) return null;
+        const ranges = collectExpressionVariableIdentifierRanges(parsed.expression, name);
+        if (ranges.length !== 1) return null;
+        const prefixLength = parsed.source.length - String(text || "").length;
+        return ranges[0][0] - prefixLength;
+    }
+
+    function statementIdentifierOffset(text, name) {
+        const parsed = parseControlFlowStatement(text);
+        if (!parsed?.statement) return null;
+        const ranges = collectExpressionVariableIdentifierRanges(parsed.statement, name);
+        return ranges.length === 1 ? ranges[0][0] : null;
+    }
+
+    function substituteSingleStatementIdentifier(text, name, replacement) {
+        const parsed = parseControlFlowStatement(text);
+        if (!parsed?.statement) return null;
+        const ranges = collectExpressionVariableIdentifierRanges(parsed.statement, name);
+        if (ranges.length !== 1) return null;
+        const [start, end] = ranges[0];
+        if (parsed.source.slice(start, end) !== name) return null;
+        return parsed.source.slice(0, start) + replacement + parsed.source.slice(end);
+    }
+
+    function rewriteConsumer(consumer, aliases) {
+        let text;
+        let mode;
+        if (consumer?.type === "if") {
+            text = String(consumer.condition || "");
+            mode = "condition";
+        } else if (consumer?.type === "raw") {
+            text = String(consumer.text || "");
+            mode = "statement";
+        } else return null;
+
+        const positions = aliases.map(alias => mode === "condition"
+            ? expressionIdentifierOffset(text, alias.name)
+            : statementIdentifierOffset(text, alias.name));
+        if (positions.some(position => position == null)) return null;
+        for (let index = 1; index < positions.length; index++) {
+            if (!(positions[index - 1] < positions[index])) return null;
+        }
+
+        let rewritten = text;
+        for (const alias of aliases) {
+            rewritten = mode === "condition"
+                ? substituteSingleExpressionIdentifier(rewritten, alias.name, alias.globalName)
+                : substituteSingleStatementIdentifier(rewritten, alias.name, alias.globalName);
+            if (!rewritten) return null;
+        }
+        return { mode, rewritten };
+    }
+
+    function visitBody(body, facts) {
+        for (let consumerIndex = 1; consumerIndex < (body || []).length; consumerIndex++) {
+            const consumer = body[consumerIndex];
+            const aliases = [];
+            for (let index = consumerIndex - 1; index >= 0; index--) {
+                const candidateNode = body[index];
+                const alias = aliasInfo(candidateNode);
+                if (alias) {
+                    if ((facts.reads.get(alias.name) || 0) !== 1 || (facts.definitions.get(alias.name) || 0) !== 1) break;
+                    if (!(consumer.reads || []).includes(alias.name)) break;
+                    aliases.unshift({ ...alias, bodyIndex: index });
+                    continue;
+                }
+                const operation = candidateNode?.type === "raw" ? candidateNode.operation : null;
+                const parameterSnapshot = operation && staticArgsIndex(parseOperationExpression(operation)) !== null;
+                if (parameterSnapshot) continue;
+                break;
+            }
+            if (aliases.length) {
+                const rewritten = rewriteConsumer(consumer, aliases);
+                if (rewritten) {
+                    const removed = new Set(aliases.map(alias => alias.name));
+                    consumer.reads = [...new Set((consumer.reads || []).filter(name => !removed.has(name)))];
+                    if (rewritten.mode === "condition") {
+                        consumer.condition = normalizeRecoveredLogicalExpression(rewritten.rewritten);
+                    } else {
+                        consumer.text = rewritten.rewritten;
+                        if (consumer.operation) {
+                            consumer.operation.emittedText = rewritten.rewritten;
+                            if (consumer.operation.kind === "effect-call") consumer.operation.rhs = rewritten.rewritten;
+                            consumer.operation.reads = [...consumer.reads];
+                        }
+                    }
+                    for (const alias of aliases) { const at = body.indexOf(alias.node); if (at >= 0) body.splice(at, 1); }
+                    folds += aliases.length;
+                    return true;
+                }
+            }
+            if (consumer?.type === "if") {
+                if (visitBody(consumer.thenBody, facts) || visitBody(consumer.elseBody, facts)) return true;
+            } else if (consumer?.type === "numeric-for" || consumer?.type === "generic-for") {
+                if (visitBody(consumer.body, facts)) return true;
+            } else if (consumer?.type === "while-guard" || consumer?.type === "repeat-until") {
+                if (visitBody(consumer.conditionBody, facts) || visitBody(consumer.body, facts)) return true;
+            }
+        }
+        return false;
+    }
+
+    let changed = true;
+    while (changed) {
+        changed = visitBody(nodes, collectFacts(nodes));
+    }
+    return folds;
+}
+
 function recoverStructuredLogicalConditionPrograms(nodes, graph) {
     let folds = 0;
     const capturedBindings = graph?.recoveredUpvalueBindings || [];
@@ -1078,7 +1284,7 @@ function recoverStructuredLogicalConditionPrograms(nodes, graph) {
                     const logical = recoverCfLogicalConditionSuffix(body.slice(0, index), conditionInfo.name, capturedBindings, graph);
                     if (logical) {
                         const expression = conditionInfo.negated ? `not (${logical.expression})` : logical.expression;
-                        node.condition = expression;
+                        node.condition = normalizeRecoveredLogicalExpression(expression);
                         node.reads = [...new Set(logical.reads || [])];
                         body.splice(logical.start, index - logical.start, ...(logical.retainedNodes || []));
                         folds++;
@@ -5124,6 +5330,7 @@ function solveAcyclicStructured(originalAst, graph) {
     const postCfDeadClosureRecoveryCount = recoverStructuredPostCfDeadClosureTemps(structured.nodes, graph);
     const postCfDeadScalarLocalRecoveryCount = recoverStructuredPostCfDeadScalarLocals(structured.nodes, graph, { syntheticLocals: ["args"] });
     const postCfCopyScalarRecoveryCount = recoverStructuredPostCfCopyScalarTemps(structured.nodes, graph);
+    const postCfCompilerGlobalAliasRecoveryCount = recoverStructuredCompilerGlobalAliases(structured.nodes, graph);
     // Dead scalar/copy cleanup can expose a compiler condition leaf that was not
     // adjacent during the first structured condition pass. Re-run the exact same
     // fail-closed proof after those deletions; this does not cross any surviving
@@ -5156,6 +5363,7 @@ function solveAcyclicStructured(originalAst, graph) {
         postCfDeadClosureRecoveryCount,
         postCfDeadScalarLocalRecoveryCount,
         postCfCopyScalarRecoveryCount,
+        postCfCompilerGlobalAliasRecoveryCount,
         postCfStaticMemberRecoveryCount,
         postCfFunctionDeclarationRecoveryCount,
         joinCount,
@@ -5837,6 +6045,7 @@ function solveClosureRegions(originalAst, graph) {
         postCfNamecallRecoveryCount: sum("postCfNamecallRecoveryCount"),
         postCfStaticMemberRecoveryCount: sum("postCfStaticMemberRecoveryCount"),
         postCfCopyScalarRecoveryCount: sum("postCfCopyScalarRecoveryCount"),
+        postCfCompilerGlobalAliasRecoveryCount: sum("postCfCompilerGlobalAliasRecoveryCount"),
         terminalReturnLowered: results.every(result => result.terminalReturnLowered),
         terminalReturnText: rootResult.terminalReturnText || null,
         closureRegionCount: graph.entries.length,
@@ -5924,5 +6133,7 @@ module.exports = {
     recoverNestedFunctionSignature,
     recoverStructuredPostCfDeadClosureTemps,
     recoverStructuredPostCfDeadScalarLocals,
+    recoverStructuredCompilerGlobalAliases,
+    normalizeRecoveredLogicalExpression,
     solveBetaControlFlow,
 };
