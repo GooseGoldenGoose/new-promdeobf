@@ -453,6 +453,128 @@ function finalizePreCfTableDestinations(betaResult) {
     return betaResult;
 }
 
+function isLiteralOnlyPreCfScalarExpression(node) {
+    if (!node) return false;
+    if (["NumericLiteral", "StringLiteral", "BooleanLiteral", "NilLiteral"].includes(node.type)) return true;
+    if (node.type === "UnaryExpression") return isLiteralOnlyPreCfScalarExpression(node.argument);
+    if (node.type === "BinaryExpression") return isLiteralOnlyPreCfScalarExpression(node.left) && isLiteralOnlyPreCfScalarExpression(node.right);
+    return false;
+}
+
+function directTableEntryIdentifierUses(tableExpression) {
+    const uses = [];
+    for (const field of tableExpression?.fields || []) {
+        if (field?.type === "TableValue" && field.value?.type === "Identifier") uses.push(field.value);
+        else if (field?.type === "TableKey") {
+            if (field.key?.type === "Identifier") uses.push(field.key);
+            if (field.value?.type === "Identifier") uses.push(field.value);
+        } else if (field?.type === "TableKeyString" && field.value?.type === "Identifier") uses.push(field.value);
+    }
+    return uses;
+}
+
+function finalizePreCfTableEntryTemps(betaResult) {
+    if (!betaResult?.graph || typeof betaResult.source !== "string" || betaResult.graph.cfgComplete !== true) {
+        betaResult.preCfTableEntryTemps = { applied: false, safe: false, reason: "PRE-CF table entry recovery requires a complete beta graph" };
+        return betaResult;
+    }
+    let folds = 0;
+    const captured = new Set(betaResult.graph.recoveredUpvalueBindings || []);
+    const maxRounds = (betaResult.graph.states || []).reduce((n, state) => n + (state.operations || []).length, 0) + 1;
+    for (let round = 0; round < maxRounds; round++) {
+        let candidate = null;
+        for (const state of betaResult.graph.states || []) {
+            const operations = state.operations || [];
+            for (let tableOffset = 0; tableOffset < operations.length; tableOffset++) {
+                const tableOp = operations[tableOffset];
+                if (!["version-define", "epoch-start", "epoch-mutate"].includes(tableOp?.kind) || !tableOp.emittedTarget) continue;
+                const tableExpression = parsePreCfRhs(tableOp.rhs);
+                if (tableExpression?.type !== "TableConstructorExpression" || !Array.isArray(tableExpression.range)) continue;
+                const directUses = directTableEntryIdentifierUses(tableExpression);
+                if (!directUses.length) continue;
+                const occurrenceCounts = new Map();
+                for (const use of directUses) occurrenceCounts.set(use.name, (occurrenceCounts.get(use.name) || 0) + 1);
+                const replacements = [];
+                const producers = new Set();
+                for (const use of directUses) {
+                    const name = use.name;
+                    if (occurrenceCounts.get(name) !== 1 || captured.has(name) || !Array.isArray(use.range)) continue;
+                    let producerOffset = -1;
+                    for (let i = tableOffset - 1; i >= 0; i--) {
+                        if (operationWrites(operations[i]).includes(name)) { producerOffset = i; break; }
+                    }
+                    if (producerOffset < 0) continue;
+                    const producer = operations[producerOffset];
+                    if (!isCopyOperation(producer) || !String(producer.emittedText || "").trim().startsWith("local ")) continue;
+                    const producerExpression = parsePreCfRhs(producer.rhs);
+                    if (!isLiteralOnlyPreCfScalarExpression(producerExpression)) continue;
+                    let blocked = false;
+                    for (let i = producerOffset + 1; i < tableOffset; i++) {
+                        const op = operations[i];
+                        if ((op.reads || []).includes(name) || operationWrites(op).includes(name)) { blocked = true; break; }
+                    }
+                    if (blocked) continue;
+                    if (!operationWrites(tableOp).includes(name)) {
+                        let killed = false;
+                        for (let i = tableOffset + 1; i < operations.length; i++) {
+                            const op = operations[i];
+                            if ((op.reads || []).includes(name)) { blocked = true; break; }
+                            if (operationWrites(op).includes(name)) { killed = true; break; }
+                        }
+                        if (blocked || (!killed && (state.successors || []).length !== 0)) continue;
+                    }
+                    replacements.push({
+                        name,
+                        producer,
+                        producerOffset,
+                        start: use.range[0] - tableExpression.range[0],
+                        end: use.range[1] - tableExpression.range[0],
+                        replacement: producer.rhs,
+                    });
+                    producers.add(producer);
+                }
+                if (!replacements.length) continue;
+                let rhs = tableOp.rhs;
+                for (const edit of [...replacements].sort((a, b) => b.start - a.start)) rhs = rhs.slice(0, edit.start) + edit.replacement + rhs.slice(edit.end);
+                const prefix = String(tableOp.emittedText || "").trim().startsWith("local ") ? "local " : "";
+                const emittedText = `${prefix}${tableOp.emittedTarget} = ${rhs}`;
+                candidate = { state, tableOp, tableOffset, replacements, producers, rhs, emittedText };
+                break;
+            }
+            if (candidate) break;
+        }
+        if (!candidate) break;
+        const ownership = mapPreCfOperationRanges(betaResult);
+        if (!ownership.safe) { betaResult.preCfTableEntryTemps = { applied: folds > 0, safe: false, reason: ownership.reason, folds }; return betaResult; }
+        const tableRange = ownership.ranges.get(candidate.tableOp);
+        const producerRanges = [...candidate.producers].map(op => ownership.ranges.get(op));
+        if (!tableRange || producerRanges.some(range => !range)) {
+            betaResult.preCfTableEntryTemps = { applied: folds > 0, safe: false, reason: "PRE-CF table entry recovery lost exact source ownership", folds };
+            return betaResult;
+        }
+        const edits = [
+            { start: tableRange[0], end: tableRange[1], replacement: candidate.emittedText },
+            ...producerRanges.map(range => ({ start: range[0], end: range[1], replacement: "" })),
+        ];
+        const output = applySourceEdits(betaResult.source, edits);
+        try { parsePreCfSource(output); }
+        catch (error) {
+            betaResult.preCfTableEntryTemps = { applied: folds > 0, safe: false, reason: `PRE-CF table entry recovery reparse failed: ${error.message}`, folds };
+            return betaResult;
+        }
+        betaResult.source = output;
+        candidate.tableOp.rhs = candidate.rhs;
+        const removedNames = new Set(candidate.replacements.map(item => item.name));
+        candidate.tableOp.reads = (candidate.tableOp.reads || []).filter(name => !removedNames.has(name));
+        candidate.tableOp.emittedText = candidate.emittedText;
+        candidate.state.operations = candidate.state.operations.filter(op => !candidate.producers.has(op));
+        for (let i = 0; i < candidate.state.operations.length; i++) candidate.state.operations[i].index = i + 1;
+        folds += candidate.replacements.length;
+    }
+    betaResult.preCfTableEntryTemps = { applied: folds > 0, safe: true, folds };
+    return betaResult;
+}
+
 function finalizePreCfDiscardedCallResults(betaResult) {
     if (!betaResult?.graph || typeof betaResult.source !== "string" || betaResult.graph.cfgComplete !== true) {
         betaResult.preCfDiscardedCallResults = { applied: false, safe: false, reason: "PRE-CF discarded call-result recovery requires a complete beta graph" };
@@ -1567,6 +1689,7 @@ function finalizePreCfTempRecovery(betaResult) {
         finalizePreCfClosureTemps,
         finalizePreCfCallResultDestinations,
         finalizePreCfTableDestinations,
+        finalizePreCfTableEntryTemps,
         finalizePreCfScalarTemps,
         finalizePreCfGlobalLookups,
         finalizePreCfLookupTemps,
@@ -1588,7 +1711,7 @@ function finalizePreCfTempRecovery(betaResult) {
         }
         stageNames.push(stage.name);
     }
-    const foldKeys = ["preCfCopyTemps", "preCfClosureTemps", "preCfCallResultDestinations", "preCfTableDestinations", "preCfScalarTemps", "preCfGlobalLookups", "preCfLookupTemps", "preCfCallArgumentTemps", "preCfCallBaseTemps", "preCfNamecalls", "preCfDiscardedCallResults", "preCfReturnTemps", "preCfReturnAllTemps", "preCfMultiReturnTemps"];
+    const foldKeys = ["preCfCopyTemps", "preCfClosureTemps", "preCfCallResultDestinations", "preCfTableDestinations", "preCfTableEntryTemps", "preCfScalarTemps", "preCfGlobalLookups", "preCfLookupTemps", "preCfCallArgumentTemps", "preCfCallBaseTemps", "preCfNamecalls", "preCfDiscardedCallResults", "preCfReturnTemps", "preCfReturnAllTemps", "preCfMultiReturnTemps"];
     const folds = foldKeys.reduce((sum, key) => sum + Number(betaResult[key]?.folds || 0), 0);
     betaResult.preCfTempRecovery = { applied: folds > 0, safe: true, folds, stages: stageNames };
     return betaResult;
@@ -1600,6 +1723,7 @@ module.exports = {
     finalizePreCfClosureTemps,
     finalizePreCfCallResultDestinations,
     finalizePreCfTableDestinations,
+    finalizePreCfTableEntryTemps,
     finalizePreCfScalarTemps,
     finalizePreCfGlobalLookups,
     finalizePreCfLookupTemps,
