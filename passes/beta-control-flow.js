@@ -341,6 +341,7 @@ function solveSingleState(originalAst, graph) {
     const sunk = sinkTerminalReturnPayload(state.operations);
     const lowered = lowerTerminalReturn(sunk.operations);
     const structuredNodes = lowered.operations.map(operation => rawNode(operation, state.id));
+    const structuredLogicalConditionRecoveryCount = recoverStructuredLogicalConditionPrograms(structuredNodes, graph);
     const postCfNamecallRecoveryCount = recoverStructuredPostCfNamecalls(structuredNodes);
     const postCfClosureDestinationRecoveryCount = recoverStructuredPostCfClosureDestinationTemps(structuredNodes, graph);
     const postCfDeadClosureRecoveryCount = recoverStructuredPostCfDeadClosureTemps(structuredNodes, graph);
@@ -360,6 +361,7 @@ function solveSingleState(originalAst, graph) {
         stateCount: graph.states.length,
         statementCount: countStructuredStatements(structuredNodes),
         branchCount: 0,
+        structuredLogicalConditionRecoveryCount,
         postCfNamecallRecoveryCount,
         postCfClosureDestinationRecoveryCount,
         postCfDeadClosureRecoveryCount,
@@ -665,6 +667,8 @@ function recoverCfLogicalValueProgram(nodes, resultName, capturedBindings = []) 
     const captured = new Set(capturedBindings || []);
     if (work[0]?.type === "raw" && String(work[0].text || "").trim() === `local ${resultName}`) work.shift();
     if (!work.length) return null;
+    const directLinear = recoverCfLinearProducerChain(work, resultName, capturedBindings);
+    if (directLinear) return directLinear;
 
     const last = work[work.length - 1];
     const branch = last?.type === "if" && !last.elseBody ? last : null;
@@ -707,8 +711,13 @@ function recoverCfLogicalConditionSuffix(nodes, resultName, capturedBindings = [
         const recovered = recoverCfLogicalValueProgram(nodes.slice(start), resultName, capturedBindings);
         if (recovered) exactMatches.push({ start, retainedNodes: [], ...recovered });
     }
-    if (exactMatches.length === 1) return exactMatches[0];
-    if (exactMatches.length > 1 || !graph) return null;
+    if (exactMatches.length) {
+        // Every exact match is a suffix ending at the same consumer. Prefer the
+        // unique maximal enclosing proof (smallest start), rather than rejecting
+        // a valid producer chain merely because its own tail is also recoverable.
+        return exactMatches.reduce((best, match) => match.start < best.start ? match : best);
+    }
+    if (!graph) return null;
 
     // Final beta scheduling can insert unrelated pure snapshots inside the
     // compiler short-circuit value program. Hoisting such a snapshot before the
@@ -724,9 +733,11 @@ function recoverCfLogicalConditionSuffix(nodes, resultName, capturedBindings = [
     function movableBookkeeping(node, protectedNames) {
         if (node?.type !== "raw") return false;
         const operation = node.operation || {};
-        if (operation.returnSinkSafe !== true || !operation.emittedTarget || protectedNames.has(operation.emittedTarget)) return false;
+        const parameterSnapshot = staticArgsIndex(parseOperationExpression(operation)) !== null;
+        if ((operation.returnSinkSafe !== true && !parameterSnapshot) || !operation.emittedTarget || protectedNames.has(operation.emittedTarget)) return false;
         if (captured.has(operation.emittedTarget) || (writeCounts.get(operation.emittedTarget) || 0) !== 1) return false;
         if (operation.kind !== "version-define" && operation.kind !== "epoch-start" && operation.kind !== "epoch-mutate") return false;
+        if (parameterSnapshot) return true;
         for (const read of operation.reads || []) {
             if (protectedNames.has(read) || captured.has(read) || (writeCounts.get(read) || 0) !== 1) return false;
         }
@@ -1046,6 +1057,50 @@ function formatStructuredNodes(nodes, depth = 0) {
     return parts.join("\n\n");
 }
 
+function recoverStructuredLogicalConditionPrograms(nodes, graph) {
+    let folds = 0;
+    const capturedBindings = graph?.recoveredUpvalueBindings || [];
+
+    function exactConditionName(condition) {
+        const text = String(condition || "").trim();
+        let match = text.match(/^\(?\s*([A-Za-z_][A-Za-z0-9_]*)\s*\)?$/);
+        if (match) return { name: match[1], negated: false };
+        match = text.match(/^not\s*\(\s*([A-Za-z_][A-Za-z0-9_]*)\s*\)$/);
+        return match ? { name: match[1], negated: true } : null;
+    }
+
+    function visitBody(body) {
+        for (let index = 0; index < (body || []).length; index++) {
+            const node = body[index];
+            if (node?.type === "if") {
+                const conditionInfo = exactConditionName(node.condition);
+                if (conditionInfo && index > 0) {
+                    const logical = recoverCfLogicalConditionSuffix(body.slice(0, index), conditionInfo.name, capturedBindings, graph);
+                    if (logical) {
+                        const expression = conditionInfo.negated ? `not (${logical.expression})` : logical.expression;
+                        node.condition = expression;
+                        node.reads = [...new Set(logical.reads || [])];
+                        body.splice(logical.start, index - logical.start, ...(logical.retainedNodes || []));
+                        folds++;
+                        return true;
+                    }
+                }
+                if (visitBody(node.thenBody) || visitBody(node.elseBody)) return true;
+            } else if (node?.type === "numeric-for" || node?.type === "generic-for") {
+                if (visitBody(node.body)) return true;
+            } else if (node?.type === "while-guard") {
+                if (visitBody(node.conditionBody) || visitBody(node.body)) return true;
+            } else if (node?.type === "repeat-until") {
+                if (visitBody(node.body) || visitBody(node.conditionBody)) return true;
+            }
+        }
+        return false;
+    }
+
+    let changed = true;
+    while (changed) changed = visitBody(nodes);
+    return folds;
+}
 function recoverStructuredLoopBranchConditionTemps(nodes, graph) {
     const captured = new Set(graph?.recoveredUpvalueBindings || []);
     let folds = 0;
@@ -5062,6 +5117,7 @@ function solveAcyclicStructured(originalAst, graph) {
         return { applied: false, reason: `Acyclic structuring emitted ${emittedStates.size}/${states.length} reachable states` };
     }
 
+    const structuredLogicalConditionRecoveryCount = recoverStructuredLogicalConditionPrograms(structured.nodes, graph);
     let loopControlConditionTempRecoveryCount = recoverStructuredLoopBranchConditionTemps(structured.nodes, graph);
     const postCfNamecallRecoveryCount = recoverStructuredPostCfNamecalls(structured.nodes);
     const postCfClosureDestinationRecoveryCount = recoverStructuredPostCfClosureDestinationTemps(structured.nodes, graph);
@@ -5094,6 +5150,7 @@ function solveAcyclicStructured(originalAst, graph) {
         statementCount: countStructuredStatements(structured.nodes),
         branchCount,
         ifConditionTempRecoveryCount,
+        structuredLogicalConditionRecoveryCount,
         loopControlConditionTempRecoveryCount,
         postCfClosureDestinationRecoveryCount,
         postCfDeadClosureRecoveryCount,

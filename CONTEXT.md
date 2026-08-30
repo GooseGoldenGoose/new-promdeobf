@@ -748,3 +748,24 @@ Control-flow post-PRE-CF shape contract checkpoint (2026-08-30): numeric/generic
 - Refusal coverage includes effectful gaps, captured packs, extra reads, non-final unpack use, and effectful return slots.
 - Verification: `test-pre-cf-return-all-temps.js`, new `test-pre-cf-return-literal-temps.js`, canonical PRE-CF integration all PASS. Combined gate PASS: 38 focused suites, 66/66 canonical samples.
 
+
+## 2026-08-30 — Structured short-circuit condition recovery
+
+Commit pending from `dc036be Recover RETURN_ALL forwarding` follow-up.
+
+Implemented in `passes/beta-control-flow.js`:
+- `recoverCfLogicalValueProgram()` now first accepts a fully proven direct linear producer chain ending at the requested result binding. This covers deepest short-circuit leaves such as `local t = call(); result = not t` / `result = t` without weakening effect/order rules.
+- `recoverCfLogicalConditionSuffix()` now prefers the maximal enclosing exact suffix (smallest start) when multiple nested suffixes are individually proven. All candidates end at the same consumer; this avoids rejecting a valid full logical program because its own tail is also recoverable.
+- the existing movable-bookkeeping fallback now recognizes only exact compiler parameter snapshots `args[N]` (via the same `staticArgsIndex()` proof used by function-signature recovery) as safe synthetic snapshots. Generic index/table operations are still not movable.
+- added `recoverStructuredLogicalConditionPrograms()` and run it in both single-state and acyclic structured CF presentation paths, so a final `if result then` can absorb the preceding proven short-circuit value program.
+
+Fresh vararg/pcall fixture after the change:
+- negative chain recovers to one direct `if not pcall(...) or not pcall(...) or not pcall(...) then` shape (some compiler-global aliases may remain as call bases).
+- positive chain recovers to one direct `if pcall(...) or pcall(...) or pcall(...) then` shape.
+- call order/count and short-circuit structure are preserved.
+- the first IIFE `local pack = { pcall(...) }; local closure = function...; closure(unpack(pack))` intentionally remains: folding it crosses recovered closure allocation and needs separate compiler base-before-args ownership proof.
+
+Regression:
+- `tools/test-beta-cf-condition-temps.js` now includes a three-arm logical OR with an interposed proven `args[3]` compiler parameter snapshot.
+- focused condition suite PASS.
+- combined PRE-CF + CF gate PASS: 38 focused suites, 66/66 canonical samples.

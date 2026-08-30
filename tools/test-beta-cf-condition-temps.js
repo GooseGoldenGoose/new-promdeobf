@@ -149,4 +149,46 @@ assert.equal((logicalAnd.source.match(/A\(\)/g) || []).length, 1);
 assert.equal((logicalAnd.source.match(/B\(\)/g) || []).length, 1);
 parseLua(logicalAnd.source, "<cf-condition-logical-and>");
 
+const logicalOrWithParameterSnapshot = solveBetaControlFlow(wrapper, {
+    applied: true,
+    graph: {
+        cfgComplete: true,
+        stateName: "state",
+        entries: [1],
+        recoveredUpvalueBindings: [],
+        states: [
+            { id: 1, predecessors: [], successors: [4, 2], operations: [
+                { kind: "version-define", emittedTarget: "seed_v", rhs: "A()", emittedText: "local seed_v = A()", reads: ["A"] },
+                { kind: "version-define", emittedTarget: "param_v", rhs: "args[3]", emittedText: "local param_v = args[3]", reads: ["args"] },
+                { kind: "epoch-start", emittedTarget: "result_v", rhs: "seed_v", emittedText: "local result_v = seed_v", reads: ["seed_v"], returnSinkSafe: true },
+                { kind: "state-transition", emittedTarget: "state", rhs: "seed_v and 4 or 2", emittedText: "state = seed_v and 4 or 2", reads: ["seed_v"] },
+            ] },
+            { id: 2, predecessors: [1], successors: [4, 3], operations: [
+                { kind: "version-define", emittedTarget: "rhs_v", rhs: "B()", emittedText: "local rhs_v = B()", reads: ["B"] },
+                { kind: "epoch-mutate", emittedTarget: "result_v", rhs: "rhs_v", emittedText: "result_v = rhs_v", reads: ["rhs_v"], returnSinkSafe: true },
+                { kind: "state-transition", emittedTarget: "state", rhs: "rhs_v and 4 or 3", emittedText: "state = rhs_v and 4 or 3", reads: ["rhs_v"] },
+            ] },
+            { id: 3, predecessors: [2], successors: [4], operations: [
+                { kind: "version-define", emittedTarget: "tail_v", rhs: "C()", emittedText: "local tail_v = C()", reads: ["C"] },
+                { kind: "epoch-mutate", emittedTarget: "result_v", rhs: "tail_v", emittedText: "result_v = tail_v", reads: ["tail_v"], returnSinkSafe: true },
+                { kind: "state-transition", emittedTarget: "state", rhs: "4", emittedText: "state = 4", reads: [] },
+            ] },
+            { id: 4, predecessors: [1, 2, 3], successors: [5, 6], operations: [
+                { kind: "state-transition", emittedTarget: "state", rhs: "result_v and 5 or 6", emittedText: "state = result_v and 5 or 6", reads: ["result_v"] },
+            ] },
+            terminal(5, "yes"),
+            terminal(6, "no"),
+        ],
+    },
+});
+assert.equal(logicalOrWithParameterSnapshot.applied, true, logicalOrWithParameterSnapshot.reason);
+assert(logicalOrWithParameterSnapshot.source.includes("A()"), logicalOrWithParameterSnapshot.source);
+assert(logicalOrWithParameterSnapshot.source.includes("B()"), logicalOrWithParameterSnapshot.source);
+assert(logicalOrWithParameterSnapshot.source.includes("C()"), logicalOrWithParameterSnapshot.source);
+assert(logicalOrWithParameterSnapshot.source.includes(" or "), logicalOrWithParameterSnapshot.source);
+assert(!logicalOrWithParameterSnapshot.source.includes("if result_v then"), logicalOrWithParameterSnapshot.source);
+assert.equal((logicalOrWithParameterSnapshot.source.match(/A\(\)/g) || []).length, 1);
+assert.equal((logicalOrWithParameterSnapshot.source.match(/B\(\)/g) || []).length, 1);
+assert.equal((logicalOrWithParameterSnapshot.source.match(/C\(\)/g) || []).length, 1);
+parseLua(logicalOrWithParameterSnapshot.source, "<cf-condition-logical-or-parameter-snapshot>");
 console.log("beta CF if condition temps: PASS");
