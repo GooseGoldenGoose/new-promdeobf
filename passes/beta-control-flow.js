@@ -1214,6 +1214,14 @@ function recoverStructuredPostCfStaticMembers(nodes) {
                     return;
                 }
             }
+            if (astNode.type === "TableKey") {
+                const member = plainPostCfMemberName(astNode.key);
+                if (member && Array.isArray(astNode.range) && Array.isArray(astNode.value?.range)) {
+                    const valueText = parsed.source.slice(astNode.value.range[0], astNode.value.range[1]);
+                    edits.push({ start: astNode.range[0], end: astNode.range[1], replacement: `${member} = ${valueText}` });
+                    return;
+                }
+            }
             for (const key of Object.keys(astNode)) {
                 if (key === "loc" || key === "range") continue;
                 const value = astNode[key];
