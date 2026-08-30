@@ -1090,6 +1090,23 @@ function recoverStructuredLoopBranchConditionTemps(nodes, graph) {
         return substituteSingleExpressionIdentifier(String(condition || ""), name, rhs);
     }
 
+    function foldLiteralConditionLeaf(node, producerNode, facts) {
+        const producer = producerNode?.type === "raw" ? producerNode.operation : null;
+        const name = producer?.emittedTarget;
+        if (!name || captured.has(name)) return false;
+        if ((facts.reads.get(name) || 0) !== 1 || (facts.definitions.get(name) || 0) !== 1) return false;
+        if (producer.kind !== "version-define" && producer.kind !== "epoch-start" && producer.kind !== "epoch-mutate") return false;
+        const expression = parseOperationExpression(producer);
+        if (!isMovableNumericForHeaderConstant(expression)) return false;
+        const rhs = String(producer.rhs || "").trim();
+        if (!rhs) return false;
+        const rewritten = rewriteCondition(node.condition, name, rhs);
+        if (!rewritten) return false;
+        node.condition = rewritten;
+        node.reads = [...new Set([...(node.reads || []).filter(read => read !== name), ...(producer.reads || [])])];
+        return true;
+    }
+
     let changed = true;
     while (changed) {
         changed = false;
@@ -1099,7 +1116,13 @@ function recoverStructuredLoopBranchConditionTemps(nodes, graph) {
             for (let index = 0; index < (body || []).length; index++) {
                 const node = body[index];
                 if (node.type === "if") {
-                    if (inLoop && index > 0) {
+                    if (index > 0 && foldLiteralConditionLeaf(node, body[index - 1], facts)) {
+                        body.splice(index - 1, 1);
+                        folds++;
+                        changed = true;
+                        return true;
+                    }
+                    if (index > 0) {
                         const name = exactConditionName(node.condition);
                         const producerNode = body[index - 1];
                         const producer = producerNode?.type === "raw" ? producerNode.operation : null;
@@ -1131,11 +1154,25 @@ function recoverStructuredLoopBranchConditionTemps(nodes, graph) {
                     continue;
                 }
                 if (node.type === "while-guard") {
+                    const conditionBody = node.conditionBody || [];
+                    if (conditionBody.length && foldLiteralConditionLeaf(node, conditionBody[conditionBody.length - 1], facts)) {
+                        conditionBody.pop();
+                        folds++;
+                        changed = true;
+                        return true;
+                    }
                     if (visitBody(node.conditionBody, false)) return true;
                     if (visitBody(node.body, true)) return true;
                     continue;
                 }
                 if (node.type === "repeat-until") {
+                    const conditionBody = node.conditionBody || [];
+                    if (conditionBody.length && foldLiteralConditionLeaf(node, conditionBody[conditionBody.length - 1], facts)) {
+                        conditionBody.pop();
+                        folds++;
+                        changed = true;
+                        return true;
+                    }
                     if (visitBody(node.body, true)) return true;
                     if (visitBody(node.conditionBody, false)) return true;
                 }
@@ -2729,6 +2766,58 @@ function recoverNumericForHeaderTemps(graph, preOps, headerNames, internalOperat
         defaultStep: roots[2].expression.type === "NumericLiteral" && Number(roots[2].expression.value) === 1,
     };
 }
+function looksLikeCompilerNumericForCore(graph, checkStateId) {
+    const check = (graph.states || []).find(state => state.id === checkStateId);
+    if (!check || !Array.isArray(check.successors) || check.successors.length !== 2) return false;
+    const items = (check.operations || []).map((operation, index) => ({ operation, index, expression: parseOperationExpression(operation) }));
+    const selfAdds = items.filter(item =>
+        item.operation?.emittedTarget &&
+        item.expression?.type === 'BinaryExpression' && item.expression.operator === '+' &&
+        identifierName(item.expression.left) === item.operation.emittedTarget && identifierName(item.expression.right)
+    );
+    if (selfAdds.length !== 1) return false;
+    const currentName = selfAdds[0].operation.emittedTarget;
+    const stepName = identifierName(selfAdds[0].expression.right);
+    if (!stepName) return false;
+
+    const lessEquals = items.filter(item =>
+        item.expression?.type === 'BinaryExpression' && item.expression.operator === '<=' &&
+        identifierName(item.expression.left) === currentName && identifierName(item.expression.right)
+    );
+    const greaterEquals = items.filter(item =>
+        item.expression?.type === 'BinaryExpression' && item.expression.operator === '>=' &&
+        identifierName(item.expression.left) === currentName && identifierName(item.expression.right)
+    );
+    if (lessEquals.length !== 1 || greaterEquals.length !== 1) return false;
+    const lessEqual = lessEquals[0];
+    const greaterEqual = greaterEquals[0];
+    const finalName = identifierName(lessEqual.expression.right);
+    if (!finalName || identifierName(greaterEqual.expression.right) !== finalName) return false;
+
+    const unaryNotItems = items.filter(item => item.expression?.type === 'UnaryExpression' && item.expression.operator === 'not');
+    for (const negativeArm of items) {
+        const negativeExpr = negativeArm.expression;
+        if (negativeExpr?.type !== 'LogicalExpression' || negativeExpr.operator !== 'and') continue;
+        const negativeFlagName = identifierName(negativeExpr.left);
+        if (!negativeFlagName || identifierName(negativeExpr.right) !== greaterEqual.operation.emittedTarget) continue;
+        for (const positiveArm of items) {
+            const positiveExpr = positiveArm.expression;
+            if (positiveExpr?.type !== 'LogicalExpression' || positiveExpr.operator !== 'and') continue;
+            const notNegativeName = identifierName(positiveExpr.left);
+            if (!notNegativeName || identifierName(positiveExpr.right) !== lessEqual.operation.emittedTarget) continue;
+            const notNegative = unaryNotItems.find(item => item.operation?.emittedTarget === notNegativeName && identifierName(item.expression.argument) === negativeFlagName);
+            if (!notNegative) continue;
+            const combined = items.some(item =>
+                item.expression?.type === 'LogicalExpression' && item.expression.operator === 'or' &&
+                identifierName(item.expression.left) === negativeArm.operation.emittedTarget &&
+                identifierName(item.expression.right) === positiveArm.operation.emittedTarget
+            );
+            if (combined) return true;
+        }
+    }
+    return false;
+}
+
 function matchCompilerNumericFor(graph, checkStateId) {
     const states = graph.states || [];
     const stateById = new Map(states.map(state => [state.id, state]));
@@ -2865,10 +2954,13 @@ function matchCompilerNumericFor(graph, checkStateId) {
             }
         }
     }
-    if (loopVariableDefinitions.length !== 1 || loopVariableDefinitions[0].stateId !== bodyId) return null;
-    const loopVariableDefinition = loopVariableDefinitions[0].operation;
-    const loopVariable = loopVariableDefinition.emittedTarget;
-    const loopVariableOriginal = originalOperationTarget(loopVariableDefinition);
+    if (loopVariableDefinitions.length > 1) return null;
+    const directLoopBinding = loopVariableDefinitions.length === 0;
+    if (!directLoopBinding && loopVariableDefinitions[0].stateId !== bodyId) return null;
+    const loopVariableDefinition = directLoopBinding ? null : loopVariableDefinitions[0].operation;
+    const loopVariable = directLoopBinding ? currentName : loopVariableDefinition.emittedTarget;
+    const loopVariableOriginal = directLoopBinding ? null : originalOperationTarget(loopVariableDefinition);
+    if (directLoopBinding && (graph.recoveredUpvalueBindings || []).includes(currentName)) return null;
 
     const cleanupCandidates = [];
     const loopVariableWrites = [];
@@ -2891,16 +2983,27 @@ function matchCompilerNumericFor(graph, checkStateId) {
         }
     }
 
-    const recoveredCapturedLoopVariable =
+    const recoveredCapturedLoopVariable = !directLoopBinding &&
         (loopVariableDefinition.kind === 'upvalue-binding-init' || loopVariableDefinition.kind === 'upvalue-binding-start') &&
         capturedLoopDeclarations.length <= 1 &&
         capturedLoopDeclarations.every(candidate => candidate.stateId === bodyId);
 
     const requiredCleanupStates = new Set([...region.latchIds, ...(region.breakIds || [])]);
     const cleanupStateIds = new Set(cleanupCandidates.map(candidate => candidate.stateId));
-    if (recoveredCapturedLoopVariable) {
+    if (directLoopBinding) {
+        // Earlier proven PRE-CF/dead-clear cleanup can erase the compiler's
+        // visible-loop copy and nil cleanup entirely. In that shape the hidden
+        // induction epoch itself is the only surviving loop binding. Accept it
+        // only when the body does not write that epoch and it is not captured.
+        if (cleanupCandidates.length !== 0 || capturedLoopDeclarations.length !== 0) return null;
+    } else if (recoveredCapturedLoopVariable) {
         // beta-upvalues already consumed the compiler releaseUpvalue(cell) cleanup.
         if (cleanupCandidates.length !== 0) return null;
+    } else if (cleanupCandidates.length === 0) {
+        // finalizeBetaDeadRegisterClears runs before CF and can remove every proven
+        // compiler epoch-kill while leaving the explicit visible-loop copy intact.
+        // The copy + numeric induction signature still owns the source binding; no
+        // missing syntax is required after that earlier proof has consumed it.
     } else if (cleanupCandidates.length !== requiredCleanupStates.size || !sameMembers([...cleanupStateIds], [...requiredCleanupStates])) {
         return null;
     }
@@ -2911,6 +3014,7 @@ function matchCompilerNumericFor(graph, checkStateId) {
         !cleanupOperations.has(operation) &&
         !capturedLoopDeclarations.some(candidate => candidate.operation === operation)
     );
+    if (directLoopBinding && sourceLoopVariableWrites.length !== 0) return null;
     if (sourceLoopVariableWrites.some(operation =>
         loopVariableDefinition.registerEpoch && operation.registerEpoch &&
         loopVariableDefinition.registerEpoch !== operation.registerEpoch
@@ -2928,11 +3032,11 @@ function matchCompilerNumericFor(graph, checkStateId) {
     }
 
     const skipOperations = new Set([
-        loopVariableDefinition,
+        ...(loopVariableDefinition ? [loopVariableDefinition] : []),
         ...cleanupOperations,
         ...capturedLoopDeclarations.map(candidate => candidate.operation),
     ]);
-    const structuredBody = structureLoopBodyRegion(stateById, region, bodyId, check.id, skipOperations, currentName, exitId, true);
+    const structuredBody = structureLoopBodyRegion(stateById, region, bodyId, check.id, skipOperations, directLoopBinding ? null : currentName, exitId, true);
     if (!structuredBody) return null;
 
     const numericHeader = recoverNumericForHeaderTemps(
@@ -3145,6 +3249,19 @@ function recoverGenericForPackedIterator(graph, preOps, preTransitionIndex, iter
         removeOperations,
     };
 }
+function looksLikeCompilerGenericForCore(graph, checkStateId) {
+    const check = (graph.states || []).find(state => state.id === checkStateId);
+    if (!check || !Array.isArray(check.successors) || check.successors.length !== 2) return false;
+    const steps = (check.operations || []).filter(operation => operation?.kind === "multi-call-write");
+    if (steps.length !== 1) return false;
+    const step = steps[0];
+    const targets = step.emittedTargets || step.originalTargets || [];
+    const args = step.callArgumentOriginals || [];
+    if (targets.length !== 2 || !targets[0] || !targets[1] || args.length !== 2 || !step.callBaseOriginal) return false;
+    const info = transitionInfo(check, { allowUnprovenCondition: true });
+    return !info.error && info.kind === "branch" && info.conditionName === targets[0];
+}
+
 function matchCompilerGenericFor(graph, checkStateId) {
     const states = graph.states || [];
     const stateById = new Map(states.map(state => [state.id, state]));
@@ -3254,9 +3371,20 @@ function matchCompilerGenericFor(graph, checkStateId) {
     // compiler cleanup is still present, any recovered binding initialized from
     // that iterator value is an ordinary captured local copy inside the body.
     if (!secondHasCompilerCleanup && secondOrdinaryCleanups.length !== 0) return null;
-    if (!directIteratorBindings && !secondHasCompilerCleanup && secondBindingCandidates.length !== 1) return null;
     if (directIteratorBindings && secondBindingCandidates.length !== 0) return null;
-    const secondBinding = directIteratorBindings ? null : (secondHasCompilerCleanup ? null : secondBindingCandidates[0]);
+    let secondBinding = null;
+    if (!directIteratorBindings && !secondHasCompilerCleanup) {
+        if (secondBindingCandidates.length === 1) {
+            secondBinding = secondBindingCandidates[0];
+        } else if (secondBindingCandidates.length === 0 && !recoveredUpvalueBindings.has(emittedSecondVariable)) {
+            // finalizeBetaDeadRegisterClears may already have removed the ordinary
+            // second loop-variable cleanup, leaving the iterator result epoch as
+            // the surviving uncaptured binding.
+            secondBinding = null;
+        } else {
+            return null;
+        }
+    }
     const secondVariable = secondBinding?.emittedTarget || emittedSecondVariable;
     const secondVariableCaptured = Boolean(secondBinding);
     if (directIteratorBindings && recoveredUpvalueBindings.has(secondVariable)) return null;
@@ -3279,6 +3407,11 @@ function matchCompilerGenericFor(graph, checkStateId) {
             continue;
         }
         const cleanupStates = new Set(cleanups.map(item => item.stateId));
+        if (cleanups.length === 0) {
+            // Proven dead register clears run before CF and may consume every
+            // ordinary generic-for loop-variable epoch-kill.
+            continue;
+        }
         if (cleanups.length !== requiredCleanupStates.size || !sameMembers([...cleanupStates], [...requiredCleanupStates])) return null;
         for (const item of cleanups) cleanupOperations.add(item.operation);
     }
@@ -3484,8 +3617,8 @@ function matchCompilerWhileConditionRegion(graph, decisionStateId) {
 function matchCompilerWhile(graph, checkStateId) {
     // A numeric for has the same natural-loop topology. Let the stricter compiler
     // signature own it so generic while recovery cannot degrade a for into while true.
-    if (matchCompilerNumericFor(graph, checkStateId)) return null;
-    if (matchCompilerGenericFor(graph, checkStateId)) return null;
+    if (looksLikeCompilerNumericForCore(graph, checkStateId) || matchCompilerNumericFor(graph, checkStateId)) return null;
+    if (looksLikeCompilerGenericForCore(graph, checkStateId) || matchCompilerGenericFor(graph, checkStateId)) return null;
 
     const states = graph.states || [];
     const stateById = new Map(states.map(state => [state.id, state]));
@@ -4929,12 +5062,17 @@ function solveAcyclicStructured(originalAst, graph) {
         return { applied: false, reason: `Acyclic structuring emitted ${emittedStates.size}/${states.length} reachable states` };
     }
 
-    const loopControlConditionTempRecoveryCount = recoverStructuredLoopBranchConditionTemps(structured.nodes, graph);
+    let loopControlConditionTempRecoveryCount = recoverStructuredLoopBranchConditionTemps(structured.nodes, graph);
     const postCfNamecallRecoveryCount = recoverStructuredPostCfNamecalls(structured.nodes);
     const postCfClosureDestinationRecoveryCount = recoverStructuredPostCfClosureDestinationTemps(structured.nodes, graph);
     const postCfDeadClosureRecoveryCount = recoverStructuredPostCfDeadClosureTemps(structured.nodes, graph);
     const postCfDeadScalarLocalRecoveryCount = recoverStructuredPostCfDeadScalarLocals(structured.nodes, graph, { syntheticLocals: ["args"] });
     const postCfCopyScalarRecoveryCount = recoverStructuredPostCfCopyScalarTemps(structured.nodes, graph);
+    // Dead scalar/copy cleanup can expose a compiler condition leaf that was not
+    // adjacent during the first structured condition pass. Re-run the exact same
+    // fail-closed proof after those deletions; this does not cross any surviving
+    // statement or change condition evaluation frequency.
+    loopControlConditionTempRecoveryCount += recoverStructuredLoopBranchConditionTemps(structured.nodes, graph);
     const postCfStaticMemberRecoveryCount = recoverStructuredPostCfStaticMembers(structured.nodes);
     const postCfFunctionDeclarationRecoveryCount = recoverStructuredPostCfFunctionDeclarations(structured.nodes);
 

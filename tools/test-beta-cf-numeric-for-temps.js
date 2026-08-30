@@ -4,7 +4,7 @@ const { parseLua } = require("../main");
 const { solveBetaControlFlow } = require("../passes/beta-control-flow");
 const ast = parseLua("return (function(...) return 1 end)(...)", "<numeric-for-temp-wrapper>");
 
-function solve({ start = "1", final = "3", step = "1", order = ["start", "final", "step"], extraStartUse = false }) {
+function solve({ start = "1", final = "3", step = "1", order = ["start", "final", "step"], extraStartUse = false, directLoopBinding = false, mutateDirect = false, removedCleanup = false }) {
     const values = { start, final, step };
     const pre = order.map(name => ({
         kind: "version-define", emittedTarget: name, rhs: values[name], emittedText: `local ${name} = ${values[name]}`, reads: [],
@@ -32,10 +32,14 @@ function solve({ start = "1", final = "3", step = "1", order = ["start", "final"
                 { kind: "version-define", emittedTarget: "exitId", rhs: "4", emittedText: "local exitId = 4", reads: [] },
                 { kind: "state-transition", emittedTarget: "state", rhs: "stateTmp or exitId", emittedText: "state = stateTmp or exitId", reads: ["stateTmp", "exitId"] },
             ] },
-            { id: 3, predecessors: [2], successors: [2], operations: [
+            { id: 3, predecessors: [2], successors: [2], operations: directLoopBinding ? [
+                ...(mutateDirect ? [{ kind: "epoch-mutate", emittedTarget: "current", rhs: "99", emittedText: "current = 99", reads: [] }] : []),
+                { kind: "statement", emittedText: "consume(current)", originalText: "consume(current)", reads: ["current"] },
+                { kind: "state-transition", emittedTarget: "state", rhs: "2", emittedText: "state = 2", reads: [] },
+            ] : [
                 { kind: "epoch-start", originalTarget: "loopPhysical", emittedTarget: "loopVar", rhs: "current", emittedText: "local loopVar = current", reads: ["current"], registerEpoch: "loop:1" },
                 { kind: "statement", emittedText: "consume(loopVar)", originalText: "consume(loopVar)", reads: ["loopVar"] },
-                { kind: "epoch-kill", originalTarget: "loopPhysical", emittedTarget: "deadLoopCleanup", rhs: "nil", emittedText: "local deadLoopCleanup = nil", reads: [], registerEpoch: "loop:1" },
+                ...(!removedCleanup ? [{ kind: "epoch-kill", originalTarget: "loopPhysical", emittedTarget: "deadLoopCleanup", rhs: "nil", emittedText: "local deadLoopCleanup = nil", reads: [], registerEpoch: "loop:1" }] : []),
                 { kind: "state-transition", emittedTarget: "state", rhs: "2", emittedText: "state = 2", reads: [] },
             ] },
             { id: 4, predecessors: [2], successors: [], operations: [
@@ -53,6 +57,24 @@ assert(!r.source.includes("local start =") && !r.source.includes("local final ="
 
 r = solve({ start: "3", final: "1", step: "-1" });
 assert(r.source.includes("for loopVar = 3, 1, -1 do"), r.source);
+
+
+r = solve({ removedCleanup: true });
+assert.equal(r.numericForLoopCount, 1);
+assert(r.source.includes("for loopVar = 1, 3 do"), r.source);
+
+r = solve({ directLoopBinding: true });
+assert.equal(r.numericForLoopCount, 1);
+assert.equal(r.whileLoopCount, 0);
+assert(r.source.includes("for current = 1, 3 do"), r.source);
+assert(r.source.includes("consume(current)"), r.source);
+
+r = solve({ start: "10", final: "1", step: "-1", directLoopBinding: true });
+assert(r.source.includes("for current = 10, 1, -1 do"), r.source);
+
+r = solve({ directLoopBinding: true, mutateDirect: true });
+assert.equal(r.applied, false);
+assert(r.reason.includes("loop/backedge"));
 
 r = solve({ start: "S()", final: "F()", step: "P()" });
 assert(r.source.includes("for loopVar = S(), F(), P() do"), r.source);

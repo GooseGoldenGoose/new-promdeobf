@@ -34,6 +34,7 @@ const focused = [
     "test-beta-cf-numeric-for-temps.js",
     "test-beta-cf-generic-for-temps.js",
     "test-beta-cf-loop-control-temps.js",
+    "test-beta-cf-post-pre-cf-shapes.js",
     "test-beta-cf-post-copy-scalar.js",
     "test-beta-cf-post-closure-destinations.js",
     "test-beta-cf-post-dead-closures.js",

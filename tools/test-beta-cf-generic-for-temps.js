@@ -111,9 +111,7 @@ assert(!directRecovered.source.includes('gameAlias'));
 parseLua(directRecovered.source, '<generic-for-direct-iterator-recovered>');
 
 const directMutationRefused = solveBetaControlFlow(ast, directIteratorGraph({ mutateControl: true }));
-assert.equal(directMutationRefused.applied, true);
-assert.equal(directMutationRefused.genericForLoopCount, 0);
-assert.equal(directMutationRefused.whileLoopCount, 1);
-parseLua(directMutationRefused.source, '<generic-for-direct-iterator-mutation-refused>');
+assert.equal(directMutationRefused.applied, false);
+assert(directMutationRefused.reason.includes('loop/backedge'));
 
 console.log('beta CF generic-for temps: PASS');
