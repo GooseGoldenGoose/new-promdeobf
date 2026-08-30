@@ -347,6 +347,7 @@ function solveSingleState(originalAst, graph) {
     const postCfDeadScalarLocalRecoveryCount = recoverStructuredPostCfDeadScalarLocals(structuredNodes, graph, { syntheticLocals: ["args"] });
     const postCfCopyScalarRecoveryCount = recoverStructuredPostCfCopyScalarTemps(structuredNodes, graph);
     const postCfStaticMemberRecoveryCount = recoverStructuredPostCfStaticMembers(structuredNodes);
+    const postCfFunctionDeclarationRecoveryCount = recoverStructuredPostCfFunctionDeclarations(structuredNodes);
     const bodyText = formatStructuredNodes(structuredNodes);
     const presented = buildPresentedSource(originalAst, bodyText, { registerOverflowUsed: graph.registerOverflowUsed === true });
     if (!presented.applied) return presented;
@@ -365,6 +366,7 @@ function solveSingleState(originalAst, graph) {
         postCfDeadScalarLocalRecoveryCount,
         postCfCopyScalarRecoveryCount,
         postCfStaticMemberRecoveryCount,
+        postCfFunctionDeclarationRecoveryCount,
         terminalReturnCount: lowered.lowered ? 1 : 0,
         terminalReturnPayloadSunk: sunk.moved,
         terminalReturnPayloadSunkCount: sunk.moved ? 1 : 0,
@@ -1152,6 +1154,47 @@ function plainPostCfMemberName(node) {
     const match = String(node.raw || "").match(/^["']([A-Za-z_][A-Za-z0-9_]*)["']$/);
     if (!match || POST_CF_MEMBER_KEYWORDS.has(match[1])) return null;
     return match[1];
+}
+
+function recoverStructuredPostCfFunctionDeclarations(nodes) {
+    let folds = 0;
+
+    function isDeclarationTarget(node) {
+        if (node?.type === "Identifier") return true;
+        return node?.type === "MemberExpression" && node.indexer === "." &&
+            node.identifier?.type === "Identifier" && isDeclarationTarget(node.base);
+    }
+
+    function rewriteRaw(node) {
+        const parsed = parseControlFlowStatement(node?.text);
+        const statement = parsed?.statement;
+        if (statement?.type !== "AssignmentStatement" || statement.variables?.length !== 1 || statement.init?.length !== 1) return;
+        const target = statement.variables[0];
+        const fn = statement.init[0];
+        if (!isDeclarationTarget(target) || fn?.type !== "FunctionDeclaration" || fn.identifier != null) return;
+        if (!Array.isArray(target.range) || !Array.isArray(fn.range)) return;
+        const targetText = parsed.source.slice(target.range[0], target.range[1]);
+        const fnText = parsed.source.slice(fn.range[0], fn.range[1]);
+        if (!fnText.startsWith("function")) return;
+        const text = `function ${targetText}${fnText.slice("function".length)}`;
+        if (!parseControlFlowStatement(text)) return;
+        node.text = text;
+        if (node.operation) node.operation.emittedText = text;
+        folds++;
+    }
+
+    function visitBody(body) {
+        for (const node of body || []) {
+            if (node?.type === "raw") rewriteRaw(node);
+            if (node?.type === "if") { visitBody(node.thenBody); visitBody(node.elseBody); }
+            else if (node?.type === "numeric-for" || node?.type === "generic-for") visitBody(node.body);
+            else if (node?.type === "while-guard") { visitBody(node.conditionBody); visitBody(node.body); }
+            else if (node?.type === "repeat-until") { visitBody(node.body); visitBody(node.conditionBody); }
+        }
+    }
+
+    visitBody(nodes);
+    return folds;
 }
 
 function recoverStructuredPostCfStaticMembers(nodes) {
@@ -4789,6 +4832,7 @@ function solveAcyclicStructured(originalAst, graph) {
     const postCfDeadScalarLocalRecoveryCount = recoverStructuredPostCfDeadScalarLocals(structured.nodes, graph, { syntheticLocals: ["args"] });
     const postCfCopyScalarRecoveryCount = recoverStructuredPostCfCopyScalarTemps(structured.nodes, graph);
     const postCfStaticMemberRecoveryCount = recoverStructuredPostCfStaticMembers(structured.nodes);
+    const postCfFunctionDeclarationRecoveryCount = recoverStructuredPostCfFunctionDeclarations(structured.nodes);
 
     const epochHoisting = hoistEscapingEpochDeclarations(structured.nodes);
     if (!epochHoisting.safe) return { applied: false, reason: epochHoisting.reason || "Beta epoch declaration hoisting failed closed" };
@@ -4814,6 +4858,7 @@ function solveAcyclicStructured(originalAst, graph) {
         postCfDeadScalarLocalRecoveryCount,
         postCfCopyScalarRecoveryCount,
         postCfStaticMemberRecoveryCount,
+        postCfFunctionDeclarationRecoveryCount,
         joinCount,
         guardBranchCount,
         terminalReturnCount,
@@ -5546,6 +5591,7 @@ module.exports = {
     removeCompilerPosPreservationOperations,
     normalizeRegisterOverflowGraph,
     recoverStructuredPostCfStaticMembers,
+    recoverStructuredPostCfFunctionDeclarations,
     recoverStructuredPostCfNamecalls,
     recoverStructuredPostCfClosureDestinationTemps,
     recoverNestedFunctionSignature,

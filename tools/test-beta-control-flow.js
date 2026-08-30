@@ -1327,7 +1327,7 @@ const overflowFactoryNormalized = solveBetaControlFlow(ast, {
     },
 });
 assert.equal(overflowFactoryNormalized.applied, true);
-assert(overflowFactoryNormalized.source.includes("RegisterOverflow.v1 = function()"));
+assert(overflowFactoryNormalized.source.includes("function RegisterOverflow.v1()"));
 assert(!overflowFactoryNormalized.source.includes("createClosure2("));
 assert(!overflowFactoryNormalized.source.includes("RegisterOverflow["));
 parseLua(overflowFactoryNormalized.source, "<beta-cf-overflow-factory-normalized>");
