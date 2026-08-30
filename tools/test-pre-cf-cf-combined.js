@@ -15,6 +15,7 @@ const focused = [
     "test-pre-cf-table-destinations.js",
     "test-pre-cf-table-entry-temps.js",
     "test-pre-cf-index-key-temps.js",
+    "test-pre-cf-global-writes.js",
     "test-pre-cf-discarded-call-results.js",
     "test-pre-cf-scalar-temps.js",
     "test-pre-cf-global-lookups.js",
