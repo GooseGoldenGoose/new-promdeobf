@@ -1778,38 +1778,115 @@ function recoverStructuredPostCfStaticMembers(nodes) {
 
 function recoverStructuredPostCfNamecalls(nodes) {
     let folds = 0;
+
+    function exactNamecallEdit(source, call, prefixLength = 0) {
+        if (call?.type !== "CallExpression" || call.base?.type !== "IndexExpression" || call.base.base?.type !== "Identifier") return null;
+        const base = call.base.base;
+        const method = plainPostCfMemberName(call.base.index);
+        const args = call.arguments || [];
+        const self = args[0];
+        if (!method || self?.type !== "Identifier" || self.name !== base.name || !Array.isArray(call.range)) return null;
+        const remaining = args.slice(1).map(arg => {
+            if (!Array.isArray(arg?.range)) return null;
+            return source.slice(arg.range[0] - prefixLength, arg.range[1] - prefixLength);
+        });
+        if (remaining.some(text => text === null)) return null;
+        return {
+            start: call.range[0] - prefixLength,
+            end: call.range[1] - prefixLength,
+            replacement: `${base.name}:${method}(${remaining.join(", ")})`,
+        };
+    }
+
+    function recoverExpression(text) {
+        const source = String(text || "");
+        const parsed = parseTransitionExpression(source);
+        if (!parsed?.expression) return null;
+        const prefixLength = parsed.source.length - source.length;
+        const edits = [];
+
+        function visit(astNode) {
+            if (!astNode || typeof astNode !== "object") return;
+            const edit = exactNamecallEdit(source, astNode, prefixLength);
+            if (edit) edits.push(edit);
+            for (const [key, value] of Object.entries(astNode)) {
+                if (key === "range" || key === "loc") continue;
+                if (Array.isArray(value)) for (const child of value) visit(child);
+                else if (value && typeof value === "object") visit(value);
+            }
+        }
+        visit(parsed.expression);
+        if (!edits.length) return null;
+
+        // Keep only non-overlapping innermost calls. This preserves nested argument
+        // text instead of letting an outer replacement overwrite a proven inner edit.
+        edits.sort((a, b) => (a.end - a.start) - (b.end - b.start) || a.start - b.start);
+        const selected = [];
+        for (const edit of edits) {
+            if (selected.some(other => !(edit.end <= other.start || edit.start >= other.end))) continue;
+            selected.push(edit);
+        }
+        selected.sort((a, b) => b.start - a.start);
+        let rewritten = source;
+        for (const edit of selected) rewritten = rewritten.slice(0, edit.start) + edit.replacement + rewritten.slice(edit.end);
+        if (!parseTransitionExpression(rewritten)?.expression) return null;
+        return { text: rewritten, count: selected.length };
+    }
+
+    function recoverRaw(node) {
+        const parsed = parseControlFlowStatement(node.text);
+        const statement = parsed?.statement;
+        let call = null;
+        if (statement?.type === "CallStatement") call = statement.expression;
+        else if ((statement?.type === "LocalStatement" || statement?.type === "AssignmentStatement") && statement.init?.length === 1) call = statement.init[0];
+        const edit = exactNamecallEdit(parsed?.source || "", call, 0);
+        if (!edit) return;
+        const text = parsed.source.slice(0, edit.start) + edit.replacement + parsed.source.slice(edit.end);
+        if (!parseControlFlowStatement(text)) return;
+        node.text = text;
+        if (node.operation) {
+            node.operation.emittedText = text;
+            if (statement.type !== "CallStatement") node.operation.rhs = edit.replacement;
+        }
+        folds++;
+    }
+
+    function recoverField(node, field) {
+        const recovered = recoverExpression(node?.[field]);
+        if (!recovered) return;
+        node[field] = recovered.text;
+        folds += recovered.count;
+    }
+
     function visitBody(body) {
         for (const node of body || []) {
-            if (node?.type === "raw") {
-                const parsed = parseControlFlowStatement(node.text);
-                const statement = parsed?.statement;
-                let call = null;
-                if (statement?.type === "CallStatement") call = statement.expression;
-                else if ((statement?.type === "LocalStatement" || statement?.type === "AssignmentStatement") && statement.init?.length === 1) call = statement.init[0];
-                if (call?.type === "CallExpression" && call.base?.type === "IndexExpression" && call.base.base?.type === "Identifier") {
-                    const base = call.base.base;
-                    const method = plainPostCfMemberName(call.base.index);
-                    const args = call.arguments || [];
-                    const self = args[0];
-                    if (method && self?.type === "Identifier" && self.name === base.name && Array.isArray(call.range) && Array.isArray(base.range)) {
-                        const remaining = args.slice(1).map(arg => parsed.source.slice(arg.range[0], arg.range[1]));
-                        const replacement = `${base.name}:${method}(${remaining.join(", ")})`;
-                        const text = parsed.source.slice(0, call.range[0]) + replacement + parsed.source.slice(call.range[1]);
-                        if (parseControlFlowStatement(text)) {
-                            node.text = text;
-                            if (node.operation) {
-                                node.operation.emittedText = text;
-                                if (statement.type !== "CallStatement") node.operation.rhs = replacement;
-                            }
-                            folds++;
-                        }
-                    }
+            if (node?.type === "raw") recoverRaw(node);
+            if (node?.type === "if") {
+                recoverField(node, "condition");
+                visitBody(node.thenBody);
+                visitBody(node.elseBody);
+            } else if (node?.type === "numeric-for") {
+                recoverField(node, "initial");
+                recoverField(node, "limit");
+                recoverField(node, "step");
+                visitBody(node.body);
+            } else if (node?.type === "generic-for") {
+                for (let index = 0; index < (node.expressions || []).length; index++) {
+                    const recovered = recoverExpression(node.expressions[index]);
+                    if (!recovered) continue;
+                    node.expressions[index] = recovered.text;
+                    folds += recovered.count;
                 }
+                visitBody(node.body);
+            } else if (node?.type === "while-guard") {
+                recoverField(node, "condition");
+                visitBody(node.conditionBody);
+                visitBody(node.body);
+            } else if (node?.type === "repeat-until") {
+                recoverField(node, "condition");
+                visitBody(node.body);
+                visitBody(node.conditionBody);
             }
-            if (node?.type === "if") { visitBody(node.thenBody); visitBody(node.elseBody); }
-            else if (node?.type === "numeric-for" || node?.type === "generic-for") visitBody(node.body);
-            else if (node?.type === "while-guard") { visitBody(node.conditionBody); visitBody(node.body); }
-            else if (node?.type === "repeat-until") { visitBody(node.body); visitBody(node.conditionBody); }
         }
     }
     visitBody(nodes);

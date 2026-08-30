@@ -794,3 +794,11 @@ Latest post-Step-47 work - compiler IIFE / anonymous closure expression recovery
 - Added tools/test-beta-cf-repeat-multistate-precheck.js with positive retained-prefix coverage and mismatched duplicate refusal. Global-alias regression checks synchronized RHS. Combined gate: 41 focused suites + 66/66 canonical samples PASS.
 - Exact Horst fixture tmp/horst-enhance-20260830.fixed7.lua no longer emits a pre-repeat if game:IsLoaded() and has no undefined r_v2_1; it starts directly with the source repeat.
 - Runtime probe tmp/repeat-precheck-runtime-20260830*: readable source and final both print body 0 0, body 1 0, done 2 1; local Prometheus obfuscated form prints only body 1 0, done 2 1, confirming final recovery intentionally removes the compiler-added first condition evaluation.
+
+
+## Structured-condition namecall recovery (2026-08-30)
+- `recoverStructuredPostCfNamecalls` now applies the same exact self-call proof to structured expression fields, not only raw statements.
+- Covered fields: `if.condition`, `while-guard.condition`, `repeat-until.condition`, numeric-for initial/limit/step, and generic-for iterator expressions.
+- Exact proof remains fail-closed: direct identifier base, static non-keyword method string, and first argument is the exact same identifier. Complex/dynamic bases or mismatched self arguments refuse.
+- Horst repeat fixture now emits `r_v2_6:IsLoaded()` inside the recovered `until` condition while preserving the multi-state repeat-precheck fix.
+- Verification: post-CF namecall focused suite PASS, beta-control-flow suite PASS, exact 98-state/7-closure Horst fixture PASS, combined gate 41 focused suites + 66/66 canonical samples PASS.
