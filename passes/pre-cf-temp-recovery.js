@@ -893,7 +893,7 @@ function globalWriteInfo(operation) {
     else return null;
     const rhs = statement.init[0];
     if (!Array.isArray(rhs?.range)) return null;
-    return { globalName, keyBinding, rhsText: text.slice(rhs.range[0], rhs.range[1]) };
+    return { globalName, keyBinding, rhsText: text.slice(rhs.range[0], rhs.range[1]), rhsBinding: rhs.type === "Identifier" ? rhs.name : null };
 }
 function finalizePreCfGlobalWrites(betaResult) {
     if (!betaResult?.graph || typeof betaResult.source !== "string" || betaResult.graph.cfgComplete !== true) {
@@ -919,7 +919,7 @@ function finalizePreCfGlobalWrites(betaResult) {
             const operation = state.operations[offset];
             const info = globalWriteInfo(operation);
             if (!info || claimed.has(operation)) continue;
-            let globalName = info.globalName, keyProducer = null, keyFacts = null;
+            let globalName = info.globalName, keyProducer = null, keyFacts = null, rhsProducer = null, rhsFacts = null, rhsText = info.rhsText;
             if (info.keyBinding) {
                 keyFacts = proof.byBinding.get(info.keyBinding);
                 if (!keyFacts?.singleDefinition || !keyFacts.singleUse || keyFacts.captured || !keyFacts.sameState || keyFacts.consumer?.operation !== operation || keyFacts.producer.offset >= offset) { refused++; continue; }
@@ -928,26 +928,41 @@ function finalizePreCfGlobalWrites(betaResult) {
                 if (!keyProducer || !["version-define", "epoch-start"].includes(keyProducer.kind) || !globalName) { refused++; continue; }
             }
             if (!isValidGlobalIdentifierName(globalName) || hasLexicalBindingNamed(environment.functionNode, globalName)) { refused++; continue; }
-            const opRange = ownership.ranges.get(operation), keyRange = keyProducer ? ownership.ranges.get(keyProducer) : null;
-            if (!opRange || (keyProducer && !keyRange)) { betaResult.preCfGlobalWrites = { applied: false, safe: false, reason: "PRE-CF global write recovery lost exact source ownership" }; return betaResult; }
-            candidates.push({ state, operation, offset, globalName, keyProducer, keyFacts, opRange, keyRange, rhsText: info.rhsText, emittedText: `${globalName} = ${info.rhsText}` });
-            claimed.add(operation); if (keyProducer) claimed.add(keyProducer);
+            if (info.rhsBinding) {
+                rhsFacts = proof.byBinding.get(info.rhsBinding);
+                if (rhsFacts?.singleDefinition && rhsFacts.singleUse && !rhsFacts.captured && rhsFacts.sameState &&
+                    rhsFacts.consumer?.operation === operation && rhsFacts.producer.offset < offset) {
+                    const producer = rhsFacts.producer.operation;
+                    const expression = parsePreCfRhs(producer?.rhs);
+                    if (["version-define", "epoch-start"].includes(producer?.kind) &&
+                        String(producer.emittedText || "").trim().startsWith("local ") &&
+                        isLiteralOnlyPreCfScalarExpression(expression)) {
+                        rhsProducer = producer;
+                        rhsText = producer.rhs;
+                    }
+                }
+            }
+            const opRange = ownership.ranges.get(operation), keyRange = keyProducer ? ownership.ranges.get(keyProducer) : null, rhsRange = rhsProducer ? ownership.ranges.get(rhsProducer) : null;
+            if (!opRange || (keyProducer && !keyRange) || (rhsProducer && !rhsRange)) { betaResult.preCfGlobalWrites = { applied: false, safe: false, reason: "PRE-CF global write recovery lost exact source ownership" }; return betaResult; }
+            candidates.push({ state, operation, offset, globalName, keyProducer, keyFacts, rhsProducer, rhsFacts, opRange, keyRange, rhsRange, rhsText, emittedText: `${globalName} = ${rhsText}` });
+            claimed.add(operation); if (keyProducer) claimed.add(keyProducer); if (rhsProducer) claimed.add(rhsProducer);
         }
     }
     if (!candidates.length) { betaResult.preCfGlobalWrites = { applied: false, safe: true, folds: 0, keyTempsRemoved: 0, refused, environmentProven: true }; return betaResult; }
     const edits = [];
-    for (const c of candidates) { if (c.keyRange) edits.push({ start:c.keyRange[0], end:c.keyRange[1], replacement:"" }); edits.push({ start:c.opRange[0], end:c.opRange[1], replacement:c.emittedText }); }
+    for (const c of candidates) { if (c.keyRange) edits.push({ start:c.keyRange[0], end:c.keyRange[1], replacement:"" }); if (c.rhsRange && c.rhsProducer !== c.keyProducer) edits.push({ start:c.rhsRange[0], end:c.rhsRange[1], replacement:"" }); edits.push({ start:c.opRange[0], end:c.opRange[1], replacement:c.emittedText }); }
     const output = applySourceEdits(betaResult.source, edits);
     try { parsePreCfSource(output); } catch (error) { betaResult.preCfGlobalWrites = { applied: false, safe: false, reason: `PRE-CF global write recovery reparse failed: ${error.message}` }; return betaResult; }
     betaResult.source = output;
-    const removalsByState = new Map(); let keyTempsRemoved = 0;
+    const removalsByState = new Map(); let keyTempsRemoved = 0, rhsTempsRemoved = 0;
     for (const c of candidates) {
         c.operation.emittedText = c.emittedText;
-        c.operation.reads = (c.operation.reads || []).filter(name => name !== "_env" && name !== c.keyFacts?.name);
+        c.operation.reads = (c.operation.reads || []).filter(name => name !== "_env" && name !== c.keyFacts?.name && name !== c.rhsFacts?.name);
         if (c.keyProducer) { const loc=proof.locations.get(c.keyProducer); if (loc) { if(!removalsByState.has(loc.stateId)) removalsByState.set(loc.stateId,[]); removalsByState.get(loc.stateId).push(loc.offset); keyTempsRemoved++; } }
+        if (c.rhsProducer && c.rhsProducer !== c.keyProducer) { const loc=proof.locations.get(c.rhsProducer); if (loc) { if(!removalsByState.has(loc.stateId)) removalsByState.set(loc.stateId,[]); removalsByState.get(loc.stateId).push(loc.offset); rhsTempsRemoved++; } }
     }
     for (const [stateId, offsets] of removalsByState) { const state=betaResult.graph.states.find(item=>item.id===stateId); for(const offset of [...new Set(offsets)].sort((a,b)=>b-a)) state.operations.splice(offset,1); for(let i=0;i<state.operations.length;i++) state.operations[i].index=i+1; }
-    betaResult.preCfGlobalWrites = { applied: true, safe: true, folds: candidates.length, keyTempsRemoved, refused, environmentProven: true };
+    betaResult.preCfGlobalWrites = { applied: true, safe: true, folds: candidates.length, keyTempsRemoved, rhsTempsRemoved, refused, environmentProven: true };
     return betaResult;
 }
 

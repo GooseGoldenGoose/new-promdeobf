@@ -52,4 +52,23 @@ function stmt(text, reads=[]) { return { kind:"statement", emittedText:text, ori
     const result = finalizePreCfGlobalWrites(beta(source, [write('_env["hello-world"] = value', ["_env","value"]), stmt("return")]));
     assert.equal(result.preCfGlobalWrites.folds, 0, result.source);
 }
+// Compiler RHS scratch scalar can be consumed directly by the proven global write.
+{
+    const source = wrap('local value = 1\n_env["answer"] = value\nreturn');
+    const result = finalizePreCfGlobalWrites(beta(source, [def("value", "1"), write('_env["answer"] = value', ["_env","value"]), stmt("return")]));
+    assert.equal(result.preCfGlobalWrites.folds, 1, result.source);
+    assert.equal(result.preCfGlobalWrites.rhsTempsRemoved, 1, result.source);
+    assert(result.source.includes("answer = 1"), result.source);
+    assert(!result.source.includes("local value = 1"), result.source);
+}
+// Calls/effectful RHS producers are not moved into the write.
+{
+    const source = wrap('local value = make()\n_env["answer"] = value\nreturn');
+    const result = finalizePreCfGlobalWrites(beta(source, [def("value", "make()", ["make"]), write('_env["answer"] = value', ["_env","value"]), stmt("return")]));
+    assert.equal(result.preCfGlobalWrites.folds, 1, result.source);
+    assert.equal(result.preCfGlobalWrites.rhsTempsRemoved || 0, 0, result.source);
+    assert(result.source.includes("local value = make()"), result.source);
+    assert(result.source.includes("answer = value"), result.source);
+}
+
 console.log("PRE-CF global writes: PASS");
