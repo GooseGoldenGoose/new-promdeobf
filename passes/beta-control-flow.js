@@ -341,6 +341,7 @@ function solveSingleState(originalAst, graph) {
     const sunk = sinkTerminalReturnPayload(state.operations);
     const lowered = lowerTerminalReturn(sunk.operations);
     const structuredNodes = lowered.operations.map(operation => rawNode(operation, state.id));
+    const postCfClosureDestinationRecoveryCount = recoverStructuredPostCfClosureDestinationTemps(structuredNodes, graph);
     const postCfCopyScalarRecoveryCount = recoverStructuredPostCfCopyScalarTemps(structuredNodes, graph);
     const bodyText = formatStructuredNodes(structuredNodes);
     const presented = buildPresentedSource(originalAst, bodyText, { registerOverflowUsed: graph.registerOverflowUsed === true });
@@ -354,6 +355,7 @@ function solveSingleState(originalAst, graph) {
         stateCount: graph.states.length,
         statementCount: countStructuredStatements(structuredNodes),
         branchCount: 0,
+        postCfClosureDestinationRecoveryCount,
         postCfCopyScalarRecoveryCount,
         terminalReturnCount: lowered.lowered ? 1 : 0,
         terminalReturnPayloadSunk: sunk.moved,
@@ -1132,6 +1134,97 @@ function recoverStructuredLoopBranchConditionTemps(nodes, graph) {
         }
 
         visitBody(nodes, false);
+    }
+    return folds;
+}
+
+function recoverStructuredPostCfClosureDestinationTemps(nodes, graph) {
+    const captured = new Set(graph?.recoveredUpvalueBindings || []);
+    let folds = 0;
+
+    function collectFacts(root) {
+        const reads = new Map();
+        const definitions = new Map();
+        function visit(body) {
+            for (const node of body || []) {
+                for (const name of node.reads || []) reads.set(name, (reads.get(name) || 0) + 1);
+                if (node.type === "raw" && node.operation?.emittedTarget) {
+                    const name = node.operation.emittedTarget;
+                    definitions.set(name, (definitions.get(name) || 0) + 1);
+                }
+                if (node.type === "if") { visit(node.thenBody); visit(node.elseBody); }
+                else if (node.type === "numeric-for" || node.type === "generic-for") visit(node.body);
+                else if (node.type === "while-guard") { visit(node.conditionBody); visit(node.body); }
+                else if (node.type === "repeat-until") { visit(node.body); visit(node.conditionBody); }
+            }
+        }
+        visit(root);
+        return { reads, definitions };
+    }
+
+    function closureProducerInfo(node, tempName) {
+        const parsed = parseControlFlowStatement(node?.text);
+        const statement = parsed?.statement;
+        if (statement?.type !== "LocalStatement" || statement.variables?.length !== 1 || statement.init?.length !== 1) return null;
+        const variable = statement.variables[0];
+        const init = statement.init[0];
+        if (variable?.type !== "Identifier" || variable.name !== tempName || init?.type !== "FunctionDeclaration" || !Array.isArray(init.range)) return null;
+        return { functionText: parsed.source.slice(init.range[0], init.range[1]) };
+    }
+
+    function closureConsumerInfo(node, tempName) {
+        const parsed = parseControlFlowStatement(node?.text);
+        const statement = parsed?.statement;
+        if ((statement?.type !== "AssignmentStatement" && statement?.type !== "LocalStatement") || statement.variables?.length !== 1 || statement.init?.length !== 1) return null;
+        const rhs = statement.init[0];
+        const lhs = statement.variables[0];
+        if (rhs?.type !== "Identifier" || rhs.name !== tempName || !Array.isArray(lhs?.range)) return null;
+        if (!["Identifier", "MemberExpression", "IndexExpression"].includes(lhs.type)) return null;
+        return {
+            prefix: statement.type === "LocalStatement" ? "local " : "",
+            targetText: parsed.source.slice(lhs.range[0], lhs.range[1]),
+        };
+    }
+
+    let changed = true;
+    while (changed) {
+        changed = false;
+        const facts = collectFacts(nodes);
+        function visitBody(body) {
+            for (let index = 1; index < (body || []).length; index++) {
+                const producerNode = body[index - 1];
+                const consumerNode = body[index];
+                if (producerNode?.type === "raw" && consumerNode?.type === "raw") {
+                    const producer = producerNode.operation || {};
+                    const consumer = consumerNode.operation || {};
+                    const tempName = producer.emittedTarget;
+                    if (tempName && !captured.has(tempName) && (facts.reads.get(tempName) || 0) === 1 && (facts.definitions.get(tempName) || 0) === 1) {
+                        const producerInfo = closureProducerInfo(producerNode, tempName);
+                        const consumerInfo = producerInfo ? closureConsumerInfo(consumerNode, tempName) : null;
+                        if (consumerInfo) {
+                            const emittedText = `${consumerInfo.prefix}${consumerInfo.targetText} = ${producerInfo.functionText}`;
+                            const nextReads = (consumerNode.reads || []).filter(name => name !== tempName);
+                            consumerNode.text = emittedText;
+                            consumerNode.reads = nextReads;
+                            consumer.emittedText = emittedText;
+                            consumer.rhs = producerInfo.functionText;
+                            consumer.reads = [...nextReads];
+                            body.splice(index - 1, 1);
+                            folds++;
+                            changed = true;
+                            return true;
+                        }
+                    }
+                }
+                const node = body[index];
+                if (node?.type === "if") { if (visitBody(node.thenBody) || visitBody(node.elseBody)) return true; }
+                else if (node?.type === "numeric-for" || node?.type === "generic-for") { if (visitBody(node.body)) return true; }
+                else if (node?.type === "while-guard") { if (visitBody(node.conditionBody) || visitBody(node.body)) return true; }
+                else if (node?.type === "repeat-until") { if (visitBody(node.body) || visitBody(node.conditionBody)) return true; }
+            }
+            return false;
+        }
+        visitBody(nodes);
     }
     return folds;
 }
@@ -4411,6 +4504,7 @@ function solveAcyclicStructured(originalAst, graph) {
     }
 
     const loopControlConditionTempRecoveryCount = recoverStructuredLoopBranchConditionTemps(structured.nodes, graph);
+    const postCfClosureDestinationRecoveryCount = recoverStructuredPostCfClosureDestinationTemps(structured.nodes, graph);
     const postCfCopyScalarRecoveryCount = recoverStructuredPostCfCopyScalarTemps(structured.nodes, graph);
 
     const epochHoisting = hoistEscapingEpochDeclarations(structured.nodes);
@@ -4432,6 +4526,7 @@ function solveAcyclicStructured(originalAst, graph) {
         branchCount,
         ifConditionTempRecoveryCount,
         loopControlConditionTempRecoveryCount,
+        postCfClosureDestinationRecoveryCount,
         postCfCopyScalarRecoveryCount,
         joinCount,
         guardBranchCount,
@@ -4998,6 +5093,7 @@ function solveClosureRegions(originalAst, graph) {
         terminalReturnCount: sum("terminalReturnCount"),
         terminalReturnPayloadSunk: results.some(result => result.terminalReturnPayloadSunk),
         terminalReturnPayloadSunkCount: sum("terminalReturnPayloadSunkCount"),
+        postCfClosureDestinationRecoveryCount: sum("postCfClosureDestinationRecoveryCount"),
         postCfCopyScalarRecoveryCount: sum("postCfCopyScalarRecoveryCount"),
         terminalReturnLowered: results.every(result => result.terminalReturnLowered),
         terminalReturnText: null,
@@ -5076,5 +5172,6 @@ module.exports = {
     forwardControlOnlyJoinBranches,
     removeCompilerPosPreservationOperations,
     normalizeRegisterOverflowGraph,
+    recoverStructuredPostCfClosureDestinationTemps,
     solveBetaControlFlow,
 };
