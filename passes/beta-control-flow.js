@@ -341,6 +341,7 @@ function solveSingleState(originalAst, graph) {
     const sunk = sinkTerminalReturnPayload(state.operations);
     const lowered = lowerTerminalReturn(sunk.operations);
     const structuredNodes = lowered.operations.map(operation => rawNode(operation, state.id));
+    const postCfNamecallRecoveryCount = recoverStructuredPostCfNamecalls(structuredNodes);
     const postCfClosureDestinationRecoveryCount = recoverStructuredPostCfClosureDestinationTemps(structuredNodes, graph);
     const postCfDeadClosureRecoveryCount = recoverStructuredPostCfDeadClosureTemps(structuredNodes, graph);
     const postCfCopyScalarRecoveryCount = recoverStructuredPostCfCopyScalarTemps(structuredNodes, graph);
@@ -356,6 +357,7 @@ function solveSingleState(originalAst, graph) {
         stateCount: graph.states.length,
         statementCount: countStructuredStatements(structuredNodes),
         branchCount: 0,
+        postCfNamecallRecoveryCount,
         postCfClosureDestinationRecoveryCount,
         postCfDeadClosureRecoveryCount,
         postCfCopyScalarRecoveryCount,
@@ -1137,6 +1139,54 @@ function recoverStructuredLoopBranchConditionTemps(nodes, graph) {
 
         visitBody(nodes, false);
     }
+    return folds;
+}
+
+const POST_CF_MEMBER_KEYWORDS = new Set(["and","break","do","else","elseif","end","false","for","function","goto","if","in","local","nil","not","or","repeat","return","then","true","until","while","continue"]);
+function plainPostCfMemberName(node) {
+    if (node?.type !== "StringLiteral") return null;
+    const match = String(node.raw || "").match(/^["']([A-Za-z_][A-Za-z0-9_]*)["']$/);
+    if (!match || POST_CF_MEMBER_KEYWORDS.has(match[1])) return null;
+    return match[1];
+}
+
+function recoverStructuredPostCfNamecalls(nodes) {
+    let folds = 0;
+    function visitBody(body) {
+        for (const node of body || []) {
+            if (node?.type === "raw") {
+                const parsed = parseControlFlowStatement(node.text);
+                const statement = parsed?.statement;
+                let call = null;
+                if (statement?.type === "CallStatement") call = statement.expression;
+                else if ((statement?.type === "LocalStatement" || statement?.type === "AssignmentStatement") && statement.init?.length === 1) call = statement.init[0];
+                if (call?.type === "CallExpression" && call.base?.type === "IndexExpression" && call.base.base?.type === "Identifier") {
+                    const base = call.base.base;
+                    const method = plainPostCfMemberName(call.base.index);
+                    const args = call.arguments || [];
+                    const self = args[0];
+                    if (method && self?.type === "Identifier" && self.name === base.name && Array.isArray(call.range) && Array.isArray(base.range)) {
+                        const remaining = args.slice(1).map(arg => parsed.source.slice(arg.range[0], arg.range[1]));
+                        const replacement = `${base.name}:${method}(${remaining.join(", ")})`;
+                        const text = parsed.source.slice(0, call.range[0]) + replacement + parsed.source.slice(call.range[1]);
+                        if (parseControlFlowStatement(text)) {
+                            node.text = text;
+                            if (node.operation) {
+                                node.operation.emittedText = text;
+                                if (statement.type !== "CallStatement") node.operation.rhs = replacement;
+                            }
+                            folds++;
+                        }
+                    }
+                }
+            }
+            if (node?.type === "if") { visitBody(node.thenBody); visitBody(node.elseBody); }
+            else if (node?.type === "numeric-for" || node?.type === "generic-for") visitBody(node.body);
+            else if (node?.type === "while-guard") { visitBody(node.conditionBody); visitBody(node.body); }
+            else if (node?.type === "repeat-until") { visitBody(node.body); visitBody(node.conditionBody); }
+        }
+    }
+    visitBody(nodes);
     return folds;
 }
 
@@ -4605,6 +4655,7 @@ function solveAcyclicStructured(originalAst, graph) {
     }
 
     const loopControlConditionTempRecoveryCount = recoverStructuredLoopBranchConditionTemps(structured.nodes, graph);
+    const postCfNamecallRecoveryCount = recoverStructuredPostCfNamecalls(structured.nodes);
     const postCfClosureDestinationRecoveryCount = recoverStructuredPostCfClosureDestinationTemps(structured.nodes, graph);
     const postCfDeadClosureRecoveryCount = recoverStructuredPostCfDeadClosureTemps(structured.nodes, graph);
     const postCfCopyScalarRecoveryCount = recoverStructuredPostCfCopyScalarTemps(structured.nodes, graph);
@@ -5281,6 +5332,7 @@ function solveClosureRegions(originalAst, graph) {
         terminalReturnPayloadSunkCount: sum("terminalReturnPayloadSunkCount"),
         postCfClosureDestinationRecoveryCount: sum("postCfClosureDestinationRecoveryCount"),
         postCfDeadClosureRecoveryCount: sum("postCfDeadClosureRecoveryCount"),
+        postCfNamecallRecoveryCount: sum("postCfNamecallRecoveryCount"),
         postCfCopyScalarRecoveryCount: sum("postCfCopyScalarRecoveryCount"),
         terminalReturnLowered: results.every(result => result.terminalReturnLowered),
         terminalReturnText: null,
@@ -5359,6 +5411,7 @@ module.exports = {
     forwardControlOnlyJoinBranches,
     removeCompilerPosPreservationOperations,
     normalizeRegisterOverflowGraph,
+    recoverStructuredPostCfNamecalls,
     recoverStructuredPostCfClosureDestinationTemps,
     recoverNestedFunctionSignature,
     recoverStructuredPostCfDeadClosureTemps,
