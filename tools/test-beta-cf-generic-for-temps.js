@@ -58,4 +58,62 @@ assert(refused.source.includes('local pack = { factory() }'));
 assert(refused.source.includes('for key, value in iter, invariant, control do'));
 parseLua(refused.source, '<step16-refused>');
 
+
+
+function directIteratorGraph({ mutateControl = false } = {}) {
+    const bodyOperations = [
+        ...(mutateControl ? [{ kind: 'epoch-mutate', originalTarget: 'r2', emittedTarget: 'control', rhs: '99', emittedText: 'control = 99', reads: [] }] : []),
+        { kind: 'effect-call', emittedText: 'print(control, value)', rhs: 'print(control, value)', reads: ['control', 'value'] },
+        { kind: 'state-transition', originalTarget: 'state', emittedTarget: 'state', rhs: '2', emittedText: 'state = 2', reads: [] },
+    ];
+    return {
+        applied: true,
+        graph: {
+            cfgComplete: true,
+            stateName: 'state',
+            entries: [1],
+            recoveredUpvalueBindings: [],
+            states: [
+                { id: 1, predecessors: [], successors: [2], operations: [
+                    { kind: 'version-define', originalTarget: 'state', emittedTarget: 'pairsAlias', rhs: 'pairs', emittedText: 'local pairsAlias = pairs', reads: [], compilerGlobalLookupRecovered: 'pairs' },
+                    { kind: 'epoch-start', originalTarget: 'r3', emittedTarget: 'gameAlias', rhs: 'game', emittedText: 'local gameAlias = game', reads: [], compilerGlobalLookupRecovered: 'game' },
+                    { kind: 'epoch-start', originalTarget: 'r7', emittedTarget: 'method', rhs: 'gameAlias["GetChildren"]', emittedText: 'local method = gameAlias["GetChildren"]', reads: ['gameAlias'] },
+                    { kind: 'epoch-start', originalTarget: 'r6', emittedTarget: 'innerPack', rhs: '{ method(gameAlias) }', emittedText: 'local innerPack = { method(gameAlias) }', reads: ['method', 'gameAlias'] },
+                    { kind: 'epoch-start', originalTarget: 'r3', emittedTarget: 'iterPack', rhs: '{ pairsAlias(unpack(innerPack)) }', emittedText: 'local iterPack = { pairsAlias(unpack(innerPack)) }', reads: ['pairsAlias', 'innerPack'] },
+                    { kind: 'version-define', originalTarget: 'ReturnVal', emittedTarget: 'iterResult', rhs: 'iterPack[1]', emittedText: 'local iterResult = iterPack[1]', reads: ['iterPack'] },
+                    { kind: 'epoch-start', originalTarget: 'r1', emittedTarget: 'invariant', rhs: 'iterPack[2]', emittedText: 'local invariant = iterPack[2]', reads: ['iterPack'] },
+                    { kind: 'epoch-start', originalTarget: 'r2', emittedTarget: 'control', rhs: 'iterPack[3]', emittedText: 'local control = iterPack[3]', reads: ['iterPack'] },
+                    { kind: 'epoch-start', originalTarget: 'r3', emittedTarget: 'iter', rhs: 'iterResult', emittedText: 'local iter = iterResult', reads: ['iterResult'] },
+                    { kind: 'state-transition', originalTarget: 'state', emittedTarget: 'state', rhs: '2', emittedText: 'state = 2', reads: [] },
+                ] },
+                { id: 2, predecessors: [1, 3], successors: [3, 4], operations: [
+                    { kind: 'multi-call-write', originalTargets: ['r2', 'r7'], emittedTargets: ['control', 'value'], callBaseOriginal: 'r3', callArgumentOriginals: ['r1', 'r2'], rhs: 'iter(invariant, control)', emittedText: 'control, value = iter(invariant, control)', reads: ['iter', 'invariant', 'control'] },
+                    { kind: 'state-transition', originalTarget: 'state', emittedTarget: 'state', rhs: 'control and 3 or 4', emittedText: 'state = control and 3 or 4', reads: ['control'] },
+                ] },
+                { id: 3, predecessors: [2], successors: [2], operations: bodyOperations },
+                { id: 4, predecessors: [2], successors: [], operations: [
+                    { kind: 'return-payload', terminalCompilerReturnPayload: true, returnExpressions: [], emittedText: 'ReturnVal = {}', rhs: '{}', reads: [] },
+                    { kind: 'state-transition', originalTarget: 'state', emittedTarget: 'state', rhs: 'nil', emittedText: 'state = nil', reads: [] },
+                ] },
+            ],
+        },
+    };
+}
+
+const directRecovered = solveBetaControlFlow(ast, directIteratorGraph());
+assert.equal(directRecovered.applied, true);
+assert.equal(directRecovered.genericForLoopCount, 1);
+assert.equal(directRecovered.whileLoopCount, 0);
+assert(directRecovered.source.includes('for control, value in pairs(game:GetChildren()) do'));
+assert(!directRecovered.source.includes('innerPack'));
+assert(!directRecovered.source.includes('pairsAlias'));
+assert(!directRecovered.source.includes('gameAlias'));
+parseLua(directRecovered.source, '<generic-for-direct-iterator-recovered>');
+
+const directMutationRefused = solveBetaControlFlow(ast, directIteratorGraph({ mutateControl: true }));
+assert.equal(directMutationRefused.applied, true);
+assert.equal(directMutationRefused.genericForLoopCount, 0);
+assert.equal(directMutationRefused.whileLoopCount, 1);
+parseLua(directMutationRefused.source, '<generic-for-direct-iterator-mutation-refused>');
+
 console.log('beta CF generic-for temps: PASS');

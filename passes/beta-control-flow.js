@@ -2981,7 +2981,7 @@ function sourceTextForParsedExpressionNode(rhs, node) {
     return String(rhs).slice(start, end);
 }
 
-function recoverGenericForPackedIterator(graph, preOps, preTransitionIndex, iteratorRoots, iteratorStep, preTransition, structuralOperations = []) {
+function recoverGenericForPackedIterator(graph, preOps, preTransitionIndex, iteratorRoots, iteratorStep, preTransition, structuralOperations = [], bodyOperations = [], bodyLoopBindings = []) {
     if (!Array.isArray(iteratorRoots) || iteratorRoots.length !== 3) return null;
     const captured = new Set(graph.recoveredUpvalueBindings || []);
     const definitionsByName = new Map();
@@ -3033,21 +3033,104 @@ function recoverGenericForPackedIterator(graph, preOps, preTransitionIndex, iter
     if (packExpression?.type !== 'TableConstructorExpression' || packExpression.fields?.length !== 1) return null;
     const field = packExpression.fields[0];
     if (field?.type !== 'TableValue' || field.value?.type !== 'CallExpression') return null;
-    const callText = sourceTextForParsedExpressionNode(String(packDef.rhs || ''), field.value);
+    let callText = sourceTextForParsedExpressionNode(String(packDef.rhs || ''), field.value);
     if (!callText) return null;
 
-    const removeOperations = new Set([packDef, ...traced.flatMap(item => item.chain)]);
-    const removedNames = new Set([...removeOperations].map(operation => operation.emittedTarget).filter(Boolean));
-    const allowedReaders = new Set([...removeOperations, iteratorStep, preTransition, ...(structuralOperations || [])]);
-    for (const state of graph.states || []) {
-        for (const operation of state.operations || []) {
-            for (const name of removedNames) {
-                if ((operation.reads || []).includes(name) && !allowedReaders.has(operation)) return null;
+    const extraRemoveOperations = new Set();
+    let recoveredCallReads = new Set(packDef.reads || []);
+
+    // Local Prometheus can feed a generic-for iterator factory through RETURN_ALL:
+    //   local innerPack = { producer(...) }
+    //   local iterPack = { factory(unpack(innerPack)) }
+    // Recover only that exact one-pack/one-unpack chain. This keeps the producer at
+    // the same iterator-header evaluation point and preserves final-argument
+    // multi-return expansion without generic call inlining.
+    const outerCall = field.value;
+    const outerArgs = outerCall.arguments || [];
+    if (outerArgs.length === 1 && outerArgs[0]?.type === 'CallExpression' && isIdentifier(outerArgs[0].base, 'unpack')) {
+        const unpackArgs = outerArgs[0].arguments || [];
+        const innerPackName = unpackArgs.length === 1 && isIdentifier(unpackArgs[0]) ? unpackArgs[0].name : null;
+        const innerPackDefItem = innerPackName ? priorDefinition(innerPackName, packDefItem.index) : null;
+        const innerPackDef = innerPackDefItem?.operation || null;
+        const innerPackExpression = innerPackDef ? parseOperationExpression(innerPackDef) : null;
+        const innerFields = innerPackExpression?.type === 'TableConstructorExpression' ? (innerPackExpression.fields || []) : [];
+        const innerCall = innerFields.length === 1 && innerFields[0]?.type === 'TableValue' && innerFields[0].value?.type === 'CallExpression'
+            ? innerFields[0].value
+            : null;
+        if (innerPackName && innerPackDefItem && !captured.has(innerPackName) && innerCall) {
+            let innerCallText = sourceTextForParsedExpressionNode(String(innerPackDef.rhs || ''), innerCall);
+            const outerBaseText = sourceTextForParsedExpressionNode(String(packDef.rhs || ''), outerCall.base);
+            if (innerCallText && outerBaseText) {
+                // Preserve exact native namecall semantics for the compiler's
+                // method-snapshot + explicit-self call when structurally proven.
+                if (isIdentifier(innerCall.base) && (innerCall.arguments || []).length >= 1 && isIdentifier(innerCall.arguments[0])) {
+                    const selfName = innerCall.arguments[0].name;
+                    const methodDefItem = priorDefinition(innerCall.base.name, innerPackDefItem.index);
+                    const methodDef = methodDefItem?.operation || null;
+                    const methodExpression = methodDef ? parseOperationExpression(methodDef) : null;
+                    const methodName = methodExpression?.type === 'IndexExpression' && isIdentifier(methodExpression.base, selfName)
+                        ? plainPostCfMemberName(methodExpression.index)
+                        : null;
+                    if (methodName && !captured.has(innerCall.base.name)) {
+                        const argTexts = (innerCall.arguments || []).slice(1).map(arg => sourceTextForParsedExpressionNode(String(innerPackDef.rhs || ''), arg));
+                        if (argTexts.every(Boolean)) {
+                            innerCallText = `${selfName}:${methodName}(${argTexts.join(', ')})`;
+                            extraRemoveOperations.add(methodDef);
+                            recoveredCallReads.delete(innerCall.base.name);
+                            for (const read of methodDef.reads || []) recoveredCallReads.add(read);
+                        }
+                    }
+                }
+
+                callText = `${outerBaseText}(${innerCallText})`;
+                extraRemoveOperations.add(innerPackDef);
+                recoveredCallReads.delete(innerPackName);
+                for (const read of innerPackDef.reads || []) recoveredCallReads.add(read);
+
+                // Compiler-proven _env lookups may be presented directly once every
+                // use of the alias is owned by this recovered iterator setup. Do not
+                // touch genuine source aliases.
+                const aliasCandidates = [];
+                if (isIdentifier(outerCall.base)) aliasCandidates.push(outerCall.base.name);
+                const innerSelf = innerCall?.arguments?.[0];
+                if (isIdentifier(innerSelf)) aliasCandidates.push(innerSelf.name);
+                for (const aliasName of aliasCandidates) {
+                    const aliasDefItem = priorDefinition(aliasName, innerPackDefItem.index);
+                    const aliasDef = aliasDefItem?.operation || null;
+                    const globalName = aliasDef?.compilerGlobalLookupRecovered;
+                    if (!aliasDef || typeof globalName !== 'string' || !/^[A-Za-z_][A-Za-z0-9_]*$/.test(globalName) || POST_CF_MEMBER_KEYWORDS.has(globalName)) continue;
+                    const readerOps = [];
+                    for (const state of graph.states || []) {
+                        for (const operation of state.operations || []) {
+                            if ((operation.reads || []).includes(aliasName)) readerOps.push(operation);
+                        }
+                    }
+                    const ownedReaders = new Set([packDef, innerPackDef, ...extraRemoveOperations]);
+                    if (!readerOps.every(operation => ownedReaders.has(operation))) continue;
+                    callText = callText.replace(new RegExp(`\\b${aliasName.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}\\b`, 'g'), globalName);
+                    extraRemoveOperations.add(aliasDef);
+                    recoveredCallReads.delete(aliasName);
+                }
             }
         }
     }
 
-    const callReads = new Set(packDef.reads || []);
+    const removeOperations = new Set([packDef, ...traced.flatMap(item => item.chain), ...extraRemoveOperations]);
+    const removedNames = new Set([...removeOperations].map(operation => operation.emittedTarget).filter(Boolean));
+    const allowedReaders = new Set([...removeOperations, iteratorStep, preTransition, ...(structuralOperations || [])]);
+    const bodyReaderOperations = new Set(bodyOperations || []);
+    const bodyBindingNames = new Set(bodyLoopBindings || []);
+    for (const state of graph.states || []) {
+        for (const operation of state.operations || []) {
+            for (const name of removedNames) {
+                if (!(operation.reads || []).includes(name) || allowedReaders.has(operation)) continue;
+                if (bodyReaderOperations.has(operation) && bodyBindingNames.has(name)) continue;
+                return null;
+            }
+        }
+    }
+
+    const callReads = recoveredCallReads;
     for (let index = packDefItem.index + 1; index < preTransitionIndex; index++) {
         const operation = preOps[index];
         if (removeOperations.has(operation)) continue;
@@ -3130,17 +3213,21 @@ function matchCompilerGenericFor(graph, checkStateId) {
         const rhsOriginal = originalOperationRhs(operation);
         return rhsOriginal === controlName || operation?.rhs === emittedControlName;
     });
-    if (firstCopies.length !== 1) return null;
-    const firstCopy = firstCopies[0];
-    const firstVariableOriginal = originalOperationTarget(firstCopy);
-    const firstVariable = firstCopy.emittedTarget;
-    if (!firstVariableOriginal || firstVariableOriginal === secondVariableOriginal) return null;
+    if (firstCopies.length > 1) return null;
+    const directIteratorBindings = firstCopies.length === 0;
+    const firstCopy = firstCopies[0] || null;
+    const firstVariableOriginal = directIteratorBindings ? controlName : originalOperationTarget(firstCopy);
+    const firstVariable = directIteratorBindings ? emittedControlName : firstCopy.emittedTarget;
+    if (!firstVariableOriginal || (!directIteratorBindings && firstVariableOriginal === secondVariableOriginal)) return null;
 
-    // Captured ForIn variables are promoted by the local compiler immediately
-    // after the iterator step. beta-upvalues consumes alloc/init/alias/release
-    // scaffolding and leaves either the first compiler copy as the recovered
-    // binding or a dedicated upvalue-binding init for later loop variables.
+    // Dead register-clear / scalar transport cleanup can erase the compiler's
+    // explicit first loop-variable copy after beta lifetime ownership has already
+    // proven that the iterator result itself is the surviving source binding. In
+    // that shape, use the iterator result epochs directly instead of requiring
+    // syntax that an earlier proven cleanup intentionally removed. Captured loop
+    // bindings still require the explicit upvalue path below.
     const firstVariableCaptured = recoveredUpvalueBindings.has(firstVariable);
+    if (directIteratorBindings && firstVariableCaptured) return null;
     const secondBindingCandidates = (bodyEntry?.operations || []).filter(operation =>
         (operation?.kind === "upvalue-binding-start" || operation?.kind === "upvalue-binding-init") &&
         (originalOperationRhs(operation) === secondVariableOriginal || operation?.rhs === emittedSecondVariable) &&
@@ -3167,12 +3254,14 @@ function matchCompilerGenericFor(graph, checkStateId) {
     // compiler cleanup is still present, any recovered binding initialized from
     // that iterator value is an ordinary captured local copy inside the body.
     if (!secondHasCompilerCleanup && secondOrdinaryCleanups.length !== 0) return null;
-    if (!secondHasCompilerCleanup && secondBindingCandidates.length !== 1) return null;
-    const secondBinding = secondHasCompilerCleanup ? null : secondBindingCandidates[0];
+    if (!directIteratorBindings && !secondHasCompilerCleanup && secondBindingCandidates.length !== 1) return null;
+    if (directIteratorBindings && secondBindingCandidates.length !== 0) return null;
+    const secondBinding = directIteratorBindings ? null : (secondHasCompilerCleanup ? null : secondBindingCandidates[0]);
     const secondVariable = secondBinding?.emittedTarget || emittedSecondVariable;
     const secondVariableCaptured = Boolean(secondBinding);
+    if (directIteratorBindings && recoveredUpvalueBindings.has(secondVariable)) return null;
     const cleanupOperations = new Set();
-    for (const variable of [
+    for (const variable of directIteratorBindings ? [] : [
         { name: firstVariableOriginal, captured: firstVariableCaptured },
         { name: secondVariableOriginal, captured: secondVariableCaptured },
     ]) {
@@ -3204,10 +3293,13 @@ function matchCompilerGenericFor(graph, checkStateId) {
         }
     }
 
-    const skipOperations = new Set([firstCopy, ...(secondBinding ? [secondBinding] : []), ...cleanupOperations]);
+    const skipOperations = new Set([...(firstCopy ? [firstCopy] : []), ...(secondBinding ? [secondBinding] : []), ...cleanupOperations]);
     const structuredBody = structureLoopBodyRegion(stateById, region, bodyId, check.id, skipOperations, null, exitId, true);
     if (!structuredBody) return null;
 
+    const loopBodyOperations = directIteratorBindings
+        ? [...region.ids].flatMap(stateId => stateById.get(stateId)?.operations || [])
+        : [];
     const packedIterator = recoverGenericForPackedIterator(
         graph,
         preOps,
@@ -3215,7 +3307,9 @@ function matchCompilerGenericFor(graph, checkStateId) {
         [iteratorDef, iteratorStateDef, controlDef],
         iteratorStep,
         preInfo.operation,
-        [checkInfo.operation, firstCopy, ...(secondBinding ? [secondBinding] : []), ...cleanupOperations]
+        [checkInfo.operation, ...(firstCopy ? [firstCopy] : []), ...(secondBinding ? [secondBinding] : []), ...cleanupOperations],
+        loopBodyOperations,
+        directIteratorBindings ? [firstVariable, secondVariable] : []
     );
     const iteratorExpressions = packedIterator?.expressions || [iteratorDef.emittedTarget, iteratorStateDef.emittedTarget, controlDef.emittedTarget];
     const iteratorReads = packedIterator?.reads || [iteratorDef.emittedTarget, iteratorStateDef.emittedTarget, controlDef.emittedTarget];
@@ -4611,6 +4705,7 @@ function solveAcyclicStructured(originalAst, graph) {
     const prepared = new Map();
     let terminalReturnPayloadSunkCount = 0;
     let terminalReturnCount = 0;
+    const terminalReturnTexts = [];
     let ifConditionTempRecoveryCount = 0;
     for (const state of states) {
         if (hasUnsafeUnsupportedOperation(state.operations)) {
@@ -4634,6 +4729,7 @@ function solveAcyclicStructured(originalAst, graph) {
             }
             terminalReturnPayloadSunkCount += sunk.moved ? 1 : 0;
             terminalReturnCount++;
+            terminalReturnTexts.push(lowered.returnText || null);
             prepared.set(state.id, { state, info: { kind: "return" }, bodyOperations: lowered.operations });
             continue;
         }
@@ -4873,7 +4969,7 @@ function solveAcyclicStructured(originalAst, graph) {
         terminalReturnPayloadSunk: terminalReturnPayloadSunkCount > 0,
         terminalReturnPayloadSunkCount,
         terminalReturnLowered: terminalReturnCount > 0,
-        terminalReturnText: null,
+        terminalReturnText: terminalReturnCount === 1 ? terminalReturnTexts[0] : null,
         environmentHeader: presented.environmentHeader,
         hoistedEpochDeclarationCount: epochHoisting.count || 0,
         registerOverflowUsed: graph.registerOverflowUsed === true,
