@@ -4991,6 +4991,27 @@ function finalizePresentedSource(source) {
     return [headers, body].filter(Boolean).join("\n\n") + "\n";
 }
 
+function removeCompilerRootBareReturn(source, terminalReturnText) {
+    const text = String(source || "");
+    if (terminalReturnText !== "return") return text;
+    let ast;
+    try {
+        ast = luaparse.parse(text, {
+            luaVersion: "luau",
+            comments: false,
+            scope: false,
+            locations: false,
+            ranges: true,
+        });
+    } catch {
+        return text;
+    }
+    const body = ast.body || [];
+    const last = body[body.length - 1];
+    if (last?.type !== "ReturnStatement" || (last.arguments || []).length !== 0 || !Array.isArray(last.range)) return text;
+    return text.slice(0, last.range[0]).trimEnd() + "\n";
+}
+
 function parseNestedBody(bodyText) {
     try {
         return luaparse.parse(String(bodyText || ""), {
@@ -5518,7 +5539,7 @@ function solveClosureRegions(originalAst, graph) {
         postCfStaticMemberRecoveryCount: sum("postCfStaticMemberRecoveryCount"),
         postCfCopyScalarRecoveryCount: sum("postCfCopyScalarRecoveryCount"),
         terminalReturnLowered: results.every(result => result.terminalReturnLowered),
-        terminalReturnText: null,
+        terminalReturnText: rootResult.terminalReturnText || null,
         closureRegionCount: graph.entries.length,
         inlinedClosureFactoryCount: sites.length,
     };
@@ -5554,7 +5575,8 @@ function solveBetaControlFlowImpl(originalAst, betaResult) {
         solved = solveClosureRegions(originalAst, graph);
     }
     if (!solved.applied) return solved;
-    const finalSource = finalizePresentedSource(solved.source);
+    const presentedSource = finalizePresentedSource(solved.source);
+    const finalSource = removeCompilerRootBareReturn(presentedSource, solved.terminalReturnText);
     return {
         ...solved,
         source: finalSource,
