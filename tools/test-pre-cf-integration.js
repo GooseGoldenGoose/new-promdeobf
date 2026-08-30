@@ -33,6 +33,7 @@ assert.deepEqual(result.beta.preCfTempRecovery.stages, [
     "finalizePreCfCallBaseTemps",
     "finalizePreCfNamecalls",
     "finalizePreCfDiscardedCallResults",
+    "finalizePreCfEffectCallArgumentTemps",
     "finalizePreCfReturnTemps",
     "finalizePreCfReturnAllTemps",
     "finalizePreCfMultiReturnTemps",

@@ -1,6 +1,6 @@
 "use strict";
 const assert = require("assert");
-const { finalizePreCfCallArgumentTemps } = require("../passes/pre-cf-temp-recovery");
+const { finalizePreCfCallArgumentTemps, finalizePreCfEffectCallArgumentTemps } = require("../passes/pre-cf-temp-recovery");
 
 function makeBeta(consumerRhs, consumerReads, extraOps = [], extraSource = "") {
     const source = `vm = function(state, args, upvalues, gcProxy)
@@ -98,6 +98,129 @@ end`;
     assert(!beta.source.includes("local arg2_v = 2"));
     assert(!beta.source.includes("local arg1_v = 1"));
     assert(beta.source.includes("local out_v = sink_v(1, 2)"), beta.source);
+}
+
+
+// Contiguous static lookup snapshots may return to a call-argument tail when order is unchanged.
+{
+    const source = `vm = function(state, args, upvalues, gcProxy)
+    local ReturnVal
+    while state do
+        if state == 1 then
+            local sink_v = args
+            local table_v = args
+            local a_v = table_v[1]
+            local b_v = table_v[2]
+            local c_v = table_v.key
+            local out_v = sink_v("values", a_v, b_v, c_v)
+            state = nil
+        end
+    end
+    return ReturnVal
+end`;
+    const operations = [
+        { index:1, kind:"version-define", emittedTarget:"sink_v", rhs:"args", reads:[], emittedText:"local sink_v = args" },
+        { index:2, kind:"version-define", emittedTarget:"table_v", rhs:"args", reads:[], emittedText:"local table_v = args" },
+        { index:3, kind:"version-define", emittedTarget:"a_v", rhs:"table_v[1]", reads:["table_v"], emittedText:"local a_v = table_v[1]" },
+        { index:4, kind:"version-define", emittedTarget:"b_v", rhs:"table_v[2]", reads:["table_v"], emittedText:"local b_v = table_v[2]" },
+        { index:5, kind:"version-define", emittedTarget:"c_v", rhs:"table_v.key", reads:["table_v"], emittedText:"local c_v = table_v.key" },
+        { index:6, kind:"version-define", emittedTarget:"out_v", rhs:'sink_v("values", a_v, b_v, c_v)', reads:["sink_v","a_v","b_v","c_v"], emittedText:'local out_v = sink_v("values", a_v, b_v, c_v)' },
+        { index:7, kind:"state-transition", emittedTarget:"state", rhs:"nil", reads:[], emittedText:"state = nil" },
+    ];
+    const beta={source,graph:{cfgComplete:true,stateName:"state",recoveredUpvalueBindings:[],states:[{id:1,successors:[],operations}]}};
+    finalizePreCfCallArgumentTemps(beta);
+    assert.equal(beta.preCfCallArgumentTemps.folds,3,beta.source);
+    assert(beta.source.includes('local out_v = sink_v("values", table_v[1], table_v[2], table_v.key)'),beta.source);
+    assert(!beta.source.includes('local a_v = table_v[1]'),beta.source);
+}
+// Effectful earlier arguments forbid delaying lookup snapshots into the call.
+{
+    const source = `vm = function(state, args, upvalues, gcProxy)
+    local ReturnVal
+    while state do
+        if state == 1 then
+            local sink_v = args
+            local table_v = args
+            local a_v = table_v[1]
+            local out_v = sink_v(other_v(), a_v)
+            state = nil
+        end
+    end
+    return ReturnVal
+end`;
+    const operations = [
+        { index:1, kind:"version-define", emittedTarget:"sink_v", rhs:"args", reads:[], emittedText:"local sink_v = args" },
+        { index:2, kind:"version-define", emittedTarget:"table_v", rhs:"args", reads:[], emittedText:"local table_v = args" },
+        { index:3, kind:"version-define", emittedTarget:"a_v", rhs:"table_v[1]", reads:["table_v"], emittedText:"local a_v = table_v[1]" },
+        { index:4, kind:"version-define", emittedTarget:"out_v", rhs:"sink_v(other_v(), a_v)", reads:["sink_v","other_v","a_v"], emittedText:"local out_v = sink_v(other_v(), a_v)" },
+        { index:5, kind:"state-transition", emittedTarget:"state", rhs:"nil", reads:[], emittedText:"state = nil" },
+    ];
+    const beta={source,graph:{cfgComplete:true,stateName:"state",recoveredUpvalueBindings:[],states:[{id:1,successors:[],operations}]}};
+    finalizePreCfCallArgumentTemps(beta);
+    assert.equal(beta.preCfCallArgumentTemps.folds,0,beta.source);
+    assert(beta.source.includes("local a_v = table_v[1]"),beta.source);
+}
+
+
+// After compiler scratch-call removal, recover contiguous scalar/static-lookup setup into an effect-call.
+{
+    const source = `vm = function(state, args, upvalues, gcProxy)
+    local ReturnVal
+    while state do
+        if state == 1 then
+            local sink_v = args
+            local table_v = args
+            local a_v = table_v[1]
+            local b_v = table_v[2]
+            local label_v = "values"
+            sink_v(label_v, a_v, b_v)
+            state = nil
+        end
+    end
+    return ReturnVal
+end`;
+    const operations = [
+        { index:1, kind:"version-define", emittedTarget:"sink_v", rhs:"args", reads:[], emittedText:"local sink_v = args" },
+        { index:2, kind:"version-define", emittedTarget:"table_v", rhs:"args", reads:[], emittedText:"local table_v = args" },
+        { index:3, kind:"epoch-start", emittedTarget:"a_v", rhs:"table_v[1]", reads:["table_v"], emittedText:"local a_v = table_v[1]" },
+        { index:4, kind:"epoch-start", emittedTarget:"b_v", rhs:"table_v[2]", reads:["table_v"], emittedText:"local b_v = table_v[2]" },
+        { index:5, kind:"epoch-start", emittedTarget:"label_v", rhs:'"values"', reads:[], emittedText:'local label_v = "values"' },
+        { index:6, kind:"effect-call", emittedTarget:null, rhs:"sink_v(label_v, a_v, b_v)", reads:["sink_v","label_v","a_v","b_v"], emittedText:"sink_v(label_v, a_v, b_v)" },
+        { index:7, kind:"state-transition", emittedTarget:"state", rhs:"nil", reads:[], emittedText:"state = nil" },
+    ];
+    const beta={source,graph:{cfgComplete:true,stateName:"state",recoveredUpvalueBindings:[],states:[{id:1,successors:[],operations}]}};
+    finalizePreCfEffectCallArgumentTemps(beta);
+    assert.equal(beta.preCfEffectCallArgumentTemps.folds,3,beta.source);
+    assert(beta.source.includes('sink_v("values", table_v[1], table_v[2])'),beta.source);
+    assert(!beta.source.includes("local a_v = table_v[1]"),beta.source);
+}
+// Reordered lookup arguments refuse because lookup side effects/order could change.
+{
+    const source = `vm = function(state, args, upvalues, gcProxy)
+    local ReturnVal
+    while state do
+        if state == 1 then
+            local sink_v = args
+            local table_v = args
+            local a_v = table_v[1]
+            local b_v = table_v[2]
+            sink_v(b_v, a_v)
+            state = nil
+        end
+    end
+    return ReturnVal
+end`;
+    const operations = [
+        { index:1, kind:"version-define", emittedTarget:"sink_v", rhs:"args", reads:[], emittedText:"local sink_v = args" },
+        { index:2, kind:"version-define", emittedTarget:"table_v", rhs:"args", reads:[], emittedText:"local table_v = args" },
+        { index:3, kind:"epoch-start", emittedTarget:"a_v", rhs:"table_v[1]", reads:["table_v"], emittedText:"local a_v = table_v[1]" },
+        { index:4, kind:"epoch-start", emittedTarget:"b_v", rhs:"table_v[2]", reads:["table_v"], emittedText:"local b_v = table_v[2]" },
+        { index:5, kind:"effect-call", emittedTarget:null, rhs:"sink_v(b_v, a_v)", reads:["sink_v","b_v","a_v"], emittedText:"sink_v(b_v, a_v)" },
+        { index:6, kind:"state-transition", emittedTarget:"state", rhs:"nil", reads:[], emittedText:"state = nil" },
+    ];
+    const beta={source,graph:{cfgComplete:true,stateName:"state",recoveredUpvalueBindings:[],states:[{id:1,successors:[],operations}]}};
+    finalizePreCfEffectCallArgumentTemps(beta);
+    assert.equal(beta.preCfEffectCallArgumentTemps.folds,0,beta.source);
 }
 
 console.log("pre-CF call argument temps: PASS");
