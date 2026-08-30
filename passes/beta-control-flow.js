@@ -4979,6 +4979,18 @@ function presentedBody(source) {
     return String(source).slice(index + marker.length).trimEnd();
 }
 
+function finalizePresentedSource(source) {
+    const text = String(source || "");
+    const prefix = "--headers";
+    const marker = "\n\n--body\n\n";
+    if (!text.startsWith(prefix)) return text;
+    const markerIndex = text.indexOf(marker, prefix.length);
+    if (markerIndex < 0) return text;
+    const headers = text.slice(prefix.length, markerIndex).trim();
+    const body = text.slice(markerIndex + marker.length).trim();
+    return [headers, body].filter(Boolean).join("\n\n") + "\n";
+}
+
 function parseNestedBody(bodyText) {
     try {
         return luaparse.parse(String(bodyText || ""), {
@@ -5270,17 +5282,9 @@ function nestedFunctionExpression(bodyText, options = {}) {
     const recoveredSignature = options.recoveredSignature === true;
     const parameters = recoveredSignature ? [...(options.parameters || [])] : [];
     if (recoveredSignature && options.vararg === true) parameters.push("...");
-    const lines = [
-        recoveredSignature ? `function(${parameters.join(", ")})` : "function(...)",
-        "    --headers",
-        "",
-    ];
+    const lines = [recoveredSignature ? `function(${parameters.join(", ")})` : "function(...)"];
     if (!recoveredSignature) lines.push("    local args = { ... }");
     if (options.registerOverflowUsed === true) lines.push("    local RegisterOverflow = {}");
-    lines.push(
-        "",
-        "    --body"
-    );
     if (body) lines.push("", indentText(body, 1));
     lines.push("end");
     return lines.join("\n");
@@ -5550,8 +5554,10 @@ function solveBetaControlFlowImpl(originalAst, betaResult) {
         solved = solveClosureRegions(originalAst, graph);
     }
     if (!solved.applied) return solved;
+    const finalSource = finalizePresentedSource(solved.source);
     return {
         ...solved,
+        source: finalSource,
         posPreservationRemoval: posPreservation,
         upvalueRecoveryApplied: upvalues.applied,
         recoveredUpvalueCellCount: upvalues.stats?.recoveredCellCount || 0,
