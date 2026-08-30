@@ -1974,81 +1974,162 @@ function recoverStructuredGenericForGlobalMethodTemps(nodes, graph) {
         return { reads, definitions };
     }
 
-    function methodSnapshot(operation, receiverName) {
-        const rhs = String(operation?.rhs || "").trim();
-        const parsed = parseTransitionExpression(rhs);
-        const expression = parsed?.expression;
-        if (!expression) return null;
-        if (expression.type === "MemberExpression" && expression.base?.type === "Identifier" &&
-            expression.base.name === receiverName && expression.identifier?.type === "Identifier") {
-            const method = expression.identifier.name;
-            return /^[A-Za-z_][A-Za-z0-9_]*$/.test(method) && !POST_CF_MEMBER_KEYWORDS.has(method) ? method : null;
+    function staticMember(expression, baseName) {
+        if (expression?.type === "MemberExpression" && expression.base?.type === "Identifier" &&
+            expression.base.name === baseName && expression.identifier?.type === "Identifier") {
+            const name = expression.identifier.name;
+            return /^[A-Za-z_][A-Za-z0-9_]*$/.test(name) && !POST_CF_MEMBER_KEYWORDS.has(name) ? name : null;
         }
-        if (expression.type === "IndexExpression" && expression.base?.type === "Identifier" && expression.base.name === receiverName) {
+        if (expression?.type === "IndexExpression" && expression.base?.type === "Identifier" && expression.base.name === baseName) {
             return plainPostCfMemberName(expression.index);
         }
         return null;
     }
 
-    function recoverHeader(body, index, facts) {
-        const loop = body[index];
-        if (loop?.type !== "generic-for" || (loop.expressions || []).length !== 1 || index < 2) return false;
+    function isSyntheticSnapshot(node) {
+        const operation = node?.type === "raw" ? node.operation : null;
+        const expression = operation ? parseOperationExpression(operation) : null;
+        return !!operation && (
+            staticArgsIndex(expression) !== null ||
+            (operation.returnSinkSafe === true && expression?.type === "Identifier" && expression.name === "args")
+        );
+    }
 
-        function previousSemanticNode(fromIndex) {
-            for (let at = fromIndex; at >= 0; at--) {
-                const candidate = body[at];
-                const operation = candidate?.type === "raw" ? candidate.operation : null;
-                const expression = operation ? parseOperationExpression(operation) : null;
-                const parameterSnapshot = operation && (
-                    staticArgsIndex(expression) !== null ||
-                    (operation.returnSinkSafe === true && expression?.type === "Identifier" && expression.name === "args")
-                );
-                if (parameterSnapshot) continue;
-                return { node: candidate, index: at };
-            }
-            return null;
+    function recoverHeader(body, loopIndex, facts) {
+        const loop = body[loopIndex];
+        if (loop?.type !== "generic-for" || (loop.expressions || []).length !== 1) return false;
+
+        const definitions = new Map();
+        for (let index = 0; index < loopIndex; index++) {
+            const node = body[index];
+            const target = node?.type === "raw" ? node.operation?.emittedTarget : null;
+            if (!target || definitions.has(target)) continue;
+            definitions.set(target, { node, operation: node.operation, index });
         }
 
-        const methodItem = previousSemanticNode(index - 1);
-        if (!methodItem?.node || methodItem.node.type !== "raw") return false;
-        const receiverItem = previousSemanticNode(methodItem.index - 1);
-        if (!receiverItem?.node || receiverItem.node.type !== "raw") return false;
+        const consumedNodes = new Set();
+        const expectedReads = new Map();
+        const active = new Set();
+        let earliest = loopIndex;
 
-        const receiver = receiverItem.node.operation || {};
-        const method = methodItem.node.operation || {};
-        const receiverName = receiver.emittedTarget;
-        const methodName = method.emittedTarget;
-        const globalName = receiver.compilerGlobalLookupRecovered;
-        if (!receiverName || !methodName || captured.has(receiverName) || captured.has(methodName)) return false;
-        if (typeof globalName !== "string" || !/^[A-Za-z_][A-Za-z0-9_]*$/.test(globalName) || POST_CF_MEMBER_KEYWORDS.has(globalName)) return false;
-        if (String(receiver.rhs || "").trim() !== globalName) return false;
-        if ((facts.definitions.get(receiverName) || 0) !== 1 || (facts.definitions.get(methodName) || 0) !== 1) return false;
-        if ((facts.reads.get(receiverName) || 0) !== 2 || (facts.reads.get(methodName) || 0) !== 1) return false;
-        if ((method.reads || []).length !== 1 || method.reads[0] !== receiverName) return false;
-        const staticMethod = methodSnapshot(method, receiverName);
-        if (!staticMethod) return false;
+        function noteRead(name, count = 1) {
+            expectedReads.set(name, (expectedReads.get(name) || 0) + count);
+        }
+
+        function expressionText(rhs, astNode) {
+            return sourceTextForParsedExpressionNode(String(rhs || ""), astNode);
+        }
+
+        function recoverArgument(arg, lowerBound, upperBound) {
+            if (arg?.type !== "Identifier") return expressionText(loop.expressions[0], arg);
+            const item = definitions.get(arg.name);
+            if (!item || item.index <= lowerBound || item.index >= upperBound || captured.has(arg.name)) return arg.name;
+            if ((facts.definitions.get(arg.name) || 0) !== 1 || item.operation?.returnSinkSafe !== true) return null;
+            const expression = parseOperationExpression(item.operation);
+            if (!expression || !["NumericLiteral", "StringLiteral", "BooleanLiteral", "NilLiteral"].includes(expression.type)) return null;
+            noteRead(arg.name);
+            consumedNodes.add(item.node);
+            earliest = Math.min(earliest, item.index);
+            return String(item.operation.rhs || "").trim();
+        }
+
+        function recoverValue(name, useIndex) {
+            if (!name || active.has(name) || captured.has(name)) return null;
+            const item = definitions.get(name);
+            if (!item || item.index >= useIndex || (facts.definitions.get(name) || 0) !== 1) return null;
+            const operation = item.operation || {};
+            const rhs = String(operation.rhs || "").trim();
+            const expression = parseOperationExpression(operation);
+            if (!expression) return null;
+            active.add(name);
+            let result = null;
+
+            const globalName = operation.compilerGlobalLookupRecovered;
+            if (typeof globalName === "string" && /^[A-Za-z_][A-Za-z0-9_]*$/.test(globalName) &&
+                !POST_CF_MEMBER_KEYWORDS.has(globalName) && rhs === globalName) {
+                result = globalName;
+            } else if ((expression.type === "MemberExpression" || expression.type === "IndexExpression") && expression.base?.type === "Identifier") {
+                const baseName = expression.base.name;
+                const member = staticMember(expression, baseName);
+                if (member) {
+                    noteRead(baseName);
+                    const base = recoverValue(baseName, item.index);
+                    if (base) result = `${base}.${member}`;
+                }
+            } else if (expression.type === "CallExpression" && expression.base?.type === "Identifier") {
+                result = recoverCall(expression, item.index, rhs);
+            }
+
+            active.delete(name);
+            if (!result) return null;
+            consumedNodes.add(item.node);
+            earliest = Math.min(earliest, item.index);
+            return result;
+        }
+
+        function recoverCall(call, consumerIndex, source) {
+            if (call?.base?.type !== "Identifier") return null;
+            const methodName = call.base.name;
+            const methodItem = definitions.get(methodName);
+            if (!methodItem || methodItem.index >= consumerIndex || captured.has(methodName) ||
+                (facts.definitions.get(methodName) || 0) !== 1) return null;
+            const args = call.arguments || [];
+            if (!args.length || args[0]?.type !== "Identifier") return null;
+            const receiverName = args[0].name;
+            const methodExpression = parseOperationExpression(methodItem.operation);
+            const member = staticMember(methodExpression, receiverName);
+            if (!member) return null;
+
+            noteRead(methodName);
+            noteRead(receiverName, 2);
+            const receiver = recoverValue(receiverName, methodItem.index);
+            if (!receiver) return null;
+
+            const sourceText = String(source || "");
+            const callPrefix = parseTransitionExpression(sourceText)?.source.length - sourceText.length;
+            const renderedArgs = [];
+            for (const arg of args.slice(1)) {
+                let text = null;
+                if (arg?.type === "Identifier") {
+                    text = recoverArgument(arg, methodItem.index, consumerIndex);
+                    if (text === arg.name) noteRead(arg.name);
+                } else if (Array.isArray(arg?.range)) {
+                    text = sourceText.slice(arg.range[0] - callPrefix, arg.range[1] - callPrefix);
+                }
+                if (text == null) return null;
+                renderedArgs.push(text);
+            }
+
+            consumedNodes.add(methodItem.node);
+            earliest = Math.min(earliest, methodItem.index);
+            const rendered = `${receiver}:${member}(${renderedArgs.join(", ")})`;
+            return parseTransitionExpression(rendered)?.expression ? rendered : null;
+        }
 
         const source = String(loop.expressions[0] || "");
         const parsed = parseTransitionExpression(source);
         const call = parsed?.expression;
-        if (call?.type !== "CallExpression" || call.base?.type !== "Identifier" || call.base.name !== methodName) return false;
-        const args = call.arguments || [];
-        if (!args.length || args[0]?.type !== "Identifier" || args[0].name !== receiverName) return false;
-        const prefixLength = parsed.source.length - source.length;
-        const remaining = args.slice(1).map(arg => Array.isArray(arg?.range)
-            ? source.slice(arg.range[0] - prefixLength, arg.range[1] - prefixLength)
-            : null);
-        if (remaining.some(text => text === null)) return false;
-        const rewritten = `${globalName}[${JSON.stringify(staticMethod)}](${globalName}${remaining.length ? `, ${remaining.join(", ")}` : ""})`;
-        if (!parseTransitionExpression(rewritten)?.expression) return false;
+        const recovered = recoverCall(call, loopIndex, source);
+        if (!recovered) return false;
 
-        loop.expressions[0] = rewritten;
-        loop.reads = [...new Set((loop.reads || []).filter(name => name !== receiverName && name !== methodName))];
-        body.splice(methodItem.index, 1);
-        body.splice(receiverItem.index, 1);
-        folds += 2;
+        for (const [name, expected] of expectedReads) {
+            if ((facts.reads.get(name) || 0) !== expected) return false;
+        }
+        for (let index = earliest; index < loopIndex; index++) {
+            const node = body[index];
+            if (consumedNodes.has(node) || isSyntheticSnapshot(node)) continue;
+            return false;
+        }
+
+        loop.expressions[0] = recovered;
+        loop.reads = [...new Set((loop.reads || []).filter(name => !expectedReads.has(name)))];
+        for (let index = loopIndex - 1; index >= earliest; index--) {
+            if (consumedNodes.has(body[index])) body.splice(index, 1);
+        }
+        folds += consumedNodes.size;
         return true;
     }
+
     let changed = true;
     while (changed) {
         changed = false;

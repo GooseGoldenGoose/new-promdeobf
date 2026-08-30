@@ -88,8 +88,8 @@ for (const condition of [
     ];
     assert.equal(recoverStructuredGenericForGlobalMethodTemps(nodes, { recoveredUpvalueBindings: [] }), 2);
     assert.equal(nodes.length, 2);
-    assert.equal(nodes[1].expressions[0], 'game["GetChildren"](game)');
-    assert.equal(recoverStructuredPostCfNamecalls(nodes), 1);
+    assert.equal(nodes[1].expressions[0], "game:GetChildren()");
+    assert.equal(recoverStructuredPostCfNamecalls(nodes), 0);
     assert.equal(nodes[1].expressions[0], "game:GetChildren()");
 }
 
@@ -102,4 +102,33 @@ for (const condition of [
     assert.equal(recoverStructuredGenericForGlobalMethodTemps(nodes, { recoveredUpvalueBindings: [] }), 0);
     assert.equal(nodes.length, 3);
 }
+
+
+{
+    const nodes = [
+        { type: "raw", text: "local root = game", reads: [], operation: { kind: "version-define", emittedTarget: "root", rhs: "game", reads: [], emittedText: "local root = game", compilerGlobalLookupRecovered: "game" } },
+        { type: "raw", text: 'local getService = root["GetService"]', reads: ["root"], operation: { kind: "version-define", emittedTarget: "getService", rhs: 'root["GetService"]', reads: ["root"], emittedText: 'local getService = root["GetService"]' } },
+        { type: "raw", text: 'local serviceName = "Workspace"', reads: [], operation: { kind: "version-define", emittedTarget: "serviceName", rhs: '"Workspace"', reads: [], emittedText: 'local serviceName = "Workspace"', returnSinkSafe: true } },
+        { type: "raw", text: "local workspace = getService(root, serviceName)", reads: ["getService", "root", "serviceName"], operation: { kind: "version-define", emittedTarget: "workspace", rhs: "getService(root, serviceName)", reads: ["getService", "root", "serviceName"], emittedText: "local workspace = getService(root, serviceName)" } },
+        { type: "raw", text: 'local getChildren = workspace["GetChildren"]', reads: ["workspace"], operation: { kind: "version-define", emittedTarget: "getChildren", rhs: 'workspace["GetChildren"]', reads: ["workspace"], emittedText: 'local getChildren = workspace["GetChildren"]' } },
+        { type: "generic-for", variables: ["i", "v"], expressions: ["getChildren(workspace)"], reads: ["getChildren", "workspace"], body: [] },
+    ];
+    assert.equal(recoverStructuredGenericForGlobalMethodTemps(nodes, { recoveredUpvalueBindings: [] }), 5);
+    assert.equal(nodes.length, 1);
+    assert.equal(nodes[0].expressions[0], 'game:GetService("Workspace"):GetChildren()');
+}
+
+{
+    const nodes = [
+        { type: "raw", text: "local root = game", reads: [], operation: { kind: "version-define", emittedTarget: "root", rhs: "game", reads: [], emittedText: "local root = game", compilerGlobalLookupRecovered: "game" } },
+        { type: "raw", text: "local storage = root.ReplicatedStorage", reads: ["root"], operation: { kind: "version-define", emittedTarget: "storage", rhs: "root.ReplicatedStorage", reads: ["root"], emittedText: "local storage = root.ReplicatedStorage" } },
+        { type: "raw", text: "local folder = storage.Folder", reads: ["storage"], operation: { kind: "version-define", emittedTarget: "folder", rhs: "storage.Folder", reads: ["storage"], emittedText: "local folder = storage.Folder" } },
+        { type: "raw", text: 'local getChildren = folder["GetChildren"]', reads: ["folder"], operation: { kind: "version-define", emittedTarget: "getChildren", rhs: 'folder["GetChildren"]', reads: ["folder"], emittedText: 'local getChildren = folder["GetChildren"]' } },
+        { type: "generic-for", variables: ["i", "v"], expressions: ["getChildren(folder)"], reads: ["getChildren", "folder"], body: [] },
+    ];
+    assert.equal(recoverStructuredGenericForGlobalMethodTemps(nodes, { recoveredUpvalueBindings: [] }), 4);
+    assert.equal(nodes.length, 1);
+    assert.equal(nodes[0].expressions[0], "game.ReplicatedStorage.Folder:GetChildren()");
+}
+
 console.log("beta CF post-CF namecalls: PASS");

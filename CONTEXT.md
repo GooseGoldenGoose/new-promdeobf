@@ -829,3 +829,12 @@ Latest post-Step-47 work - compiler IIFE / anonymous closure expression recovery
 - The pass rewrites the generic-for expression to `<global>["Method"](<global>, ...)`; existing post-CF namecall recovery then emits `<global>:Method(...)` without changing generic-for multi-result adjustment.
 - Exact fixture `tmp/small-iter-while-20260830.genericfix3.lua` now emits `for r_v5_1, r_v8_1 in game:GetChildren() do`; the requested `while task.wait()` lowering remains unchanged.
 - Focused namecall suite PASS. Full combined gate PASS: 43 focused suites + 66/66 canonical samples.
+
+
+## Recursive generic-for receiver chain recovery (2026-08-31)
+- Expanded `recoverStructuredGenericForGlobalMethodTemps` from direct-global-only recovery into recursive compiler-owned receiver-expression recovery rooted at `compilerGlobalLookupRecovered`.
+- Supported producer pieces are structural/name-agnostic: static member/index access, proven explicit-self method calls, compiler argument-setup literals, and nested combinations.
+- Recovery resolves the receiver/table chain first, then renders the generic-for iterator as the recovered source-like namecall chain. No method/service/property name is hardcoded.
+- Every consumed beta temp must have one definition and exact read ownership; captures refuse. Every semantic node between the earliest consumed producer and the loop must belong to the chain, except proven synthetic `args` / `args[N]` snapshots. External/source argument identifiers stay as identifiers instead of being generically inlined.
+- Exact compiler fixture `game:GetService("Workspace"):GetChildren()` now recovers fully. Exact static table chain `game.ReplicatedStorage.Folder:GetChildren()` also recovers fully.
+- Focused namecall suite PASS; full combined gate PASS: 43 focused suites + 66/66 canonical samples.
