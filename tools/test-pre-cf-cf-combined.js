@@ -39,6 +39,7 @@ const focused = [
     "test-beta-cf-post-dead-closures.js",
     "test-beta-cf-post-namecalls.js",
     "test-beta-cf-post-static-members.js",
+    "test-beta-cf-post-dead-scalars.js",
     "test-beta-cf-closure-signatures.js",
     "test-beta-control-flow.js",
     "test-production-pipeline.js",

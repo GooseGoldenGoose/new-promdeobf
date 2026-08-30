@@ -344,6 +344,7 @@ function solveSingleState(originalAst, graph) {
     const postCfNamecallRecoveryCount = recoverStructuredPostCfNamecalls(structuredNodes);
     const postCfClosureDestinationRecoveryCount = recoverStructuredPostCfClosureDestinationTemps(structuredNodes, graph);
     const postCfDeadClosureRecoveryCount = recoverStructuredPostCfDeadClosureTemps(structuredNodes, graph);
+    const postCfDeadScalarLocalRecoveryCount = recoverStructuredPostCfDeadScalarLocals(structuredNodes, graph);
     const postCfCopyScalarRecoveryCount = recoverStructuredPostCfCopyScalarTemps(structuredNodes, graph);
     const postCfStaticMemberRecoveryCount = recoverStructuredPostCfStaticMembers(structuredNodes);
     const bodyText = formatStructuredNodes(structuredNodes);
@@ -361,6 +362,7 @@ function solveSingleState(originalAst, graph) {
         postCfNamecallRecoveryCount,
         postCfClosureDestinationRecoveryCount,
         postCfDeadClosureRecoveryCount,
+        postCfDeadScalarLocalRecoveryCount,
         postCfCopyScalarRecoveryCount,
         postCfStaticMemberRecoveryCount,
         terminalReturnCount: lowered.lowered ? 1 : 0,
@@ -1412,6 +1414,83 @@ function recoverStructuredPostCfDeadClosureTemps(nodes, graph) {
                                 changed = true;
                                 return true;
                             }
+                        }
+                    }
+                }
+                if (node?.type === "if") { if (visitBody(node.thenBody) || visitBody(node.elseBody)) return true; }
+                else if (node?.type === "numeric-for" || node?.type === "generic-for") { if (visitBody(node.body)) return true; }
+                else if (node?.type === "while-guard") { if (visitBody(node.conditionBody) || visitBody(node.body)) return true; }
+                else if (node?.type === "repeat-until") { if (visitBody(node.body) || visitBody(node.conditionBody)) return true; }
+            }
+            return false;
+        }
+        visitBody(nodes);
+    }
+    return folds;
+}
+
+function recoverStructuredPostCfDeadScalarLocals(nodes, graph) {
+    const captured = new Set(graph?.recoveredUpvalueBindings || []);
+    let folds = 0;
+
+    function collectFacts(root) {
+        const reads = new Map();
+        const definitions = new Map();
+        const localDeclarations = new Set();
+        function visit(body) {
+            for (const node of body || []) {
+                for (const name of node.reads || []) reads.set(name, (reads.get(name) || 0) + 1);
+                if (node.type === "raw") {
+                    if (node.operation?.emittedTarget) {
+                        const name = node.operation.emittedTarget;
+                        definitions.set(name, (definitions.get(name) || 0) + 1);
+                    }
+                    const parsed = parseControlFlowStatement(node.text);
+                    const statement = parsed?.statement;
+                    if (statement?.type === "LocalStatement") {
+                        for (const variable of statement.variables || []) {
+                            if (variable?.type === "Identifier") localDeclarations.add(variable.name);
+                        }
+                    }
+                }
+                if (node.type === "if") { visit(node.thenBody); visit(node.elseBody); }
+                else if (node.type === "numeric-for" || node.type === "generic-for") visit(node.body);
+                else if (node.type === "while-guard") { visit(node.conditionBody); visit(node.body); }
+                else if (node.type === "repeat-until") { visit(node.body); visit(node.conditionBody); }
+            }
+        }
+        visit(root);
+        return { reads, definitions, localDeclarations };
+    }
+
+    function safeDeadInitializer(init, facts) {
+        if (!init) return false;
+        if (init.type === "NilLiteral" || init.type === "NumericLiteral" || init.type === "StringLiteral" || init.type === "BooleanLiteral") return true;
+        if (init.type !== "Identifier") return false;
+        return facts.localDeclarations.has(init.name) || captured.has(init.name);
+    }
+
+    let changed = true;
+    while (changed) {
+        changed = false;
+        const facts = collectFacts(nodes);
+        function visitBody(body) {
+            for (let index = 0; index < (body || []).length; index++) {
+                const node = body[index];
+                if (node?.type === "raw") {
+                    const parsed = parseControlFlowStatement(node.text);
+                    const statement = parsed?.statement;
+                    const target = node.operation?.emittedTarget;
+                    if (target && statement?.type === "LocalStatement" && statement.variables?.length === 1 && statement.init?.length === 1) {
+                        const variable = statement.variables[0];
+                        const init = statement.init[0];
+                        if (variable?.type === "Identifier" && variable.name === target &&
+                            !captured.has(target) && (facts.reads.get(target) || 0) === 0 &&
+                            (facts.definitions.get(target) || 0) === 1 && safeDeadInitializer(init, facts)) {
+                            body.splice(index, 1);
+                            folds++;
+                            changed = true;
+                            return true;
                         }
                     }
                 }
@@ -4705,6 +4784,7 @@ function solveAcyclicStructured(originalAst, graph) {
     const postCfNamecallRecoveryCount = recoverStructuredPostCfNamecalls(structured.nodes);
     const postCfClosureDestinationRecoveryCount = recoverStructuredPostCfClosureDestinationTemps(structured.nodes, graph);
     const postCfDeadClosureRecoveryCount = recoverStructuredPostCfDeadClosureTemps(structured.nodes, graph);
+    const postCfDeadScalarLocalRecoveryCount = recoverStructuredPostCfDeadScalarLocals(structured.nodes, graph);
     const postCfCopyScalarRecoveryCount = recoverStructuredPostCfCopyScalarTemps(structured.nodes, graph);
     const postCfStaticMemberRecoveryCount = recoverStructuredPostCfStaticMembers(structured.nodes);
 
@@ -4729,6 +4809,7 @@ function solveAcyclicStructured(originalAst, graph) {
         loopControlConditionTempRecoveryCount,
         postCfClosureDestinationRecoveryCount,
         postCfDeadClosureRecoveryCount,
+        postCfDeadScalarLocalRecoveryCount,
         postCfCopyScalarRecoveryCount,
         postCfStaticMemberRecoveryCount,
         joinCount,
@@ -5381,6 +5462,7 @@ function solveClosureRegions(originalAst, graph) {
         terminalReturnPayloadSunkCount: sum("terminalReturnPayloadSunkCount"),
         postCfClosureDestinationRecoveryCount: sum("postCfClosureDestinationRecoveryCount"),
         postCfDeadClosureRecoveryCount: sum("postCfDeadClosureRecoveryCount"),
+        postCfDeadScalarLocalRecoveryCount: sum("postCfDeadScalarLocalRecoveryCount"),
         postCfNamecallRecoveryCount: sum("postCfNamecallRecoveryCount"),
         postCfStaticMemberRecoveryCount: sum("postCfStaticMemberRecoveryCount"),
         postCfCopyScalarRecoveryCount: sum("postCfCopyScalarRecoveryCount"),
@@ -5466,5 +5548,6 @@ module.exports = {
     recoverStructuredPostCfClosureDestinationTemps,
     recoverNestedFunctionSignature,
     recoverStructuredPostCfDeadClosureTemps,
+    recoverStructuredPostCfDeadScalarLocals,
     solveBetaControlFlow,
 };
