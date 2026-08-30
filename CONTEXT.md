@@ -20,6 +20,55 @@ Git is authoritative for the exact newest commit; this file records the verified
 
 Treat this file as the authoritative handoff. If Git is newer, Git wins.
 
+## Current Handoff Snapshot — 2026-08-30 after Step 47
+
+Latest semantic implementation before this handoff: `e8bf425 Recover assignment scalar RHS temps`. Git/log is authoritative for newer commits.
+
+Current phase: late structural cleanup / real-compiler audit. There is no fixed remaining step count. Do not invent Step 48+ transformations from a checklist; regenerate current production output, compare against readable source and local compiler behavior, and only implement a surviving compiler artifact when its ownership/evaluation semantics are proven.
+
+Current verified gate:
+
+- `tools/test-pre-cf-cf-combined.js`: **36 focused suites + 66/66 canonical samples PASS**.
+- Fresh real Medium source/obfuscated/final runtime parity has been exact for Steps 42-47 fixtures.
+- Production boundary remains `node tools/deobfuscate.js <obfuscated> <final>`.
+- Local Prometheus authority remains the WeAreDevs compiler at `C:\Users\reala\Desktop\!workspaces\promdeobf ova\wearedev obf`.
+
+Latest completed recovery/presentation steps:
+
+- Step 42: global-write literal/scalar RHS transport.
+- Step 43: indexed-write literal/scalar RHS transport.
+- Step 44: post-discard `effect-call` argument literal/static-lookup recovery with evaluation-order proof.
+- Step 45: post-discard direct global call-base recovery using preserved `compilerGlobalLookupRecovered` provenance; genuine source aliases remain untouched.
+- Step 46: post-CF static table key presentation, `{["key"] = v}` -> `{key = v}` only for valid non-keyword identifier strings.
+- Step 47: PRE-CF scalar RHS scratch removal for existing-local `epoch-mutate` and captured-local `upvalue-write`; identifier-root RHS remains a hard source-copy barrier. Compiler proof is `compiler.lua:1386-1440`.
+
+Fresh outputs after these steps:
+
+- `tmp/compiler-static-audit2-20260829.final.step46.lua` is structurally clean apart from unrecoverable source names/style: table literal is direct and call is `print("values", r_v4_2, r_v3_2[1], r_v3_2[2], r_v3_2.key)`.
+- `tmp/indexed-write-20260830.final.step43.lua` / current regenerated form is structurally clean: direct indexed writes and direct `print` call; remaining register names are source-name loss, not compiler transport.
+- `tmp/scope-mutation-20260830-015811.final.step47.lua` now emits direct captured mutations `r_v1_1 = 2` and `r_v1_1 = 3`. A possible next audit is the surviving nested closure terminal bare `return`; do not remove it unless child-region/compiler metadata proves it is synthetic.
+
+Important fail-closed barriers:
+
+- Never generic-inline one-use locals. Recover compiler intent only from exact AST/CFG/data-flow provenance.
+- Do not invent original source variable names. `r_vN_K` / `o_vN_K` names are correct when source names are unrecoverable.
+- Calls, indexes, table constructors, closures, globals, captures, multi-return and logical expressions have separate proof rules; do not move them across effects.
+- For global READ recovery, lexical name collision is allowed by current policy after proving the real `_env` binding. For global WRITE recovery, lexical collision must still refuse direct assignment because it would bind the local.
+- Source aliases such as `local f = print; f()` are real source unless compiler provenance proves otherwise.
+- Identifier-root assignment RHS is a value-copy barrier; Step 47 must not collapse `local b=2; a=b` into `a=2`.
+
+Next turn when the user says `continue`:
+
+1. Read this file completely.
+2. Check `git status --short --branch` and recent log; preserve unrelated files.
+3. Regenerate current production outputs; never reason from stale `.final.step*` files alone.
+4. Audit one real surviving compiler artifact. The nested synthetic child bare-return shape is a candidate, not a mandate.
+5. Inspect local `compiler.lua` and existing passes before implementing.
+6. Add focused positive + refusal tests.
+7. Run source/obfuscated/final Luau parity where possible and the canonical combined gate.
+8. Update this file, stage only intended files, commit, push `origin/main`, and verify `HEAD == origin/main`.
+9. Stop after the completed step and end exactly: `Done for this turn — you can prompt now.`
+
 ## Mandatory Workflow
 
 - Read this file first in a new chat.
@@ -62,27 +111,17 @@ Use this mode by default for all project/technical work unless the user explicit
 
 ### Preserve unrelated working-copy files
 
-Latest known user/unrelated tracked edits:
+Current known pre-existing unrelated tracked edits (preserve; do not stage unless explicitly requested):
 
 ```text
-sample/20.source.lua
-sample/23.source.lua
-sample/23.txt
+formater/input.txt
+main.js
+opti/spacial6.lua
 ```
 
-Generated `output/` content is disposable and ignored as a whole. Do not commit regenerated output/test artifacts.
+There are also many unrelated untracked artifacts under `opt/`, `opti/`, `tmp/`, `tools/_tmp-*`, generated `sample/*.source.obfuscated.lua`, and similar scratch paths. Preserve them.
 
-Common intentionally untracked items:
-
-```text
-formater/
-output/
-sample/*.source.obfuscated.lua
-sample/sixzens.txt
-sample/spacial*.txt
-```
-
-Do not stage these automatically.
+Generated output/test artifacts are disposable unless the user explicitly asks to track them. Never use `git add .` when unrelated files exist.
 
 ## Core Rules
 
@@ -599,13 +638,13 @@ Use `git log` for commits newer than this handoff text.
 
 ## Immediate Priorities
 
-1. Round-2 requested targets 1-3 are complete: formatter hash cache, scheduler indexes, lifetime/version allocation reduction.
-2. Preserve formatter cache invalidation by exact input hash + formatter signature; never trust filename alone.
-3. Preserve immutable-Set / copy-on-write rules in lifetime/version reaching maps and entry maps.
-4. Preserve the scheduler's full safety validator whenever any generic scheduling move occurs.
-5. Re-run 13 focused suites plus 1-63 byte-identity checks after meaningful CFG/upvalue/lifetime/performance changes.
-6. If the user asks to continue optimization, next candidates are removing more duplicate full-file parses / AST rebuilds, then re-profile before any broader redesign.
-7. Keep this file compact; replace stale sections instead of appending chronology.
+1. Continue late-stage real-output auditing after Step 47; no predetermined Step 48 transform.
+2. Prefer exact compiler-proven cleanup over generic inlining/dead-code rules.
+3. A candidate for the next audit is compiler-synthetic terminal bare `return` inside recovered child closures; prove child-region ownership before changing it.
+4. Keep current semantic barriers for globals, captures, calls, indexes, multi-return, namecalls, and assignment RHS copies.
+5. Canonical regression requirement is currently 36 focused suites + 66/66 canonical samples; also run fresh Medium runtime parity for the changed shape.
+6. Preserve formatter/cache, immutable reaching-set, scheduler, and overflow invariants documented above.
+7. Keep this file compact and update this snapshot instead of adding contradictory handoff sections.
 
 ## New-Chat Resume
 
