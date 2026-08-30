@@ -812,3 +812,12 @@ Latest post-Step-47 work - compiler IIFE / anonymous closure expression recovery
 - Required grouping is preserved for shapes such as `(A() or B()) and C()` and `not (A() or B())`; redundant grouping such as `((A())) and (((B())))` becomes `A() and B()`.
 - Horst fixture now starts with `until r_v2_6:IsLoaded() and (_G)["Horst_SetDescription"]` instead of the nested-parenthesis form.
 - Added `tools/test-beta-cf-expression-presentation.js`; updated existing presentation expectations only. Full combined gate: 42 focused suites + 66/66 canonical samples PASS.
+
+
+## Repeat structured condition-program recovery (2026-08-30)
+- `recoverStructuredLogicalConditionPrograms` now recovers proven compiler short-circuit condition programs owned by `repeat-until`, including the local compiler shape where the real condition program is a terminal suffix of the structured repeat body rather than `conditionBody`.
+- Added `recoverCfOrderedProducerChain` only for this repeat-condition path. It preserves compiler evaluation order across proven `returnSinkSafe` bookkeeping/literal setup and requires each non-bookkeeping producer in the candidate to transitively contribute to the final condition value; unrelated loop-body setup/effects therefore force the candidate start later or refuse.
+- Repeat extraction requires an exact terminal suffix with no retained/moved nodes, and refuses captured condition bindings. This prevents moving condition computation across actual loop-body effects.
+- Exact Horst loading loop now emits `until not r_v6_4:FindFirstChild("loading") or r_v6_4:FindFirstChild("loading") and (((r_v6_4)["loading"])["Enabled"]) == (false)` with `r_v4_49` removed and exactly two `FindFirstChild("loading")` evaluations preserved.
+- Canonical sample 36 regression remains intact: `print("short-repeat-body", _G.scr)` stays in the repeat body and the short-circuit condition remains recovered.
+- Added `tools/test-beta-cf-repeat-condition-program.js`; combined gate PASS: 43 focused suites + 66/66 canonical samples.
