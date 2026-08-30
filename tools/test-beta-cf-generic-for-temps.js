@@ -1,6 +1,6 @@
 ﻿const assert = require('assert');
 const { parseLua } = require('../main');
-const { solveBetaControlFlow } = require('../passes/beta-control-flow');
+const { solveBetaControlFlow, recoverGenericForPackedIterator } = require('../passes/beta-control-flow');
 
 const ast = parseLua('local seed = 1\n', '<step16-base>');
 
@@ -113,5 +113,44 @@ parseLua(directRecovered.source, '<generic-for-direct-iterator-recovered>');
 const directMutationRefused = solveBetaControlFlow(ast, directIteratorGraph({ mutateControl: true }));
 assert.equal(directMutationRefused.applied, false);
 assert(directMutationRefused.reason.includes('loop/backedge'));
+
+
+
+function packedFieldIteratorFixture(sourceAlias = false) {
+    const method = {
+        kind: 'epoch-start',
+        originalTarget: sourceAlias ? 'r1' : 'state',
+        emittedTarget: 'method',
+        rhs: 'obj["iter"]',
+        emittedText: 'local method = obj["iter"]',
+        reads: ['obj'],
+        registerEpoch: sourceAlias ? 'r1:epoch:1' : null,
+    };
+    const pack = { kind: 'epoch-start', originalTarget: 'r5', emittedTarget: 'pack', rhs: '{ method() }', emittedText: 'local pack = { method() }', reads: ['method'], registerEpoch: 'r5:epoch:1' };
+    const iter = { kind: 'version-define', originalTarget: 'ReturnVal', emittedTarget: 'iter', rhs: 'pack[1]', emittedText: 'local iter = pack[1]', reads: ['pack'] };
+    const invariant = { kind: 'epoch-start', originalTarget: 'r2', emittedTarget: 'invariant', rhs: 'pack[2]', emittedText: 'local invariant = pack[2]', reads: ['pack'], registerEpoch: 'r2:epoch:1' };
+    const control = { kind: 'epoch-start', originalTarget: 'r3', emittedTarget: 'control', rhs: 'pack[3]', emittedText: 'local control = pack[3]', reads: ['pack'], registerEpoch: 'r3:epoch:1' };
+    const transition = { kind: 'state-transition', originalTarget: 'state', emittedTarget: 'state', rhs: '2', emittedText: 'state = 2', reads: [] };
+    const iteratorStep = { kind: 'multi-call-write', emittedTargets: ['control', 'value'], reads: ['iter', 'invariant', 'control'] };
+    const preOps = [method, pack, iter, invariant, control, transition];
+    const graph = { stateName: 'state', recoveredUpvalueBindings: [], states: [{ id: 1, operations: preOps }, { id: 2, operations: [iteratorStep] }] };
+    return { graph, preOps, roots: [iter, invariant, control], iteratorStep, transition, method };
+}
+
+{
+    const fixture = packedFieldIteratorFixture(false);
+    const recovered = recoverGenericForPackedIterator(fixture.graph, fixture.preOps, 5, fixture.roots, fixture.iteratorStep, fixture.transition);
+    assert(recovered);
+    assert.deepEqual(recovered.expressions, ['obj.iter()']);
+    assert(recovered.removeOperations.has(fixture.method));
+}
+
+{
+    const fixture = packedFieldIteratorFixture(true);
+    const recovered = recoverGenericForPackedIterator(fixture.graph, fixture.preOps, 5, fixture.roots, fixture.iteratorStep, fixture.transition);
+    assert(recovered);
+    assert.deepEqual(recovered.expressions, ['method()']);
+    assert(!recovered.removeOperations.has(fixture.method));
+}
 
 console.log('beta CF generic-for temps: PASS');

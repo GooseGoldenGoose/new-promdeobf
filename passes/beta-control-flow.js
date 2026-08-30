@@ -4111,6 +4111,36 @@ function recoverGenericForPackedIterator(graph, preOps, preTransitionIndex, iter
     // multi-return expansion without generic call inlining.
     const outerCall = field.value;
     const outerArgs = outerCall.arguments || [];
+
+    // Direct source field calls compile through a short-lived field snapshot before
+    // the iterator pack, while a genuine source alias owns a normal register epoch.
+    // Fold only the exact compiler scratch shape and only for zero-argument calls,
+    // so lookup timing cannot move across argument evaluation.
+    if (outerArgs.length === 0 && isIdentifier(outerCall.base)) {
+        const methodDefItem = priorDefinition(outerCall.base.name, packDefItem.index);
+        const methodDef = methodDefItem?.operation || null;
+        const methodExpression = methodDef ? parseOperationExpression(methodDef) : null;
+        const scratchOwned = methodDef && methodDef.originalTarget === graph.stateName && !methodDef.registerEpoch;
+        const adjacent = methodDefItem?.index === packDefItem.index - 1;
+        let memberName = null;
+        let receiverName = null;
+        if (methodExpression?.type === 'IndexExpression' && isIdentifier(methodExpression.base)) {
+            memberName = plainPostCfMemberName(methodExpression.index);
+            receiverName = methodExpression.base.name;
+        } else if (methodExpression?.type === 'MemberExpression' && isIdentifier(methodExpression.base) && methodExpression.identifier?.type === 'Identifier') {
+            const candidate = methodExpression.identifier.name;
+            if (/^[A-Za-z_][A-Za-z0-9_]*$/.test(candidate) && !POST_CF_MEMBER_KEYWORDS.has(candidate)) {
+                memberName = candidate;
+                receiverName = methodExpression.base.name;
+            }
+        }
+        if (scratchOwned && adjacent && memberName && receiverName && !captured.has(outerCall.base.name)) {
+            callText = `${receiverName}.${memberName}()`;
+            extraRemoveOperations.add(methodDef);
+            recoveredCallReads.delete(outerCall.base.name);
+            for (const read of methodDef.reads || []) recoveredCallReads.add(read);
+        }
+    }
     if (outerArgs.length === 1 && outerArgs[0]?.type === 'CallExpression' && isIdentifier(outerArgs[0].base, 'unpack')) {
         const unpackArgs = outerArgs[0].arguments || [];
         const innerPackName = unpackArgs.length === 1 && isIdentifier(unpackArgs[0]) ? unpackArgs[0].name : null;
@@ -6899,6 +6929,7 @@ module.exports = {
     recoverStructuredPostCfFunctionDeclarations,
     recoverStructuredPostCfNamecalls,
     recoverStructuredGenericForGlobalMethodTemps,
+    recoverGenericForPackedIterator,
     recoverStructuredPostCfClosureDestinationTemps,
     recoverNestedFunctionSignature,
     recoverStructuredPostCfDeadClosureTemps,

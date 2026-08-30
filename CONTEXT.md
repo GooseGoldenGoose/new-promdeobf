@@ -838,3 +838,12 @@ Latest post-Step-47 work - compiler IIFE / anonymous closure expression recovery
 - Every consumed beta temp must have one definition and exact read ownership; captures refuse. Every semantic node between the earliest consumed producer and the loop must belong to the chain, except proven synthetic `args` / `args[N]` snapshots. External/source argument identifiers stay as identifiers instead of being generically inlined.
 - Exact compiler fixture `game:GetService("Workspace"):GetChildren()` now recovers fully. Exact static table chain `game.ReplicatedStorage.Folder:GetChildren()` also recovers fully.
 - Focused namecall suite PASS; full combined gate PASS: 43 focused suites + 66/66 canonical samples.
+
+
+## Generic-for local field iterator snapshot recovery (2026-08-31)
+- `recoverGenericForPackedIterator` now removes the exact compiler scratch field snapshot used by a zero-argument direct iterator call, recovering `local temp = obj.iter; for ... in temp() do` back to `for ... in obj.iter() do`.
+- The proof is compiler-provenance based, not generic one-use inlining: the local Prometheus direct field-call scratch uses `originalTarget === stateName` with no `registerEpoch`; a genuine source alias such as `local f = obj.iter` owns a normal `rN` target plus a register epoch and is preserved.
+- The scratch snapshot must be immediately adjacent to the iterator pack, uncaptured, and a static member/index on a direct identifier receiver.
+- Recovery is intentionally limited to zero-argument calls so field lookup is not moved across argument evaluation.
+- Exact compiler A/B test: direct `a.iter()` now emits `for ... in r_v2_1.iter() do`; source `local f = a.iter; for ... in f() do` remains an alias call.
+- Focused generic-for/namecall suites PASS; full combined gate PASS: 43 focused suites + 66/66 canonical samples.
