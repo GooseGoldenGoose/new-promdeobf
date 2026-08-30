@@ -802,3 +802,13 @@ Latest post-Step-47 work - compiler IIFE / anonymous closure expression recovery
 - Exact proof remains fail-closed: direct identifier base, static non-keyword method string, and first argument is the exact same identifier. Complex/dynamic bases or mismatched self arguments refuse.
 - Horst repeat fixture now emits `r_v2_6:IsLoaded()` inside the recovered `until` condition while preserving the multi-state repeat-precheck fix.
 - Verification: post-CF namecall focused suite PASS, beta-control-flow suite PASS, exact 98-state/7-closure Horst fixture PASS, combined gate 41 focused suites + 66/66 canonical samples PASS.
+
+
+## Safe structured-expression parentheses cleanup (2026-08-30)
+- Added `normalizeStructuredSingleValueExpression` and `recoverStructuredExpressionPresentation` in `passes/beta-control-flow.js`.
+- Presentation cleanup runs after post-CF semantic recovery and before structured formatting.
+- It reuses the AST-based logical renderer and reparses the rewritten expression; no broad parenthesis regex was added.
+- Covered only proven single-value structured fields: `if.condition`, `while-guard.condition`, `repeat-until.condition`, and numeric-for initial/limit/step. Generic-for expression lists are deliberately untouched because the final iterator expression participates in Lua multi-result adjustment.
+- Required grouping is preserved for shapes such as `(A() or B()) and C()` and `not (A() or B())`; redundant grouping such as `((A())) and (((B())))` becomes `A() and B()`.
+- Horst fixture now starts with `until r_v2_6:IsLoaded() and (_G)["Horst_SetDescription"]` instead of the nested-parenthesis form.
+- Added `tools/test-beta-cf-expression-presentation.js`; updated existing presentation expectations only. Full combined gate: 42 focused suites + 66/66 canonical samples PASS.

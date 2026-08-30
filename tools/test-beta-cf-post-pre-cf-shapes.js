@@ -67,7 +67,7 @@ const wh = solveBetaControlFlow(ast, { applied: true, graph: {
 } });
 assert.equal(wh.applied, true);
 assert.equal(wh.whileLoopCount, 1);
-assert(wh.source.includes("while (x < (3)) do"), wh.source);
+assert(wh.source.includes("while x < (3) do"), wh.source);
 assert(!wh.source.includes("while true do"), wh.source);
 assert(!wh.source.includes("local limit = 3"), wh.source);
 
@@ -91,7 +91,7 @@ const iff = solveBetaControlFlow(ast, { applied: true, graph: {
     ],
 } });
 assert.equal(iff.applied, true);
-assert(iff.source.includes("if (x == (0)) then"), iff.source);
+assert(iff.source.includes("if x == (0) then"), iff.source);
 assert(!iff.source.includes("local zero = 0"), iff.source);
 assert(!iff.source.includes("local dead = 9"), iff.source);
 

@@ -41,13 +41,13 @@ function makeGraph(kind, extraUse = false) {
 
 const breakResult = solveBetaControlFlow(ast, makeGraph("break"));
 assert.equal(breakResult.applied, true);
-assert(breakResult.source.includes("if (shouldBreak()) then"));
+assert(breakResult.source.includes("if shouldBreak() then"));
 assert(breakResult.source.includes("break"));
 assert(!breakResult.source.includes("local breakCond = shouldBreak()"));
 
 const continueResult = solveBetaControlFlow(ast, makeGraph("continue"));
 assert.equal(continueResult.applied, true);
-assert(continueResult.source.includes("if (shouldContinue()) then"));
+assert(continueResult.source.includes("if shouldContinue() then"));
 assert(continueResult.source.includes("continue"));
 assert(!continueResult.source.includes("local continueCond = shouldContinue()"));
 

@@ -37,10 +37,10 @@ function solve({ rhs, reads = [], gap = [], tail = [], captured = [], extraReads
 }
 
 for (const probe of [
-    { rhs: "check()", reads: ["check"], expected: "if (check()) then" },
-    { rhs: "A() and B()", reads: ["A", "B"], expected: "if (A() and B()) then" },
-    { rhs: "not flag_v", reads: ["flag_v"], expected: "if (not flag_v) then" },
-    { rhs: "obj_v[field_v] == 3", reads: ["obj_v", "field_v"], expected: "if (obj_v[field_v] == 3) then" },
+    { rhs: "check()", reads: ["check"], expected: "if check() then" },
+    { rhs: "A() and B()", reads: ["A", "B"], expected: "if A() and B() then" },
+    { rhs: "not flag_v", reads: ["flag_v"], expected: "if not flag_v then" },
+    { rhs: "obj_v[field_v] == 3", reads: ["obj_v", "field_v"], expected: "if obj_v[field_v] == 3 then" },
 ]) {
     const result = solve(probe);
     assert.equal(result.applied, true, result.reason);
@@ -69,8 +69,8 @@ const safeTail = solve({
 assert.equal(safeTail.applied, true);
 assert.equal(safeTail.ifConditionTempRecoveryCount, 1);
 assert(safeTail.source.includes("local args_v = args"));
-assert(safeTail.source.includes("if (check()) then"));
-assert(safeTail.source.indexOf("local args_v = args") < safeTail.source.indexOf("if (check()) then"));
+assert(safeTail.source.includes("if check() then"));
+assert(safeTail.source.indexOf("local args_v = args") < safeTail.source.indexOf("if check() then"));
 assert(!safeTail.source.includes("local cond_v = check()"));
 
 const effectfulTail = solve({

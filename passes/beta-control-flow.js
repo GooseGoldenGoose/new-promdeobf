@@ -352,6 +352,7 @@ function solveSingleState(originalAst, graph) {
     const postCfCompilerReturnAllRecoveryCount = recoverStructuredCompilerReturnAllForwarding(structuredNodes, graph);
     const postCfStaticMemberRecoveryCount = recoverStructuredPostCfStaticMembers(structuredNodes);
     const postCfFunctionDeclarationRecoveryCount = recoverStructuredPostCfFunctionDeclarations(structuredNodes);
+    const structuredExpressionPresentationRecoveryCount = recoverStructuredExpressionPresentation(structuredNodes);
     const bodyText = formatStructuredNodes(structuredNodes);
     const presented = buildPresentedSource(originalAst, bodyText, { registerOverflowUsed: graph.registerOverflowUsed === true });
     if (!presented.applied) return presented;
@@ -375,6 +376,7 @@ function solveSingleState(originalAst, graph) {
         postCfCompilerReturnAllRecoveryCount,
         postCfStaticMemberRecoveryCount,
         postCfFunctionDeclarationRecoveryCount,
+        structuredExpressionPresentationRecoveryCount,
         terminalReturnCount: lowered.lowered ? 1 : 0,
         terminalReturnPayloadSunk: sunk.moved,
         terminalReturnPayloadSunkCount: sunk.moved ? 1 : 0,
@@ -1113,6 +1115,57 @@ function normalizeRecoveredLogicalExpression(text) {
     rendered = rendered.replace(/\(([A-Za-z_][A-Za-z0-9_]*)\)(?=\s*\()/g, "$1");
     rendered = rendered.replace(/([,(]\s*)\(([A-Za-z_][A-Za-z0-9_]*)\)(?=\s*[,)]|\s*\.\.\.)/g, "$1$2");
     return rendered;
+}
+
+function normalizeStructuredSingleValueExpression(text) {
+    const source = String(text || "");
+    const parsedBefore = parseTransitionExpression(source);
+    if (!parsedBefore?.expression) return source;
+    const rewritten = normalizeRecoveredLogicalExpression(source);
+    if (rewritten === source) return source;
+    const parsedAfter = parseTransitionExpression(rewritten);
+    if (!parsedAfter?.expression) return source;
+    return rewritten;
+}
+
+function recoverStructuredExpressionPresentation(nodes) {
+    let folds = 0;
+    function normalizeField(node, field) {
+        const before = String(node?.[field] ?? "");
+        if (!before) return;
+        const after = normalizeStructuredSingleValueExpression(before);
+        if (after === before) return;
+        node[field] = after;
+        folds++;
+    }
+    function visit(body) {
+        for (const node of body || []) {
+            if (node?.type === "if") {
+                normalizeField(node, "condition");
+                visit(node.thenBody);
+                visit(node.elseBody);
+            } else if (node?.type === "while-guard") {
+                normalizeField(node, "condition");
+                visit(node.conditionBody);
+                visit(node.body);
+            } else if (node?.type === "repeat-until") {
+                normalizeField(node, "condition");
+                visit(node.body);
+                visit(node.conditionBody);
+            } else if (node?.type === "numeric-for") {
+                normalizeField(node, "initial");
+                normalizeField(node, "limit");
+                if (node.step !== null && node.step !== undefined) normalizeField(node, "step");
+                visit(node.body);
+            } else if (node?.type === "generic-for") {
+                // Generic-for expression lists participate in Lua multi-result
+                // adjustment. Leave them untouched in this presentation-only pass.
+                visit(node.body);
+            }
+        }
+    }
+    visit(nodes);
+    return folds;
 }
 
 function recoverStructuredCompilerGlobalAliases(nodes, graph) {
@@ -5722,6 +5775,7 @@ function solveAcyclicStructured(originalAst, graph) {
     loopControlConditionTempRecoveryCount += recoverStructuredLoopBranchConditionTemps(structured.nodes, graph);
     const postCfStaticMemberRecoveryCount = recoverStructuredPostCfStaticMembers(structured.nodes);
     const postCfFunctionDeclarationRecoveryCount = recoverStructuredPostCfFunctionDeclarations(structured.nodes);
+    const structuredExpressionPresentationRecoveryCount = recoverStructuredExpressionPresentation(structured.nodes);
 
     const epochHoisting = hoistEscapingEpochDeclarations(structured.nodes);
     if (!epochHoisting.safe) return { applied: false, reason: epochHoisting.reason || "Beta epoch declaration hoisting failed closed" };
@@ -5752,6 +5806,7 @@ function solveAcyclicStructured(originalAst, graph) {
         postCfCompilerReturnAllRecoveryCount,
         postCfStaticMemberRecoveryCount,
         postCfFunctionDeclarationRecoveryCount,
+        structuredExpressionPresentationRecoveryCount,
         joinCount,
         guardBranchCount,
         terminalReturnCount,
@@ -6531,5 +6586,7 @@ module.exports = {
     recoverStructuredCompilerClosureTemps,
     recoverStructuredCompilerReturnAllForwarding,
     normalizeRecoveredLogicalExpression,
+    normalizeStructuredSingleValueExpression,
+    recoverStructuredExpressionPresentation,
     solveBetaControlFlow,
 };
