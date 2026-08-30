@@ -1020,6 +1020,69 @@ function finalizePreCfIndexedWriteTemps(betaResult) {
     return betaResult;
 }
 
+function closureWriteDestinationInfo(operation) {
+    if (operation?.kind !== "effect-write") return null;
+    const text = String(operation.emittedText || "");
+    const statement = parsePreCfStatement(text);
+    if (statement?.type !== "AssignmentStatement" || statement.variables?.length !== 1 || statement.init?.length !== 1) return null;
+    const lhs = statement.variables[0];
+    const rhs = statement.init[0];
+    if (lhs?.type !== "IndexExpression" || lhs.base?.type !== "Identifier" || lhs.base.name === "_env") return null;
+    if (lhs.index?.type !== "StringLiteral" || rhs?.type !== "Identifier") return null;
+    const memberName = stringLiteralIdentifierValue(lhs.index);
+    if (!isValidGlobalIdentifierName(memberName)) return null;
+    if (!Array.isArray(lhs.range) || !Array.isArray(rhs.range)) return null;
+    return { baseName: lhs.base.name, memberName, closureBinding: rhs.name, lhsStart: lhs.range[0], lhsEnd: lhs.range[1] };
+}
+function finalizePreCfClosureWriteDestinations(betaResult) {
+    if (!betaResult?.graph || typeof betaResult.source !== "string" || betaResult.graph.cfgComplete !== true) {
+        betaResult.preCfClosureWriteDestinations = { applied: false, safe: false, reason: "PRE-CF closure write destination recovery requires a complete beta graph" };
+        return betaResult;
+    }
+    const proof = buildPreCfTempProofIndex(betaResult);
+    const ownership = mapPreCfOperationRanges(betaResult);
+    if (!ownership.safe) {
+        betaResult.preCfClosureWriteDestinations = { applied: false, safe: false, reason: ownership.reason };
+        return betaResult;
+    }
+    const candidates = [];
+    for (const state of betaResult.graph.states || []) {
+        for (let offset = 0; offset < (state.operations || []).length; offset++) {
+            const operation = state.operations[offset];
+            const info = closureWriteDestinationInfo(operation);
+            if (!info) continue;
+            const facts = proof.byBinding.get(info.closureBinding);
+            if (!facts?.singleDefinition || !facts.singleUse || facts.captured || !facts.sameState) continue;
+            if (facts.consumer?.operation !== operation || facts.producer.offset >= offset) continue;
+            const producer = facts.producer.operation;
+            if (!isPreCfClosureFactoryCall(parsePreCfRhs(producer?.rhs), betaResult.graph)) continue;
+            const range = ownership.ranges.get(operation);
+            if (!range) {
+                betaResult.preCfClosureWriteDestinations = { applied: false, safe: false, reason: "PRE-CF closure write destination recovery lost exact source ownership" };
+                return betaResult;
+            }
+            const text = String(operation.emittedText || "");
+            const lhsText = `${info.baseName}.${info.memberName}`;
+            const emittedText = text.slice(0, info.lhsStart) + lhsText + text.slice(info.lhsEnd);
+            candidates.push({ operation, range, emittedText });
+        }
+    }
+    if (!candidates.length) {
+        betaResult.preCfClosureWriteDestinations = { applied: false, safe: true, folds: 0 };
+        return betaResult;
+    }
+    const output = applySourceEdits(betaResult.source, candidates.map(c => ({ start: c.range[0], end: c.range[1], replacement: c.emittedText })));
+    try { parsePreCfSource(output); }
+    catch (error) {
+        betaResult.preCfClosureWriteDestinations = { applied: false, safe: false, reason: `PRE-CF closure write destination recovery reparse failed: ${error.message}` };
+        return betaResult;
+    }
+    betaResult.source = output;
+    for (const candidate of candidates) candidate.operation.emittedText = candidate.emittedText;
+    betaResult.preCfClosureWriteDestinations = { applied: true, safe: true, folds: candidates.length };
+    return betaResult;
+}
+
 function finalizePreCfGlobalLookups(betaResult) {
     if (!betaResult?.graph || typeof betaResult.source !== "string" || betaResult.graph.cfgComplete !== true) {
         betaResult.preCfGlobalLookups = { applied: false, safe: false, reason: "PRE-CF global lookup recovery requires a complete beta graph" };
@@ -1943,6 +2006,7 @@ function finalizePreCfTempRecovery(betaResult) {
         finalizePreCfIndexKeyTemps,
         finalizePreCfGlobalWrites,
         finalizePreCfIndexedWriteTemps,
+        finalizePreCfClosureWriteDestinations,
         finalizePreCfScalarTemps,
         finalizePreCfGlobalLookups,
         finalizePreCfLookupTemps,
@@ -1964,7 +2028,7 @@ function finalizePreCfTempRecovery(betaResult) {
         }
         stageNames.push(stage.name);
     }
-    const foldKeys = ["preCfCopyTemps", "preCfClosureTemps", "preCfCallResultDestinations", "preCfTableDestinations", "preCfTableEntryTemps", "preCfIndexKeyTemps", "preCfGlobalWrites", "preCfIndexedWriteTemps", "preCfScalarTemps", "preCfGlobalLookups", "preCfLookupTemps", "preCfCallArgumentTemps", "preCfCallBaseTemps", "preCfNamecalls", "preCfDiscardedCallResults", "preCfReturnTemps", "preCfReturnAllTemps", "preCfMultiReturnTemps"];
+    const foldKeys = ["preCfCopyTemps", "preCfClosureTemps", "preCfCallResultDestinations", "preCfTableDestinations", "preCfTableEntryTemps", "preCfIndexKeyTemps", "preCfGlobalWrites", "preCfIndexedWriteTemps", "preCfClosureWriteDestinations", "preCfScalarTemps", "preCfGlobalLookups", "preCfLookupTemps", "preCfCallArgumentTemps", "preCfCallBaseTemps", "preCfNamecalls", "preCfDiscardedCallResults", "preCfReturnTemps", "preCfReturnAllTemps", "preCfMultiReturnTemps"];
     const folds = foldKeys.reduce((sum, key) => sum + Number(betaResult[key]?.folds || 0), 0);
     betaResult.preCfTempRecovery = { applied: folds > 0, safe: true, folds, stages: stageNames };
     return betaResult;
@@ -1980,6 +2044,7 @@ module.exports = {
     finalizePreCfIndexKeyTemps,
     finalizePreCfGlobalWrites,
     finalizePreCfIndexedWriteTemps,
+    finalizePreCfClosureWriteDestinations,
     finalizePreCfScalarTemps,
     finalizePreCfGlobalLookups,
     finalizePreCfLookupTemps,

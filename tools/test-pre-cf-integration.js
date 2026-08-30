@@ -24,6 +24,7 @@ assert.deepEqual(result.beta.preCfTempRecovery.stages, [
     "finalizePreCfIndexKeyTemps",
     "finalizePreCfGlobalWrites",
     "finalizePreCfIndexedWriteTemps",
+    "finalizePreCfClosureWriteDestinations",
     "finalizePreCfScalarTemps",
     "finalizePreCfGlobalLookups",
     "finalizePreCfLookupTemps",
