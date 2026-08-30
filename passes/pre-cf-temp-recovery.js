@@ -344,6 +344,7 @@ function finalizePreCfCallResultDestinations(betaResult) {
         candidate.producer.emittedTarget = candidate.actualTarget;
         candidate.producer.originalTarget = candidate.consumer.originalTarget;
         candidate.producer.registerEpoch = candidate.consumer.registerEpoch;
+        candidate.producer.compilerCallResultRetargeted = true;
         candidate.producer.kind = candidate.consumer.kind;
         candidate.producer.emittedText = emittedText;
         candidate.state.operations.splice(candidate.consumerOffset, 1);
@@ -660,10 +661,17 @@ function finalizePreCfDiscardedCallResults(betaResult) {
     for (const facts of proof.byBinding.values()) {
         if (!facts.singleDefinition || facts.readCount !== 0 || facts.captured) continue;
         const producer = facts.producer?.operation;
-        if (!isCompilerCallResultOperation(producer, betaResult.graph)) continue;
-        const expression = parsePreCfRhs(producer.rhs);
-        if (expression?.type !== "CallExpression") continue;
-        candidates.push({ facts, producer });
+        const expression = parsePreCfRhs(producer?.rhs);
+        if (expression?.type !== "CallExpression" || isPreCfClosureFactoryCall(expression, betaResult.graph)) continue;
+        const compilerResult = isCompilerCallResultOperation(producer, betaResult.graph);
+        const directScratchResult =
+            producer &&
+            producer.compilerCallResultRetargeted !== true &&
+            ["epoch-start", "epoch-mutate"].includes(producer.kind) &&
+            producer.registerEpoch &&
+            /^(?:r\d+|__overflow_phys_\d+)$/.test(String(producer.originalTarget || ""));
+        if (!compilerResult && !directScratchResult) continue;
+        candidates.push({ facts, producer, directScratchResult });
     }
     if (!candidates.length) {
         betaResult.preCfDiscardedCallResults = { applied: false, safe: true, folds: 0 };

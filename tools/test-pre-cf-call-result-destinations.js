@@ -90,6 +90,7 @@ for (const beta of [
     assert.equal(beta.graph.states[0].operations[0].emittedTarget, "actual_v");
     assert.equal(beta.graph.states[0].operations[0].originalTarget, "r4");
     assert.equal(beta.graph.states[0].operations[0].registerEpoch, "r4:epoch:2");
+    assert.equal(beta.graph.states[0].operations[0].compilerCallResultRetargeted, true);
 }
 
 {

@@ -2,8 +2,8 @@
 const assert = require("assert");
 const { finalizePreCfDiscardedCallResults } = require("../passes/pre-cf-temp-recovery");
 
-function makeBeta({ rhs = "callee_v(arg_v)", reads = ["callee_v", "arg_v"], originalTarget = "ReturnVal", resultReads = 0, captured = false, registerEpoch = null }) {
-    const producer = { index: 1, kind: "version-define", emittedTarget: "temp_v", originalTarget, registerEpoch, rhs, reads, emittedText: `local temp_v = ${rhs}` };
+function makeBeta({ rhs = "callee_v(arg_v)", reads = ["callee_v", "arg_v"], originalTarget = "ReturnVal", resultReads = 0, captured = false, registerEpoch = null, kind = "version-define", compilerCallResultRetargeted = false }) {
+    const producer = { index: 1, kind, emittedTarget: "temp_v", originalTarget, registerEpoch, compilerCallResultRetargeted, rhs, reads, emittedText: `local temp_v = ${rhs}` };
     const operations = [producer];
     for (let i = 0; i < resultReads; i++) operations.push({ index: 0, kind: "version-define", emittedTarget: `sink_${i}`, originalTarget: `r${10+i}`, registerEpoch: `r${10+i}:epoch:1`, rhs: "temp_v", reads: ["temp_v"], emittedText: `local sink_${i} = temp_v` });
     operations.push({ index: 0, kind: "state-transition", emittedTarget: "state", originalTarget: "state", rhs: "nil", reads: [], emittedText: "state = nil" });
@@ -18,6 +18,7 @@ function makeBeta({ rhs = "callee_v(arg_v)", reads = ["callee_v", "arg_v"], orig
 for (const beta of [
     makeBeta({}),
     makeBeta({ rhs: "obj_v:m(1)", reads: ["obj_v"] }),
+    makeBeta({ originalTarget: "r6", registerEpoch: "r6:epoch:1", kind: "epoch-start" }),
 ]) {
     finalizePreCfDiscardedCallResults(beta);
     assert.equal(beta.preCfDiscardedCallResults.safe, true);
@@ -33,6 +34,7 @@ for (const beta of [
     makeBeta({ captured: true }),
     makeBeta({ originalTarget: "r1" }),
     makeBeta({ registerEpoch: "r1:epoch:1", originalTarget: "r1" }),
+    makeBeta({ registerEpoch: "r1:epoch:1", originalTarget: "r1", kind: "epoch-start", compilerCallResultRetargeted: true }),
     makeBeta({ rhs: "createClosure2(2, {})", reads: [] }),
 ]) {
     if (beta.source.includes("createClosure2")) beta.graph.entries = [1, 2];
