@@ -783,3 +783,14 @@ Latest post-Step-47 work - compiler IIFE / anonymous closure expression recovery
 - Local compiler authority confirms FunctionCallExpression evaluates base before arguments (`compiler.lua:1974+`); the structural IIFE recovery reconstructs that source-level shape only after the compiler closure/base and RETURN_ALL ownership proofs succeed.
 - Exact vararg/pcall fixture now begins `(function(...fixed..., ...) ... end)(pcall(function() return ... end))`; multi-use `atf`/`w` closures remain locals.
 - Focused `tools/test-beta-cf-iife-return-all.js` added. `tools/test-beta-control-flow.js` regression forced the call-base rule to remain effect-call-only. Combined gate: 40 focused suites + 66/66 canonical samples PASS.
+
+
+## 2026-08-30 - Multi-state repeat precheck + structured alias metadata fix
+
+- Fixed recoverStructuredCompilerGlobalAliases so raw-statement rewrites synchronize operation.rhs with emittedText; later condition recovery cannot resurrect a removed alias from stale RHS metadata.
+- Repeat short-circuit recovery now handles compiler-discarded first evaluations whose duplicate condition spans predecessor states. The simple repeat matcher identifies the real logical-condition state set, proves the upstream duplicate through findDuplicateControlRepeatCondition, preserves any prefix before the duplicate entry, and removes the duplicate region plus old preheader with the loop.
+- Condition-region signatures include terminal preheader topology, ignore only sink-safe direct synthetic args snapshots, and canonicalize current recovered RHS/emitted targets when earlier structural recovery retargeted compiler operations.
+- Structured scope validation also parses generated beta names from structured if/while/repeat conditions in the correct lexical scope; missing declarations are not rejected because child closures may legally capture outer beta bindings.
+- Added tools/test-beta-cf-repeat-multistate-precheck.js with positive retained-prefix coverage and mismatched duplicate refusal. Global-alias regression checks synchronized RHS. Combined gate: 41 focused suites + 66/66 canonical samples PASS.
+- Exact Horst fixture tmp/horst-enhance-20260830.fixed7.lua no longer emits a pre-repeat if game:IsLoaded() and has no undefined r_v2_1; it starts directly with the source repeat.
+- Runtime probe tmp/repeat-precheck-runtime-20260830*: readable source and final both print body 0 0, body 1 0, done 2 1; local Prometheus obfuscated form prints only body 1 0, done 2 1, confirming final recovery intentionally removes the compiler-added first condition evaluation.

@@ -1182,6 +1182,15 @@ function recoverStructuredCompilerGlobalAliases(nodes, graph) {
         return parsed.source.slice(0, start) + replacement + parsed.source.slice(end);
     }
 
+    function rewrittenAssignmentRhs(text) {
+        const parsed = parseControlFlowStatement(text);
+        const statement = parsed?.statement;
+        const init = statement?.init || [];
+        if ((statement?.type !== "AssignmentStatement" && statement?.type !== "LocalStatement") ||
+            init.length !== 1 || !Array.isArray(init[0]?.range)) return null;
+        return parsed.source.slice(init[0].range[0], init[0].range[1]);
+    }
+
     function rewriteConsumer(consumer, aliases) {
         let text;
         let mode;
@@ -1237,10 +1246,14 @@ function recoverStructuredCompilerGlobalAliases(nodes, graph) {
                     if (rewritten.mode === "condition") {
                         consumer.condition = normalizeRecoveredLogicalExpression(rewritten.rewritten);
                     } else {
+                        const rewrittenRhs = consumer.operation?.kind === "effect-call"
+                            ? rewritten.rewritten
+                            : rewrittenAssignmentRhs(rewritten.rewritten);
+                        if (consumer.operation && !rewrittenRhs) return false;
                         consumer.text = rewritten.rewritten;
                         if (consumer.operation) {
                             consumer.operation.emittedText = rewritten.rewritten;
-                            if (consumer.operation.kind === "effect-call") consumer.operation.rhs = rewritten.rewritten;
+                            consumer.operation.rhs = rewrittenRhs;
                             consumer.operation.reads = [...consumer.reads];
                             consumer.operation.compilerStructuredGlobalAliasesRecovered = aliases.map(alias => ({ globalName: alias.globalName }));
                         }
@@ -2568,6 +2581,22 @@ function validateStructuredLocalScopes(nodes) {
         return null;
     }
 
+    function generatedConditionReads(condition) {
+        const parsed = parseTransitionExpression(String(condition || '').trim());
+        const names = new Set();
+        function visitNode(node) {
+            if (!node || typeof node !== 'object') return;
+            if (node.type === 'Identifier' && /^(?:r_v\d+_\d+|o_v\d+_\d+)$/.test(node.name)) names.add(node.name);
+            for (const [key, value] of Object.entries(node)) {
+                if (key === 'range' || key === 'loc') continue;
+                if (Array.isArray(value)) for (const child of value) visitNode(child);
+                else if (value && typeof value === 'object') visitNode(value);
+            }
+        }
+        visitNode(parsed?.expression);
+        return [...names];
+    }
+
     function visit(body, scopeId) {
         for (const node of body) {
             if (node.type === "raw") {
@@ -2588,13 +2617,13 @@ function validateStructuredLocalScopes(nodes) {
                 parentScope.set(bodyScope, scopeId);
                 if (!node.conditionBody.length) {
                     sequence++;
-                    for (const name of node.reads || []) reads.push({ name, scopeId, sequence });
+                    for (const name of [...new Set([...(node.reads || []), ...generatedConditionReads(node.condition)])]) reads.push({ name, scopeId, sequence });
                 }
                 const conditionError = visit(node.conditionBody, bodyScope);
                 if (conditionError) return conditionError;
                 if (node.conditionBody.length) {
                     sequence++;
-                    for (const name of node.reads || []) reads.push({ name, scopeId: bodyScope, sequence });
+                    for (const name of [...new Set([...(node.reads || []), ...generatedConditionReads(node.condition)])]) reads.push({ name, scopeId: bodyScope, sequence });
                 }
                 const bodyError = visit(node.body, bodyScope);
                 if (bodyError) return bodyError;
@@ -2608,10 +2637,13 @@ function validateStructuredLocalScopes(nodes) {
                 const conditionError = visit(node.conditionBody, bodyScope);
                 if (conditionError) return conditionError;
                 sequence++;
-                for (const name of node.reads || []) reads.push({ name, scopeId: bodyScope, sequence });
+                for (const name of [...new Set([...(node.reads || []), ...generatedConditionReads(node.condition)])]) reads.push({ name, scopeId: bodyScope, sequence });
                 continue;
             }
-            for (const name of node.reads || []) reads.push({ name, scopeId, sequence });
+            const structuredReads = node.type === "if"
+                ? [...new Set([...(node.reads || []), ...generatedConditionReads(node.condition)])]
+                : (node.reads || []);
+            for (const name of structuredReads) reads.push({ name, scopeId, sequence });
             if (node.type === "numeric-for") {
                 const bodyScope = nextScopeId++;
                 parentScope.set(bodyScope, scopeId);
@@ -2651,6 +2683,9 @@ function validateStructuredLocalScopes(nodes) {
 
     for (const read of reads) {
         const list = declarations.get(read.name);
+        // A generated beta name without a declaration in this structured region
+        // may be a proven outer lexical capture. Scope validation can reject only
+        // names whose declaration ownership is visible in this region.
         if (!list || !list.length) continue;
         const visible = list.filter(declaration => isAncestor(declaration.scopeId, read.scopeId));
         if (!visible.length) {
@@ -4333,18 +4368,23 @@ function canonicalCompilerExpression(node, latestDefinitions) {
     return output;
 }
 
-function canonicalCompilerOperationSequence(operations) {
+function canonicalCompilerOperationSequence(operations, options = {}) {
     const latestDefinitions = new Map();
     const sequence = [];
     for (let index = 0; index < operations.length; index++) {
         const operation = operations[index];
-        const rhs = originalOperationRhs(operation);
+        const rhs = options.preferCurrentRhs === true
+            ? (String(operation?.rhs || '').trim() || originalOperationRhs(operation))
+            : originalOperationRhs(operation);
         if (!rhs) return null;
         const parsed = parseTransitionExpression(rhs)?.expression || null;
         if (!parsed) return null;
         sequence.push(canonicalCompilerExpression(parsed, latestDefinitions));
         const target = originalOperationTarget(operation);
         if (target) latestDefinitions.set(target, index);
+        if (options.preferCurrentRhs === true && operation?.emittedTarget) {
+            latestDefinitions.set(operation.emittedTarget, index);
+        }
     }
     return JSON.stringify(sequence);
 }
@@ -4754,8 +4794,13 @@ function computeStronglyConnectedComponents(states) {
 function compilerConditionEvaluationOperations(state) {
     return (state?.operations || []).filter(operation => {
         if (operation?.kind === 'state-transition') return false;
-        if (originalOperationTarget(operation) !== 'ReturnVal' || operation?.returnSinkSafe !== true) return true;
         const expression = parseOperationExpression(operation);
+        // Root VM argument snapshots can be scheduled inside the compiler's
+        // discarded first repeat-condition evaluation even though they are not
+        // part of the source condition. Ignore only the proven sink-safe direct
+        // synthetic args snapshot; later scope cleanup still owns its lifetime.
+        if (operation?.returnSinkSafe === true && expression?.type === 'Identifier' && expression.name === 'args') return false;
+        if (originalOperationTarget(operation) !== 'ReturnVal' || operation?.returnSinkSafe !== true) return true;
         return expression?.type !== 'Identifier';
     });
 }
@@ -4795,7 +4840,7 @@ function compilerConditionRegionSignature(stateById, ids, entryId, entryStartInd
         operations.push(...(id === entryId ? stateOperations.slice(entryStartIndex) : stateOperations));
     }
     if (!operations.length) return null;
-    const operationSignature = canonicalCompilerOperationSequence(operations);
+    const operationSignature = canonicalCompilerOperationSequence(operations, { preferCurrentRhs: true });
     if (!operationSignature) return null;
     const indexById = new Map(order.map((id, index) => [id, index]));
     const internalEdges = [];
@@ -4825,7 +4870,13 @@ function findDuplicateControlRepeatCondition(graph, repeatShape) {
         if (!region || [...region.ids].some(id => excluded.has(id))) continue;
         const entryOps = compilerConditionEvaluationOperations(state);
         for (let startIndex = 0; startIndex < entryOps.length; startIndex++) {
-            const signature = compilerConditionRegionSignature(stateById, region.ids, state.id, startIndex);
+            // The duplicated precheck flows into the ordinary repeat preheader.
+            // Include that terminal jump-only state in the topology signature so
+            // multi-state short-circuit regions compare against the real condition
+            // region including its terminal decision state. Its state-transition
+            // is excluded from condition operations, so only control topology is added.
+            const signatureIds = new Set([...region.ids, repeatShape.preheaderId]);
+            const signature = compilerConditionRegionSignature(stateById, signatureIds, state.id, startIndex);
             if (signature !== realSignature) continue;
             const firstRemovedOperation = entryOps[startIndex];
             const firstRemovedIndex = (state.operations || []).indexOf(firstRemovedOperation);
@@ -5007,11 +5058,43 @@ function matchCompilerRepeat(graph, checkStateId) {
     let bodyNodes = structuredBody.nodes;
     const combinedConditionProgram = [...bodyNodes, ...conditionNodes];
     const logicalSuffix = recoverCfLogicalSuffix(combinedConditionProgram, checkInfo.conditionName, graph.recoveredUpvalueBindings);
+    let upstreamDuplicate = null;
+    let logicalConditionStateIds = [];
     if (logicalSuffix) {
         condition = logicalSuffix.expression;
         conditionReads = logicalSuffix.reads;
+        const logicalProgramNodes = combinedConditionProgram.slice(logicalSuffix.start);
+        const ids = new Set();
+        const collectStateIds = nodes => {
+            for (const node of nodes || []) {
+                if (node?.type === "raw" && Number.isInteger(node.stateId)) ids.add(node.stateId);
+                else if (node?.type === "if") { collectStateIds(node.thenBody); collectStateIds(node.elseBody); }
+                else if (node?.type === "while-guard" || node?.type === "repeat-until") { collectStateIds(node.conditionBody); collectStateIds(node.body); }
+                else if (node?.type === "numeric-for" || node?.type === "generic-for") collectStateIds(node.body);
+            }
+        };
+        collectStateIds(logicalProgramNodes);
+        logicalConditionStateIds = [...ids];
         bodyNodes = combinedConditionProgram.slice(0, logicalSuffix.start);
         conditionNodes = [];
+
+        // Multi-state short-circuit repeat conditions are compiled once before
+        // the body and once again as the real post-test. If the immediate
+        // preheader contains no duplicate operations, prove the predecessor
+        // condition region structurally and consume it with the loop.
+        if (junkSlice.operations.size === 0 && logicalConditionStateIds.some(id => id !== check.id)) {
+            const conditionStateIds = [...new Set([...logicalConditionStateIds, check.id])];
+            const conditionSet = new Set(conditionStateIds);
+            upstreamDuplicate = findDuplicateControlRepeatCondition(graph, {
+                preheaderId: preheader.id,
+                conditionEntryId: logicalConditionStateIds[0],
+                conditionStateIds,
+                bodyId,
+                bodyStateIds: [...region.ids].filter(id => !conditionSet.has(id)),
+                exitId,
+            });
+            if (!upstreamDuplicate) return null;
+        }
     } else {
         const adjacent = recoverCfAdjacentConditionTemp(graph, check, checkInfo, conditionOperations);
         condition = adjacent.info.condition;
@@ -5019,8 +5102,12 @@ function matchCompilerRepeat(graph, checkStateId) {
         conditionNodes = adjacent.bodyOperations.map(operation => operationNode(operation, check.id));
     }
 
+    const duplicateRemovedIds = upstreamDuplicate
+        ? new Set([...upstreamDuplicate.regionIds, preheader.id])
+        : null;
+    if (duplicateRemovedIds) duplicateRemovedIds.delete(upstreamDuplicate.entryId);
     return {
-        preheaderId: preheader.id,
+        preheaderId: upstreamDuplicate?.entryId ?? preheader.id,
         checkId: check.id,
         bodyId,
         bodyStateIds: [...region.ids],
@@ -5031,8 +5118,11 @@ function matchCompilerRepeat(graph, checkStateId) {
         bodyNodes,
         bodyBranchCount: structuredBody.branchCount,
         bodyJoinCount: structuredBody.joinCount,
-        retainedPreheaderOperations,
-        removedCompilerConditionOperationCount: junkSlice.operations.size,
+        retainedPreheaderOperations: upstreamDuplicate?.retainedPrefix ?? retainedPreheaderOperations,
+        removedCompilerConditionOperationCount: upstreamDuplicate?.removedOperationCount ?? junkSlice.operations.size,
+        removeStateIds: upstreamDuplicate
+            ? [...region.ids, check.id, ...duplicateRemovedIds]
+            : undefined,
     };
 }
 

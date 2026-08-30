@@ -59,6 +59,19 @@ function argsSnapshot(name, slot) {
     assert.equal(nodes.length, 3);
 }
 
+
+{
+    const nodes = [
+        alias("game_v", "game"),
+        raw({ kind: "version-define", emittedTarget: "cond_v", rhs: "game_v:IsLoaded()", emittedText: "local cond_v = game_v:IsLoaded()", reads: ["game_v"] }),
+    ];
+    assert.equal(recoverStructuredCompilerGlobalAliases(nodes, { recoveredUpvalueBindings: [] }), 1);
+    assert.equal(nodes.length, 1);
+    assert.equal(nodes[0].text, "local cond_v = game:IsLoaded()");
+    assert.equal(nodes[0].operation.rhs, "game:IsLoaded()");
+    assert.deepEqual(nodes[0].operation.reads, []);
+}
+
 {
     const sourceAlias = raw({ kind: "version-define", emittedTarget: "f_v", rhs: "print", emittedText: "local f_v = print", reads: [] });
     const nodes = [sourceAlias, raw({ kind: "effect-call", rhs: "f_v(1)", emittedText: "f_v(1)", reads: ["f_v"] })];
