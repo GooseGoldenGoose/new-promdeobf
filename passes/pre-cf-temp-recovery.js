@@ -362,6 +362,42 @@ function isCompilerTableResultOperation(operation, graph) {
     return parsePreCfRhs(operation.rhs)?.type === "TableConstructorExpression";
 }
 
+function canDeclareRetargetedTableDestination(candidate) {
+    if (candidate.consumer?.kind === "epoch-start") return true;
+    if (candidate.consumer?.kind !== "epoch-mutate") return false;
+
+    // A reused physical register can hold a short-lived table-entry value before
+    // the compiler allocates that same register as the new source local. In that
+    // shape beta sees an epoch mutation even though the recovered constructor is
+    // the declaration point. Shadowing the prior beta local is safe only inside a
+    // terminal state: the constructor initializer still reads the old local, and
+    // every later use in the state resolves to the new local. Cross-state users
+    // remain conservative because a new lexical local would not escape the block.
+    if ((candidate.state?.successors || []).length !== 0) return false;
+    const operations = candidate.state.operations || [];
+    const producerOffset = operations.indexOf(candidate.producer);
+    const consumerOffset = candidate.consumerOffset;
+    if (producerOffset < 0 || !(consumerOffset > producerOffset)) return false;
+
+    let priorDeclaration = null;
+    for (let i = producerOffset - 1; i >= 0; i--) {
+        const op = operations[i];
+        if (!operationWrites(op).includes(candidate.actualTarget)) continue;
+        priorDeclaration = { op, offset: i };
+        break;
+    }
+    if (!priorDeclaration) return false;
+    if (!String(priorDeclaration.op.emittedText || "").trim().startsWith("local ")) return false;
+    if (!candidate.producer.reads?.includes(candidate.actualTarget)) return false;
+
+    for (let i = priorDeclaration.offset + 1; i < consumerOffset; i++) {
+        const op = operations[i];
+        if (op === candidate.producer) continue;
+        if (operationWrites(op).includes(candidate.actualTarget)) return false;
+    }
+    return true;
+}
+
 function finalizePreCfTableDestinations(betaResult) {
     if (!betaResult?.graph || typeof betaResult.source !== "string" || betaResult.graph.cfgComplete !== true) {
         betaResult.preCfTableDestinations = { applied: false, safe: false, reason: "PRE-CF table destination recovery requires a complete beta graph" };
@@ -398,7 +434,8 @@ function finalizePreCfTableDestinations(betaResult) {
         if (!ownership.safe) { betaResult.preCfTableDestinations = { applied: folds > 0, safe: false, reason: ownership.reason, folds }; return betaResult; }
         const pr = ownership.ranges.get(candidate.producer), cr = ownership.ranges.get(candidate.consumer);
         if (!pr || !cr) { betaResult.preCfTableDestinations = { applied: folds > 0, safe: false, reason: "PRE-CF table destination recovery lost exact source ownership", folds }; return betaResult; }
-        const prefix = String(candidate.consumer.emittedText || "").trim().startsWith("local ") ? "local " : "";
+        const declareDestination = canDeclareRetargetedTableDestination(candidate);
+        const prefix = declareDestination ? "local " : "";
         const emittedText = `${prefix}${candidate.actualTarget} = ${candidate.producer.rhs}`;
         const output = applySourceEdits(betaResult.source, [{ start: pr[0], end: pr[1], replacement: emittedText }, { start: cr[0], end: cr[1], replacement: "" }]);
         try { parsePreCfSource(output); } catch (error) { betaResult.preCfTableDestinations = { applied: folds > 0, safe: false, reason: `PRE-CF table destination recovery reparse failed: ${error.message}`, folds }; return betaResult; }
@@ -406,7 +443,7 @@ function finalizePreCfTableDestinations(betaResult) {
         candidate.producer.emittedTarget = candidate.actualTarget;
         candidate.producer.originalTarget = candidate.consumer.originalTarget;
         candidate.producer.registerEpoch = candidate.consumer.registerEpoch;
-        candidate.producer.kind = candidate.consumer.kind;
+        candidate.producer.kind = declareDestination ? "epoch-start" : candidate.consumer.kind;
         candidate.producer.emittedText = emittedText;
         candidate.state.operations.splice(candidate.consumerOffset, 1);
         for (let i = 0; i < candidate.state.operations.length; i++) candidate.state.operations[i].index = i + 1;
