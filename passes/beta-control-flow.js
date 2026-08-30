@@ -342,6 +342,7 @@ function solveSingleState(originalAst, graph) {
     const lowered = lowerTerminalReturn(sunk.operations);
     const structuredNodes = lowered.operations.map(operation => rawNode(operation, state.id));
     const postCfClosureDestinationRecoveryCount = recoverStructuredPostCfClosureDestinationTemps(structuredNodes, graph);
+    const postCfDeadClosureRecoveryCount = recoverStructuredPostCfDeadClosureTemps(structuredNodes, graph);
     const postCfCopyScalarRecoveryCount = recoverStructuredPostCfCopyScalarTemps(structuredNodes, graph);
     const bodyText = formatStructuredNodes(structuredNodes);
     const presented = buildPresentedSource(originalAst, bodyText, { registerOverflowUsed: graph.registerOverflowUsed === true });
@@ -356,6 +357,7 @@ function solveSingleState(originalAst, graph) {
         statementCount: countStructuredStatements(structuredNodes),
         branchCount: 0,
         postCfClosureDestinationRecoveryCount,
+        postCfDeadClosureRecoveryCount,
         postCfCopyScalarRecoveryCount,
         terminalReturnCount: lowered.lowered ? 1 : 0,
         terminalReturnPayloadSunk: sunk.moved,
@@ -1217,6 +1219,105 @@ function recoverStructuredPostCfClosureDestinationTemps(nodes, graph) {
                     }
                 }
                 const node = body[index];
+                if (node?.type === "if") { if (visitBody(node.thenBody) || visitBody(node.elseBody)) return true; }
+                else if (node?.type === "numeric-for" || node?.type === "generic-for") { if (visitBody(node.body)) return true; }
+                else if (node?.type === "while-guard") { if (visitBody(node.conditionBody) || visitBody(node.body)) return true; }
+                else if (node?.type === "repeat-until") { if (visitBody(node.body) || visitBody(node.conditionBody)) return true; }
+            }
+            return false;
+        }
+        visitBody(nodes);
+    }
+    return folds;
+}
+
+function recoverStructuredPostCfDeadClosureTemps(nodes, graph) {
+    const captured = new Set(graph?.recoveredUpvalueBindings || []);
+    let folds = 0;
+
+    function collectFacts(root) {
+        const reads = new Map();
+        const localDeclarations = new Set();
+        function visit(body) {
+            for (const node of body || []) {
+                for (const name of node.reads || []) reads.set(name, (reads.get(name) || 0) + 1);
+                if (node.type === "raw") {
+                    const parsed = parseControlFlowStatement(node.text);
+                    const statement = parsed?.statement;
+                    if (statement?.type === "LocalStatement") {
+                        for (const variable of statement.variables || []) {
+                            if (variable?.type === "Identifier") localDeclarations.add(variable.name);
+                        }
+                    }
+                }
+                if (node.type === "if") { visit(node.thenBody); visit(node.elseBody); }
+                else if (node.type === "numeric-for" || node.type === "generic-for") visit(node.body);
+                else if (node.type === "while-guard") { visit(node.conditionBody); visit(node.body); }
+                else if (node.type === "repeat-until") { visit(node.body); visit(node.conditionBody); }
+            }
+        }
+        visit(root);
+        return { reads, localDeclarations };
+    }
+
+    function deadClosureProducerInfo(node) {
+        const operation = node?.operation || {};
+        const name = operation.emittedTarget;
+        if (!name) return null;
+        const parsed = parseControlFlowStatement(node?.text);
+        const statement = parsed?.statement;
+        if (statement?.type !== "LocalStatement" || statement.variables?.length !== 1 || statement.init?.length !== 1) return null;
+        const variable = statement.variables[0];
+        const init = statement.init[0];
+        if (variable?.type !== "Identifier" || variable.name !== name || init?.type !== "FunctionDeclaration") return null;
+        return { name };
+    }
+
+    function deadLocalConsumerInfo(node, tempName, facts) {
+        const parsed = parseControlFlowStatement(node?.text);
+        const statement = parsed?.statement;
+        if ((statement?.type !== "AssignmentStatement" && statement?.type !== "LocalStatement") || statement.variables?.length !== 1 || statement.init?.length !== 1) return null;
+        const lhs = statement.variables[0];
+        const rhs = statement.init[0];
+        if (lhs?.type !== "Identifier" || rhs?.type !== "Identifier" || rhs.name !== tempName) return null;
+        const target = lhs.name;
+        if (captured.has(target) || (facts.reads.get(target) || 0) !== 0) return null;
+        if (statement.type === "AssignmentStatement" && !facts.localDeclarations.has(target)) return null;
+        return { target };
+    }
+
+    let changed = true;
+    while (changed) {
+        changed = false;
+        const facts = collectFacts(nodes);
+        function visitBody(body) {
+            for (let index = 0; index < (body || []).length; index++) {
+                const node = body[index];
+                if (node?.type === "raw") {
+                    const producer = deadClosureProducerInfo(node);
+                    if (producer && !captured.has(producer.name)) {
+                        const readCount = facts.reads.get(producer.name) || 0;
+                        if (readCount === 0) {
+                            body.splice(index, 1);
+                            folds++;
+                            changed = true;
+                            return true;
+                        }
+                        if (readCount === 1) {
+                            for (let consumerIndex = index + 1; consumerIndex < body.length; consumerIndex++) {
+                                const consumerNode = body[consumerIndex];
+                                if (consumerNode?.type !== "raw") continue;
+                                const consumer = deadLocalConsumerInfo(consumerNode, producer.name, facts);
+                                if (!consumer) continue;
+                                body.splice(consumerIndex, 1);
+                                body.splice(index, 1);
+                                folds += 2;
+                                changed = true;
+                                return true;
+                            }
+                        }
+                    }
+                }
                 if (node?.type === "if") { if (visitBody(node.thenBody) || visitBody(node.elseBody)) return true; }
                 else if (node?.type === "numeric-for" || node?.type === "generic-for") { if (visitBody(node.body)) return true; }
                 else if (node?.type === "while-guard") { if (visitBody(node.conditionBody) || visitBody(node.body)) return true; }
@@ -4505,6 +4606,7 @@ function solveAcyclicStructured(originalAst, graph) {
 
     const loopControlConditionTempRecoveryCount = recoverStructuredLoopBranchConditionTemps(structured.nodes, graph);
     const postCfClosureDestinationRecoveryCount = recoverStructuredPostCfClosureDestinationTemps(structured.nodes, graph);
+    const postCfDeadClosureRecoveryCount = recoverStructuredPostCfDeadClosureTemps(structured.nodes, graph);
     const postCfCopyScalarRecoveryCount = recoverStructuredPostCfCopyScalarTemps(structured.nodes, graph);
 
     const epochHoisting = hoistEscapingEpochDeclarations(structured.nodes);
@@ -4527,6 +4629,7 @@ function solveAcyclicStructured(originalAst, graph) {
         ifConditionTempRecoveryCount,
         loopControlConditionTempRecoveryCount,
         postCfClosureDestinationRecoveryCount,
+        postCfDeadClosureRecoveryCount,
         postCfCopyScalarRecoveryCount,
         joinCount,
         guardBranchCount,
@@ -5094,6 +5197,7 @@ function solveClosureRegions(originalAst, graph) {
         terminalReturnPayloadSunk: results.some(result => result.terminalReturnPayloadSunk),
         terminalReturnPayloadSunkCount: sum("terminalReturnPayloadSunkCount"),
         postCfClosureDestinationRecoveryCount: sum("postCfClosureDestinationRecoveryCount"),
+        postCfDeadClosureRecoveryCount: sum("postCfDeadClosureRecoveryCount"),
         postCfCopyScalarRecoveryCount: sum("postCfCopyScalarRecoveryCount"),
         terminalReturnLowered: results.every(result => result.terminalReturnLowered),
         terminalReturnText: null,
@@ -5173,5 +5277,6 @@ module.exports = {
     removeCompilerPosPreservationOperations,
     normalizeRegisterOverflowGraph,
     recoverStructuredPostCfClosureDestinationTemps,
+    recoverStructuredPostCfDeadClosureTemps,
     solveBetaControlFlow,
 };
