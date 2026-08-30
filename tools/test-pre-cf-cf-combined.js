@@ -22,6 +22,7 @@ const focused = [
     "test-pre-cf-scalar-temps.js",
     "test-pre-cf-global-lookups.js",
     "test-pre-cf-lookup-temps.js",
+    "test-pre-cf-call-setup-chains.js",
     "test-pre-cf-call-argument-temps.js",
     "test-pre-cf-call-base-temps.js",
     "test-pre-cf-namecalls.js",

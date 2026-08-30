@@ -1337,6 +1337,105 @@ function rewriteDirectCallArguments(rhs, replacements) {
     return { rhs: rewritten, baseName: expression.base.name, consumed };
 }
 
+function isStablePreCfCallSetupExpression(node) {
+    if (!node) return false;
+    return ["Identifier", "NumericLiteral", "StringLiteral", "BooleanLiteral", "NilLiteral"].includes(node.type);
+}
+
+function rewriteDirectCallSetup(rhs, replacements) {
+    const expression = parsePreCfRhs(rhs);
+    if (expression?.type !== "CallExpression" || expression.base?.type !== "Identifier") return null;
+    const offset = "return ".length;
+    const edits = [];
+    const consumed = new Set();
+    const nodes = [expression.base, ...(expression.arguments || [])];
+    for (const node of nodes) {
+        if (node?.type !== "Identifier" || !replacements.has(node.name)) continue;
+        if (!Array.isArray(node.range)) return null;
+        edits.push({ start: node.range[0] - offset, end: node.range[1] - offset, replacement: replacements.get(node.name) });
+        consumed.add(node.name);
+    }
+    if (!edits.length) return null;
+    let output = rhs;
+    for (const edit of edits.sort((a, b) => b.start - a.start)) output = output.slice(0, edit.start) + edit.replacement + output.slice(edit.end);
+    return { rhs: output, consumed, baseName: expression.base.name };
+}
+
+function finalizePreCfCallSetupChains(betaResult) {
+    if (!betaResult?.graph || typeof betaResult.source !== "string" || betaResult.graph.cfgComplete !== true) {
+        betaResult.preCfCallSetupChains = { applied: false, safe: false, reason: "PRE-CF call setup chain recovery requires a complete beta graph" };
+        return betaResult;
+    }
+    let folds = 0;
+    const maxRounds = (betaResult.graph.states || []).reduce((n, state) => n + (state.operations || []).length, 0) + 1;
+    for (let round = 0; round < maxRounds; round++) {
+        const proof = buildPreCfTempProofIndex(betaResult);
+        let candidate = null;
+        for (const state of betaResult.graph.states || []) {
+            const operations = state.operations || [];
+            for (let consumerOffset = 0; consumerOffset < operations.length; consumerOffset++) {
+                const consumer = operations[consumerOffset];
+                if (!isCopyOperation(consumer)) continue;
+                const call = parsePreCfRhs(consumer.rhs);
+                if (call?.type !== "CallExpression" || call.base?.type !== "Identifier") continue;
+                const directNames = new Set([call.base.name, ...(call.arguments || []).filter(arg => arg?.type === "Identifier").map(arg => arg.name)]);
+                const replacements = new Map();
+                const producerItems = [];
+                for (let producerOffset = consumerOffset - 1; producerOffset >= 0; producerOffset--) {
+                    const producer = operations[producerOffset];
+                    if (!isCopyOperation(producer) || !directNames.has(producer.emittedTarget)) break;
+                    const facts = proof.byBinding.get(producer.emittedTarget);
+                    if (!facts?.safeSameStateTransport || facts.producer?.operation !== producer || facts.consumer?.operation !== consumer) break;
+                    const producerExpr = parsePreCfRhs(producer.rhs);
+                    if (!isStablePreCfCallSetupExpression(producerExpr)) break;
+                    replacements.set(producer.emittedTarget, producer.rhs);
+                    producerItems.push({ facts, producer });
+                }
+                if (producerItems.length < 2 || !replacements.has(call.base.name)) continue;
+                const rewritten = rewriteDirectCallSetup(consumer.rhs, replacements);
+                if (!rewritten || rewritten.consumed.size !== producerItems.length) continue;
+                candidate = { state, consumer, producerItems, rewritten };
+                break;
+            }
+            if (candidate) break;
+        }
+        if (!candidate) break;
+        const ownership = mapPreCfOperationRanges(betaResult);
+        if (!ownership.safe) {
+            betaResult.preCfCallSetupChains = { applied: folds > 0, safe: false, reason: ownership.reason, folds };
+            return betaResult;
+        }
+        const producerRanges = candidate.producerItems.map(item => ownership.ranges.get(item.producer));
+        const consumerRange = ownership.ranges.get(candidate.consumer);
+        if (producerRanges.some(range => !range) || !consumerRange) {
+            betaResult.preCfCallSetupChains = { applied: folds > 0, safe: false, reason: "PRE-CF call setup chain recovery lost exact source ownership", folds };
+            return betaResult;
+        }
+        const prefix = String(candidate.consumer.emittedText || "").trim().startsWith("local ") ? "local " : "";
+        const emittedText = `${prefix}${candidate.consumer.emittedTarget} = ${candidate.rewritten.rhs}`;
+        const output = applySourceEdits(betaResult.source, [
+            ...producerRanges.map(range => ({ start: range[0], end: range[1], replacement: "" })),
+            { start: consumerRange[0], end: consumerRange[1], replacement: emittedText },
+        ]);
+        try { parsePreCfSource(output); }
+        catch (error) {
+            betaResult.preCfCallSetupChains = { applied: folds > 0, safe: false, reason: `PRE-CF call setup chain recovery reparse failed: ${error.message}`, folds };
+            return betaResult;
+        }
+        betaResult.source = output;
+        const removedNames = new Set(candidate.producerItems.map(item => item.facts.name));
+        const addedReads = candidate.producerItems.flatMap(item => item.producer.reads || []);
+        candidate.consumer.rhs = candidate.rewritten.rhs;
+        candidate.consumer.reads = [...new Set([...(candidate.consumer.reads || []).filter(name => !removedNames.has(name)), ...addedReads])];
+        candidate.consumer.emittedText = emittedText;
+        for (const offset of candidate.producerItems.map(item => item.facts.producer.offset).sort((a, b) => b - a)) candidate.state.operations.splice(offset, 1);
+        for (let i = 0; i < candidate.state.operations.length; i++) candidate.state.operations[i].index = i + 1;
+        folds += candidate.producerItems.length;
+    }
+    betaResult.preCfCallSetupChains = { applied: folds > 0, safe: true, folds };
+    return betaResult;
+}
+
 function finalizePreCfCallArgumentTemps(betaResult) {
     if (!betaResult?.graph || typeof betaResult.source !== "string" || betaResult.graph.cfgComplete !== true) {
         betaResult.preCfCallArgumentTemps = { applied: false, safe: false, reason: "PRE-CF call-argument recovery requires a complete beta graph" };
@@ -2010,6 +2109,7 @@ function finalizePreCfTempRecovery(betaResult) {
         finalizePreCfScalarTemps,
         finalizePreCfGlobalLookups,
         finalizePreCfLookupTemps,
+        finalizePreCfCallSetupChains,
         finalizePreCfCallArgumentTemps,
         finalizePreCfCallBaseTemps,
         finalizePreCfNamecalls,
@@ -2028,7 +2128,7 @@ function finalizePreCfTempRecovery(betaResult) {
         }
         stageNames.push(stage.name);
     }
-    const foldKeys = ["preCfCopyTemps", "preCfClosureTemps", "preCfCallResultDestinations", "preCfTableDestinations", "preCfTableEntryTemps", "preCfIndexKeyTemps", "preCfGlobalWrites", "preCfIndexedWriteTemps", "preCfClosureWriteDestinations", "preCfScalarTemps", "preCfGlobalLookups", "preCfLookupTemps", "preCfCallArgumentTemps", "preCfCallBaseTemps", "preCfNamecalls", "preCfDiscardedCallResults", "preCfReturnTemps", "preCfReturnAllTemps", "preCfMultiReturnTemps"];
+    const foldKeys = ["preCfCopyTemps", "preCfClosureTemps", "preCfCallResultDestinations", "preCfTableDestinations", "preCfTableEntryTemps", "preCfIndexKeyTemps", "preCfGlobalWrites", "preCfIndexedWriteTemps", "preCfClosureWriteDestinations", "preCfScalarTemps", "preCfGlobalLookups", "preCfLookupTemps", "preCfCallSetupChains", "preCfCallArgumentTemps", "preCfCallBaseTemps", "preCfNamecalls", "preCfDiscardedCallResults", "preCfReturnTemps", "preCfReturnAllTemps", "preCfMultiReturnTemps"];
     const folds = foldKeys.reduce((sum, key) => sum + Number(betaResult[key]?.folds || 0), 0);
     betaResult.preCfTempRecovery = { applied: folds > 0, safe: true, folds, stages: stageNames };
     return betaResult;
@@ -2048,6 +2148,7 @@ module.exports = {
     finalizePreCfScalarTemps,
     finalizePreCfGlobalLookups,
     finalizePreCfLookupTemps,
+    finalizePreCfCallSetupChains,
     finalizePreCfCallArgumentTemps,
     finalizePreCfCallBaseTemps,
     finalizePreCfNamecalls,
