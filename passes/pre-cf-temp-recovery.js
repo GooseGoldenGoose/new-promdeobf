@@ -743,7 +743,7 @@ function finalizePreCfScalarTemps(betaResult) {
             const producer = facts.producer.operation;
             const consumer = facts.consumer.operation;
             if (claimed.has(producer) || claimed.has(consumer)) continue;
-            if (!isCopyOperation(producer) || !isCopyOperation(consumer) || consumer.rhs !== facts.name) continue;
+            if (!isCopyOperation(producer) || !["version-define", "epoch-start", "epoch-mutate", "upvalue-write"].includes(consumer?.kind) || consumer.rhs !== facts.name) continue;
             const expression = parsePreCfRhs(producer.rhs);
             if (!expression || expression.type === "Identifier" || !isSafePreCfScalarExpression(expression)) continue;
             candidates.push({ facts, producer, consumer });

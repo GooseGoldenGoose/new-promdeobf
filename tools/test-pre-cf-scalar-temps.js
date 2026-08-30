@@ -50,4 +50,56 @@ for (const [rhs, reads] of [["f()", []], ["obj[k]", []], ["a_v and b_v", ["a_v",
     assert(beta.source.includes(`local temp_v = ${rhs}`), rhs);
 }
 
+// Compiler assignment RHS scratch feeding an existing local mutation may fold.
+{
+    const beta = makeBeta("2", []);
+    const consumer = beta.graph.states[0].operations[3];
+    consumer.kind = "epoch-mutate";
+    consumer.emittedText = "sink_v = temp_v";
+    beta.source = beta.source.replace("local sink_v = temp_v", "sink_v = temp_v");
+    finalizePreCfScalarTemps(beta);
+    assert.equal(beta.preCfScalarTemps.folds, 1, beta.source);
+    assert(beta.source.includes("sink_v = 2"), beta.source);
+    assert(!beta.source.includes("local temp_v = 2"), beta.source);
+}
+
+// Identifier RHS remains a source-value copy barrier even for an existing-local mutation.
+{
+    const beta = makeBeta("a_v", ["a_v"]);
+    const consumer = beta.graph.states[0].operations[3];
+    consumer.kind = "epoch-mutate";
+    consumer.emittedText = "sink_v = temp_v";
+    beta.source = beta.source.replace("local sink_v = temp_v", "sink_v = temp_v");
+    finalizePreCfScalarTemps(beta);
+    assert.equal(beta.preCfScalarTemps.folds, 0, beta.source);
+    assert(beta.source.includes("local temp_v = a_v"), beta.source);
+}
+
+// Captured-local assignment uses the same compiler RHS scratch before an upvalue write.
+{
+    const beta = makeBeta("3", []);
+    const consumer = beta.graph.states[0].operations[3];
+    consumer.kind = "upvalue-write";
+    consumer.originalTarget = "sink_v";
+    consumer.emittedText = "sink_v = temp_v";
+    beta.source = beta.source.replace("local sink_v = temp_v", "sink_v = temp_v");
+    finalizePreCfScalarTemps(beta);
+    assert.equal(beta.preCfScalarTemps.folds, 1, beta.source);
+    assert(beta.source.includes("sink_v = 3"), beta.source);
+    assert(!beta.source.includes("local temp_v = 3"), beta.source);
+}
+
+// Captured-local assignment from a source identifier remains a copy barrier.
+{
+    const beta = makeBeta("a_v", ["a_v"]);
+    const consumer = beta.graph.states[0].operations[3];
+    consumer.kind = "upvalue-write";
+    consumer.originalTarget = "sink_v";
+    consumer.emittedText = "sink_v = temp_v";
+    beta.source = beta.source.replace("local sink_v = temp_v", "sink_v = temp_v");
+    finalizePreCfScalarTemps(beta);
+    assert.equal(beta.preCfScalarTemps.folds, 0, beta.source);
+    assert(beta.source.includes("local temp_v = a_v"), beta.source);
+}
+
 console.log("pre-CF scalar temps: PASS");
