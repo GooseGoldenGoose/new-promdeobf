@@ -302,7 +302,7 @@ function buildPresentedSource(originalAst, bodyText, options = {}) {
         environmentHeader = `local _env = ${provider}`;
         headerLines.push(environmentHeader);
     }
-    headerLines.push("local args = { ... }");
+    if (/\bargs\b/.test(bodyText)) headerLines.push("local args = { ... }");
     let registerOverflowHeader = null;
     if (options.registerOverflowUsed === true) {
         registerOverflowHeader = "local RegisterOverflow = {}";
@@ -344,7 +344,7 @@ function solveSingleState(originalAst, graph) {
     const postCfNamecallRecoveryCount = recoverStructuredPostCfNamecalls(structuredNodes);
     const postCfClosureDestinationRecoveryCount = recoverStructuredPostCfClosureDestinationTemps(structuredNodes, graph);
     const postCfDeadClosureRecoveryCount = recoverStructuredPostCfDeadClosureTemps(structuredNodes, graph);
-    const postCfDeadScalarLocalRecoveryCount = recoverStructuredPostCfDeadScalarLocals(structuredNodes, graph);
+    const postCfDeadScalarLocalRecoveryCount = recoverStructuredPostCfDeadScalarLocals(structuredNodes, graph, { syntheticLocals: ["args"] });
     const postCfCopyScalarRecoveryCount = recoverStructuredPostCfCopyScalarTemps(structuredNodes, graph);
     const postCfStaticMemberRecoveryCount = recoverStructuredPostCfStaticMembers(structuredNodes);
     const bodyText = formatStructuredNodes(structuredNodes);
@@ -1429,8 +1429,9 @@ function recoverStructuredPostCfDeadClosureTemps(nodes, graph) {
     return folds;
 }
 
-function recoverStructuredPostCfDeadScalarLocals(nodes, graph) {
+function recoverStructuredPostCfDeadScalarLocals(nodes, graph, options = {}) {
     const captured = new Set(graph?.recoveredUpvalueBindings || []);
+    const syntheticLocals = new Set(options.syntheticLocals || []);
     let folds = 0;
 
     function collectFacts(root) {
@@ -1463,11 +1464,12 @@ function recoverStructuredPostCfDeadScalarLocals(nodes, graph) {
         return { reads, definitions, localDeclarations };
     }
 
-    function safeDeadInitializer(init, facts) {
+    function safeDeadInitializer(init, facts, operation) {
         if (!init) return false;
         if (init.type === "NilLiteral" || init.type === "NumericLiteral" || init.type === "StringLiteral" || init.type === "BooleanLiteral") return true;
         if (init.type !== "Identifier") return false;
-        return facts.localDeclarations.has(init.name) || captured.has(init.name);
+        if (facts.localDeclarations.has(init.name) || captured.has(init.name)) return true;
+        return syntheticLocals.has(init.name) && Boolean(operation?.registerEpoch) && /^(?:r\d+|__overflow_phys_\d+)$/.test(String(operation?.originalTarget || ""));
     }
 
     let changed = true;
@@ -1486,7 +1488,7 @@ function recoverStructuredPostCfDeadScalarLocals(nodes, graph) {
                         const init = statement.init[0];
                         if (variable?.type === "Identifier" && variable.name === target &&
                             !captured.has(target) && (facts.reads.get(target) || 0) === 0 &&
-                            (facts.definitions.get(target) || 0) === 1 && safeDeadInitializer(init, facts)) {
+                            (facts.definitions.get(target) || 0) === 1 && safeDeadInitializer(init, facts, node.operation)) {
                             body.splice(index, 1);
                             folds++;
                             changed = true;
@@ -4784,7 +4786,7 @@ function solveAcyclicStructured(originalAst, graph) {
     const postCfNamecallRecoveryCount = recoverStructuredPostCfNamecalls(structured.nodes);
     const postCfClosureDestinationRecoveryCount = recoverStructuredPostCfClosureDestinationTemps(structured.nodes, graph);
     const postCfDeadClosureRecoveryCount = recoverStructuredPostCfDeadClosureTemps(structured.nodes, graph);
-    const postCfDeadScalarLocalRecoveryCount = recoverStructuredPostCfDeadScalarLocals(structured.nodes, graph);
+    const postCfDeadScalarLocalRecoveryCount = recoverStructuredPostCfDeadScalarLocals(structured.nodes, graph, { syntheticLocals: ["args"] });
     const postCfCopyScalarRecoveryCount = recoverStructuredPostCfCopyScalarTemps(structured.nodes, graph);
     const postCfStaticMemberRecoveryCount = recoverStructuredPostCfStaticMembers(structured.nodes);
 

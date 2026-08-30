@@ -6,8 +6,8 @@ function raw(operation) {
     return { type: "raw", operation, text: operation.emittedText, reads: [...(operation.reads || [])] };
 }
 
-function run(nodes, captured = []) {
-    return recoverStructuredPostCfDeadScalarLocals(nodes, { recoveredUpvalueBindings: captured });
+function run(nodes, captured = [], options = {}) {
+    return recoverStructuredPostCfDeadScalarLocals(nodes, { recoveredUpvalueBindings: captured }, options);
 }
 
 {
@@ -52,6 +52,22 @@ function run(nodes, captured = []) {
 {
     const nodes = [raw({ kind: "version-define", emittedTarget: "x", rhs: "f()", emittedText: "local x = f()", reads: ["f"] })];
     assert.equal(run(nodes), 0);
+    assert.equal(nodes.length, 1);
+}
+
+{
+    const nodes = [raw({ kind: "version-define", emittedTarget: "x", rhs: "args", emittedText: "local x = args", reads: ["args"] })];
+    assert.equal(run(nodes), 0);
+    assert.equal(nodes.length, 1);
+}
+{
+    const nodes = [raw({ kind: "epoch-start", emittedTarget: "x", originalTarget: "r8", registerEpoch: "r8:epoch:1", rhs: "args", emittedText: "local x = args", reads: ["args"] })];
+    assert.equal(run(nodes, [], { syntheticLocals: ["args"] }), 1);
+    assert.equal(nodes.length, 0);
+}
+{
+    const nodes = [raw({ kind: "version-define", emittedTarget: "setup", rhs: "args", emittedText: "local setup = args", reads: ["args"] })];
+    assert.equal(run(nodes, [], { syntheticLocals: ["args"] }), 0);
     assert.equal(nodes.length, 1);
 }
 
