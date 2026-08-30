@@ -775,3 +775,11 @@ Latest post-Step-47 work - structured compiler global alias + logical presentati
 - Recovered logical expressions are AST-normalized for `and`/`or`/`not` precedence, removing compiler-generated redundant grouping without regex-stripping semantic call parentheses.
 - Exact vararg/pcall fixture now emits direct `pcall(tostring, ...)`, `pcall(type, ...)`, `pcall(typeof, ...)`, `xpcall(..., print)` with no compiler global alias locals.
 - Focused `tools/test-beta-cf-global-aliases.js` added; combined gate is 39 focused suites + 66/66 canonical samples PASS.
+
+Latest post-Step-47 work - compiler IIFE / anonymous closure expression recovery:
+- Closure-region replacement operations now preserve structural compiler closure provenance (`factoryName`, entry, capture count).
+- `recoverStructuredCompilerClosureTemps` inlines only zero-capture, one-definition/one-read compiler closure temporaries in exact proven contexts: discarded/effect-call bases, or arguments to a call base previously proven as a compiler global alias. Source closure locals without compiler provenance, captured closures, multi-use closures, and value-producing call-base assignments refuse.
+- `recoverStructuredCompilerReturnAllForwarding` handles the exact adjacent post-CF bridge `{ call(...) }` -> anonymous compiler closure call whose final argument is `unpack(pack)`, preserving final-argument multi-return expansion. Non-final unpack, ordinary call bases, captures, and ambiguous ownership refuse.
+- Local compiler authority confirms FunctionCallExpression evaluates base before arguments (`compiler.lua:1974+`); the structural IIFE recovery reconstructs that source-level shape only after the compiler closure/base and RETURN_ALL ownership proofs succeed.
+- Exact vararg/pcall fixture now begins `(function(...fixed..., ...) ... end)(pcall(function() return ... end))`; multi-use `atf`/`w` closures remain locals.
+- Focused `tools/test-beta-cf-iife-return-all.js` added. `tools/test-beta-control-flow.js` regression forced the call-base rule to remain effect-call-only. Combined gate: 40 focused suites + 66/66 canonical samples PASS.

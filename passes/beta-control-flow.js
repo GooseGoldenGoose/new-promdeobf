@@ -348,6 +348,8 @@ function solveSingleState(originalAst, graph) {
     const postCfDeadScalarLocalRecoveryCount = recoverStructuredPostCfDeadScalarLocals(structuredNodes, graph, { syntheticLocals: ["args"] });
     const postCfCopyScalarRecoveryCount = recoverStructuredPostCfCopyScalarTemps(structuredNodes, graph);
     const postCfCompilerGlobalAliasRecoveryCount = recoverStructuredCompilerGlobalAliases(structuredNodes, graph);
+    const postCfCompilerClosureTempRecoveryCount = recoverStructuredCompilerClosureTemps(structuredNodes, graph);
+    const postCfCompilerReturnAllRecoveryCount = recoverStructuredCompilerReturnAllForwarding(structuredNodes, graph);
     const postCfStaticMemberRecoveryCount = recoverStructuredPostCfStaticMembers(structuredNodes);
     const postCfFunctionDeclarationRecoveryCount = recoverStructuredPostCfFunctionDeclarations(structuredNodes);
     const bodyText = formatStructuredNodes(structuredNodes);
@@ -369,6 +371,8 @@ function solveSingleState(originalAst, graph) {
         postCfDeadScalarLocalRecoveryCount,
         postCfCopyScalarRecoveryCount,
         postCfCompilerGlobalAliasRecoveryCount,
+        postCfCompilerClosureTempRecoveryCount,
+        postCfCompilerReturnAllRecoveryCount,
         postCfStaticMemberRecoveryCount,
         postCfFunctionDeclarationRecoveryCount,
         terminalReturnCount: lowered.lowered ? 1 : 0,
@@ -1238,6 +1242,7 @@ function recoverStructuredCompilerGlobalAliases(nodes, graph) {
                             consumer.operation.emittedText = rewritten.rewritten;
                             if (consumer.operation.kind === "effect-call") consumer.operation.rhs = rewritten.rewritten;
                             consumer.operation.reads = [...consumer.reads];
+                            consumer.operation.compilerStructuredGlobalAliasesRecovered = aliases.map(alias => ({ globalName: alias.globalName }));
                         }
                     }
                     for (const alias of aliases) { const at = body.indexOf(alias.node); if (at >= 0) body.splice(at, 1); }
@@ -1260,6 +1265,216 @@ function recoverStructuredCompilerGlobalAliases(nodes, graph) {
     while (changed) {
         changed = visitBody(nodes, collectFacts(nodes));
     }
+    return folds;
+}
+
+
+function recoverStructuredCompilerClosureTemps(nodes, graph) {
+    const captured = new Set(graph?.recoveredUpvalueBindings || []);
+    let folds = 0;
+
+    function collectFacts(root) {
+        const reads = new Map();
+        const definitions = new Map();
+        function visit(body) {
+            for (const node of body || []) {
+                for (const name of node.reads || []) reads.set(name, (reads.get(name) || 0) + 1);
+                if (node.type === "raw" && node.operation?.emittedTarget) {
+                    const name = node.operation.emittedTarget;
+                    definitions.set(name, (definitions.get(name) || 0) + 1);
+                }
+                if (node.type === "if") {
+                    visit(node.thenBody); visit(node.elseBody);
+                } else if (node.type === "numeric-for" || node.type === "generic-for") {
+                    visit(node.body);
+                } else if (node.type === "while-guard" || node.type === "repeat-until") {
+                    visit(node.conditionBody); visit(node.body);
+                }
+            }
+        }
+        visit(root);
+        return { reads, definitions };
+    }
+
+    function statementUseContext(text, name) {
+        const parsed = parseControlFlowStatement(text);
+        if (!parsed?.statement) return null;
+        const matches = [];
+        function walk(node, parent = null, key = null) {
+            if (!node || typeof node !== "object") return;
+            if (node.type === "Identifier" && node.name === name) {
+                const staticMemberKey = parent?.type === "MemberExpression" && key === "identifier";
+                const staticTableKey = parent?.type === "TableKeyString" && key === "key";
+                if (!staticMemberKey && !staticTableKey && Array.isArray(node.range)) matches.push({ node, parent, key });
+                return;
+            }
+            for (const [childKey, value] of Object.entries(node)) {
+                if (childKey === "range" || childKey === "loc") continue;
+                if (Array.isArray(value)) {
+                    for (const child of value) if (child?.type) walk(child, node, childKey);
+                } else if (value?.type) {
+                    walk(value, node, childKey);
+                }
+            }
+        }
+        walk(parsed.statement);
+        if (matches.length !== 1) return null;
+        const match = matches[0];
+        if (match.parent?.type !== "CallExpression") return null;
+        const role = match.key === "base" ? "call-base" : match.key === "arguments" ? "call-argument" : null;
+        if (!role) return null;
+        return { parsed, ...match, role };
+    }
+
+    function rewriteStatementIdentifier(text, name, replacement) {
+        const parsed = parseControlFlowStatement(text);
+        if (!parsed?.statement) return null;
+        const ranges = collectExpressionVariableIdentifierRanges(parsed.statement, name);
+        if (ranges.length !== 1) return null;
+        const [start, end] = ranges[0];
+        if (parsed.source.slice(start, end) !== name) return null;
+        return parsed.source.slice(0, start) + replacement + parsed.source.slice(end);
+    }
+
+    function assignmentRhs(text) {
+        const parsed = parseControlFlowStatement(text);
+        const statement = parsed?.statement;
+        const init = statement?.init || [];
+        if ((statement?.type !== "AssignmentStatement" && statement?.type !== "LocalStatement") || init.length !== 1 || !Array.isArray(init[0]?.range)) return null;
+        return parsed.source.slice(init[0].range[0], init[0].range[1]);
+    }
+
+    function visitBody(body, facts) {
+        for (let index = 1; index < (body || []).length; index++) {
+            const producerNode = body[index - 1];
+            const consumerNode = body[index];
+            const producer = producerNode?.type === "raw" ? producerNode.operation : null;
+            const info = producer?.compilerClosureFactoryRecovered;
+            const name = producer?.emittedTarget;
+            if (info && info.captureCount === 0 && name && !captured.has(name) &&
+                (facts.reads.get(name) || 0) === 1 && (facts.definitions.get(name) || 0) === 1 &&
+                consumerNode?.type === "raw" && (consumerNode.reads || []).includes(name)) {
+                const functionText = String(producer.rhs || "").trim();
+                const context = /^function\s*\(/.test(functionText) ? statementUseContext(consumerNode.text, name) : null;
+                if (context) {
+                    let allowed = context.role === "call-base" && consumerNode.operation?.kind === "effect-call";
+                    if (context.role === "call-argument") {
+                        const recoveredGlobals = consumerNode.operation?.compilerStructuredGlobalAliasesRecovered || [];
+                        const base = context.parent?.base;
+                        allowed = base?.type === "Identifier" && recoveredGlobals.some(item => item?.globalName === base.name);
+                    }
+                    if (allowed) {
+                        const replacement = context.role === "call-base" ? `(${functionText})` : functionText;
+                        const rewritten = rewriteStatementIdentifier(consumerNode.text, name, replacement);
+                        if (rewritten && parseControlFlowStatement(rewritten)) {
+                            consumerNode.text = rewritten;
+                            consumerNode.reads = (consumerNode.reads || []).filter(read => read !== name);
+                            if (consumerNode.operation) {
+                                consumerNode.operation.emittedText = rewritten;
+                                const rhs = consumerNode.operation.kind === "effect-call" ? rewritten : assignmentRhs(rewritten);
+                                if (rhs) consumerNode.operation.rhs = rhs;
+                                consumerNode.operation.reads = [...consumerNode.reads];
+                                if (context.role === "call-base") consumerNode.operation.compilerInlineClosureBaseRecovered = true;
+                                if (context.role === "call-argument") consumerNode.operation.compilerInlineClosureArgumentRecovered = true;
+                            }
+                            body.splice(index - 1, 1);
+                            folds++;
+                            return true;
+                        }
+                    }
+                }
+            }
+            if (consumerNode?.type === "if") {
+                if (visitBody(consumerNode.thenBody, facts) || visitBody(consumerNode.elseBody, facts)) return true;
+            } else if (consumerNode?.type === "numeric-for" || consumerNode?.type === "generic-for") {
+                if (visitBody(consumerNode.body, facts)) return true;
+            } else if (consumerNode?.type === "while-guard" || consumerNode?.type === "repeat-until") {
+                if (visitBody(consumerNode.conditionBody, facts) || visitBody(consumerNode.body, facts)) return true;
+            }
+        }
+        return false;
+    }
+
+    let changed = true;
+    while (changed) changed = visitBody(nodes, collectFacts(nodes));
+    return folds;
+}
+
+function recoverStructuredCompilerReturnAllForwarding(nodes, graph) {
+    const captured = new Set(graph?.recoveredUpvalueBindings || []);
+    let folds = 0;
+
+    function collectFacts(root) {
+        const reads = new Map();
+        const definitions = new Map();
+        function visit(body) {
+            for (const node of body || []) {
+                for (const name of node.reads || []) reads.set(name, (reads.get(name) || 0) + 1);
+                if (node.type === "raw" && node.operation?.emittedTarget) {
+                    const name = node.operation.emittedTarget;
+                    definitions.set(name, (definitions.get(name) || 0) + 1);
+                }
+                if (node.type === "if") { visit(node.thenBody); visit(node.elseBody); }
+                else if (node.type === "numeric-for" || node.type === "generic-for") visit(node.body);
+                else if (node.type === "while-guard" || node.type === "repeat-until") { visit(node.conditionBody); visit(node.body); }
+            }
+        }
+        visit(root);
+        return { reads, definitions };
+    }
+
+    function visitBody(body, facts) {
+        for (let index = 1; index < (body || []).length; index++) {
+            const packNode = body[index - 1];
+            const consumerNode = body[index];
+            const pack = packNode?.type === "raw" ? packNode.operation : null;
+            const packName = pack?.emittedTarget;
+            if (pack && packName && !captured.has(packName) &&
+                (facts.reads.get(packName) || 0) === 1 && (facts.definitions.get(packName) || 0) === 1 &&
+                consumerNode?.type === "raw" && consumerNode.operation?.compilerInlineClosureBaseRecovered === true) {
+                const packExpr = parseOperationExpression(pack);
+                const fields = packExpr?.type === "TableConstructorExpression" ? (packExpr.fields || []) : [];
+                const innerCall = fields.length === 1 && fields[0]?.type === "TableValue" && fields[0].value?.type === "CallExpression" ? fields[0].value : null;
+                const innerCallText = innerCall ? sourceTextForParsedExpressionNode(String(pack.rhs || ""), innerCall) : null;
+                const parsedConsumer = parseControlFlowStatement(consumerNode.text);
+                const statement = parsedConsumer?.statement;
+                const expression = statement?.type === "CallStatement" ? statement.expression : null;
+                const args = expression?.type === "CallExpression" ? (expression.arguments || []) : [];
+                const last = args[args.length - 1];
+                const unpackArgs = last?.type === "CallExpression" && isIdentifier(last.base, "unpack") ? (last.arguments || []) : [];
+                if (innerCallText && expression?.base?.type === "FunctionDeclaration" && unpackArgs.length === 1 && isIdentifier(unpackArgs[0], packName) && Array.isArray(last.range)) {
+                    const rewritten = parsedConsumer.source.slice(0, last.range[0]) + innerCallText + parsedConsumer.source.slice(last.range[1]);
+                    if (parseControlFlowStatement(rewritten)) {
+                        consumerNode.text = rewritten;
+                        const nextReads = [];
+                        for (const read of consumerNode.reads || []) {
+                            if (read === packName) nextReads.push(...(pack.reads || []));
+                            else nextReads.push(read);
+                        }
+                        consumerNode.reads = [...new Set(nextReads)];
+                        consumerNode.operation.emittedText = rewritten;
+                        consumerNode.operation.rhs = rewritten;
+                        consumerNode.operation.reads = [...consumerNode.reads];
+                        consumerNode.operation.compilerStructuredReturnAllRecovered = true;
+                        body.splice(index - 1, 1);
+                        folds++;
+                        return true;
+                    }
+                }
+            }
+            if (consumerNode?.type === "if") {
+                if (visitBody(consumerNode.thenBody, facts) || visitBody(consumerNode.elseBody, facts)) return true;
+            } else if (consumerNode?.type === "numeric-for" || consumerNode?.type === "generic-for") {
+                if (visitBody(consumerNode.body, facts)) return true;
+            } else if (consumerNode?.type === "while-guard" || consumerNode?.type === "repeat-until") {
+                if (visitBody(consumerNode.conditionBody, facts) || visitBody(consumerNode.body, facts)) return true;
+            }
+        }
+        return false;
+    }
+
+    let changed = true;
+    while (changed) changed = visitBody(nodes, collectFacts(nodes));
     return folds;
 }
 
@@ -5331,6 +5546,8 @@ function solveAcyclicStructured(originalAst, graph) {
     const postCfDeadScalarLocalRecoveryCount = recoverStructuredPostCfDeadScalarLocals(structured.nodes, graph, { syntheticLocals: ["args"] });
     const postCfCopyScalarRecoveryCount = recoverStructuredPostCfCopyScalarTemps(structured.nodes, graph);
     const postCfCompilerGlobalAliasRecoveryCount = recoverStructuredCompilerGlobalAliases(structured.nodes, graph);
+    const postCfCompilerClosureTempRecoveryCount = recoverStructuredCompilerClosureTemps(structured.nodes, graph);
+    const postCfCompilerReturnAllRecoveryCount = recoverStructuredCompilerReturnAllForwarding(structured.nodes, graph);
     // Dead scalar/copy cleanup can expose a compiler condition leaf that was not
     // adjacent during the first structured condition pass. Re-run the exact same
     // fail-closed proof after those deletions; this does not cross any surviving
@@ -5364,6 +5581,8 @@ function solveAcyclicStructured(originalAst, graph) {
         postCfDeadScalarLocalRecoveryCount,
         postCfCopyScalarRecoveryCount,
         postCfCompilerGlobalAliasRecoveryCount,
+        postCfCompilerClosureTempRecoveryCount,
+        postCfCompilerReturnAllRecoveryCount,
         postCfStaticMemberRecoveryCount,
         postCfFunctionDeclarationRecoveryCount,
         joinCount,
@@ -5818,7 +6037,7 @@ function nestedFunctionExpression(bodyText, options = {}) {
     return lines.join("\n");
 }
 
-function replaceClosureFactoryOperation(operation, functionExpression) {
+function replaceClosureFactoryOperation(operation, functionExpression, closureInfo = null) {
     const text = String(operationText(operation) || "").trimStart();
     let target = operation?.emittedTarget || null;
     let localPrefix = text.startsWith("local ") ? "local " : "";
@@ -5842,6 +6061,11 @@ function replaceClosureFactoryOperation(operation, functionExpression) {
         emittedText: `${localPrefix}${target} = ${functionExpression}`,
         reads: [],
         returnSinkSafe: false,
+        compilerClosureFactoryRecovered: closureInfo ? {
+            factoryName: closureInfo.factoryName,
+            entry: closureInfo.entry,
+            captureCount: closureInfo.captureCount,
+        } : null,
     };
 }
 
@@ -5882,7 +6106,8 @@ function regionGraph(graph, entry, ownerByState, solvedBodies) {
                         recoveredSignature: signature.recovered === true,
                         parameters: signature.parameters || [],
                         vararg: signature.vararg === true,
-                    })
+                    }),
+                    call
                 );
                 if (!replacement) {
                     return { error: `Closure factory for entry ${call.entry} has no replaceable beta assignment target` };
@@ -6046,6 +6271,8 @@ function solveClosureRegions(originalAst, graph) {
         postCfStaticMemberRecoveryCount: sum("postCfStaticMemberRecoveryCount"),
         postCfCopyScalarRecoveryCount: sum("postCfCopyScalarRecoveryCount"),
         postCfCompilerGlobalAliasRecoveryCount: sum("postCfCompilerGlobalAliasRecoveryCount"),
+        postCfCompilerClosureTempRecoveryCount: sum("postCfCompilerClosureTempRecoveryCount"),
+        postCfCompilerReturnAllRecoveryCount: sum("postCfCompilerReturnAllRecoveryCount"),
         terminalReturnLowered: results.every(result => result.terminalReturnLowered),
         terminalReturnText: rootResult.terminalReturnText || null,
         closureRegionCount: graph.entries.length,
@@ -6134,6 +6361,8 @@ module.exports = {
     recoverStructuredPostCfDeadClosureTemps,
     recoverStructuredPostCfDeadScalarLocals,
     recoverStructuredCompilerGlobalAliases,
+    recoverStructuredCompilerClosureTemps,
+    recoverStructuredCompilerReturnAllForwarding,
     normalizeRecoveredLogicalExpression,
     solveBetaControlFlow,
 };
