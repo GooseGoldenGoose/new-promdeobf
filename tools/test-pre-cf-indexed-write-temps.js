@@ -28,4 +28,29 @@ for (const beta of [
     makeBeta({captured:true}),
     makeBeta({gapWrite:true}),
 ]) { finalizePreCfIndexedWriteTemps(beta); assert.equal(beta.preCfIndexedWriteTemps.folds,0,beta.source); }
+
+// Compiler RHS scratch scalar can be consumed directly by the proven indexed write.
+{
+    const beta=makeBeta({writeText:'table_v["key"] = value_v'});
+    const value={index:1,kind:"epoch-start",emittedTarget:"value_v",originalTarget:"r2",registerEpoch:"r2:epoch:1",rhs:"10",reads:[],emittedText:"local value_v = 10"};
+    beta.graph.states[0].operations.splice(1,0,value);
+    beta.graph.states[0].operations.forEach((op,i)=>op.index=i+1);
+    beta.source=beta.source.replace('            table_v["key"] = value_v','            local value_v = 10\n            table_v["key"] = value_v');
+    finalizePreCfIndexedWriteTemps(beta);
+    assert.equal(beta.preCfIndexedWriteTemps.rhsTempsRemoved,1,beta.source);
+    assert(beta.source.includes('table_v["key"] = 10'),beta.source);
+    assert(!beta.source.includes('local value_v = 10'),beta.source);
+}
+// Effectful RHS producers stay at their original evaluation point.
+{
+    const beta=makeBeta({writeText:'table_v["key"] = value_v'});
+    const value={index:1,kind:"epoch-start",emittedTarget:"value_v",originalTarget:"r2",registerEpoch:"r2:epoch:1",rhs:"make()",reads:["make"],emittedText:"local value_v = make()"};
+    beta.graph.states[0].operations.splice(1,0,value);
+    beta.graph.states[0].operations.forEach((op,i)=>op.index=i+1);
+    beta.source=beta.source.replace('            table_v["key"] = value_v','            local value_v = make()\n            table_v["key"] = value_v');
+    finalizePreCfIndexedWriteTemps(beta);
+    assert.equal(beta.preCfIndexedWriteTemps.rhsTempsRemoved,0,beta.source);
+    assert(beta.source.includes('local value_v = make()'),beta.source);
+}
+
 console.log("pre-CF indexed write temps: PASS");

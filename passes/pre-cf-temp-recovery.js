@@ -966,18 +966,22 @@ function finalizePreCfGlobalWrites(betaResult) {
     return betaResult;
 }
 
-function indexedWriteKeyInfo(operation) {
+function indexedWriteTempInfo(operation) {
     if (operation?.kind !== "effect-write") return null;
     const text = String(operation.emittedText || "");
     const statement = parsePreCfStatement(text);
     if (statement?.type !== "AssignmentStatement" || statement.variables?.length !== 1 || statement.init?.length !== 1) return null;
     const lhs = statement.variables[0];
+    const rhs = statement.init[0];
     if (lhs?.type !== "IndexExpression" || lhs.base?.type !== "Identifier" || lhs.base.name === "_env") return null;
-    if (lhs.index?.type !== "Identifier" || !Array.isArray(lhs.index.range)) return null;
+    if (!Array.isArray(rhs?.range)) return null;
     return {
-        keyBinding: lhs.index.name,
-        keyStart: lhs.index.range[0],
-        keyEnd: lhs.index.range[1],
+        keyBinding: lhs.index?.type === "Identifier" && Array.isArray(lhs.index.range) ? lhs.index.name : null,
+        keyStart: lhs.index?.type === "Identifier" && Array.isArray(lhs.index.range) ? lhs.index.range[0] : null,
+        keyEnd: lhs.index?.type === "Identifier" && Array.isArray(lhs.index.range) ? lhs.index.range[1] : null,
+        rhsBinding: rhs.type === "Identifier" ? rhs.name : null,
+        rhsStart: rhs.range[0],
+        rhsEnd: rhs.range[1],
     };
 }
 function finalizePreCfIndexedWriteTemps(betaResult) {
@@ -985,7 +989,7 @@ function finalizePreCfIndexedWriteTemps(betaResult) {
         betaResult.preCfIndexedWriteTemps = { applied: false, safe: false, reason: "PRE-CF indexed write recovery requires a complete beta graph" };
         return betaResult;
     }
-    let folds = 0;
+    let folds = 0, keyTempsRemoved = 0, rhsTempsRemoved = 0;
     const maxRounds = (betaResult.graph.states || []).reduce((n, state) => n + (state.operations || []).length, 0) + 1;
     for (let round = 0; round < maxRounds; round++) {
         const proof = buildPreCfTempProofIndex(betaResult);
@@ -993,34 +997,41 @@ function finalizePreCfIndexedWriteTemps(betaResult) {
         for (const state of betaResult.graph.states || []) {
             for (let offset = 0; offset < (state.operations || []).length; offset++) {
                 const operation = state.operations[offset];
-                const info = indexedWriteKeyInfo(operation);
+                const info = indexedWriteTempInfo(operation);
                 if (!info) continue;
-                const facts = proof.byBinding.get(info.keyBinding);
-                if (!facts?.safeSameStateTransport || facts.consumer?.operation !== operation || facts.producer.offset >= offset) continue;
-                const producer = facts.producer.operation;
-                if (!isCopyOperation(producer) || !String(producer.emittedText || "").trim().startsWith("local ")) continue;
-                const keyExpression = parsePreCfRhs(producer.rhs);
-                if (!isLiteralOnlyPreCfScalarExpression(keyExpression)) continue;
-                let blocked = false;
-                for (let i = facts.producer.offset + 1; i < offset; i++) {
-                    const gap = state.operations[i];
-                    if ((gap.reads || []).includes(info.keyBinding) || operationWrites(gap).includes(info.keyBinding)) { blocked = true; break; }
+                for (const slot of [
+                    { kind: "key", binding: info.keyBinding, start: info.keyStart, end: info.keyEnd },
+                    { kind: "rhs", binding: info.rhsBinding, start: info.rhsStart, end: info.rhsEnd },
+                ]) {
+                    if (!slot.binding) continue;
+                    const facts = proof.byBinding.get(slot.binding);
+                    if (!facts?.safeSameStateTransport || facts.consumer?.operation !== operation || facts.producer.offset >= offset) continue;
+                    const producer = facts.producer.operation;
+                    if (!isCopyOperation(producer) || !String(producer.emittedText || "").trim().startsWith("local ")) continue;
+                    const expression = parsePreCfRhs(producer.rhs);
+                    if (!isLiteralOnlyPreCfScalarExpression(expression)) continue;
+                    let blocked = false;
+                    for (let i = facts.producer.offset + 1; i < offset; i++) {
+                        const gap = state.operations[i];
+                        if ((gap.reads || []).includes(slot.binding) || operationWrites(gap).includes(slot.binding)) { blocked = true; break; }
+                    }
+                    if (blocked) continue;
+                    const emittedText = String(operation.emittedText || "");
+                    const rewrittenText = emittedText.slice(0, slot.start) + producer.rhs + emittedText.slice(slot.end);
+                    candidate = { state, operation, offset, producer, producerOffset: facts.producer.offset, facts, emittedText: rewrittenText, kind: slot.kind };
+                    break;
                 }
-                if (blocked) continue;
-                const emittedText = String(operation.emittedText || "");
-                const rewrittenText = emittedText.slice(0, info.keyStart) + producer.rhs + emittedText.slice(info.keyEnd);
-                candidate = { state, operation, offset, producer, producerOffset: facts.producer.offset, facts, emittedText: rewrittenText };
-                break;
+                if (candidate) break;
             }
             if (candidate) break;
         }
         if (!candidate) break;
         const ownership = mapPreCfOperationRanges(betaResult);
-        if (!ownership.safe) { betaResult.preCfIndexedWriteTemps = { applied: folds > 0, safe: false, reason: ownership.reason, folds }; return betaResult; }
+        if (!ownership.safe) { betaResult.preCfIndexedWriteTemps = { applied: folds > 0, safe: false, reason: ownership.reason, folds, keyTempsRemoved, rhsTempsRemoved }; return betaResult; }
         const producerRange = ownership.ranges.get(candidate.producer);
         const consumerRange = ownership.ranges.get(candidate.operation);
         if (!producerRange || !consumerRange) {
-            betaResult.preCfIndexedWriteTemps = { applied: folds > 0, safe: false, reason: "PRE-CF indexed write recovery lost exact source ownership", folds };
+            betaResult.preCfIndexedWriteTemps = { applied: folds > 0, safe: false, reason: "PRE-CF indexed write recovery lost exact source ownership", folds, keyTempsRemoved, rhsTempsRemoved };
             return betaResult;
         }
         const output = applySourceEdits(betaResult.source, [
@@ -1029,7 +1040,7 @@ function finalizePreCfIndexedWriteTemps(betaResult) {
         ]);
         try { parsePreCfSource(output); }
         catch (error) {
-            betaResult.preCfIndexedWriteTemps = { applied: folds > 0, safe: false, reason: `PRE-CF indexed write recovery reparse failed: ${error.message}`, folds };
+            betaResult.preCfIndexedWriteTemps = { applied: folds > 0, safe: false, reason: `PRE-CF indexed write recovery reparse failed: ${error.message}`, folds, keyTempsRemoved, rhsTempsRemoved };
             return betaResult;
         }
         betaResult.source = output;
@@ -1037,9 +1048,11 @@ function finalizePreCfIndexedWriteTemps(betaResult) {
         candidate.operation.reads = (candidate.operation.reads || []).filter(name => name !== candidate.facts.name);
         candidate.state.operations.splice(candidate.producerOffset, 1);
         for (let i = 0; i < candidate.state.operations.length; i++) candidate.state.operations[i].index = i + 1;
+        if (candidate.kind === "key") keyTempsRemoved++;
+        else rhsTempsRemoved++;
         folds++;
     }
-    betaResult.preCfIndexedWriteTemps = { applied: folds > 0, safe: true, folds };
+    betaResult.preCfIndexedWriteTemps = { applied: folds > 0, safe: true, folds, keyTempsRemoved, rhsTempsRemoved };
     return betaResult;
 }
 
