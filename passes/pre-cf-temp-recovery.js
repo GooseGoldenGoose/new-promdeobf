@@ -2054,6 +2054,86 @@ function finalizePreCfReturnTemps(betaResult) {
     betaResult.preCfReturnTemps = { applied: folds > 0, safe: true, folds, parseRounds };
     return betaResult;
 }
+function finalizePreCfLiteralReturnTemps(betaResult) {
+    if (!betaResult?.graph || typeof betaResult.source !== "string" || betaResult.graph.cfgComplete !== true) {
+        betaResult.preCfLiteralReturnTemps = { applied: false, safe: false, reason: "PRE-CF literal return recovery requires a complete beta graph" };
+        return betaResult;
+    }
+    let folds = 0;
+    const maxRounds = (betaResult.graph.states || []).reduce((n, state) => n + (state.operations || []).length, 0) + 1;
+    for (let round = 0; round < maxRounds; round++) {
+        const proof = buildPreCfTempProofIndex(betaResult);
+        let candidate = null;
+        for (const state of betaResult.graph.states || []) {
+            const ops = state.operations || [];
+            for (let payloadOffset = 0; payloadOffset < ops.length; payloadOffset++) {
+                const payload = ops[payloadOffset];
+                if (payload?.kind !== "return-payload" || payload.terminalCompilerReturnPayload !== true || !Array.isArray(payload.returnExpressions) || !payload.returnExpressions.length) continue;
+                const replacements = [];
+                const producers = new Set();
+                for (let slot = 0; slot < payload.returnExpressions.length; slot++) {
+                    const expressionText = String(payload.returnExpressions[slot] || "").trim();
+                    const expression = parsePreCfRhs(expressionText);
+                    if (expression?.type !== "Identifier") continue;
+                    const name = expression.name;
+                    const facts = proof.byBinding.get(name);
+                    if (!facts?.safeSameStateTransport || facts.consumer?.operation !== payload || facts.consumer?.stateId !== state.id || facts.producer.offset >= payloadOffset) continue;
+                    const producer = facts.producer.operation;
+                    if (!isCopyOperation(producer) || !producer.emittedTarget || !String(producer.emittedText || "").trim().startsWith("local ")) continue;
+                    const producerExpression = parsePreCfRhs(producer.rhs);
+                    if (!isLiteralOnlyPreCfScalarExpression(producerExpression)) continue;
+                    replacements.push({ slot, name, producer, rhs: String(producer.rhs || "").trim() });
+                    producers.add(producer);
+                }
+                if (!replacements.length) continue;
+                candidate = { state, payload, payloadOffset, replacements, producers };
+                break;
+            }
+            if (candidate) break;
+        }
+        if (!candidate) break;
+
+        const ownership = mapPreCfOperationRanges(betaResult);
+        if (!ownership.safe) {
+            betaResult.preCfLiteralReturnTemps = { applied: folds > 0, safe: false, reason: ownership.reason, folds };
+            return betaResult;
+        }
+        const payloadRange = ownership.ranges.get(candidate.payload);
+        const producerRanges = [...candidate.producers].map(operation => ownership.ranges.get(operation));
+        if (!payloadRange || producerRanges.some(range => !range)) {
+            betaResult.preCfLiteralReturnTemps = { applied: folds > 0, safe: false, reason: "PRE-CF literal return recovery lost exact source ownership", folds };
+            return betaResult;
+        }
+        const expressions = [...candidate.payload.returnExpressions];
+        for (const replacement of candidate.replacements) expressions[replacement.slot] = replacement.rhs;
+        const rhs = `{ ${expressions.join(", ")} }`;
+        const emittedText = `${candidate.payload.emittedTarget || betaResult.graph.returnName || "ReturnVal"} = ${rhs}`;
+        const output = applySourceEdits(betaResult.source, [
+            ...producerRanges.map(range => ({ start: range[0], end: range[1], replacement: "" })),
+            { start: payloadRange[0], end: payloadRange[1], replacement: emittedText },
+        ]);
+        try { parsePreCfSource(output); }
+        catch (error) {
+            betaResult.preCfLiteralReturnTemps = { applied: folds > 0, safe: false, reason: `PRE-CF literal return recovery reparse failed: ${error.message}`, folds };
+            return betaResult;
+        }
+        betaResult.source = output;
+        candidate.payload.returnExpressions = expressions;
+        candidate.payload.rhs = rhs;
+        candidate.payload.emittedText = emittedText;
+        const removedNames = new Set(candidate.replacements.map(item => item.name));
+        candidate.payload.reads = [...new Set([
+            ...(candidate.payload.reads || []).filter(name => !removedNames.has(name)),
+            ...candidate.replacements.flatMap(item => item.producer.reads || []),
+        ])];
+        candidate.state.operations = candidate.state.operations.filter(operation => !candidate.producers.has(operation));
+        for (let i = 0; i < candidate.state.operations.length; i++) candidate.state.operations[i].index = i + 1;
+        folds += candidate.replacements.length;
+    }
+    betaResult.preCfLiteralReturnTemps = { applied: folds > 0, safe: true, folds };
+    return betaResult;
+}
+
 function parsePackedSingleCall(rhs) {
     const expression = parsePreCfRhs(rhs);
     if (expression?.type !== "TableConstructorExpression" || expression.fields?.length !== 1) return null;
@@ -2121,26 +2201,47 @@ function finalizePreCfReturnAllTemps(betaResult) {
             const ops = state.operations || [];
             for (let offset = 0; offset + 1 < ops.length; offset++) {
                 const packOp = ops[offset];
-                const consumer = ops[offset + 1];
                 if (!isCopyOperation(packOp) || !packOp.emittedTarget) continue;
                 const packName = packOp.emittedTarget;
                 if (betaResult.graph.recoveredUpvalueBindings?.includes(packName)) continue;
                 const packFacts = proof.byBinding.get(packName);
-                if (!packFacts?.singleDefinition || packFacts.captured || packFacts.readCount !== 1 || packFacts.producer?.operation !== packOp || packFacts.consumer?.operation !== consumer) continue;
-                if (!packFacts.safeSameStateTransport || !packFacts.adjacent) continue;
+                if (!packFacts?.singleDefinition || packFacts.captured || packFacts.readCount !== 1 || packFacts.producer?.operation !== packOp) continue;
+                if (!packFacts.safeSameStateTransport || packFacts.consumer?.stateId !== state.id) continue;
+                const consumerOffset = packFacts.consumer.offset;
+                const consumer = packFacts.consumer.operation;
+                if (!(consumerOffset > offset)) continue;
                 const innerCall = parsePackedSingleCall(packOp.rhs);
                 if (!innerCall) continue;
+
+                // Moving the packed call to its final RETURN_ALL consumer is allowed
+                // across compiler bookkeeping only. Such gaps must be literal-only
+                // scalar definitions: no calls/indexes/metamethods, no pack use, and
+                // no mutation/read dependency with the packed call's input bindings.
+                const producerReads = new Set(packOp.reads || []);
+                let blocked = false;
+                for (let gapOffset = offset + 1; gapOffset < consumerOffset; gapOffset++) {
+                    const gap = ops[gapOffset];
+                    if ((gap.reads || []).includes(packName) || operationWrites(gap).includes(packName)) { blocked = true; break; }
+                    const gapExpression = parsePreCfRhs(gap.rhs);
+                    if (!gap.emittedTarget || !isCopyOperation(gap) || !isLiteralOnlyPreCfScalarExpression(gapExpression)) { blocked = true; break; }
+                    if (producerReads.has(gap.emittedTarget) || (gap.reads || []).some(name => producerReads.has(name))) { blocked = true; break; }
+                }
+                if (blocked) continue;
+
                 let rewritten = null;
                 let consumerKind = null;
                 if (isCopyOperation(consumer) && consumer.emittedTarget) {
                     rewritten = rewriteReturnAllFinalCallArgument(consumer.rhs, packName, innerCall);
                     consumerKind = rewritten ? "call-argument" : null;
+                } else if (consumer?.kind === "effect-call") {
+                    rewritten = rewriteReturnAllFinalCallArgument(consumer.rhs, packName, innerCall);
+                    consumerKind = rewritten ? "effect-call" : null;
                 } else if (consumer?.kind === "return-payload") {
                     rewritten = rewriteReturnAllReturnPayload(consumer, packName, innerCall);
                     consumerKind = rewritten ? "return-payload" : null;
                 }
                 if (!rewritten || !consumerKind) continue;
-                candidate = { state, offset, packOp, consumer, packName, rewritten, consumerKind };
+                candidate = { state, offset, consumerOffset, packOp, consumer, packName, rewritten, consumerKind };
                 break;
             }
             if (candidate) break;
@@ -2160,7 +2261,9 @@ function finalizePreCfReturnAllTemps(betaResult) {
         const isLocal = String(candidate.consumer.emittedText || "").trim().startsWith("local ");
         const emittedText = candidate.consumerKind === "return-payload"
             ? `${candidate.consumer.emittedTarget || betaResult.graph.returnName || "ReturnVal"} = ${candidate.rewritten.rhs}`
-            : `${isLocal ? "local " : ""}${candidate.consumer.emittedTarget} = ${candidate.rewritten.rhs}`;
+            : candidate.consumerKind === "effect-call"
+                ? candidate.rewritten.rhs
+                : `${isLocal ? "local " : ""}${candidate.consumer.emittedTarget} = ${candidate.rewritten.rhs}`;
         const output = applySourceEdits(betaResult.source, [
             { start: packRange[0], end: packRange[1], replacement: "" },
             { start: consumerRange[0], end: consumerRange[1], replacement: emittedText },
@@ -2316,6 +2419,36 @@ function finalizePreCfMultiReturnTemps(betaResult) {
     return betaResult;
 }
 
+function finalizePreCfPostReturnAllConvergence(betaResult) {
+    const stages = [
+        [finalizePreCfCallArgumentTemps, "preCfCallArgumentTemps"],
+        [finalizePreCfCallBaseTemps, "preCfCallBaseTemps"],
+        [finalizePreCfEffectCallArgumentTemps, "preCfEffectCallArgumentTemps"],
+        [finalizePreCfEffectCallBaseTemps, "preCfEffectCallBaseTemps"],
+    ];
+    let folds = 0;
+    for (const [stage, key] of stages) {
+        const previous = betaResult[key] ? { ...betaResult[key] } : null;
+        betaResult = stage(betaResult);
+        const current = betaResult[key] || {};
+        if (current.safe === false) {
+            betaResult.preCfPostReturnAllConvergence = { applied: folds > 0, safe: false, reason: current.reason || `${stage.name} failed`, folds };
+            return betaResult;
+        }
+        const added = Number(current.folds || 0);
+        folds += added;
+        if (previous) {
+            betaResult[key] = {
+                ...current,
+                applied: previous.applied === true || current.applied === true,
+                folds: Number(previous.folds || 0) + added,
+            };
+        }
+    }
+    betaResult.preCfPostReturnAllConvergence = { applied: folds > 0, safe: true, folds };
+    return betaResult;
+}
+
 function finalizePreCfTempRecovery(betaResult) {
     const stages = [
         finalizePreCfCopyTemps,
@@ -2338,7 +2471,9 @@ function finalizePreCfTempRecovery(betaResult) {
         finalizePreCfEffectCallArgumentTemps,
         finalizePreCfEffectCallBaseTemps,
         finalizePreCfReturnTemps,
+        finalizePreCfLiteralReturnTemps,
         finalizePreCfReturnAllTemps,
+        finalizePreCfPostReturnAllConvergence,
         finalizePreCfMultiReturnTemps,
     ];
     const stageNames = [];
@@ -2351,7 +2486,7 @@ function finalizePreCfTempRecovery(betaResult) {
         }
         stageNames.push(stage.name);
     }
-    const foldKeys = ["preCfCopyTemps", "preCfClosureTemps", "preCfCallResultDestinations", "preCfTableDestinations", "preCfTableEntryTemps", "preCfIndexKeyTemps", "preCfGlobalWrites", "preCfIndexedWriteTemps", "preCfClosureWriteDestinations", "preCfScalarTemps", "preCfGlobalLookups", "preCfLookupTemps", "preCfCallSetupChains", "preCfCallArgumentTemps", "preCfCallBaseTemps", "preCfNamecalls", "preCfDiscardedCallResults", "preCfEffectCallArgumentTemps", "preCfEffectCallBaseTemps", "preCfReturnTemps", "preCfReturnAllTemps", "preCfMultiReturnTemps"];
+    const foldKeys = ["preCfCopyTemps", "preCfClosureTemps", "preCfCallResultDestinations", "preCfTableDestinations", "preCfTableEntryTemps", "preCfIndexKeyTemps", "preCfGlobalWrites", "preCfIndexedWriteTemps", "preCfClosureWriteDestinations", "preCfScalarTemps", "preCfGlobalLookups", "preCfLookupTemps", "preCfCallSetupChains", "preCfCallArgumentTemps", "preCfCallBaseTemps", "preCfNamecalls", "preCfDiscardedCallResults", "preCfEffectCallArgumentTemps", "preCfEffectCallBaseTemps", "preCfReturnTemps", "preCfLiteralReturnTemps", "preCfReturnAllTemps", "preCfMultiReturnTemps"];
     const folds = foldKeys.reduce((sum, key) => sum + Number(betaResult[key]?.folds || 0), 0);
     betaResult.preCfTempRecovery = { applied: folds > 0, safe: true, folds, stages: stageNames };
     return betaResult;
@@ -2379,7 +2514,9 @@ module.exports = {
     finalizePreCfEffectCallArgumentTemps,
     finalizePreCfEffectCallBaseTemps,
     finalizePreCfReturnTemps,
+    finalizePreCfLiteralReturnTemps,
     finalizePreCfReturnAllTemps,
+    finalizePreCfPostReturnAllConvergence,
     finalizePreCfMultiReturnTemps,
     finalizePreCfTempRecovery,
 };

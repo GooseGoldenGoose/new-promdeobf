@@ -28,6 +28,7 @@ const focused = [
     "test-pre-cf-namecalls.js",
     "test-pre-cf-return-temps.js",
     "test-pre-cf-return-all-temps.js",
+    "test-pre-cf-return-literal-temps.js",
     "test-pre-cf-multi-return-temps.js",
     "test-pre-cf-integration.js",
     "test-beta-cf-condition-temps.js",
