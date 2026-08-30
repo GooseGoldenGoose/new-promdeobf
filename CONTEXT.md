@@ -821,3 +821,11 @@ Latest post-Step-47 work - compiler IIFE / anonymous closure expression recovery
 - Exact Horst loading loop now emits `until not r_v6_4:FindFirstChild("loading") or r_v6_4:FindFirstChild("loading") and (((r_v6_4)["loading"])["Enabled"]) == (false)` with `r_v4_49` removed and exactly two `FindFirstChild("loading")` evaluations preserved.
 - Canonical sample 36 regression remains intact: `print("short-repeat-body", _G.scr)` stays in the repeat body and the short-circuit condition remains recovered.
 - Added `tools/test-beta-cf-repeat-condition-program.js`; combined gate PASS: 43 focused suites + 66/66 canonical samples.
+
+## Generic-for compiler global method header recovery (2026-08-30)
+- Added `recoverStructuredGenericForGlobalMethodTemps` before post-CF namecall recovery.
+- It removes only the exact compiler-owned header chain `local recv = <proven global>; local method = recv["Method"]; for ... in method(recv, ...) do`, allowing only proven synthetic `args` / `args[N]` snapshots between the method temp and loop node.
+- The receiver must carry `compilerGlobalLookupRecovered`, both receiver/method temps must have exact single-definition/read ownership, the explicit self argument must match the receiver, and captures/source aliases refuse.
+- The pass rewrites the generic-for expression to `<global>["Method"](<global>, ...)`; existing post-CF namecall recovery then emits `<global>:Method(...)` without changing generic-for multi-result adjustment.
+- Exact fixture `tmp/small-iter-while-20260830.genericfix3.lua` now emits `for r_v5_1, r_v8_1 in game:GetChildren() do`; the requested `while task.wait()` lowering remains unchanged.
+- Focused namecall suite PASS. Full combined gate PASS: 43 focused suites + 66/66 canonical samples.

@@ -1,6 +1,6 @@
 "use strict";
 const assert = require("assert");
-const { recoverStructuredPostCfNamecalls } = require("../passes/beta-control-flow");
+const { recoverStructuredPostCfNamecalls, recoverStructuredGenericForGlobalMethodTemps } = require("../passes/beta-control-flow");
 
 function raw(text, kind = "effect-call") {
     const operation = { kind, emittedText: text, rhs: kind === "effect-call" ? null : text.slice(text.indexOf("=") + 1).trim(), reads: [] };
@@ -79,4 +79,27 @@ for (const condition of [
     assert.equal(nodes[0].condition, condition);
 }
 
+{
+    const nodes = [
+        { type: "raw", text: "local recv = game", reads: [], operation: { kind: "version-define", emittedTarget: "recv", rhs: "game", reads: [], emittedText: "local recv = game", compilerGlobalLookupRecovered: "game" } },
+        { type: "raw", text: 'local method = recv["GetChildren"]', reads: ["recv"], operation: { kind: "version-define", emittedTarget: "method", rhs: 'recv["GetChildren"]', reads: ["recv"], emittedText: 'local method = recv["GetChildren"]' } },
+        { type: "raw", text: "local scratch = args", reads: [], operation: { kind: "version-define", emittedTarget: "scratch", rhs: "args", reads: [], emittedText: "local scratch = args", returnSinkSafe: true } },
+        { type: "generic-for", variables: ["i", "v"], expressions: ["method(recv)"], reads: ["method", "recv"], body: [] },
+    ];
+    assert.equal(recoverStructuredGenericForGlobalMethodTemps(nodes, { recoveredUpvalueBindings: [] }), 2);
+    assert.equal(nodes.length, 2);
+    assert.equal(nodes[1].expressions[0], 'game["GetChildren"](game)');
+    assert.equal(recoverStructuredPostCfNamecalls(nodes), 1);
+    assert.equal(nodes[1].expressions[0], "game:GetChildren()");
+}
+
+{
+    const nodes = [
+        { type: "raw", text: "local recv = sourceObj", reads: ["sourceObj"], operation: { kind: "version-define", emittedTarget: "recv", rhs: "sourceObj", reads: ["sourceObj"], emittedText: "local recv = sourceObj" } },
+        { type: "raw", text: 'local method = recv["GetChildren"]', reads: ["recv"], operation: { kind: "version-define", emittedTarget: "method", rhs: 'recv["GetChildren"]', reads: ["recv"], emittedText: 'local method = recv["GetChildren"]' } },
+        { type: "generic-for", variables: ["i", "v"], expressions: ["method(recv)"], reads: ["method", "recv"], body: [] },
+    ];
+    assert.equal(recoverStructuredGenericForGlobalMethodTemps(nodes, { recoveredUpvalueBindings: [] }), 0);
+    assert.equal(nodes.length, 3);
+}
 console.log("beta CF post-CF namecalls: PASS");

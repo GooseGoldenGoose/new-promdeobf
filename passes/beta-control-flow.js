@@ -342,6 +342,7 @@ function solveSingleState(originalAst, graph) {
     const lowered = lowerTerminalReturn(sunk.operations);
     const structuredNodes = lowered.operations.map(operation => rawNode(operation, state.id));
     const structuredLogicalConditionRecoveryCount = recoverStructuredLogicalConditionPrograms(structuredNodes, graph);
+    const genericForGlobalMethodTempRecoveryCount = recoverStructuredGenericForGlobalMethodTemps(structuredNodes, graph);
     const postCfNamecallRecoveryCount = recoverStructuredPostCfNamecalls(structuredNodes);
     const postCfClosureDestinationRecoveryCount = recoverStructuredPostCfClosureDestinationTemps(structuredNodes, graph);
     const postCfDeadClosureRecoveryCount = recoverStructuredPostCfDeadClosureTemps(structuredNodes, graph);
@@ -1950,6 +1951,122 @@ function recoverStructuredPostCfStaticMembers(nodes) {
     return folds;
 }
 
+function recoverStructuredGenericForGlobalMethodTemps(nodes, graph) {
+    const captured = new Set(graph?.recoveredUpvalueBindings || []);
+    let folds = 0;
+
+    function collectFacts(root) {
+        const reads = new Map();
+        const definitions = new Map();
+        function visit(body) {
+            for (const node of body || []) {
+                for (const name of node.reads || []) reads.set(name, (reads.get(name) || 0) + 1);
+                if (node?.type === "raw" && node.operation?.emittedTarget) {
+                    const name = node.operation.emittedTarget;
+                    definitions.set(name, (definitions.get(name) || 0) + 1);
+                }
+                if (node?.type === "if") { visit(node.thenBody); visit(node.elseBody); }
+                else if (node?.type === "numeric-for" || node?.type === "generic-for") visit(node.body);
+                else if (node?.type === "while-guard" || node?.type === "repeat-until") { visit(node.conditionBody); visit(node.body); }
+            }
+        }
+        visit(root);
+        return { reads, definitions };
+    }
+
+    function methodSnapshot(operation, receiverName) {
+        const rhs = String(operation?.rhs || "").trim();
+        const parsed = parseTransitionExpression(rhs);
+        const expression = parsed?.expression;
+        if (!expression) return null;
+        if (expression.type === "MemberExpression" && expression.base?.type === "Identifier" &&
+            expression.base.name === receiverName && expression.identifier?.type === "Identifier") {
+            const method = expression.identifier.name;
+            return /^[A-Za-z_][A-Za-z0-9_]*$/.test(method) && !POST_CF_MEMBER_KEYWORDS.has(method) ? method : null;
+        }
+        if (expression.type === "IndexExpression" && expression.base?.type === "Identifier" && expression.base.name === receiverName) {
+            return plainPostCfMemberName(expression.index);
+        }
+        return null;
+    }
+
+    function recoverHeader(body, index, facts) {
+        const loop = body[index];
+        if (loop?.type !== "generic-for" || (loop.expressions || []).length !== 1 || index < 2) return false;
+
+        function previousSemanticNode(fromIndex) {
+            for (let at = fromIndex; at >= 0; at--) {
+                const candidate = body[at];
+                const operation = candidate?.type === "raw" ? candidate.operation : null;
+                const expression = operation ? parseOperationExpression(operation) : null;
+                const parameterSnapshot = operation && (
+                    staticArgsIndex(expression) !== null ||
+                    (operation.returnSinkSafe === true && expression?.type === "Identifier" && expression.name === "args")
+                );
+                if (parameterSnapshot) continue;
+                return { node: candidate, index: at };
+            }
+            return null;
+        }
+
+        const methodItem = previousSemanticNode(index - 1);
+        if (!methodItem?.node || methodItem.node.type !== "raw") return false;
+        const receiverItem = previousSemanticNode(methodItem.index - 1);
+        if (!receiverItem?.node || receiverItem.node.type !== "raw") return false;
+
+        const receiver = receiverItem.node.operation || {};
+        const method = methodItem.node.operation || {};
+        const receiverName = receiver.emittedTarget;
+        const methodName = method.emittedTarget;
+        const globalName = receiver.compilerGlobalLookupRecovered;
+        if (!receiverName || !methodName || captured.has(receiverName) || captured.has(methodName)) return false;
+        if (typeof globalName !== "string" || !/^[A-Za-z_][A-Za-z0-9_]*$/.test(globalName) || POST_CF_MEMBER_KEYWORDS.has(globalName)) return false;
+        if (String(receiver.rhs || "").trim() !== globalName) return false;
+        if ((facts.definitions.get(receiverName) || 0) !== 1 || (facts.definitions.get(methodName) || 0) !== 1) return false;
+        if ((facts.reads.get(receiverName) || 0) !== 2 || (facts.reads.get(methodName) || 0) !== 1) return false;
+        if ((method.reads || []).length !== 1 || method.reads[0] !== receiverName) return false;
+        const staticMethod = methodSnapshot(method, receiverName);
+        if (!staticMethod) return false;
+
+        const source = String(loop.expressions[0] || "");
+        const parsed = parseTransitionExpression(source);
+        const call = parsed?.expression;
+        if (call?.type !== "CallExpression" || call.base?.type !== "Identifier" || call.base.name !== methodName) return false;
+        const args = call.arguments || [];
+        if (!args.length || args[0]?.type !== "Identifier" || args[0].name !== receiverName) return false;
+        const prefixLength = parsed.source.length - source.length;
+        const remaining = args.slice(1).map(arg => Array.isArray(arg?.range)
+            ? source.slice(arg.range[0] - prefixLength, arg.range[1] - prefixLength)
+            : null);
+        if (remaining.some(text => text === null)) return false;
+        const rewritten = `${globalName}[${JSON.stringify(staticMethod)}](${globalName}${remaining.length ? `, ${remaining.join(", ")}` : ""})`;
+        if (!parseTransitionExpression(rewritten)?.expression) return false;
+
+        loop.expressions[0] = rewritten;
+        loop.reads = [...new Set((loop.reads || []).filter(name => name !== receiverName && name !== methodName))];
+        body.splice(methodItem.index, 1);
+        body.splice(receiverItem.index, 1);
+        folds += 2;
+        return true;
+    }
+    let changed = true;
+    while (changed) {
+        changed = false;
+        const facts = collectFacts(nodes);
+        function visit(body) {
+            for (let index = 0; index < (body || []).length; index++) {
+                if (recoverHeader(body, index, facts)) return true;
+                const node = body[index];
+                if (node?.type === "if" && (visit(node.thenBody) || visit(node.elseBody))) return true;
+                if ((node?.type === "numeric-for" || node?.type === "generic-for") && visit(node.body)) return true;
+                if ((node?.type === "while-guard" || node?.type === "repeat-until") && (visit(node.conditionBody) || visit(node.body))) return true;
+            }
+            return false;
+        }
+        changed = visit(nodes);
+    }
+    return folds;
+}
 function recoverStructuredPostCfNamecalls(nodes) {
     let folds = 0;
 
@@ -5881,6 +5998,7 @@ function solveAcyclicStructured(originalAst, graph) {
 
     const structuredLogicalConditionRecoveryCount = recoverStructuredLogicalConditionPrograms(structured.nodes, graph);
     let loopControlConditionTempRecoveryCount = recoverStructuredLoopBranchConditionTemps(structured.nodes, graph);
+    const genericForGlobalMethodTempRecoveryCount = recoverStructuredGenericForGlobalMethodTemps(structured.nodes, graph);
     const postCfNamecallRecoveryCount = recoverStructuredPostCfNamecalls(structured.nodes);
     const postCfClosureDestinationRecoveryCount = recoverStructuredPostCfClosureDestinationTemps(structured.nodes, graph);
     const postCfDeadClosureRecoveryCount = recoverStructuredPostCfDeadClosureTemps(structured.nodes, graph);
@@ -6699,6 +6817,7 @@ module.exports = {
     recoverStructuredPostCfStaticMembers,
     recoverStructuredPostCfFunctionDeclarations,
     recoverStructuredPostCfNamecalls,
+    recoverStructuredGenericForGlobalMethodTemps,
     recoverStructuredPostCfClosureDestinationTemps,
     recoverNestedFunctionSignature,
     recoverStructuredPostCfDeadClosureTemps,
