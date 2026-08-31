@@ -82,7 +82,7 @@ Next turn when the user says `continue`:
 - Reparse generated Lua after transformations.
 - Run focused regressions and runtime parity where executable.
 - Fail closed when structural proof is incomplete.
-- End every project-related turn with exactly: `Done for this turn à¹‚â‚¬â€ you can prompt now.`
+- End every project-related turn with exactly: `Done for this turn à¹â¬â€ you can prompt now.`
 
 ### Commit Everything Rule
 
@@ -91,7 +91,7 @@ Next turn when the user says `continue`:
 - Keep conceptually separate changes in separate commits when practical, but all completed current-turn project changes must be pushed before the turn ends.
 - Pre-existing user edits, unrelated scratch/generated artifacts, secrets, and intentionally untracked fixtures are still preserved unless the user explicitly tells you to include them. Never use `git add .` blindly when unrelated files exist.
 
-### Communication Style à¹‚â‚¬â€ Caveman Mode
+### Communication Style à¹â¬â€ Caveman Mode
 
 Use this mode by default for all project/technical work unless the user explicitly asks for a detailed explanation.
 
@@ -869,3 +869,7 @@ Latest post-Step-47 work - compiler IIFE / anonymous closure expression recovery
 PRE-CF performance step â€” index-key batching: `finalizePreCfIndexKeyTemps` now batches source-disjoint proven literal-key substitutions from one graph snapshot instead of reparsing after each fold. Existing semantic proof rules are unchanged; producers/consumers are claimed per batch, graph removals are grouped by state, and the result is reparsed once per batch. On `spacial6`, the stage now completes in 0.964 s for 3227 folds with 1 batch round / 2 parse rounds. Focused index-key regression PASS; full combined gate remains 43 focused suites + 66/66 canonical samples PASS.
 
 PRE-CF indexed-write batching: `finalizePreCfIndexedWriteTemps` now batches independent key/RHS literal-temp transports per graph snapshot, including key+RHS replacements on the same indexed write as one transaction. On current `spacial6`, 201 folds (16 key / 185 RHS) complete in ~0.541 s with 1 batch round / 2 parse rounds. Focused indexed-write test PASS; combined gate remains 43 focused suites + 66/66 canonical PASS.
+## PRE-CF batching performance step 5 (2026-08-31)
+- `finalizePreCfClosureTemps()` now batches independent proven closure retarget/copy removals per proof snapshot with operation/name conflict guards, one ownership map, one edit application, and one reparse per batch.
+- spacial6: 13 folds, 1 batch round / 2 parse rounds, ~8.6 s -> 0.473 s.
+- Focused closure-temp PASS; combined gate PASS: 43 focused suites + 66/66 canonical samples.

@@ -236,17 +236,19 @@ function finalizePreCfClosureTemps(betaResult) {
         return betaResult;
     }
     let folds = 0;
+    let parseRounds = 0;
+    let batchRounds = 0;
     const maxRounds = (betaResult.graph.states || []).reduce((n, state) => n + (state.operations || []).length, 0) + 1;
     for (let round = 0; round < maxRounds; round++) {
         const proof = buildPreCfTempProofIndex(betaResult);
-        let candidate = null;
+        const candidates = [];
         for (const facts of proof.byBinding.values()) {
             if (!facts.singleDefinition || !facts.singleUse || facts.captured || !facts.sameState) continue;
             const producer = facts.producer?.operation, consumer = facts.consumer?.operation;
             if (!isCopyOperation(producer) || !isCopyOperation(consumer) || consumer.rhs !== facts.name) continue;
             const expression = parsePreCfRhs(producer.rhs);
             if (!isPreCfClosureFactoryCall(expression, betaResult.graph)) continue;
-            const state = betaResult.graph.states.find(item => item.id === facts.producer.stateId);
+            const state = proof.stateById.get(facts.producer.stateId);
             if (!state) continue;
             const producerOffset = facts.producer.offset, consumerOffset = facts.consumer.offset;
             if (!(consumerOffset > producerOffset)) continue;
@@ -258,32 +260,52 @@ function finalizePreCfClosureTemps(betaResult) {
                 if ((op.reads || []).includes(actualTarget) || operationWrites(op).includes(actualTarget)) { targetVisibleTooEarly = true; break; }
             }
             if (targetVisibleTooEarly) continue;
-            candidate = { facts, state, producer, consumer, producerOffset, consumerOffset, actualTarget };
-            break;
+            const touchedNames = new Set([facts.name, actualTarget, ...(producer.reads || []), ...operationWrites(producer), ...(consumer.reads || []), ...operationWrites(consumer)]);
+            candidates.push({ facts, state, producer, consumer, consumerOffset, actualTarget, touchedNames });
         }
-        if (!candidate) break;
-        const ownership = mapPreCfOperationRanges(betaResult);
-        if (!ownership.safe) { betaResult.preCfClosureTemps = { applied: folds > 0, safe: false, reason: ownership.reason, folds }; return betaResult; }
-        const pr = ownership.ranges.get(candidate.producer), cr = ownership.ranges.get(candidate.consumer);
-        if (!pr || !cr) { betaResult.preCfClosureTemps = { applied: folds > 0, safe: false, reason: "PRE-CF closure temp recovery lost exact source ownership", folds }; return betaResult; }
-        const prefix = String(candidate.consumer.emittedText || "").trim().startsWith("local ") ? "local " : "";
-        const emittedText = `${prefix}${candidate.actualTarget} = ${candidate.producer.rhs}`;
-        const output = applySourceEdits(betaResult.source, [
-            { start: pr[0], end: pr[1], replacement: emittedText },
-            { start: cr[0], end: cr[1], replacement: "" },
-        ]);
-        try { parsePreCfSource(output); } catch (error) {
-            betaResult.preCfClosureTemps = { applied: folds > 0, safe: false, reason: `PRE-CF closure temp recovery reparse failed: ${error.message}`, folds };
-            return betaResult;
+        if (!candidates.length) break;
+        const accepted = [];
+        const claimedOperations = new Set();
+        const claimedNames = new Set();
+        for (const candidate of candidates) {
+            if (claimedOperations.has(candidate.producer) || claimedOperations.has(candidate.consumer)) continue;
+            if ([...candidate.touchedNames].some(name => claimedNames.has(name))) continue;
+            accepted.push(candidate);
+            claimedOperations.add(candidate.producer);
+            claimedOperations.add(candidate.consumer);
+            for (const name of candidate.touchedNames) claimedNames.add(name);
         }
+        if (!accepted.length) break;
+        const ownership = mapPreCfOperationRanges(betaResult); parseRounds++;
+        if (!ownership.safe) { betaResult.preCfClosureTemps = { applied: folds > 0, safe: false, reason: ownership.reason, folds, parseRounds, batchRounds }; return betaResult; }
+        const edits = [];
+        for (const candidate of accepted) {
+            const pr = ownership.ranges.get(candidate.producer), cr = ownership.ranges.get(candidate.consumer);
+            if (!pr || !cr) { betaResult.preCfClosureTemps = { applied: folds > 0, safe: false, reason: "PRE-CF closure temp recovery lost exact source ownership", folds, parseRounds, batchRounds }; return betaResult; }
+            const prefix = String(candidate.consumer.emittedText || "").trim().startsWith("local ") ? "local " : "";
+            candidate.emittedText = `${prefix}${candidate.actualTarget} = ${candidate.producer.rhs}`;
+            edits.push({ start: pr[0], end: pr[1], replacement: candidate.emittedText }, { start: cr[0], end: cr[1], replacement: "" });
+        }
+        let output;
+        try { output = applySourceEdits(betaResult.source, edits); parsePreCfSource(output); parseRounds++; }
+        catch (error) { betaResult.preCfClosureTemps = { applied: folds > 0, safe: false, reason: `PRE-CF closure temp recovery reparse failed: ${error.message}`, folds, parseRounds, batchRounds }; return betaResult; }
         betaResult.source = output;
-        candidate.producer.emittedTarget = candidate.actualTarget;
-        candidate.producer.emittedText = emittedText;
-        candidate.state.operations.splice(candidate.consumerOffset, 1);
-        for (let i = 0; i < candidate.state.operations.length; i++) candidate.state.operations[i].index = i + 1;
-        folds++;
+        const removalsByState = new Map();
+        for (const candidate of accepted) {
+            candidate.producer.emittedTarget = candidate.actualTarget;
+            candidate.producer.emittedText = candidate.emittedText;
+            if (!removalsByState.has(candidate.state.id)) removalsByState.set(candidate.state.id, []);
+            removalsByState.get(candidate.state.id).push(candidate.consumerOffset);
+        }
+        for (const [stateId, offsets] of removalsByState) {
+            const state = proof.stateById.get(stateId);
+            for (const offset of [...new Set(offsets)].sort((x, y) => y - x)) state.operations.splice(offset, 1);
+            for (let i = 0; i < state.operations.length; i++) state.operations[i].index = i + 1;
+        }
+        folds += accepted.length;
+        batchRounds++;
     }
-    betaResult.preCfClosureTemps = { applied: folds > 0, safe: true, folds };
+    betaResult.preCfClosureTemps = { applied: folds > 0, safe: true, folds, parseRounds, batchRounds };
     return betaResult;
 }
 
