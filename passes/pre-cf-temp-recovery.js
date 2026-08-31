@@ -658,15 +658,18 @@ function finalizePreCfIndexKeyTemps(betaResult) {
         return betaResult;
     }
     let folds = 0;
+    let parseRounds = 0;
+    let batchRounds = 0;
     const maxRounds = (betaResult.graph.states || []).reduce((n, state) => n + (state.operations || []).length, 0) + 1;
     for (let round = 0; round < maxRounds; round++) {
         const proof = buildPreCfTempProofIndex(betaResult);
-        let candidate = null;
+        const candidates = [];
+        const claimedOperations = new Set();
         for (const facts of proof.byBinding.values()) {
             if (!facts.safeSameStateTransport) continue;
             const producer = facts.producer?.operation;
             const consumer = facts.consumer?.operation;
-            if (!producer || !consumer || !isCopyOperation(producer)) continue;
+            if (!producer || !consumer || claimedOperations.has(producer) || claimedOperations.has(consumer) || !isCopyOperation(producer)) continue;
             if (!String(producer.emittedText || "").trim().startsWith("local ")) continue;
             const keyExpression = parsePreCfRhs(producer.rhs);
             if (!isLiteralOnlyPreCfScalarExpression(keyExpression)) continue;
@@ -674,7 +677,7 @@ function finalizePreCfIndexKeyTemps(betaResult) {
             if (consumerExpression?.type !== "IndexExpression") continue;
             if (consumerExpression.index?.type !== "Identifier" || consumerExpression.index.name !== facts.name) continue;
             if (consumerExpression.base?.type !== "Identifier") continue;
-            const state = betaResult.graph.states.find(item => item.id === facts.producer.stateId);
+            const state = proof.stateById.get(facts.producer.stateId);
             if (!state) continue;
             const producerOffset = facts.producer.offset;
             const consumerOffset = facts.consumer.offset;
@@ -690,36 +693,50 @@ function finalizePreCfIndexKeyTemps(betaResult) {
             const rhs = consumer.rhs.slice(0, relativeStart) + producer.rhs + consumer.rhs.slice(relativeEnd);
             const prefix = String(consumer.emittedText || "").trim().startsWith("local ") ? "local " : "";
             const emittedText = `${prefix}${consumer.emittedTarget} = ${rhs}`;
-            candidate = { facts, state, producer, consumer, producerOffset, rhs, emittedText };
-            break;
+            claimedOperations.add(producer);
+            claimedOperations.add(consumer);
+            candidates.push({ facts, state, producer, consumer, producerOffset, rhs, emittedText });
         }
-        if (!candidate) break;
-        const ownership = mapPreCfOperationRanges(betaResult);
-        if (!ownership.safe) { betaResult.preCfIndexKeyTemps = { applied: folds > 0, safe: false, reason: ownership.reason, folds }; return betaResult; }
-        const producerRange = ownership.ranges.get(candidate.producer);
-        const consumerRange = ownership.ranges.get(candidate.consumer);
-        if (!producerRange || !consumerRange) {
-            betaResult.preCfIndexKeyTemps = { applied: folds > 0, safe: false, reason: "PRE-CF index key recovery lost exact source ownership", folds };
-            return betaResult;
+        if (!candidates.length) break;
+        const ownership = mapPreCfOperationRanges(betaResult); parseRounds++;
+        if (!ownership.safe) { betaResult.preCfIndexKeyTemps = { applied: folds > 0, safe: false, reason: ownership.reason, folds, parseRounds, batchRounds }; return betaResult; }
+        const edits = [];
+        for (const candidate of candidates) {
+            const producerRange = ownership.ranges.get(candidate.producer);
+            const consumerRange = ownership.ranges.get(candidate.consumer);
+            if (!producerRange || !consumerRange) {
+                betaResult.preCfIndexKeyTemps = { applied: folds > 0, safe: false, reason: "PRE-CF index key recovery lost exact source ownership", folds, parseRounds, batchRounds };
+                return betaResult;
+            }
+            edits.push(
+                { start: producerRange[0], end: producerRange[1], replacement: "" },
+                { start: consumerRange[0], end: consumerRange[1], replacement: candidate.emittedText },
+            );
         }
-        const output = applySourceEdits(betaResult.source, [
-            { start: producerRange[0], end: producerRange[1], replacement: "" },
-            { start: consumerRange[0], end: consumerRange[1], replacement: candidate.emittedText },
-        ]);
-        try { parsePreCfSource(output); }
+        let output;
+        try { output = applySourceEdits(betaResult.source, edits); parsePreCfSource(output); parseRounds++; }
         catch (error) {
-            betaResult.preCfIndexKeyTemps = { applied: folds > 0, safe: false, reason: `PRE-CF index key recovery reparse failed: ${error.message}`, folds };
+            betaResult.preCfIndexKeyTemps = { applied: folds > 0, safe: false, reason: `PRE-CF index key recovery reparse failed: ${error.message}`, folds, parseRounds, batchRounds };
             return betaResult;
         }
         betaResult.source = output;
-        candidate.consumer.rhs = candidate.rhs;
-        candidate.consumer.reads = (candidate.consumer.reads || []).filter(name => name !== candidate.facts.name);
-        candidate.consumer.emittedText = candidate.emittedText;
-        candidate.state.operations.splice(candidate.producerOffset, 1);
-        for (let i = 0; i < candidate.state.operations.length; i++) candidate.state.operations[i].index = i + 1;
-        folds++;
+        const removalsByState = new Map();
+        for (const candidate of candidates) {
+            candidate.consumer.rhs = candidate.rhs;
+            candidate.consumer.reads = (candidate.consumer.reads || []).filter(name => name !== candidate.facts.name);
+            candidate.consumer.emittedText = candidate.emittedText;
+            if (!removalsByState.has(candidate.state.id)) removalsByState.set(candidate.state.id, new Set());
+            removalsByState.get(candidate.state.id).add(candidate.producer);
+        }
+        for (const [stateId, removals] of removalsByState) {
+            const state = proof.stateById.get(stateId);
+            state.operations = state.operations.filter(operation => !removals.has(operation));
+            for (let i = 0; i < state.operations.length; i++) state.operations[i].index = i + 1;
+        }
+        folds += candidates.length;
+        batchRounds++;
     }
-    betaResult.preCfIndexKeyTemps = { applied: folds > 0, safe: true, folds };
+    betaResult.preCfIndexKeyTemps = { applied: folds > 0, safe: true, folds, parseRounds, batchRounds };
     return betaResult;
 }
 

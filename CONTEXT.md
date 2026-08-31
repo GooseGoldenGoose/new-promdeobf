@@ -865,3 +865,5 @@ Latest post-Step-47 work - compiler IIFE / anonymous closure expression recovery
 - inalizePreCfTableEntryTemps now batches source-disjoint table-constructor literal-entry folds per graph snapshot instead of reparsing/remapping after each table.
 - spacial6: 36 folds, 1 batch round, 2 parse rounds, ~0.724 s versus ~10.685 s before batching.
 - Focused table-entry test PASS; combined PRE-CF+CF gate PASS: 43 focused suites, 66/66 canonical samples.
+
+PRE-CF performance step — index-key batching: `finalizePreCfIndexKeyTemps` now batches source-disjoint proven literal-key substitutions from one graph snapshot instead of reparsing after each fold. Existing semantic proof rules are unchanged; producers/consumers are claimed per batch, graph removals are grouped by state, and the result is reparsed once per batch. On `spacial6`, the stage now completes in 0.964 s for 3227 folds with 1 batch round / 2 parse rounds. Focused index-key regression PASS; full combined gate remains 43 focused suites + 66/66 canonical samples PASS.
