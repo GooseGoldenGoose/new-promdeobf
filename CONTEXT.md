@@ -899,3 +899,8 @@ PRE-CF indexed-write batching: `finalizePreCfIndexedWriteTemps` now batches inde
 - finalizePreCfMultiReturnTemps now uses the existing proof read index instead of rescanning every graph state for each pack, batches independent pack/extract groups, maps ownership once, applies one edit set, reparses once, and rebuilds affected state operations by identity. Proof/refusal rules are unchanged.
 - spacial6 profile: 9.782 s -> 0.624 s for 16 folds, 1 batch round / 2 parse rounds. Focused multi-return PASS; combined gate PASS: 43 focused suites + 66/66 canonical samples.
 - Post-RETURN_ALL convergence was evaluated for conditional stage skipping, but spacial6 exposes both call and effect-call consumers, so all four convergence passes remain required; no ineffective convergence change was kept.
+
+## Final spacial6 PRE-CF performance verification (2026-08-31)
+- Full measured PRE-CF stage profile totals about 15.6 s. Major remaining stage times: call-result 2.248 s, call-argument 1.627 s, post-RETURN_ALL convergence 0.988 s; all others are below 1 s in this run.
+- Full production deobfuscation reached CF in 27.307 s, then failed closed at closure entry 257 because the beta CF acyclic stage detected a loop/backedge and loop structuring is not implemented there. This is a CF capability blocker, not a PRE-CF performance regression.
+- Compared with the earlier >678 s canceled regression, PRE-CF performance is restored to the historical ~20 s class.
