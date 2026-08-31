@@ -41,7 +41,7 @@ main.js
 
 Known untracked areas include `opt/`, `opti/`, `tmp/`, `--output-dir/`, `_tmp-*` tools/passes, generated samples. Do not clean/stage them blindly.
 
-`main.js` is a newer dirty local copy and can require `./passes/input-formatter`, which does not exist at the reset checkpoint. For reset-checkpoint tests, use committed `main.js` only with a guarded backup/restore.
+`main.js` still contains unrelated newer dirty local edits that must be preserved. The tracked pipeline now provides `passes/input-formatter.js`, so the formatter dependency is valid.
 
 ## Goal
 
@@ -76,10 +76,17 @@ Important register facts:
 
 ## Current Structural Pipeline
 
+## Input Formatting
+
+- `passes/input-formatter.js` runs `formater/luau-format.exe <input> --luraph --output=<temp>` before the first parse.
+- Formatting is enabled by default; `options.formatInput === false` is an explicit diagnostic bypass.
+- It reads the requested source file directly and does not touch `formater/input.txt`.
+
 Normal path:
 
 ```text
-parse
+format input with formater/luau-format.exe (--luraph)
+-> parse
 -> constant-array recovery
 -> environment recovery
 -> closure-factory recovery

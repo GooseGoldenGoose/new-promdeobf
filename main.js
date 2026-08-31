@@ -12,6 +12,7 @@ const { scheduleVmRegisterUses } = require("./passes/vm-register-scheduler");
 const { renameVmRegisterBindings } = require("./passes/vm-register-names");
 const { renameSemanticBindings } = require("./passes/semantic-names");
 const { applyTextEdits } = require("./passes/text-edits");
+const { formatInputBeforeParse } = require("./passes/input-formatter");
 
 const ROOT = __dirname;
 const DEFAULT_INPUT = path.join(ROOT, "sample", "1.txt");
@@ -48,11 +49,20 @@ function parseLuaStructural(source, filename = "<input>") {
     }
 }
 
-function loadAst(inputPath = DEFAULT_INPUT) {
-    const absoluteInput = path.resolve(inputPath);
-    const source = fs.readFileSync(absoluteInput, "utf8");
-    const ast = parseLua(source, absoluteInput);
-    return { inputPath: absoluteInput, source, ast };
+function loadAst(inputPath = DEFAULT_INPUT, options = {}) {
+    const formattedInput = options.formatInput === false
+        ? {
+            inputPath: path.resolve(inputPath),
+            source: fs.readFileSync(path.resolve(inputPath), "utf8"),
+            originalSource: null,
+            alreadyFormatted: null,
+            formatted: false,
+            formatterPath: null,
+            formatterSkipped: true,
+        }
+        : formatInputBeforeParse(inputPath, options.formatter || {});
+    const ast = parseLua(formattedInput.source, formattedInput.inputPath);
+    return { ...formattedInput, ast };
 }
 
 function writeAst(ast, outputPath = DEFAULT_AST_OUTPUT) {
@@ -70,7 +80,7 @@ function writeSource(source, outputPath = DEFAULT_OUTPUT) {
 }
 
 function runDeobfuscator(inputPath = DEFAULT_INPUT, outputPath = DEFAULT_OUTPUT, options = {}) {
-    const loaded = loadAst(inputPath);
+    const loaded = loadAst(inputPath, options);
 
     const constantArray = inlinePrometheusConstantArray(loaded.source, loaded.ast);
     const stage1Source = constantArray.found ? constantArray.source : loaded.source;
@@ -192,6 +202,7 @@ function main() {
 
     console.log(`Input: ${result.inputPath}`);
     console.log(`AST root: ${result.ast.type}`);
+    if (!result.formatterSkipped) console.log(`Input formatted before parse: ${result.formatted}`);
     console.log(`ConstantArray found: ${constants.found}`);
     if (constants.found) {
         console.log(`Constant entries: ${constants.constants.length}`);
