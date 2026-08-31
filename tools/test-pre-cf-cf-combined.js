@@ -40,6 +40,7 @@ const focused = [
     "test-beta-cf-loop-control-temps.js",
     "test-beta-cf-post-pre-cf-shapes.js",
     "test-beta-cf-post-copy-scalar.js",
+    "test-beta-cf-post-value-expressions.js",
     "test-beta-cf-post-closure-destinations.js",
     "test-beta-cf-post-dead-closures.js",
     "test-beta-cf-post-namecalls.js",

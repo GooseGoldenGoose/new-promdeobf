@@ -671,7 +671,7 @@ function recoverCfLinearProducerChain(nodes, targetName, capturedBindings = []) 
     return { expression: `(${expression})`, reads: [...externalReads] };
 }
 
-function recoverCfOrderedProducerChain(nodes, targetName, capturedBindings = []) {
+function recoverCfOrderedProducerChain(nodes, targetName, capturedBindings = [], options = {}) {
     if (!nodes?.length || nodes.some(node => node?.type !== "raw")) return null;
     const captured = new Set(capturedBindings || []);
     const records = new Map();
@@ -690,7 +690,14 @@ function recoverCfOrderedProducerChain(nodes, targetName, capturedBindings = [])
                 const start = range[0] - prefixLength;
                 const end = range[1] - prefixLength;
                 if (start < 0 || end < start || String(rhs).slice(start, end) !== name) return null;
-                edits.push({ start, end, replacement: `(${replacement})` });
+                let renderedReplacement = `(${replacement})`;
+                if (options.compact === true) {
+                    const replacementAst = parseTransitionExpression(replacement)?.expression;
+                    if (replacementAst && ["Identifier", "NumericLiteral", "StringLiteral", "BooleanLiteral", "NilLiteral", "MemberExpression", "IndexExpression", "CallExpression"].includes(replacementAst.type)) {
+                        renderedReplacement = replacement;
+                    }
+                }
+                edits.push({ start, end, replacement: renderedReplacement });
             }
         }
         edits.sort((a, b) => b.start - a.start);
@@ -768,7 +775,7 @@ function recoverCfOrderedProducerChain(nodes, targetName, capturedBindings = [])
         if (!required.has(name) && operation.returnSinkSafe !== true) return null;
     }
 
-    return { expression: `(${result.expression})`, reads: [...result.externalReads] };
+    return { expression: `(${result.expression})`, reads: [...result.externalReads], consumedNames: [...required] };
 }
 
 function recoverCfLogicalValueProgram(nodes, resultName, capturedBindings = [], options = {}) {
@@ -1075,6 +1082,7 @@ function genericForNode(variables, expressions, body, reads = []) {
         expressions: [...expressions],
         body,
         reads: [...reads],
+        compilerIteratorRecovered: false,
     };
 }
 
@@ -1710,6 +1718,180 @@ function recoverStructuredLogicalConditionPrograms(nodes, graph) {
     while (changed) changed = visitBody(nodes);
     return folds;
 }
+function recoverStructuredCompilerValueTemps(nodes, graph) {
+    const captured = new Set(graph?.recoveredUpvalueBindings || []);
+    let folds = 0;
+
+    function collectFacts(root) {
+        const reads = new Map();
+        const definitions = new Map();
+        function visit(body) {
+            for (const node of body || []) {
+                for (const name of node.reads || []) reads.set(name, (reads.get(name) || 0) + 1);
+                if (node?.type === "raw" && node.operation?.emittedTarget) {
+                    const name = node.operation.emittedTarget;
+                    definitions.set(name, (definitions.get(name) || 0) + 1);
+                }
+                if (node?.type === "if") { visit(node.thenBody); visit(node.elseBody); }
+                else if (node?.type === "numeric-for" || node?.type === "generic-for") visit(node.body);
+                else if (node?.type === "while-guard" || node?.type === "repeat-until") { visit(node.conditionBody); visit(node.body); }
+            }
+        }
+        visit(root);
+        return { reads, definitions };
+    }
+
+    function substituteExact(text, name, recoveredExpression) {
+        const parsed = parseTransitionExpression(text);
+        if (!parsed?.expression) return null;
+        const ranges = collectExpressionVariableIdentifierRanges(parsed.expression, name);
+        if (ranges.length !== 1) return null;
+        const prefixLength = parsed.source.length - String(text).length;
+        const start = ranges[0][0] - prefixLength;
+        const end = ranges[0][1] - prefixLength;
+        if (start < 0 || end < start || String(text).slice(start, end) !== name) return null;
+
+        let replacement = String(recoveredExpression || "").trim();
+        if (replacement.startsWith("(") && replacement.endsWith(")")) replacement = replacement.slice(1, -1).trim();
+        const ast = parseTransitionExpression(replacement)?.expression;
+        if (!ast) return null;
+        const tight = ast.type === "Identifier" || ast.type === "MemberExpression" || ast.type === "IndexExpression" || ast.type === "CallExpression";
+        if (!tight) replacement = `(${replacement})`;
+        const out = String(text).slice(0, start) + replacement + String(text).slice(end);
+        return parseTransitionExpression(out)?.expression ? out : null;
+    }
+
+    function replacedReads(reads, target, replacements) {
+        const out = [];
+        for (const name of reads || []) {
+            if (name === target) out.push(...(replacements || []));
+            else out.push(name);
+        }
+        return [...new Set(out)];
+    }
+
+    function identifierUsedAsCallBase(ast, name) {
+        let found = false;
+        function visit(node) {
+            if (!node || typeof node !== "object" || found) return;
+            if (node.type === "CallExpression" && node.base?.type === "Identifier" && node.base.name === name) {
+                found = true;
+                return;
+            }
+            for (const [key, value] of Object.entries(node)) {
+                if (key === "range" || key === "loc") continue;
+                if (Array.isArray(value)) for (const child of value) visit(child);
+                else if (value && typeof value === "object") visit(value);
+            }
+        }
+        visit(ast);
+        return found;
+    }
+    function recoverSuffix(owner, expression, reads, facts) {
+        if (!(owner || []).length) return null;
+        const last = owner[owner.length - 1];
+        const target = last?.type === "raw" ? last.operation?.emittedTarget : null;
+        if (!target || captured.has(target)) return null;
+        const parsed = parseTransitionExpression(expression);
+        if (!parsed?.expression || collectExpressionVariableIdentifierRanges(parsed.expression, target).length !== 1) return null;
+        const targetProducerExpression = parseOperationExpression(last.operation);
+        let targetProducerContainsCall = false;
+        walk(targetProducerExpression, current => {
+            if (current?.type === "CallExpression") { targetProducerContainsCall = true; return false; }
+        });
+        if (targetProducerContainsCall && identifierUsedAsCallBase(parsed.expression, target)) return null;
+        if ((facts.definitions.get(target) || 0) !== 1 || (facts.reads.get(target) || 0) !== 1) return null;
+
+        for (let start = 0; start < owner.length; start++) {
+            const slice = owner.slice(start);
+            if (slice.some(node => node?.type !== "raw")) continue;
+            const recovered = recoverCfOrderedProducerChain(slice, target, [...captured], { compact: true });
+            if (!recovered) continue;
+            const consumed = new Set(recovered.consumedNames || []);
+            if (!consumed.has(target)) continue;
+            let safe = true;
+            for (const node of slice) {
+                const operation = node.operation || {};
+                const name = operation.emittedTarget;
+                if (!name || (facts.definitions.get(name) || 0) !== 1) { safe = false; break; }
+                if (consumed.has(name)) {
+                    if (captured.has(name) || (facts.reads.get(name) || 0) !== 1) { safe = false; break; }
+                    if (name !== target) {
+                        let containsCall = false;
+                        walk(parseOperationExpression(operation), current => {
+                            if (current?.type === "CallExpression") { containsCall = true; return false; }
+                        });
+                        if (containsCall) { safe = false; break; }
+                    }
+                } else if (operation.returnSinkSafe !== true) {
+                    safe = false;
+                    break;
+                }
+            }
+            if (!safe) continue;
+            const rewritten = substituteExact(expression, target, recovered.expression);
+            if (!rewritten) continue;
+            return {
+                start,
+                rewritten,
+                reads: replacedReads(reads, target, recovered.reads),
+                removedCount: owner.length - start,
+            };
+        }
+        return null;
+    }
+
+    function visit(body, facts) {
+        for (let index = 0; index < (body || []).length; index++) {
+            const node = body[index];
+            if (node?.type === "generic-for" && node.compilerIteratorRecovered === true && (node.expressions || []).length === 1 && index > 0) {
+                const prefix = body.slice(0, index);
+                const recovered = recoverSuffix(prefix, node.expressions[0], node.reads, facts);
+                if (recovered) {
+                    node.expressions[0] = recovered.rewritten;
+                    node.reads = recovered.reads;
+                    body.splice(recovered.start, index - recovered.start);
+                    folds += recovered.removedCount;
+                    return true;
+                }
+            }
+            if (node?.type === "while-guard") {
+                const recovered = recoverSuffix(node.conditionBody, node.condition, node.reads, facts);
+                if (recovered) {
+                    node.condition = recovered.rewritten;
+                    node.reads = recovered.reads;
+                    node.conditionBody.splice(recovered.start, node.conditionBody.length - recovered.start);
+                    folds += recovered.removedCount;
+                    return true;
+                }
+                if (visit(node.conditionBody, facts) || visit(node.body, facts)) return true;
+            } else if (node?.type === "repeat-until") {
+                for (const owner of [node.conditionBody, node.body]) {
+                    const recovered = recoverSuffix(owner, node.condition, node.reads, facts);
+                    if (!recovered) continue;
+                    node.condition = recovered.rewritten;
+                    node.reads = recovered.reads;
+                    owner.splice(recovered.start, owner.length - recovered.start);
+                    folds += recovered.removedCount;
+                    return true;
+                }
+                if (visit(node.conditionBody, facts) || visit(node.body, facts)) return true;
+            } else if (node?.type === "if") {
+                if (visit(node.thenBody, facts) || visit(node.elseBody, facts)) return true;
+            } else if (node?.type === "numeric-for" || node?.type === "generic-for") {
+                if (visit(node.body, facts)) return true;
+            }
+        }
+        return false;
+    }
+
+    let changed = true;
+    while (changed) {
+        const facts = collectFacts(nodes);
+        changed = visit(nodes, facts);
+    }
+    return folds;
+}
 function recoverStructuredLoopBranchConditionTemps(nodes, graph) {
     const captured = new Set(graph?.recoveredUpvalueBindings || []);
     let folds = 0;
@@ -1938,13 +2120,76 @@ function recoverStructuredPostCfStaticMembers(nodes) {
         if (node.operation) node.operation.emittedText = text;
         folds += edits.length;
     }
+    function rewriteExpressionField(node, field) {
+        let source = String(node?.[field] ?? "");
+        if (!source) return;
+        let changed = 0;
+        while (true) {
+            const parsed = parseTransitionExpression(source);
+            if (!parsed?.expression) break;
+            const prefixLength = parsed.source.length - source.length;
+            let best = null;
+            function scan(astNode) {
+                if (!isNode(astNode) || astNode.type === "FunctionDeclaration") return;
+                if (astNode.type === "IndexExpression" && Array.isArray(astNode.range) && Array.isArray(astNode.base?.range)) {
+                    const member = plainPostCfMemberName(astNode.index);
+                    if (member) {
+                        const start = astNode.range[0] - prefixLength;
+                        const end = astNode.range[1] - prefixLength;
+                        const baseStart = astNode.base.range[0] - prefixLength;
+                        const baseEnd = astNode.base.range[1] - prefixLength;
+                        if (start >= 0 && end <= source.length && baseStart >= 0 && baseEnd <= source.length) {
+                            const candidate = {
+                                start,
+                                end,
+                                replacement: `${source.slice(baseStart, baseEnd)}.${member}`,
+                                span: end - start,
+                            };
+                            if (!best || candidate.span < best.span) best = candidate;
+                        }
+                    }
+                }
+                for (const [key, value] of Object.entries(astNode)) {
+                    if (key === "range" || key === "loc") continue;
+                    if (Array.isArray(value)) for (const child of value) scan(child);
+                    else if (isNode(value)) scan(value);
+                }
+            }
+            scan(parsed.expression);
+            if (!best) break;
+            const rewritten = source.slice(0, best.start) + best.replacement + source.slice(best.end);
+            if (!parseTransitionExpression(rewritten)?.expression) break;
+            source = rewritten;
+            changed++;
+        }
+        if (!changed) return;
+        node[field] = source;
+        folds += changed;
+    }
     function visitBody(body) {
         for (const node of body || []) {
             if (node?.type === "raw") rewriteRaw(node);
-            if (node?.type === "if") { visitBody(node.thenBody); visitBody(node.elseBody); }
-            else if (node?.type === "numeric-for" || node?.type === "generic-for") visitBody(node.body);
-            else if (node?.type === "while-guard") { visitBody(node.conditionBody); visitBody(node.body); }
-            else if (node?.type === "repeat-until") { visitBody(node.body); visitBody(node.conditionBody); }
+            if (node?.type === "if") {
+                rewriteExpressionField(node, "condition");
+                visitBody(node.thenBody);
+                visitBody(node.elseBody);
+            } else if (node?.type === "numeric-for") {
+                rewriteExpressionField(node, "initial");
+                rewriteExpressionField(node, "limit");
+                if (node.step != null) rewriteExpressionField(node, "step");
+                visitBody(node.body);
+            } else if (node?.type === "generic-for") {
+                for (let index = 0; index < (node.expressions || []).length; index++) rewriteExpressionField(node.expressions, index);
+                visitBody(node.body);
+            } else if (node?.type === "while-guard") {
+                rewriteExpressionField(node, "condition");
+                visitBody(node.conditionBody);
+                visitBody(node.body);
+            } else if (node?.type === "repeat-until") {
+                rewriteExpressionField(node, "condition");
+                visitBody(node.body);
+                visitBody(node.conditionBody);
+            }
         }
     }
     visitBody(nodes);
@@ -5828,6 +6073,7 @@ function collapseCompilerGenericForLoops(graph) {
         if (!match) break;
 
         const loopNode = genericForNode(match.loopVariables, match.iteratorExpressions, match.bodyNodes, match.iteratorReads);
+        loopNode.compilerIteratorRecovered = (match.iteratorSetupRecoveryCount || 0) > 0;
         const structuredOperation = {
             kind: "structured-generic-for",
             structuredNode: loopNode,
@@ -6109,6 +6355,7 @@ function solveAcyclicStructured(originalAst, graph) {
     let loopControlConditionTempRecoveryCount = recoverStructuredLoopBranchConditionTemps(structured.nodes, graph);
     const genericForGlobalMethodTempRecoveryCount = recoverStructuredGenericForGlobalMethodTemps(structured.nodes, graph);
     const postCfNamecallRecoveryCount = recoverStructuredPostCfNamecalls(structured.nodes);
+    let postCfCompilerValueRecoveryCount = recoverStructuredCompilerValueTemps(structured.nodes, graph);
     const postCfClosureDestinationRecoveryCount = recoverStructuredPostCfClosureDestinationTemps(structured.nodes, graph);
     const postCfDeadClosureRecoveryCount = recoverStructuredPostCfDeadClosureTemps(structured.nodes, graph);
     const postCfDeadScalarLocalRecoveryCount = recoverStructuredPostCfDeadScalarLocals(structured.nodes, graph, { syntheticLocals: ["args"] });
@@ -6116,6 +6363,7 @@ function solveAcyclicStructured(originalAst, graph) {
     const postCfCompilerGlobalAliasRecoveryCount = recoverStructuredCompilerGlobalAliases(structured.nodes, graph);
     const postCfCompilerClosureTempRecoveryCount = recoverStructuredCompilerClosureTemps(structured.nodes, graph);
     const postCfCompilerReturnAllRecoveryCount = recoverStructuredCompilerReturnAllForwarding(structured.nodes, graph);
+    postCfCompilerValueRecoveryCount += recoverStructuredCompilerValueTemps(structured.nodes, graph);
     // Dead scalar/copy cleanup can expose a compiler condition leaf that was not
     // adjacent during the first structured condition pass. Re-run the exact same
     // fail-closed proof after those deletions; this does not cross any surviving
@@ -6152,6 +6400,7 @@ function solveAcyclicStructured(originalAst, graph) {
         postCfCompilerGlobalAliasRecoveryCount,
         postCfCompilerClosureTempRecoveryCount,
         postCfCompilerReturnAllRecoveryCount,
+        postCfCompilerValueRecoveryCount,
         postCfStaticMemberRecoveryCount,
         postCfFunctionDeclarationRecoveryCount,
         structuredExpressionPresentationRecoveryCount,
@@ -6957,6 +7206,7 @@ module.exports = {
     recoverStructuredPostCfDeadClosureTemps,
     recoverStructuredPostCfDeadScalarLocals,
     recoverStructuredLogicalConditionPrograms,
+    recoverStructuredCompilerValueTemps,
     recoverStructuredCompilerGlobalAliases,
     recoverStructuredCompilerClosureTemps,
     recoverStructuredCompilerReturnAllForwarding,

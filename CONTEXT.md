@@ -998,3 +998,12 @@ PRE-CF indexed-write batching: `finalizePreCfIndexedWriteTemps` now batches inde
 - User requested removal of the experimental `rust-optimizer/` tree.
 - Deleted the entire `rust-optimizer/` directory. The production JS normal -> PRE-CF -> CF pipeline remains unchanged.
 - Rust optimizer/string decoder experiments are no longer part of the repository.
+## Proof-based post-CF compiler value recovery (2026-08-31)
+- Added `recoverStructuredCompilerValueTemps` for loop-owned compiler setup only; this is not a generic one-use-local inliner.
+- Generic-for prefix recovery is gated by `compilerIteratorRecovered`, which is attached only when the generic-for iterator expression was already recovered from proven compiler pack/iterator scaffolding. Proven one-definition/one-read uncaptured property chains may then collapse into that iterator expression.
+- While/repeat condition recovery reuses `recoverCfOrderedProducerChain` over the terminal compiler condition setup. Every consumed binding must have exactly one structured definition/read; captures refuse; non-consumed crossed nodes must already be `returnSinkSafe` bookkeeping.
+- Safety tightened after regression testing: call-producing dependencies cannot be moved through another recovered producer, and a call-produced value is never substituted when that temp is itself used as the callee. This preserves existing `realFn = getPredicate(); until realFn()` behavior.
+- Compact rendering is opt-in only for this proof path; existing ordered-condition callers keep prior formatting. Structured static-member presentation now also converts proven static string indexes in if/while/repeat/numeric/generic expression fields without moving evaluation.
+- Exact requested Medium fixture now emits `pairs(game.Players.LocalPlayer:GetChildren())`, `until math.random(1, 2) == (1)`, and native `while task.wait() do`; the second direct `game:GetChildren()` iterator remains native.
+- Added `tools/test-beta-cf-post-value-expressions.js` with positive generic/repeat/while coverage plus refusal for non-compiler iterator provenance, effect gaps, captures, and extra reads.
+- Verification: syntax PASS; focused new/static-member/namecall/beta-control-flow suites PASS; combined gate PASS: 44 focused suites + 66/66 canonical samples. `spacial6` production PASS at 3799 states / 554 closures, final reparse PASS, and zero `RegisterOverflow[`, `createClosure`, `upvalueValues[`, or `ReturnVal =` scaffold.
