@@ -911,3 +911,9 @@ PRE-CF indexed-write batching: `finalizePreCfIndexedWriteTemps` now batches inde
 - The matcher now permits only non-nil writes whose emitted target is exactly the surviving second loop-variable beta binding. First/control-variable mutation remains refused; compiler cleanup/setup writes and physical-register reuse remain fail-closed.
 - Added focused regression coverage: second value-variable mutation recovers and is emitted inside the generic-for body; control-variable mutation remains refused.
 - Tests PASS: generic-for focused suite; combined 43 focused suites + 66/66 canonical samples. Full sample/spacial6.txt deobfuscation now completes end-to-end: 3799 states, 554 closures, 76.616 s. Previously it failed at closure entry 257 with an unstructured loop/backedge.
+
+## Performance plan Step 1 - production CPU profiler (2026-08-31)
+- Added `tools/profile-production-performance.js`, a standalone profiler that leaves production code unchanged. It runs the real normal -> beta/PRE-CF -> CF path, records normal/beta+CF/total wall time, writes a V8 CPU profile plus JSON summary, output SHA-256, state/closure counts, and top self-time functions.
+- `sample/spacial6.txt` profile: normal 3.884 s, beta+CF 42.805 s, total 46.689 s under profiler, 3799 states / 554 closures. CPU self-time leader was GC at ~10.49 s; next major CF hotspot was `recoverCfLogicalValueProgram()` (~1.11 s + additional compiled-code entries for the same function).
+- Profile output paths: `tmp/performance-profile/spacial6.final.lua`, `tmp/performance-profile/spacial6.cpuprofile`, `tmp/performance-profile/spacial6.summary.json`. Generated final SHA-256 exactly matched `tmp/spacial6-final-loopfix.lua`.
+- Verification: profiler syntax PASS; combined gate PASS 43 focused suites + 66/66 canonical samples. Production solver files were not modified for this step.
