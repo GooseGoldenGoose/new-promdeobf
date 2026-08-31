@@ -1,7 +1,7 @@
 const fs = require("fs");
 const path = require("path");
 const { parseLuaStructural } = require("../main");
-const { versionVmBlockRegisters, finalizeBetaRegisterUpvalues, finalizeBetaRegisterSchedule, finalizeBetaDeadStateSnapshots, finalizeBetaDeadStateInitializers, finalizeBetaDeadRegisterClears, finalizeBetaWhitespaceCleanup } = require("../passes/beta-register-versions");
+const { versionVmBlockRegisters } = require("../passes/beta-register-versions");
 
 function defaultOutputPath(inputPath) {
     const parsed = path.parse(path.resolve(inputPath));
@@ -16,22 +16,9 @@ function main() {
     const outputPath = path.resolve(process.argv[3] || defaultOutputPath(inputPath));
     const source = fs.readFileSync(inputPath, "utf8");
     const ast = parseLuaStructural(source, inputPath);
-    const rawResult = versionVmBlockRegisters(source, ast);
-    const result = finalizeBetaWhitespaceCleanup(finalizeBetaDeadRegisterClears(finalizeBetaDeadStateInitializers(finalizeBetaDeadStateSnapshots(finalizeBetaRegisterSchedule(finalizeBetaRegisterUpvalues(rawResult))))));
+    const result = versionVmBlockRegisters(source, ast);
     if (!result.found || !result.applied) {
         throw new Error(result.reason || "Beta register versioning did not apply");
-    }
-    if (result.upvalueRecovery?.completed && !result.upvalueRecovery.safe) {
-        throw new Error(result.upvalueRecovery.reason || "Beta upvalue recovery failed closed");
-    }
-    if (result.deadRegisterClears && !result.deadRegisterClears.safe) {
-        throw new Error(result.deadRegisterClears.reason || "Dead register clear cleanup failed closed");
-    }
-    if (result.whitespaceCleanup && !result.whitespaceCleanup.safe) {
-        throw new Error(result.whitespaceCleanup.reason || "Beta whitespace cleanup failed closed");
-    }
-    if (result.finalRegisterSchedule && !result.finalRegisterSchedule.safe) {
-        throw new Error(result.finalRegisterSchedule.reason || "Final beta register scheduling failed closed");
     }
 
     parseLuaStructural(result.source, `${outputPath} <beta register versions>`);

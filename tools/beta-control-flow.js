@@ -1,12 +1,8 @@
 const fs = require("fs");
 const path = require("path");
-const { parseLua, parseLuaStructural } = require("../main");
-const { versionVmBlockRegisters, finalizeBetaRegisterUpvalues, finalizeBetaRegisterSchedule, finalizeBetaDeadStateSnapshots, finalizeBetaDeadStateInitializers, finalizeBetaDeadRegisterClears, finalizeBetaWhitespaceCleanup } = require("../passes/beta-register-versions");
+const { parseLuaStructural } = require("../main");
+const { versionVmBlockRegisters } = require("../passes/beta-register-versions");
 const { solveBetaControlFlow } = require("../passes/beta-control-flow");
-const { finalizePreCfTempRecovery } = require("../passes/pre-cf-temp-recovery");
-const { recoverVmStateGraph } = require("../passes/vm-state");
-const { scheduleVmRegisterUses } = require("../passes/vm-register-scheduler");
-const { prepareOverflowAsScalarRegisters, remapOverflowBetaVersions } = require("../passes/beta-overflow-register");
 
 function defaultOutputPath(inputPath) {
     const parsed = path.parse(path.resolve(inputPath));
@@ -15,74 +11,18 @@ function defaultOutputPath(inputPath) {
 
 function generateBetaControlFlowFromSource(source, ast, outputPath) {
     const resolvedOutput = path.resolve(outputPath);
-    const prepared = prepareOverflowAsScalarRegisters(source, ast, parseLuaStructural);
-    if (!prepared.applied && (prepared.slots || []).length > 0) {
-        throw new Error(prepared.reason || "Overflow scalarization failed closed");
-    }
-    let betaSource = prepared.source;
-    let betaAst = prepared.ast;
-    let earlyVmState = null;
-    let earlyRegisterSchedule = null;
-    let betaRaw = versionVmBlockRegisters(betaSource, betaAst);
-
-    // With an aggressively low compiler MAX_REGS, even temporary values used to
-    // compute state transitions can live in RegisterOverflow. The normal pipeline
-    // therefore cannot normalize the dispatcher before this experimental pass.
-    // Once overflow slots are scalarized, retry the exact production state +
-    // register-scheduling stages, then hand the result to ordinary beta versioning.
-    if (!betaRaw.applied && betaRaw.reason === "No exact normalized VM state leaves were found" && prepared.applied) {
-        earlyVmState = recoverVmStateGraph(betaSource, betaAst);
-        if (!earlyVmState.found || !earlyVmState.normalized) {
-            throw new Error(earlyVmState.reason || "Early overflow-scalar VM state recovery failed closed");
-        }
-        betaSource = earlyVmState.source;
-        const scheduleAst = parseLua(betaSource, "<overflow before VM register scheduling>");
-        earlyRegisterSchedule = scheduleVmRegisterUses(betaSource, scheduleAst);
-        if (earlyRegisterSchedule.applied) betaSource = earlyRegisterSchedule.source;
-        betaAst = parseLuaStructural(betaSource, "<overflow after VM state recovery>");
-        betaRaw = versionVmBlockRegisters(betaSource, betaAst);
+    const beta = versionVmBlockRegisters(source, ast);
+    if (!beta.found || !beta.applied) {
+        throw new Error(beta.reason || "Beta register analysis did not apply");
     }
 
-    if (!betaRaw.found || !betaRaw.applied) {
-        throw new Error(betaRaw.reason || "Beta register analysis did not apply");
-    }
-    let beta = remapOverflowBetaVersions(betaRaw, prepared);
-    beta = finalizeBetaRegisterUpvalues(beta);
-    beta = finalizeBetaWhitespaceCleanup(finalizeBetaDeadRegisterClears(finalizeBetaDeadStateInitializers(finalizeBetaDeadStateSnapshots(finalizeBetaRegisterSchedule(beta)))));
-    beta = finalizePreCfTempRecovery(beta);
-    if (beta.upvalueRecovery?.completed && !beta.upvalueRecovery.safe) {
-        throw new Error(beta.upvalueRecovery.reason || "Beta upvalue recovery failed closed");
-    }
-    if (beta.deadStateSnapshots && !beta.deadStateSnapshots.safe) {
-        throw new Error(beta.deadStateSnapshots.reason || "Dead state snapshot cleanup failed closed");
-    }
-    if (beta.deadStateInitializers && !beta.deadStateInitializers.safe) {
-        throw new Error(beta.deadStateInitializers.reason || 'Dead state initializer cleanup failed closed');
-    }
-    if (beta.deadRegisterClears && !beta.deadRegisterClears.safe) {
-        throw new Error(beta.deadRegisterClears.reason || 'Dead register clear cleanup failed closed');
-    }
-
-    if (beta.preCfTempRecovery && !beta.preCfTempRecovery.safe) {
-        throw new Error(beta.preCfTempRecovery.reason || "PRE-CF temp recovery failed closed");
-    }
-
-    if (beta.whitespaceCleanup && !beta.whitespaceCleanup.safe) {
-        throw new Error(beta.whitespaceCleanup.reason || "Beta whitespace cleanup failed closed");
-    }
-
-    if (beta.finalRegisterSchedule && !beta.finalRegisterSchedule.safe) {
-        throw new Error(beta.finalRegisterSchedule.reason || "Final beta register scheduling failed closed");
-    }
-
-    betaAst = parseLuaStructural(beta.source, "<after final beta register scheduling>");
-    const controlFlow = solveBetaControlFlow(betaAst, beta);
+    const controlFlow = solveBetaControlFlow(ast, beta);
     if (!controlFlow.applied) throw new Error(controlFlow.reason || "Beta control-flow solving did not apply");
 
     parseLuaStructural(controlFlow.source, `${resolvedOutput} <beta control flow>`);
     fs.mkdirSync(path.dirname(resolvedOutput), { recursive: true });
     fs.writeFileSync(resolvedOutput, controlFlow.source, "utf8");
-    return { beta, controlFlow, overflow: beta.overflow, earlyVmState, earlyRegisterSchedule, outputPath: resolvedOutput };
+    return { beta, controlFlow, outputPath: resolvedOutput };
 }
 
 function generateBetaControlFlow(inputPath, outputPath = null) {
@@ -101,10 +41,6 @@ function main() {
     console.log(`Entry state: ${generated.controlFlow.entryState}`);
     console.log(`States: ${generated.controlFlow.stateCount}`);
     console.log(`Statements: ${generated.controlFlow.statementCount}`);
-    if (generated.overflow?.applied) {
-        console.log(`Overflow slots: ${generated.overflow.slots.length}`);
-        console.log(`Overflow versions: ${generated.overflow.rows.length}`);
-    }
     console.log(`Branches: ${generated.controlFlow.branchCount || 0}`);
     if (generated.controlFlow.joinCount !== undefined) console.log(`Branch joins: ${generated.controlFlow.joinCount}`);
     if (generated.controlFlow.guardBranchCount !== undefined) console.log(`Guard-return branches: ${generated.controlFlow.guardBranchCount}`);

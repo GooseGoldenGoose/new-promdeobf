@@ -1,0 +1,15 @@
+const fs=require("fs");
+const path=require("path");
+const Module=require("module");
+const luaparse=require("../parser/luaparse");
+const {versionVmBlockRegisters}=require("../passes/beta-register-versions");
+const root=path.resolve(__dirname,"..");
+const filename=path.join(root,"passes","beta-control-flow.js");
+let code=fs.readFileSync(filename,"utf8");
+code=code.replace("const forwarded = forwardControlOnlyJoinBranches(graph);","const forwarded = { graph, forwardedControlJoinCount: 0 };");
+const m=new Module(filename,module); m.filename=filename; m.paths=Module._nodeModulePaths(path.dirname(filename)); m._compile(code,filename);
+const source=fs.readFileSync(path.join(root,"output","spacial.lua"),"utf8");
+const ast=luaparse.parse(source,{luaVersion:"luau",comments:true,scope:true,locations:true,ranges:true});
+const beta=versionVmBlockRegisters(source,ast);
+const solved=m.exports.solveBetaControlFlow(ast,beta);
+console.log(JSON.stringify({applied:solved.applied,reason:solved.reason||null,states:solved.stateCount,closures:solved.closureRegionCount,numericFor:solved.numericForLoopCount,while:solved.whileLoopCount,repeat:solved.repeatLoopCount},null,2));

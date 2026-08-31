@@ -1,0 +1,1439 @@
+BETA REGISTER FLOW GRAPH
+entries: 1, 29, 30, 31, 32, 44, 45, 49
+states: 49
+epochs: 175
+analysis: defs=385, uses=363, provenance=299
+analysis: merged=57, cleanups=8/8
+
+CFG
+  ENTRY -> S1
+  ENTRY -> S29
+  ENTRY -> S30
+  ENTRY -> S31
+  ENTRY -> S32
+  ENTRY -> S44
+  ENTRY -> S45
+  ENTRY -> S49
+  S1 -> S2 [true]
+  S1 -> S3 [false]
+  S2 -> S3
+  S3 -> S4 [true]
+  S3 -> S5 [false]
+  S4 -> S5
+  S5 -> S6 [true]
+  S5 -> S7 [false]
+  S6 -> S8
+  S7 -> S6
+  S8 -> S9 [true]
+  S8 -> S10 [false]
+  S9 -> S11 [true]
+  S9 -> S12 [false]
+  S10 -> S13 [true]
+  S10 -> S14 [false]
+  S11 -> S15 [true]
+  S11 -> S16 [false]
+  S12 -> S17 [true]
+  S12 -> S18 [false]
+  S13 -> S14
+  S14 -> S19 [true]
+  S14 -> S20 [false]
+  S15 -> S21 [true]
+  S15 -> S22 [false]
+  S16 -> S23
+  S17 -> S18
+  S18 -> S23
+  S19 -> S24
+  S20 -> S25
+  S21 -> S22
+  S22 -> S16
+  S23 -> S8
+  S24 -> S26
+  S25 -> STOP
+  S26 -> S27
+  S27 -> S28 [true]
+  S27 -> S26 [false]
+  S28 -> STOP
+  S29 -> STOP
+  S30 -> STOP
+  S31 -> STOP
+  S32 -> S33 [true]
+  S32 -> S34 [false]
+  S33 -> S35 [true]
+  S33 -> S36 [false]
+  S34 -> S33
+  S35 -> S37 [true]
+  S35 -> S38 [false]
+  S36 -> S39 [true]
+  S36 -> S40 [false]
+  S37 -> S38
+  S38 -> S36
+  S39 -> S40
+  S40 -> S41
+  S41 -> S42 [true]
+  S41 -> S43 [false]
+  S42 -> S41
+  S43 -> STOP
+  S44 -> STOP
+  S45 -> S46
+  S46 -> S47 [true]
+  S46 -> S48 [false]
+  S47 -> S46
+  S48 -> STOP
+  S49 -> STOP
+
+REGISTER EPOCHS
+  r25 => r_v1_1
+    START S1#1: local r_v1_1 = allocUpvalue()
+    READ S1#3: upvalueValues[r_v1_1] = r_v2_1
+    READ S9#49: local r_v35_2 = createClosure5(32, { r_v8_4, r_v22_4, r_v11_3, r_v3_3, r_v1_1, r_v17_2, r_v26_3, r_v27_3, r_v23_4, r_v25_3, r_v24_3, r_v14_2 })
+    READ S10#1: local r_v19_4 = upvalueValues[r_v1_1]
+    READ S11#1: local r_v35_3 = upvalueValues[r_v1_1]
+    READ S12#1: local r_v30_3 = upvalueValues[r_v1_1]
+    READ S14#1: upvalueValues[r_v1_1] = r_v20_5
+    READ S14#2: local r_v2_24 = upvalueValues[r_v1_1]
+    READ S16#1: upvalueValues[r_v1_1] = ReturnVal
+    READ S18#1: upvalueValues[r_v1_1] = r_v35_2
+    READ S24#1: r_v1_1 = releaseUpvalue(r_v1_1)
+    MUTATE S24#1: r_v1_1 = releaseUpvalue(r_v1_1)
+  r25 => r_v1_2
+    START S24#9: local r_v1_2 = _env[r_v3_4]
+    READ S24#18: r_v3_4 = r_v1_2(r_v6_2, r_v5_2)
+    MUTATE S24#26: r_v1_2 = r_v3_4
+    READ S24#27: r_v3_4[r_v6_3] = r_v1_2
+  r25 => r_v1_3
+    START S24#22: local r_v1_3 = r_v6_3[r_v5_4]
+    READ S24#25: r_v6_3 = r_v1_3(r_v5_5, r_v9_4)
+  r25 => r_v1_4
+    START S24#28: local r_v1_4 = createClosure3(44, {})
+    READ S24#29: r_v6_2 = r_v1_4(r_v3_4)
+  r25 => r_v1_5
+    START S24#31: local r_v1_5 = _env[r_v6_4]
+  r25 => r_v1_6
+    START S27#2: local r_v1_6 = _env[r_v6_5]
+    READ S27#3: state = r_v1_6 and 28 or 26
+  r25 => r_v1_7
+    START S31#1: local r_v1_7 = "rLkPzM"
+    READ S31#3: local r_v10_3 = r_v1_7 ^ r_v3_5
+  r25 => r_v1_8
+    START S32#1: local r_v1_8 = upvalueValues[upvalues[1]]
+    READ S32#4: local r_v3_6 = r_v1_8(r_v6_6, r_v5_6)
+  r25 => r_v1_9
+    START S32#5: local r_v1_9 = 1
+    READ S32#6: local r_v10_4 = r_v3_6 == r_v1_9
+  r25 => r_v1_10
+    START S34#1: local r_v1_10 = upvalueValues[upvalues[2]]
+    READ S34#3: local r_v10_5 = r_v1_10 == r_v3_7
+  r25 => r_v1_11
+    START S35#15: local r_v1_11 = r_v10_6(r_v6_7, r_v3_9)
+    READ S35#16: r_v10_6 = { r_v1_11() }
+    MUTATE S37#2: r_v1_11 = r_v3_10 == r_v10_6
+    READ S37#3: local r_v4_37 = r_v1_11
+  r25 => r_v1_12
+    START S35#19: local r_v1_12 = upvalueValues[upvalues[5]]
+    READ S35#20: state = r_v1_12 and 37 or 38
+    READ S35#21: local r_v4_36 = r_v1_12
+  r25 => r_v1_13
+    START S39#3: local r_v1_13 = upvalueValues[upvalues[8]]
+    READ S39#5: r_v10_7 = r_v2_35(r_v1_13, r_v3_11)
+  r25 => r_v1_14
+    START S40#9: local r_v1_14 = 1
+    READ S40#10: r_v3_13 = r_v1_14 - r_v5_8
+    MUTATE S41#3: r_v1_14 = r_v3_13 <= r_v6_8
+    READ S41#4: r_v1_14 = r_v8_8 and r_v1_14
+    MUTATE S41#4: r_v1_14 = r_v8_8 and r_v1_14
+    READ S41#7: r_v1_14 = r_v8_9 or r_v1_14
+    MUTATE S41#7: r_v1_14 = r_v8_9 or r_v1_14
+    READ S41#9: local r_v2_37 = r_v1_14 and r_v8_10
+    MUTATE S42#5: r_v1_14 = r_v3_13
+    READ S42#6: r_v10_8[r_v1_14] = r_v8_11
+    KILL S42#7: r_v1_14 = nil
+  r25 => r_v1_15
+    START S41#10: local r_v1_15 = 43
+    READ S41#11: state = r_v2_37 or r_v1_15
+  r25 => r_v1_16
+    START S43#2: local r_v1_16 = upvalueValues[upvalues[11]]
+    READ S43#3: r_v10_8[r_v2_39] = r_v1_16
+  r25 => r_v1_17
+    START S43#5: local r_v1_17 = { r_v2_40(r_v10_8) }
+    READ S43#6: ReturnVal = { unpack(r_v1_17) }
+  r25 => r_v1_18
+    START S47#10: local r_v1_18 = r_v10_12()
+  r25 => r_v1_19
+    START S49#2: local r_v1_19 = "tYxBqR"
+    READ S49#3: local r_v10_13 = r_v1_19 ^ r_v3_15
+  r5 => r_v3_1
+    START S1#4: local r_v3_1 = "string"
+    READ S1#5: local r_v4_1 = _env[r_v3_1]
+  r5 => r_v3_2
+    START S1#8: local r_v3_2 = "gmatch"
+    READ S1#9: local r_v2_2 = r_v4_1[r_v3_2]
+  r5 => r_v3_3
+    START S1#10: local r_v3_3 = allocUpvalue()
+    READ S1#11: upvalueValues[r_v3_3] = r_v2_2
+    READ S6#24: local r_v17_1 = upvalueValues[r_v3_3]
+    READ S9#49: local r_v35_2 = createClosure5(32, { r_v8_4, r_v22_4, r_v11_3, r_v3_3, r_v1_1, r_v17_2, r_v26_3, r_v27_3, r_v23_4, r_v25_3, r_v24_3, r_v14_2 })
+    READ S24#7: r_v3_3 = releaseUpvalue(r_v3_3)
+    MUTATE S24#7: r_v3_3 = releaseUpvalue(r_v3_3)
+  r5 => r_v3_4
+    START S24#8: local r_v3_4 = "setmetatable"
+    READ S24#9: local r_v1_2 = _env[r_v3_4]
+    MUTATE S24#18: r_v3_4 = r_v1_2(r_v6_2, r_v5_2)
+    READ S24#26: r_v1_2 = r_v3_4
+    READ S24#27: r_v3_4[r_v6_3] = r_v1_2
+    READ S24#29: r_v6_2 = r_v1_4(r_v3_4)
+    KILL S28#1: r_v3_4 = nil
+  r5 => r_v3_5
+    START S31#2: local r_v3_5 = 1192387
+    READ S31#3: local r_v10_3 = r_v1_7 ^ r_v3_5
+  r5 => r_v3_6
+    START S32#4: local r_v3_6 = r_v1_8(r_v6_6, r_v5_6)
+    READ S32#6: local r_v10_4 = r_v3_6 == r_v1_9
+  r5 => r_v3_7
+    START S34#2: local r_v3_7 = upvalueValues[upvalues[3]]
+    READ S34#3: local r_v10_5 = r_v1_10 == r_v3_7
+  r5 => r_v3_8
+    START S35#6: local r_v3_8 = _env[r_v6_7]
+    READ S35#13: r_v6_7 = r_v3_8(r_v5_7)
+  r5 => r_v3_9
+    START S35#14: local r_v3_9 = ":(%d*):"
+    READ S35#15: local r_v1_11 = r_v10_6(r_v6_7, r_v3_9)
+  r5 => r_v3_10
+    START S37#1: local r_v3_10 = upvalueValues[upvalues[6]]
+    READ S37#2: r_v1_11 = r_v3_10 == r_v10_6
+  r5 => r_v3_11
+    START S39#4: local r_v3_11 = 0
+    READ S39#5: r_v10_7 = r_v2_35(r_v1_13, r_v3_11)
+  r5 => r_v3_12
+    START S40#3: local r_v3_12 = upvalueValues[upvalues[9]]
+    READ S40#4: local r_v6_8 = r_v3_12
+  r5 => r_v3_13
+    START S40#5: local r_v3_13 = 1
+    READ S40#6: local r_v5_8 = r_v3_13
+    MUTATE S40#10: r_v3_13 = r_v1_14 - r_v5_8
+    READ S41#2: r_v3_13 = r_v3_13 + r_v5_8
+    MUTATE S41#2: r_v3_13 = r_v3_13 + r_v5_8
+    READ S41#3: r_v1_14 = r_v3_13 <= r_v6_8
+    READ S41#5: local r_v8_9 = r_v3_13 >= r_v6_8
+    READ S42#5: r_v1_14 = r_v3_13
+  r5 => r_v3_14
+    START S40#7: local r_v3_14 = 0
+    READ S40#8: local r_v9_6 = r_v5_8 < r_v3_14
+  r5 => r_v3_15
+    START S49#1: local r_v3_15 = 831271
+    READ S49#3: local r_v10_13 = r_v1_19 ^ r_v3_15
+  r19 => r_v5_1
+    START S1#6: local r_v5_1 = allocUpvalue()
+    READ S1#15: local r_v7_1 = createClosure3(30, { r_v5_1 })
+    READ S1#16: upvalueValues[r_v5_1] = r_v2_4
+    READ S2#1: r_v9_1 = upvalueValues[r_v5_1]
+    READ S24#3: r_v5_1 = releaseUpvalue(r_v5_1)
+    MUTATE S24#3: r_v5_1 = releaseUpvalue(r_v5_1)
+  r19 => r_v5_2
+    START S24#17: local r_v5_2 = { [r_v9_3] = r_v8_5 }
+    READ S24#18: r_v3_4 = r_v1_2(r_v6_2, r_v5_2)
+  r19 => r_v5_3
+    START S24#19: local r_v5_3 = "math"
+    READ S24#20: local r_v6_3 = _env[r_v5_3]
+  r19 => r_v5_4
+    START S24#21: local r_v5_4 = "random"
+    READ S24#22: local r_v1_3 = r_v6_3[r_v5_4]
+  r19 => r_v5_5
+    START S24#24: local r_v5_5 = 1
+    READ S24#25: r_v6_3 = r_v1_3(r_v5_5, r_v9_4)
+  r19 => r_v5_6
+    START S32#2: local r_v5_6 = 2
+    READ S32#4: local r_v3_6 = r_v1_8(r_v6_6, r_v5_6)
+  r19 => r_v5_7
+    START S35#12: local r_v5_7 = r_v9_5[r_v8_7]
+    READ S35#13: r_v6_7 = r_v3_8(r_v5_7)
+  r19 => r_v5_8
+    START S40#6: local r_v5_8 = r_v3_13
+    READ S40#8: local r_v9_6 = r_v5_8 < r_v3_14
+    READ S40#10: r_v3_13 = r_v1_14 - r_v5_8
+    READ S41#2: r_v3_13 = r_v3_13 + r_v5_8
+  r6 => r_v6_1
+    START S1#7: local r_v6_1 = allocUpvalue()
+    READ S1#13: upvalueValues[r_v6_1] = r_v2_3
+    READ S24#10: r_v6_1 = releaseUpvalue(r_v6_1)
+    MUTATE S24#10: r_v6_1 = releaseUpvalue(r_v6_1)
+    READ S25#1: local r_v2_28 = createClosure0(45, { r_v6_1 })
+  r6 => r_v6_2
+    START S24#14: local r_v6_2 = {}
+    READ S24#18: r_v3_4 = r_v1_2(r_v6_2, r_v5_2)
+    MUTATE S24#29: r_v6_2 = r_v1_4(r_v3_4)
+  r6 => r_v6_3
+    START S24#20: local r_v6_3 = _env[r_v5_3]
+    READ S24#22: local r_v1_3 = r_v6_3[r_v5_4]
+    MUTATE S24#25: r_v6_3 = r_v1_3(r_v5_5, r_v9_4)
+    READ S24#27: r_v3_4[r_v6_3] = r_v1_2
+  r6 => r_v6_4
+    START S24#30: local r_v6_4 = "valid"
+    READ S24#31: local r_v1_5 = _env[r_v6_4]
+  r6 => r_v6_5
+    START S27#1: local r_v6_5 = "valid"
+    READ S27#2: local r_v1_6 = _env[r_v6_5]
+  r6 => r_v6_6
+    START S32#3: local r_v6_6 = 1
+    READ S32#4: local r_v3_6 = r_v1_8(r_v6_6, r_v5_6)
+  r6 => r_v6_7
+    START S35#5: local r_v6_7 = "tostring"
+    READ S35#6: local r_v3_8 = _env[r_v6_7]
+    MUTATE S35#13: r_v6_7 = r_v3_8(r_v5_7)
+    READ S35#15: local r_v1_11 = r_v10_6(r_v6_7, r_v3_9)
+  r6 => r_v6_8
+    START S40#4: local r_v6_8 = r_v3_12
+    READ S41#3: r_v1_14 = r_v3_13 <= r_v6_8
+    READ S41#5: local r_v8_9 = r_v3_13 >= r_v6_8
+  r21 => r_v7_1
+    START S1#15: local r_v7_1 = createClosure3(30, { r_v5_1 })
+    READ S1#19: r_v8_1 = r_v9_1(r_v7_1)
+  r21 => r_v7_2
+    START S3#8: local r_v7_2 = "table"
+    READ S3#9: local r_v4_5 = _env[r_v7_2]
+    MUTATE S3#10: r_v7_2 = "concat"
+    READ S3#11: local r_v2_6 = r_v4_5[r_v7_2]
+    MUTATE S3#13: r_v7_2 = r_v2_6
+  r21 => r_v7_4
+    START S24#12: local r_v7_4 = "err"
+    READ S24#13: local r_v8_5 = _env[r_v7_4]
+  r21 => r_v7_5
+    START S35#7: local r_v7_5 = "pcall"
+    READ S35#8: local r_v8_6 = _env[r_v7_5]
+    MUTATE S35#9: r_v7_5 = { r_v8_6(r_v14_4) }
+    READ S35#10: local r_v9_5 = { unpack(r_v7_5) }
+  r21 => r_v7_6
+    START S42#2: local r_v7_6 = 0
+    READ S42#4: local r_v8_11 = r_v2_38(r_v7_6, r_v14_5)
+  r17 => r_v8_1
+    START S1#17: local r_v8_1 = "pcall"
+    READ S1#18: local r_v9_1 = _env[r_v8_1]
+    MUTATE S1#19: r_v8_1 = r_v9_1(r_v7_1)
+    READ S1#20: state = r_v8_1 and 2 or 3
+    READ S1#22: local r_v4_2 = r_v8_1
+  r17 => r_v8_2
+    START S3#2: local r_v8_2 = "math"
+    READ S3#3: local r_v4_4 = _env[r_v8_2]
+  r17 => r_v8_3
+    START S3#4: local r_v8_3 = "random"
+    READ S3#5: local r_v2_5 = r_v4_4[r_v8_3]
+  r17 => r_v8_4
+    START S3#6: local r_v8_4 = allocUpvalue()
+    READ S3#7: upvalueValues[r_v8_4] = r_v2_5
+    READ S6#3: local r_v2_8 = upvalueValues[r_v8_4]
+    READ S9#12: local r_v2_16 = upvalueValues[r_v8_4]
+    READ S9#18: local r_v2_17 = upvalueValues[r_v8_4]
+    READ S9#24: local r_v4_22 = upvalueValues[r_v8_4]
+    READ S9#34: local r_v31_1 = upvalueValues[r_v8_4]
+    READ S9#49: local r_v35_2 = createClosure5(32, { r_v8_4, r_v22_4, r_v11_3, r_v3_3, r_v1_1, r_v17_2, r_v26_3, r_v27_3, r_v23_4, r_v25_3, r_v24_3, r_v14_2 })
+    READ S24#5: r_v8_4 = releaseUpvalue(r_v8_4)
+    MUTATE S24#5: r_v8_4 = releaseUpvalue(r_v8_4)
+  r17 => r_v8_5
+    START S24#13: local r_v8_5 = _env[r_v7_4]
+    READ S24#17: local r_v5_2 = { [r_v9_3] = r_v8_5 }
+  r17 => r_v8_6
+    START S35#8: local r_v8_6 = _env[r_v7_5]
+    READ S35#9: r_v7_5 = { r_v8_6(r_v14_4) }
+  r17 => r_v8_7
+    START S35#11: local r_v8_7 = 2
+    READ S35#12: local r_v5_7 = r_v9_5[r_v8_7]
+  r17 => r_v8_8
+    START S41#1: local r_v8_8 = not r_v9_6
+    READ S41#4: r_v1_14 = r_v8_8 and r_v1_14
+  r17 => r_v8_9
+    START S41#5: local r_v8_9 = r_v3_13 >= r_v6_8
+    READ S41#6: r_v8_9 = r_v9_6 and r_v8_9
+    MUTATE S41#6: r_v8_9 = r_v9_6 and r_v8_9
+    READ S41#7: r_v1_14 = r_v8_9 or r_v1_14
+  r17 => r_v8_10
+    START S41#8: local r_v8_10 = 42
+    READ S41#9: local r_v2_37 = r_v1_14 and r_v8_10
+  r17 => r_v8_11
+    START S42#4: local r_v8_11 = r_v2_38(r_v7_6, r_v14_5)
+    READ S42#6: r_v10_8[r_v1_14] = r_v8_11
+  r18 => r_v9_1
+    START S1#18: local r_v9_1 = _env[r_v8_1]
+    READ S1#19: r_v8_1 = r_v9_1(r_v7_1)
+    MUTATE S2#1: r_v9_1 = upvalueValues[r_v5_1]
+    READ S2#2: local r_v4_3 = r_v9_1
+    MUTATE S3#1: r_v9_1 = ReturnVal
+  r18 => r_v9_3
+    START S24#16: local r_v9_3 = "__tostring"
+    READ S24#17: local r_v5_2 = { [r_v9_3] = r_v8_5 }
+  r18 => r_v9_4
+    START S24#23: local r_v9_4 = 100
+    READ S24#25: r_v6_3 = r_v1_3(r_v5_5, r_v9_4)
+  r18 => r_v9_5
+    START S35#10: local r_v9_5 = { unpack(r_v7_5) }
+    READ S35#12: local r_v5_7 = r_v9_5[r_v8_7]
+  r18 => r_v9_6
+    START S40#8: local r_v9_6 = r_v5_8 < r_v3_14
+    READ S41#1: local r_v8_8 = not r_v9_6
+    READ S41#6: r_v8_9 = r_v9_6 and r_v8_9
+  r31 => r_v10_1
+    START S1#21: local r_v10_1 = args
+  r31 => r_v10_2
+    START S29#3: local r_v10_2 = "Tamper Detected!"
+    READ S29#4: local r_v4_29 = r_v2_29(r_v10_2)
+  r31 => r_v10_3
+    START S31#3: local r_v10_3 = r_v1_7 ^ r_v3_5
+    READ S31#5: local r_v2_31 = r_v4_30 - r_v10_3
+    MUTATE S31#6: r_v10_3 = r_v2_31
+    READ S31#8: local r_v2_32 = r_v4_31 / r_v10_3
+  r31 => r_v10_4
+    START S32#6: local r_v10_4 = r_v3_6 == r_v1_9
+    READ S32#7: state = r_v10_4 and 33 or 34
+    READ S32#8: local r_v4_32 = r_v10_4
+  r31 => r_v10_5
+    START S34#3: local r_v10_5 = r_v1_10 == r_v3_7
+    READ S34#4: local r_v4_33 = r_v10_5
+  r31 => r_v10_6
+    START S35#4: local r_v10_6 = upvalueValues[upvalues[4]]
+    READ S35#15: local r_v1_11 = r_v10_6(r_v6_7, r_v3_9)
+    MUTATE S35#16: r_v10_6 = { r_v1_11() }
+    READ S35#17: local r_v4_35 = r_v2_33(unpack(r_v10_6))
+    MUTATE S35#18: r_v10_6 = r_v4_35
+    READ S37#2: r_v1_11 = r_v3_10 == r_v10_6
+    KILL S38#2: r_v10_6 = nil
+  r31 => r_v10_7
+    START S39#1: local r_v10_7 = "error"
+    READ S39#2: local r_v2_35 = _env[r_v10_7]
+    MUTATE S39#5: r_v10_7 = r_v2_35(r_v1_13, r_v3_11)
+  r31 => r_v10_8
+    START S40#2: local r_v10_8 = r_v2_36
+    READ S42#6: r_v10_8[r_v1_14] = r_v8_11
+    READ S43#3: r_v10_8[r_v2_39] = r_v1_16
+    READ S43#5: local r_v1_17 = { r_v2_40(r_v10_8) }
+  r31 => r_v10_9
+    START S47#3: local r_v10_9 = "l1"
+    READ S47#4: local r_v4_39 = _env[r_v10_9]
+  r31 => r_v10_10
+    START S47#5: local r_v10_10 = "l1"
+    READ S47#6: _env[r_v10_10] = r_v2_42
+  r31 => r_v10_11
+    START S47#7: local r_v10_11 = "l2"
+    READ S47#8: _env[r_v10_11] = r_v4_39
+  r31 => r_v10_12
+    START S47#9: local r_v10_12 = upvalueValues[upvalues[1]]
+    READ S47#10: local r_v1_18 = r_v10_12()
+  r31 => r_v10_13
+    START S49#3: local r_v10_13 = r_v1_19 ^ r_v3_15
+    READ S49#5: local r_v2_43 = r_v4_40 - r_v10_13
+    MUTATE S49#6: r_v10_13 = r_v2_43
+    READ S49#8: local r_v2_44 = r_v4_41 / r_v10_13
+  r4 => r_v11_1
+    START S3#12: local r_v11_1 = r_v2_6
+    READ S5#1: local r_v2_7 = r_v11_1
+  r4 => r_v11_2
+    START S6#4: local r_v11_2 = 3
+    READ S6#6: local r_v4_7 = r_v2_8(r_v11_2, r_v13_3)
+  r4 => r_v11_3
+    START S6#10: local r_v11_3 = allocUpvalue()
+    READ S6#11: upvalueValues[r_v11_3] = r_v4_7
+    READ S6#34: local r_v20_2 = upvalueValues[r_v11_3]
+    READ S9#49: local r_v35_2 = createClosure5(32, { r_v8_4, r_v22_4, r_v11_3, r_v3_3, r_v1_1, r_v17_2, r_v26_3, r_v27_3, r_v23_4, r_v25_3, r_v24_3, r_v14_2 })
+    READ S24#2: r_v11_3 = releaseUpvalue(r_v11_3)
+    MUTATE S24#2: r_v11_3 = releaseUpvalue(r_v11_3)
+  r4 => r_v11_4
+    START S7#1: local r_v11_4 = "unpack"
+    READ S7#2: local r_v14_3 = _env[r_v11_4]
+  r13 => r_v12_1
+    START S3#14: local r_v12_1 = "table"
+    READ S3#15: local r_v13_1 = _env[r_v12_1]
+  r13 => r_v12_2
+    START S4#2: local r_v12_2 = _env[r_v15_1]
+    READ S4#4: local r_v13_2 = r_v12_2[r_v15_2]
+  r13 => r_v12_3
+    START S6#12: local r_v12_3 = r_v2_10
+    READ S13#1: local r_v19_5 = r_v13_4 == r_v12_3
+    READ S18#11: local r_v29_6 = r_v12_3 + r_v31_4
+    MUTATE S18#14: r_v12_3 = r_v30_7
+    KILL S24#32: r_v12_3 = nil
+  r16 => r_v13_1
+    START S3#15: local r_v13_1 = _env[r_v12_1]
+    READ S3#16: state = r_v13_1 and 4 or 5
+    READ S3#17: local r_v14_1 = r_v13_1
+  r16 => r_v13_2
+    START S4#4: local r_v13_2 = r_v12_2[r_v15_2]
+    READ S4#5: r_v14_1 = r_v13_2
+  r16 => r_v13_3
+    START S6#5: local r_v13_3 = 65
+    READ S6#6: local r_v4_7 = r_v2_8(r_v11_2, r_v13_3)
+  r16 => r_v13_4
+    START S6#8: local r_v13_4 = r_v2_9
+    READ S13#1: local r_v19_5 = r_v13_4 == r_v12_3
+    READ S18#6: local r_v30_6 = r_v13_4 + r_v29_4
+    MUTATE S18#9: r_v13_4 = r_v2_25
+    KILL S24#34: r_v13_4 = nil
+  r33 => r_v14_1
+    START S3#17: local r_v14_1 = r_v13_1
+    MUTATE S4#5: r_v14_1 = r_v13_2
+    READ S5#2: state = r_v14_1 and 6 or 7
+    READ S5#3: local r_v4_6 = r_v14_1
+  r33 => r_v14_2
+    START S6#1: local r_v14_2 = allocUpvalue()
+    READ S6#2: upvalueValues[r_v14_2] = ReturnVal
+    READ S9#49: local r_v35_2 = createClosure5(32, { r_v8_4, r_v22_4, r_v11_3, r_v3_3, r_v1_1, r_v17_2, r_v26_3, r_v27_3, r_v23_4, r_v25_3, r_v24_3, r_v14_2 })
+    READ S24#4: r_v14_2 = releaseUpvalue(r_v14_2)
+    MUTATE S24#4: r_v14_2 = releaseUpvalue(r_v14_2)
+  r33 => r_v14_3
+    START S7#2: local r_v14_3 = _env[r_v11_4]
+    READ S7#3: local r_v4_13 = r_v14_3
+  r33 => r_v14_4
+    START S35#1: local r_v14_4 = createClosure5(49, {})
+    READ S35#9: r_v7_5 = { r_v8_6(r_v14_4) }
+  r33 => r_v14_5
+    START S42#3: local r_v14_5 = 255
+    READ S42#4: local r_v8_11 = r_v2_38(r_v7_6, r_v14_5)
+  r27 => r_v15_1
+    START S4#1: local r_v15_1 = "table"
+    READ S4#2: local r_v12_2 = _env[r_v15_1]
+  r27 => r_v15_2
+    START S4#3: local r_v15_2 = "unpack"
+    READ S4#4: local r_v13_2 = r_v12_2[r_v15_2]
+  r27 => r_v15_3
+    START S6#14: local r_v15_3 = "pcall"
+    READ S6#15: local r_v4_8 = _env[r_v15_3]
+    MUTATE S6#16: r_v15_3 = { r_v4_8(r_v16_1) }
+    READ S6#17: local r_v2_11 = { unpack(r_v15_3) }
+    MUTATE S6#18: r_v15_3 = r_v2_11
+    READ S6#20: local r_v2_12 = r_v15_3[r_v4_9]
+    KILL S24#33: r_v15_3 = nil
+  r24 => r_v16_1
+    START S6#13: local r_v16_1 = createClosure5(31, {})
+    READ S6#16: r_v15_3 = { r_v4_8(r_v16_1) }
+    MUTATE S6#21: r_v16_1 = r_v2_12
+    READ S6#27: r_v18_1 = r_v19_1(r_v16_1)
+    READ S9#40: local r_v2_20 = r_v16_1[r_v2_19]
+    READ S9#46: local r_v2_21 = r_v2_20(r_v16_1, r_v4_24, r_v27_2)
+    KILL S24#35: r_v16_1 = nil
+  r3 => r_v17_1
+    START S6#24: local r_v17_1 = upvalueValues[r_v3_3]
+    READ S6#29: local r_v20_1 = r_v17_1(r_v18_1, r_v19_2)
+    MUTATE S6#30: r_v17_1 = { r_v20_1() }
+    READ S6#31: local r_v4_11 = r_v2_13(unpack(r_v17_1))
+  r3 => r_v17_2
+    START S6#32: local r_v17_2 = allocUpvalue()
+    READ S6#33: upvalueValues[r_v17_2] = r_v4_11
+    READ S9#49: local r_v35_2 = createClosure5(32, { r_v8_4, r_v22_4, r_v11_3, r_v3_3, r_v1_1, r_v17_2, r_v26_3, r_v27_3, r_v23_4, r_v25_3, r_v24_3, r_v14_2 })
+    READ S24#6: r_v17_2 = releaseUpvalue(r_v17_2)
+    MUTATE S24#6: r_v17_2 = releaseUpvalue(r_v17_2)
+  r2 => r_v18_1
+    START S6#25: local r_v18_1 = "tostring"
+    READ S6#26: local r_v19_1 = _env[r_v18_1]
+    MUTATE S6#27: r_v18_1 = r_v19_1(r_v16_1)
+    READ S6#29: local r_v20_1 = r_v17_1(r_v18_1, r_v19_2)
+  r2 => r_v18_2
+    START S6#37: local r_v18_2 = r_v20_3
+    READ S6#39: local r_v21_1 = r_v18_2 < r_v20_4
+    READ S6#41: r_v20_3 = r_v4_12 - r_v18_2
+    READ S8#1: r_v20_3 = r_v20_3 + r_v18_2
+  r11 => r_v19_1
+    START S6#26: local r_v19_1 = _env[r_v18_1]
+    READ S6#27: r_v18_1 = r_v19_1(r_v16_1)
+  r11 => r_v19_2
+    START S6#28: local r_v19_2 = ":(%d*):"
+    READ S6#29: local r_v20_1 = r_v17_1(r_v18_1, r_v19_2)
+  r11 => r_v19_3
+    START S6#35: local r_v19_3 = r_v20_2
+    READ S8#2: local r_v4_14 = r_v20_3 <= r_v19_3
+    READ S8#5: local r_v22_2 = r_v20_3 >= r_v19_3
+  r11 => r_v19_4
+    START S10#1: local r_v19_4 = upvalueValues[r_v1_1]
+    READ S10#2: state = r_v19_4 and 13 or 14
+    READ S10#3: local r_v20_5 = r_v19_4
+  r11 => r_v19_5
+    START S13#1: local r_v19_5 = r_v13_4 == r_v12_3
+    READ S13#2: r_v20_5 = r_v19_5
+  r11 => r_v19_6
+    START S25#2: local r_v19_6 = { r_v2_28() }
+    READ S25#3: ReturnVal = { unpack(r_v19_6) }
+  r9 => r_v20_1
+    START S6#29: local r_v20_1 = r_v17_1(r_v18_1, r_v19_2)
+    READ S6#30: r_v17_1 = { r_v20_1() }
+  r9 => r_v20_2
+    START S6#34: local r_v20_2 = upvalueValues[r_v11_3]
+    READ S6#35: local r_v19_3 = r_v20_2
+  r9 => r_v20_3
+    START S6#36: local r_v20_3 = 1
+    READ S6#37: local r_v18_2 = r_v20_3
+    MUTATE S6#41: r_v20_3 = r_v4_12 - r_v18_2
+    READ S8#1: r_v20_3 = r_v20_3 + r_v18_2
+    MUTATE S8#1: r_v20_3 = r_v20_3 + r_v18_2
+    READ S8#2: local r_v4_14 = r_v20_3 <= r_v19_3
+    READ S8#5: local r_v22_2 = r_v20_3 >= r_v19_3
+    READ S9#2: upvalueValues[r_v22_4] = r_v20_3
+  r9 => r_v20_4
+    START S6#38: local r_v20_4 = 0
+    READ S6#39: local r_v21_1 = r_v18_2 < r_v20_4
+  r9 => r_v20_5
+    START S10#3: local r_v20_5 = r_v19_4
+    MUTATE S13#2: r_v20_5 = r_v19_5
+    READ S14#1: upvalueValues[r_v1_1] = r_v20_5
+  r20 => r_v21_1
+    START S6#39: local r_v21_1 = r_v18_2 < r_v20_4
+    READ S8#3: local r_v22_1 = not r_v21_1
+    READ S8#6: r_v22_2 = r_v21_1 and r_v22_2
+  r1 => r_v22_1
+    START S8#3: local r_v22_1 = not r_v21_1
+    READ S8#4: local r_v4_15 = r_v22_1 and r_v4_14
+  r1 => r_v22_2
+    START S8#5: local r_v22_2 = r_v20_3 >= r_v19_3
+    READ S8#6: r_v22_2 = r_v21_1 and r_v22_2
+    MUTATE S8#6: r_v22_2 = r_v21_1 and r_v22_2
+    READ S8#7: local r_v4_16 = r_v22_2 or r_v4_15
+  r1 => r_v22_3
+    START S8#8: local r_v22_3 = 9
+    READ S8#9: local r_v2_14 = r_v4_16 and r_v22_3
+  r1 => r_v22_4
+    START S9#1: local r_v22_4 = allocUpvalue()
+    READ S9#2: upvalueValues[r_v22_4] = r_v20_3
+    READ S9#49: local r_v35_2 = createClosure5(32, { r_v8_4, r_v22_4, r_v11_3, r_v3_3, r_v1_1, r_v17_2, r_v26_3, r_v27_3, r_v23_4, r_v25_3, r_v24_3, r_v14_2 })
+    READ S23#6: r_v22_4 = releaseUpvalue(r_v22_4)
+    MUTATE S23#6: r_v22_4 = releaseUpvalue(r_v22_4)
+  r28 => r_v23_1
+    START S9#3: local r_v23_1 = "math"
+    READ S9#4: local r_v4_18 = _env[r_v23_1]
+  r28 => r_v23_2
+    START S9#5: local r_v23_2 = "random"
+    READ S9#6: local r_v2_15 = r_v4_18[r_v23_2]
+  r28 => r_v23_3
+    START S9#8: local r_v23_3 = 1
+    READ S9#9: local r_v4_19 = r_v2_15(r_v23_3, r_v24_1)
+  r28 => r_v23_4
+    START S9#10: local r_v23_4 = allocUpvalue()
+    READ S9#11: upvalueValues[r_v23_4] = r_v4_19
+    READ S9#19: local r_v26_1 = upvalueValues[r_v23_4]
+    READ S9#49: local r_v35_2 = createClosure5(32, { r_v8_4, r_v22_4, r_v11_3, r_v3_3, r_v1_1, r_v17_2, r_v26_3, r_v27_3, r_v23_4, r_v25_3, r_v24_3, r_v14_2 })
+    READ S23#3: r_v23_4 = releaseUpvalue(r_v23_4)
+    MUTATE S23#3: r_v23_4 = releaseUpvalue(r_v23_4)
+  r10 => r_v24_1
+    START S9#7: local r_v24_1 = 100
+    READ S9#9: local r_v4_19 = r_v2_15(r_v23_3, r_v24_1)
+  r10 => r_v24_2
+    START S9#14: local r_v24_2 = 0
+    READ S9#15: local r_v4_20 = r_v2_16(r_v24_2, r_v25_1)
+  r10 => r_v24_3
+    START S9#16: local r_v24_3 = allocUpvalue()
+    READ S9#17: upvalueValues[r_v24_3] = r_v4_20
+    READ S9#49: local r_v35_2 = createClosure5(32, { r_v8_4, r_v22_4, r_v11_3, r_v3_3, r_v1_1, r_v17_2, r_v26_3, r_v27_3, r_v23_4, r_v25_3, r_v24_3, r_v14_2 })
+    READ S18#10: local r_v31_4 = upvalueValues[r_v24_3]
+    READ S23#1: r_v24_3 = releaseUpvalue(r_v24_3)
+    MUTATE S23#1: r_v24_3 = releaseUpvalue(r_v24_3)
+  r15 => r_v25_1
+    START S9#13: local r_v25_1 = 255
+    READ S9#15: local r_v4_20 = r_v2_16(r_v24_2, r_v25_1)
+  r15 => r_v25_2
+    START S9#20: local r_v25_2 = 1
+    READ S9#21: local r_v4_21 = r_v2_17(r_v25_2, r_v26_1)
+  r15 => r_v25_3
+    START S9#22: local r_v25_3 = allocUpvalue()
+    READ S9#23: upvalueValues[r_v25_3] = r_v4_21
+    READ S9#49: local r_v35_2 = createClosure5(32, { r_v8_4, r_v22_4, r_v11_3, r_v3_3, r_v1_1, r_v17_2, r_v26_3, r_v27_3, r_v23_4, r_v25_3, r_v24_3, r_v14_2 })
+    READ S18#2: local r_v34_4 = upvalueValues[r_v25_3]
+    READ S23#4: r_v25_3 = releaseUpvalue(r_v25_3)
+    MUTATE S23#4: r_v25_3 = releaseUpvalue(r_v25_3)
+  r14 => r_v26_1
+    START S9#19: local r_v26_1 = upvalueValues[r_v23_4]
+    READ S9#21: local r_v4_21 = r_v2_17(r_v25_2, r_v26_1)
+  r14 => r_v26_2
+    START S9#27: local r_v26_2 = r_v4_22(r_v27_1, r_v28_1)
+    READ S9#29: local r_v2_18 = r_v26_2 == r_v4_23
+  r14 => r_v26_3
+    START S9#30: local r_v26_3 = allocUpvalue()
+    READ S9#31: upvalueValues[r_v26_3] = r_v2_18
+    READ S9#49: local r_v35_2 = createClosure5(32, { r_v8_4, r_v22_4, r_v11_3, r_v3_3, r_v1_1, r_v17_2, r_v26_3, r_v27_3, r_v23_4, r_v25_3, r_v24_3, r_v14_2 })
+    READ S9#55: local r_v2_23 = upvalueValues[r_v26_3]
+    READ S23#2: r_v26_3 = releaseUpvalue(r_v26_3)
+    MUTATE S23#2: r_v26_3 = releaseUpvalue(r_v26_3)
+  r22 => r_v27_1
+    START S9#25: local r_v27_1 = 1
+    READ S9#27: local r_v26_2 = r_v4_22(r_v27_1, r_v28_1)
+  r22 => r_v27_2
+    START S9#44: local r_v27_2 = r_v28_2 .. r_v35_1
+    READ S9#46: local r_v2_21 = r_v2_20(r_v16_1, r_v4_24, r_v27_2)
+  r22 => r_v27_3
+    START S9#47: local r_v27_3 = allocUpvalue()
+    READ S9#48: upvalueValues[r_v27_3] = r_v2_21
+    READ S9#49: local r_v35_2 = createClosure5(32, { r_v8_4, r_v22_4, r_v11_3, r_v3_3, r_v1_1, r_v17_2, r_v26_3, r_v27_3, r_v23_4, r_v25_3, r_v24_3, r_v14_2 })
+    READ S21#3: local r_v34_6 = upvalueValues[r_v27_3]
+    READ S23#5: r_v27_3 = releaseUpvalue(r_v27_3)
+    MUTATE S23#5: r_v27_3 = releaseUpvalue(r_v27_3)
+  r7 => r_v28_1
+    START S9#26: local r_v28_1 = 2
+    READ S9#27: local r_v26_2 = r_v4_22(r_v27_1, r_v28_1)
+  r7 => r_v28_2
+    START S9#43: local r_v28_2 = ":"
+    READ S9#44: local r_v27_2 = r_v28_2 .. r_v35_1
+  r7 => r_v28_3
+    START S9#50: local r_v28_3 = "pcall"
+    READ S9#51: local r_v4_25 = _env[r_v28_3]
+    MUTATE S9#52: r_v28_3 = { r_v4_25(r_v35_2) }
+    READ S9#53: local r_v2_22 = { unpack(r_v28_3) }
+    MUTATE S9#54: r_v28_3 = r_v2_22
+    READ S15#3: local r_v31_2 = r_v28_3[r_v34_2]
+    READ S17#2: local r_v30_5 = r_v28_3[r_v29_3]
+    READ S18#5: local r_v29_4 = r_v28_3[r_v31_3]
+    READ S21#2: local r_v31_6 = r_v28_3[r_v34_5]
+    KILL S23#7: r_v28_3 = nil
+  r12 => r_v29_1
+    START S9#32: local r_v29_1 = "tostring"
+    READ S9#33: local r_v30_1 = _env[r_v29_1]
+    MUTATE S9#39: r_v29_1 = r_v30_1(unpack(r_v34_1))
+    READ S9#42: local r_v35_1 = r_v29_1 .. r_v30_2
+  r12 => r_v29_2
+    START S15#5: local r_v29_2 = r_v31_2 == r_v34_3
+    READ S15#6: state = r_v29_2 and 21 or 22
+    READ S15#7: r_v35_2 = r_v29_2
+  r12 => r_v29_3
+    START S17#1: local r_v29_3 = 1
+    READ S17#2: local r_v30_5 = r_v28_3[r_v29_3]
+  r12 => r_v29_4
+    START S18#5: local r_v29_4 = r_v28_3[r_v31_3]
+    READ S18#6: local r_v30_6 = r_v13_4 + r_v29_4
+  r12 => r_v29_5
+    START S18#7: local r_v29_5 = 256
+    READ S18#8: local r_v2_25 = r_v30_6 % r_v29_5
+  r12 => r_v29_6
+    START S18#11: local r_v29_6 = r_v12_3 + r_v31_4
+    READ S18#13: local r_v30_7 = r_v29_6 % r_v31_5
+  r12 => r_v29_7
+    START S21#4: local r_v29_7 = r_v31_6 == r_v34_6
+    READ S21#5: r_v35_2 = r_v29_7
+  r30 => r_v30_1
+    START S9#33: local r_v30_1 = _env[r_v29_1]
+    READ S9#39: r_v29_1 = r_v30_1(unpack(r_v34_1))
+  r30 => r_v30_2
+    START S9#41: local r_v30_2 = ":"
+    READ S9#42: local r_v35_1 = r_v29_1 .. r_v30_2
+  r30 => r_v30_3
+    START S12#1: local r_v30_3 = upvalueValues[r_v1_1]
+    READ S12#2: state = r_v30_3 and 17 or 18
+    READ S12#3: r_v35_2 = r_v30_3
+  r30 => r_v30_4
+    START S15#1: local r_v30_4 = state
+    READ S22#1: local r_v2_27 = r_v30_4
+  r30 => r_v30_5
+    START S17#2: local r_v30_5 = r_v28_3[r_v29_3]
+    READ S17#3: r_v35_2 = r_v30_5
+  r30 => r_v30_6
+    START S18#6: local r_v30_6 = r_v13_4 + r_v29_4
+    READ S18#8: local r_v2_25 = r_v30_6 % r_v29_5
+  r30 => r_v30_7
+    START S18#13: local r_v30_7 = r_v29_6 % r_v31_5
+    READ S18#14: r_v12_3 = r_v30_7
+  r29 => r_v31_1
+    START S9#34: local r_v31_1 = upvalueValues[r_v8_4]
+    READ S9#37: local r_v34_1 = { r_v31_1(r_v33_1, r_v32_1) }
+  r29 => r_v31_2
+    START S15#3: local r_v31_2 = r_v28_3[r_v34_2]
+    READ S15#5: local r_v29_2 = r_v31_2 == r_v34_3
+  r29 => r_v31_3
+    START S18#4: local r_v31_3 = r_v34_4 + r_v33_2
+    READ S18#5: local r_v29_4 = r_v28_3[r_v31_3]
+  r29 => r_v31_4
+    START S18#10: local r_v31_4 = upvalueValues[r_v24_3]
+    READ S18#11: local r_v29_6 = r_v12_3 + r_v31_4
+  r29 => r_v31_5
+    START S18#12: local r_v31_5 = 256
+    READ S18#13: local r_v30_7 = r_v29_6 % r_v31_5
+  r29 => r_v31_6
+    START S21#2: local r_v31_6 = r_v28_3[r_v34_5]
+    READ S21#4: local r_v29_7 = r_v31_6 == r_v34_6
+  r8 => r_v32_1
+    START S9#35: local r_v32_1 = 10000
+    READ S9#37: local r_v34_1 = { r_v31_1(r_v33_1, r_v32_1) }
+  r32 => r_v33_1
+    START S9#36: local r_v33_1 = 0
+    READ S9#37: local r_v34_1 = { r_v31_1(r_v33_1, r_v32_1) }
+  r32 => r_v33_2
+    START S18#3: local r_v33_2 = 1
+    READ S18#4: local r_v31_3 = r_v34_4 + r_v33_2
+  r26 => r_v34_1
+    START S9#37: local r_v34_1 = { r_v31_1(r_v33_1, r_v32_1) }
+    READ S9#39: r_v29_1 = r_v30_1(unpack(r_v34_1))
+  r26 => r_v34_2
+    START S15#2: local r_v34_2 = 1
+    READ S15#3: local r_v31_2 = r_v28_3[r_v34_2]
+  r26 => r_v34_3
+    START S15#4: local r_v34_3 = false
+    READ S15#5: local r_v29_2 = r_v31_2 == r_v34_3
+  r26 => r_v34_4
+    START S18#2: local r_v34_4 = upvalueValues[r_v25_3]
+    READ S18#4: local r_v31_3 = r_v34_4 + r_v33_2
+  r26 => r_v34_5
+    START S21#1: local r_v34_5 = 2
+    READ S21#2: local r_v31_6 = r_v28_3[r_v34_5]
+  r26 => r_v34_6
+    START S21#3: local r_v34_6 = upvalueValues[r_v27_3]
+    READ S21#4: local r_v29_7 = r_v31_6 == r_v34_6
+  r23 => r_v35_1
+    START S9#42: local r_v35_1 = r_v29_1 .. r_v30_2
+    READ S9#44: local r_v27_2 = r_v28_2 .. r_v35_1
+  r23 => r_v35_2
+    START S9#49: local r_v35_2 = createClosure5(32, { r_v8_4, r_v22_4, r_v11_3, r_v3_3, r_v1_1, r_v17_2, r_v26_3, r_v27_3, r_v23_4, r_v25_3, r_v24_3, r_v14_2 })
+    READ S9#52: r_v28_3 = { r_v4_25(r_v35_2) }
+    MUTATE S12#3: r_v35_2 = r_v30_3
+    MUTATE S15#7: r_v35_2 = r_v29_2
+    MUTATE S17#3: r_v35_2 = r_v30_5
+    READ S18#1: upvalueValues[r_v1_1] = r_v35_2
+    MUTATE S21#5: r_v35_2 = r_v29_7
+    READ S22#2: local r_v4_27 = r_v35_2
+  r23 => r_v35_3
+    START S11#1: local r_v35_3 = upvalueValues[r_v1_1]
+    READ S11#2: state = r_v35_3 and 15 or 16
+    READ S11#3: local r_v4_26 = r_v35_3
+
+STATES
+  STATE 1 [ENTRY]
+    predecessors: none
+    successors: S2, S3
+    transition: r_v8_1 and 2 or 3
+    #1 epoch-start: local r_v1_1 = allocUpvalue()
+    #2 version-define: local r_v2_1 = true
+    #3 effect-write reads=[r_v1_1, r_v2_1]: upvalueValues[r_v1_1] = r_v2_1
+    #4 epoch-start: local r_v3_1 = "string"
+    #5 version-define reads=[r_v3_1]: local r_v4_1 = _env[r_v3_1]
+    #6 epoch-start: local r_v5_1 = allocUpvalue()
+    #7 epoch-start: local r_v6_1 = allocUpvalue()
+    #8 epoch-start: local r_v3_2 = "gmatch"
+    #9 version-define reads=[r_v4_1, r_v3_2]: local r_v2_2 = r_v4_1[r_v3_2]
+    #10 epoch-start: local r_v3_3 = allocUpvalue()
+    #11 effect-write reads=[r_v3_3, r_v2_2]: upvalueValues[r_v3_3] = r_v2_2
+    #12 version-define: local r_v2_3 = createClosure3(29, {})
+    #13 effect-write reads=[r_v6_1, r_v2_3]: upvalueValues[r_v6_1] = r_v2_3
+    #14 version-define: local r_v2_4 = false
+    #15 epoch-start reads=[r_v5_1]: local r_v7_1 = createClosure3(30, { r_v5_1 })
+    #16 effect-write reads=[r_v5_1, r_v2_4]: upvalueValues[r_v5_1] = r_v2_4
+    #17 epoch-start: local r_v8_1 = "pcall"
+    #18 epoch-start reads=[r_v8_1]: local r_v9_1 = _env[r_v8_1]
+    #19 epoch-mutate reads=[r_v9_1, r_v7_1]: r_v8_1 = r_v9_1(r_v7_1)
+    #20 state-transition reads=[r_v8_1]: state = r_v8_1 and 2 or 3
+    #21 epoch-start: local r_v10_1 = args
+    #22 version-define reads=[r_v8_1]: local r_v4_2 = r_v8_1
+
+  STATE 2
+    predecessors: S1
+    successors: S3
+    transition: 3
+    #1 epoch-mutate reads=[r_v5_1]: r_v9_1 = upvalueValues[r_v5_1]
+    #2 version-define reads=[r_v9_1]: local r_v4_3 = r_v9_1
+    #3 state-transition: state = 3
+
+  STATE 3
+    predecessors: S1, S2
+    successors: S4, S5
+    transition: r_v13_1 and 4 or 5
+    #1 epoch-mutate: r_v9_1 = ReturnVal
+    #2 epoch-start: local r_v8_2 = "math"
+    #3 version-define reads=[r_v8_2]: local r_v4_4 = _env[r_v8_2]
+    #4 epoch-start: local r_v8_3 = "random"
+    #5 version-define reads=[r_v4_4, r_v8_3]: local r_v2_5 = r_v4_4[r_v8_3]
+    #6 epoch-start: local r_v8_4 = allocUpvalue()
+    #7 effect-write reads=[r_v8_4, r_v2_5]: upvalueValues[r_v8_4] = r_v2_5
+    #8 epoch-start: local r_v7_2 = "table"
+    #9 version-define reads=[r_v7_2]: local r_v4_5 = _env[r_v7_2]
+    #10 epoch-mutate: r_v7_2 = "concat"
+    #11 version-define reads=[r_v4_5, r_v7_2]: local r_v2_6 = r_v4_5[r_v7_2]
+    #12 epoch-start reads=[r_v2_6]: local r_v11_1 = r_v2_6
+    #13 epoch-mutate reads=[r_v2_6]: r_v7_2 = r_v2_6
+    #14 epoch-start: local r_v12_1 = "table"
+    #15 epoch-start reads=[r_v12_1]: local r_v13_1 = _env[r_v12_1]
+    #16 state-transition reads=[r_v13_1]: state = r_v13_1 and 4 or 5
+    #17 epoch-start reads=[r_v13_1]: local r_v14_1 = r_v13_1
+
+  STATE 4
+    predecessors: S3
+    successors: S5
+    transition: 5
+    #1 epoch-start: local r_v15_1 = "table"
+    #2 epoch-start reads=[r_v15_1]: local r_v12_2 = _env[r_v15_1]
+    #3 epoch-start: local r_v15_2 = "unpack"
+    #4 epoch-start reads=[r_v12_2, r_v15_2]: local r_v13_2 = r_v12_2[r_v15_2]
+    #5 epoch-mutate reads=[r_v13_2]: r_v14_1 = r_v13_2
+    #6 state-transition: state = 5
+
+  STATE 5
+    predecessors: S3, S4
+    successors: S6, S7
+    transition: r_v14_1 and 6 or 7
+    #1 version-define reads=[r_v11_1]: local r_v2_7 = r_v11_1
+    #2 state-transition reads=[r_v14_1]: state = r_v14_1 and 6 or 7
+    #3 version-define reads=[r_v14_1]: local r_v4_6 = r_v14_1
+
+  STATE 6
+    predecessors: S5, S7
+    successors: S8
+    transition: 8
+    #1 epoch-start: local r_v14_2 = allocUpvalue()
+    #2 effect-write reads=[r_v14_2]: upvalueValues[r_v14_2] = ReturnVal
+    #3 version-define reads=[r_v8_4]: local r_v2_8 = upvalueValues[r_v8_4]
+    #4 epoch-start: local r_v11_2 = 3
+    #5 epoch-start: local r_v13_3 = 65
+    #6 version-define reads=[r_v2_8, r_v11_2, r_v13_3]: local r_v4_7 = r_v2_8(r_v11_2, r_v13_3)
+    #7 version-define: local r_v2_9 = 0
+    #8 epoch-start reads=[r_v2_9]: local r_v13_4 = r_v2_9
+    #9 version-define: local r_v2_10 = 0
+    #10 epoch-start: local r_v11_3 = allocUpvalue()
+    #11 effect-write reads=[r_v11_3, r_v4_7]: upvalueValues[r_v11_3] = r_v4_7
+    #12 epoch-start reads=[r_v2_10]: local r_v12_3 = r_v2_10
+    #13 epoch-start: local r_v16_1 = createClosure5(31, {})
+    #14 epoch-start: local r_v15_3 = "pcall"
+    #15 version-define reads=[r_v15_3]: local r_v4_8 = _env[r_v15_3]
+    #16 epoch-mutate reads=[r_v4_8, r_v16_1]: r_v15_3 = { r_v4_8(r_v16_1) }
+    #17 version-define reads=[r_v15_3]: local r_v2_11 = { unpack(r_v15_3) }
+    #18 epoch-mutate reads=[r_v2_11]: r_v15_3 = r_v2_11
+    #19 version-define: local r_v4_9 = 2
+    #20 version-define reads=[r_v15_3, r_v4_9]: local r_v2_12 = r_v15_3[r_v4_9]
+    #21 epoch-mutate reads=[r_v2_12]: r_v16_1 = r_v2_12
+    #22 version-define: local r_v4_10 = "tonumber"
+    #23 version-define reads=[r_v4_10]: local r_v2_13 = _env[r_v4_10]
+    #24 epoch-start reads=[r_v3_3]: local r_v17_1 = upvalueValues[r_v3_3]
+    #25 epoch-start: local r_v18_1 = "tostring"
+    #26 epoch-start reads=[r_v18_1]: local r_v19_1 = _env[r_v18_1]
+    #27 epoch-mutate reads=[r_v19_1, r_v16_1]: r_v18_1 = r_v19_1(r_v16_1)
+    #28 epoch-start: local r_v19_2 = ":(%d*):"
+    #29 epoch-start reads=[r_v17_1, r_v18_1, r_v19_2]: local r_v20_1 = r_v17_1(r_v18_1, r_v19_2)
+    #30 epoch-mutate reads=[r_v20_1]: r_v17_1 = { r_v20_1() }
+    #31 version-define reads=[r_v2_13, r_v17_1]: local r_v4_11 = r_v2_13(unpack(r_v17_1))
+    #32 epoch-start: local r_v17_2 = allocUpvalue()
+    #33 effect-write reads=[r_v17_2, r_v4_11]: upvalueValues[r_v17_2] = r_v4_11
+    #34 epoch-start reads=[r_v11_3]: local r_v20_2 = upvalueValues[r_v11_3]
+    #35 epoch-start reads=[r_v20_2]: local r_v19_3 = r_v20_2
+    #36 epoch-start: local r_v20_3 = 1
+    #37 epoch-start reads=[r_v20_3]: local r_v18_2 = r_v20_3
+    #38 epoch-start: local r_v20_4 = 0
+    #39 epoch-start reads=[r_v18_2, r_v20_4]: local r_v21_1 = r_v18_2 < r_v20_4
+    #40 version-define: local r_v4_12 = 1
+    #41 epoch-mutate reads=[r_v4_12, r_v18_2]: r_v20_3 = r_v4_12 - r_v18_2
+    #42 state-transition: state = 8
+
+  STATE 7
+    predecessors: S5
+    successors: S6
+    transition: 6
+    #1 epoch-start: local r_v11_4 = "unpack"
+    #2 epoch-start reads=[r_v11_4]: local r_v14_3 = _env[r_v11_4]
+    #3 version-define reads=[r_v14_3]: local r_v4_13 = r_v14_3
+    #4 state-transition: state = 6
+
+  STATE 8
+    predecessors: S6, S23
+    successors: S9, S10
+    transition: r_v2_14 or r_v4_17
+    #1 epoch-mutate reads=[r_v20_3, r_v18_2]: r_v20_3 = r_v20_3 + r_v18_2
+    #2 version-define reads=[r_v20_3, r_v19_3]: local r_v4_14 = r_v20_3 <= r_v19_3
+    #3 epoch-start reads=[r_v21_1]: local r_v22_1 = not r_v21_1
+    #4 version-define reads=[r_v22_1, r_v4_14]: local r_v4_15 = r_v22_1 and r_v4_14
+    #5 epoch-start reads=[r_v20_3, r_v19_3]: local r_v22_2 = r_v20_3 >= r_v19_3
+    #6 epoch-mutate reads=[r_v21_1, r_v22_2]: r_v22_2 = r_v21_1 and r_v22_2
+    #7 version-define reads=[r_v22_2, r_v4_15]: local r_v4_16 = r_v22_2 or r_v4_15
+    #8 epoch-start: local r_v22_3 = 9
+    #9 version-define reads=[r_v4_16, r_v22_3]: local r_v2_14 = r_v4_16 and r_v22_3
+    #10 version-define: local r_v4_17 = 10
+    #11 state-transition reads=[r_v2_14, r_v4_17]: state = r_v2_14 or r_v4_17
+
+  STATE 9
+    predecessors: S8
+    successors: S11, S12
+    transition: r_v2_23 and 11 or 12
+    #1 epoch-start: local r_v22_4 = allocUpvalue()
+    #2 effect-write reads=[r_v22_4, r_v20_3]: upvalueValues[r_v22_4] = r_v20_3
+    #3 epoch-start: local r_v23_1 = "math"
+    #4 version-define reads=[r_v23_1]: local r_v4_18 = _env[r_v23_1]
+    #5 epoch-start: local r_v23_2 = "random"
+    #6 version-define reads=[r_v4_18, r_v23_2]: local r_v2_15 = r_v4_18[r_v23_2]
+    #7 epoch-start: local r_v24_1 = 100
+    #8 epoch-start: local r_v23_3 = 1
+    #9 version-define reads=[r_v2_15, r_v23_3, r_v24_1]: local r_v4_19 = r_v2_15(r_v23_3, r_v24_1)
+    #10 epoch-start: local r_v23_4 = allocUpvalue()
+    #11 effect-write reads=[r_v23_4, r_v4_19]: upvalueValues[r_v23_4] = r_v4_19
+    #12 version-define reads=[r_v8_4]: local r_v2_16 = upvalueValues[r_v8_4]
+    #13 epoch-start: local r_v25_1 = 255
+    #14 epoch-start: local r_v24_2 = 0
+    #15 version-define reads=[r_v2_16, r_v24_2, r_v25_1]: local r_v4_20 = r_v2_16(r_v24_2, r_v25_1)
+    #16 epoch-start: local r_v24_3 = allocUpvalue()
+    #17 effect-write reads=[r_v24_3, r_v4_20]: upvalueValues[r_v24_3] = r_v4_20
+    #18 version-define reads=[r_v8_4]: local r_v2_17 = upvalueValues[r_v8_4]
+    #19 epoch-start reads=[r_v23_4]: local r_v26_1 = upvalueValues[r_v23_4]
+    #20 epoch-start: local r_v25_2 = 1
+    #21 version-define reads=[r_v2_17, r_v25_2, r_v26_1]: local r_v4_21 = r_v2_17(r_v25_2, r_v26_1)
+    #22 epoch-start: local r_v25_3 = allocUpvalue()
+    #23 effect-write reads=[r_v25_3, r_v4_21]: upvalueValues[r_v25_3] = r_v4_21
+    #24 version-define reads=[r_v8_4]: local r_v4_22 = upvalueValues[r_v8_4]
+    #25 epoch-start: local r_v27_1 = 1
+    #26 epoch-start: local r_v28_1 = 2
+    #27 epoch-start reads=[r_v4_22, r_v27_1, r_v28_1]: local r_v26_2 = r_v4_22(r_v27_1, r_v28_1)
+    #28 version-define: local r_v4_23 = 1
+    #29 version-define reads=[r_v26_2, r_v4_23]: local r_v2_18 = r_v26_2 == r_v4_23
+    #30 epoch-start: local r_v26_3 = allocUpvalue()
+    #31 effect-write reads=[r_v26_3, r_v2_18]: upvalueValues[r_v26_3] = r_v2_18
+    #32 epoch-start: local r_v29_1 = "tostring"
+    #33 epoch-start reads=[r_v29_1]: local r_v30_1 = _env[r_v29_1]
+    #34 epoch-start reads=[r_v8_4]: local r_v31_1 = upvalueValues[r_v8_4]
+    #35 epoch-start: local r_v32_1 = 10000
+    #36 epoch-start: local r_v33_1 = 0
+    #37 epoch-start reads=[r_v31_1, r_v33_1, r_v32_1]: local r_v34_1 = { r_v31_1(r_v33_1, r_v32_1) }
+    #38 version-define: local r_v2_19 = "gsub"
+    #39 epoch-mutate reads=[r_v30_1, r_v34_1]: r_v29_1 = r_v30_1(unpack(r_v34_1))
+    #40 version-define reads=[r_v16_1, r_v2_19]: local r_v2_20 = r_v16_1[r_v2_19]
+    #41 epoch-start: local r_v30_2 = ":"
+    #42 epoch-start reads=[r_v29_1, r_v30_2]: local r_v35_1 = r_v29_1 .. r_v30_2
+    #43 epoch-start: local r_v28_2 = ":"
+    #44 epoch-start reads=[r_v28_2, r_v35_1]: local r_v27_2 = r_v28_2 .. r_v35_1
+    #45 version-define: local r_v4_24 = ":(%d*):"
+    #46 version-define reads=[r_v2_20, r_v16_1, r_v4_24, r_v27_2]: local r_v2_21 = r_v2_20(r_v16_1, r_v4_24, r_v27_2)
+    #47 epoch-start: local r_v27_3 = allocUpvalue()
+    #48 effect-write reads=[r_v27_3, r_v2_21]: upvalueValues[r_v27_3] = r_v2_21
+    #49 epoch-start reads=[r_v8_4, r_v22_4, r_v11_3, r_v3_3, r_v1_1, r_v17_2, r_v26_3, r_v27_3, r_v23_4, r_v25_3, r_v24_3, r_v14_2]: local r_v35_2 = createClosure5(32, { r_v8_4, r_v22_4, r_v11_3, r_v3_3, r_v1_1, r_v17_2, r_v26_3, r_v27_3, r_v23_4, r_v25_3, r_v24_3, r_v14_2 })
+    #50 epoch-start: local r_v28_3 = "pcall"
+    #51 version-define reads=[r_v28_3]: local r_v4_25 = _env[r_v28_3]
+    #52 epoch-mutate reads=[r_v4_25, r_v35_2]: r_v28_3 = { r_v4_25(r_v35_2) }
+    #53 version-define reads=[r_v28_3]: local r_v2_22 = { unpack(r_v28_3) }
+    #54 epoch-mutate reads=[r_v2_22]: r_v28_3 = r_v2_22
+    #55 version-define reads=[r_v26_3]: local r_v2_23 = upvalueValues[r_v26_3]
+    #56 state-transition reads=[r_v2_23]: state = r_v2_23 and 11 or 12
+
+  STATE 10
+    predecessors: S8
+    successors: S13, S14
+    transition: r_v19_4 and 13 or 14
+    #1 epoch-start reads=[r_v1_1]: local r_v19_4 = upvalueValues[r_v1_1]
+    #2 state-transition reads=[r_v19_4]: state = r_v19_4 and 13 or 14
+    #3 epoch-start reads=[r_v19_4]: local r_v20_5 = r_v19_4
+
+  STATE 11
+    predecessors: S9
+    successors: S15, S16
+    transition: r_v35_3 and 15 or 16
+    #1 epoch-start reads=[r_v1_1]: local r_v35_3 = upvalueValues[r_v1_1]
+    #2 state-transition reads=[r_v35_3]: state = r_v35_3 and 15 or 16
+    #3 version-define reads=[r_v35_3]: local r_v4_26 = r_v35_3
+
+  STATE 12
+    predecessors: S9
+    successors: S17, S18
+    transition: r_v30_3 and 17 or 18
+    #1 epoch-start reads=[r_v1_1]: local r_v30_3 = upvalueValues[r_v1_1]
+    #2 state-transition reads=[r_v30_3]: state = r_v30_3 and 17 or 18
+    #3 epoch-mutate reads=[r_v30_3]: r_v35_2 = r_v30_3
+
+  STATE 13
+    predecessors: S10
+    successors: S14
+    transition: 14
+    #1 epoch-start reads=[r_v13_4, r_v12_3]: local r_v19_5 = r_v13_4 == r_v12_3
+    #2 epoch-mutate reads=[r_v19_5]: r_v20_5 = r_v19_5
+    #3 state-transition: state = 14
+
+  STATE 14
+    predecessors: S10, S13
+    successors: S19, S20
+    transition: r_v2_24 and 19 or 20
+    #1 effect-write reads=[r_v1_1, r_v20_5]: upvalueValues[r_v1_1] = r_v20_5
+    #2 version-define reads=[r_v1_1]: local r_v2_24 = upvalueValues[r_v1_1]
+    #3 state-transition reads=[r_v2_24]: state = r_v2_24 and 19 or 20
+
+  STATE 15
+    predecessors: S11
+    successors: S21, S22
+    transition: r_v29_2 and 21 or 22
+    #1 epoch-start: local r_v30_4 = state
+    #2 epoch-start: local r_v34_2 = 1
+    #3 epoch-start reads=[r_v28_3, r_v34_2]: local r_v31_2 = r_v28_3[r_v34_2]
+    #4 epoch-start: local r_v34_3 = false
+    #5 epoch-start reads=[r_v31_2, r_v34_3]: local r_v29_2 = r_v31_2 == r_v34_3
+    #6 state-transition reads=[r_v29_2]: state = r_v29_2 and 21 or 22
+    #7 epoch-mutate reads=[r_v29_2]: r_v35_2 = r_v29_2
+
+  STATE 16
+    predecessors: S11, S22
+    successors: S23
+    transition: 23
+    #1 effect-write reads=[r_v1_1]: upvalueValues[r_v1_1] = ReturnVal
+    #2 state-transition: state = 23
+
+  STATE 17
+    predecessors: S12
+    successors: S18
+    transition: 18
+    #1 epoch-start: local r_v29_3 = 1
+    #2 epoch-start reads=[r_v28_3, r_v29_3]: local r_v30_5 = r_v28_3[r_v29_3]
+    #3 epoch-mutate reads=[r_v30_5]: r_v35_2 = r_v30_5
+    #4 state-transition: state = 18
+
+  STATE 18
+    predecessors: S12, S17
+    successors: S23
+    transition: 23
+    #1 effect-write reads=[r_v1_1, r_v35_2]: upvalueValues[r_v1_1] = r_v35_2
+    #2 epoch-start reads=[r_v25_3]: local r_v34_4 = upvalueValues[r_v25_3]
+    #3 epoch-start: local r_v33_2 = 1
+    #4 epoch-start reads=[r_v34_4, r_v33_2]: local r_v31_3 = r_v34_4 + r_v33_2
+    #5 epoch-start reads=[r_v28_3, r_v31_3]: local r_v29_4 = r_v28_3[r_v31_3]
+    #6 epoch-start reads=[r_v13_4, r_v29_4]: local r_v30_6 = r_v13_4 + r_v29_4
+    #7 epoch-start: local r_v29_5 = 256
+    #8 version-define reads=[r_v30_6, r_v29_5]: local r_v2_25 = r_v30_6 % r_v29_5
+    #9 epoch-mutate reads=[r_v2_25]: r_v13_4 = r_v2_25
+    #10 epoch-start reads=[r_v24_3]: local r_v31_4 = upvalueValues[r_v24_3]
+    #11 epoch-start reads=[r_v12_3, r_v31_4]: local r_v29_6 = r_v12_3 + r_v31_4
+    #12 epoch-start: local r_v31_5 = 256
+    #13 epoch-start reads=[r_v29_6, r_v31_5]: local r_v30_7 = r_v29_6 % r_v31_5
+    #14 epoch-mutate reads=[r_v30_7]: r_v12_3 = r_v30_7
+    #15 state-transition: state = 23
+
+  STATE 19
+    predecessors: S14
+    successors: S24
+    transition: 24
+    #1 state-transition: state = 24
+
+  STATE 20
+    predecessors: S14
+    successors: S25
+    transition: 25
+    #1 version-define: local r_v2_26 = true
+    #2 state-transition: state = 25
+
+  STATE 21
+    predecessors: S15
+    successors: S22
+    transition: 22
+    #1 epoch-start: local r_v34_5 = 2
+    #2 epoch-start reads=[r_v28_3, r_v34_5]: local r_v31_6 = r_v28_3[r_v34_5]
+    #3 epoch-start reads=[r_v27_3]: local r_v34_6 = upvalueValues[r_v27_3]
+    #4 epoch-start reads=[r_v31_6, r_v34_6]: local r_v29_7 = r_v31_6 == r_v34_6
+    #5 epoch-mutate reads=[r_v29_7]: r_v35_2 = r_v29_7
+    #6 state-transition: state = 22
+
+  STATE 22
+    predecessors: S15, S21
+    successors: S16
+    transition: 16
+    #1 version-define reads=[r_v30_4]: local r_v2_27 = r_v30_4
+    #2 version-define reads=[r_v35_2]: local r_v4_27 = r_v35_2
+    #3 state-transition: state = 16
+
+  STATE 23
+    predecessors: S16, S18
+    successors: S8
+    transition: 8
+    #1 epoch-mutate reads=[r_v24_3]: r_v24_3 = releaseUpvalue(r_v24_3)
+    #2 epoch-mutate reads=[r_v26_3]: r_v26_3 = releaseUpvalue(r_v26_3)
+    #3 epoch-mutate reads=[r_v23_4]: r_v23_4 = releaseUpvalue(r_v23_4)
+    #4 epoch-mutate reads=[r_v25_3]: r_v25_3 = releaseUpvalue(r_v25_3)
+    #5 epoch-mutate reads=[r_v27_3]: r_v27_3 = releaseUpvalue(r_v27_3)
+    #6 epoch-mutate reads=[r_v22_4]: r_v22_4 = releaseUpvalue(r_v22_4)
+    #7 epoch-kill: r_v28_3 = nil
+    #8 state-transition: state = 8
+
+  STATE 24
+    predecessors: S19
+    successors: S26
+    transition: 26
+    #1 epoch-mutate reads=[r_v1_1]: r_v1_1 = releaseUpvalue(r_v1_1)
+    #2 epoch-mutate reads=[r_v11_3]: r_v11_3 = releaseUpvalue(r_v11_3)
+    #3 epoch-mutate reads=[r_v5_1]: r_v5_1 = releaseUpvalue(r_v5_1)
+    #4 epoch-mutate reads=[r_v14_2]: r_v14_2 = releaseUpvalue(r_v14_2)
+    #5 epoch-mutate reads=[r_v8_4]: r_v8_4 = releaseUpvalue(r_v8_4)
+    #6 epoch-mutate reads=[r_v17_2]: r_v17_2 = releaseUpvalue(r_v17_2)
+    #7 epoch-mutate reads=[r_v3_3]: r_v3_3 = releaseUpvalue(r_v3_3)
+    #8 epoch-start: local r_v3_4 = "setmetatable"
+    #9 epoch-start reads=[r_v3_4]: local r_v1_2 = _env[r_v3_4]
+    #10 epoch-mutate reads=[r_v6_1]: r_v6_1 = releaseUpvalue(r_v6_1)
+    #11 version-define: local r_v7_3 = nil
+    #12 epoch-start: local r_v7_4 = "err"
+    #13 epoch-start reads=[r_v7_4]: local r_v8_5 = _env[r_v7_4]
+    #14 epoch-start: local r_v6_2 = {}
+    #15 version-define: local r_v9_2 = nil
+    #16 epoch-start: local r_v9_3 = "__tostring"
+    #17 epoch-start reads=[r_v9_3, r_v8_5]: local r_v5_2 = { [r_v9_3] = r_v8_5 }
+    #18 epoch-mutate reads=[r_v1_2, r_v6_2, r_v5_2]: r_v3_4 = r_v1_2(r_v6_2, r_v5_2)
+    #19 epoch-start: local r_v5_3 = "math"
+    #20 epoch-start reads=[r_v5_3]: local r_v6_3 = _env[r_v5_3]
+    #21 epoch-start: local r_v5_4 = "random"
+    #22 epoch-start reads=[r_v6_3, r_v5_4]: local r_v1_3 = r_v6_3[r_v5_4]
+    #23 epoch-start: local r_v9_4 = 100
+    #24 epoch-start: local r_v5_5 = 1
+    #25 epoch-mutate reads=[r_v1_3, r_v5_5, r_v9_4]: r_v6_3 = r_v1_3(r_v5_5, r_v9_4)
+    #26 epoch-mutate reads=[r_v3_4]: r_v1_2 = r_v3_4
+    #27 effect-write reads=[r_v3_4, r_v6_3, r_v1_2]: r_v3_4[r_v6_3] = r_v1_2
+    #28 epoch-start: local r_v1_4 = createClosure3(44, {})
+    #29 epoch-mutate reads=[r_v1_4, r_v3_4]: r_v6_2 = r_v1_4(r_v3_4)
+    #30 epoch-start: local r_v6_4 = "valid"
+    #31 epoch-start reads=[r_v6_4]: local r_v1_5 = _env[r_v6_4]
+    #32 epoch-kill: r_v12_3 = nil
+    #33 epoch-kill: r_v15_3 = nil
+    #34 epoch-kill: r_v13_4 = nil
+    #35 epoch-kill: r_v16_1 = nil
+    #36 state-transition: state = 26
+
+  STATE 25 [STOP]
+    predecessors: S20
+    successors: STOP
+    transition: nil
+    #1 version-define reads=[r_v6_1]: local r_v2_28 = createClosure0(45, { r_v6_1 })
+    #2 epoch-start reads=[r_v2_28]: local r_v19_6 = { r_v2_28() }
+    #3 return-payload reads=[r_v19_6]: ReturnVal = { unpack(r_v19_6) }
+    #4 state-transition: state = nil
+
+  STATE 26
+    predecessors: S24, S27
+    successors: S27
+    transition: 27
+    #1 state-transition: state = 27
+
+  STATE 27
+    predecessors: S26
+    successors: S28, S26
+    transition: r_v1_6 and 28 or 26
+    #1 epoch-start: local r_v6_5 = "valid"
+    #2 epoch-start reads=[r_v6_5]: local r_v1_6 = _env[r_v6_5]
+    #3 state-transition reads=[r_v1_6]: state = r_v1_6 and 28 or 26
+
+  STATE 28 [STOP]
+    predecessors: S27
+    successors: STOP
+    transition: nil
+    #1 epoch-kill: r_v3_4 = nil
+    #2 return-payload: ReturnVal = {}
+    #3 state-transition: state = nil
+
+  STATE 29 [ENTRY, STOP]
+    predecessors: none
+    successors: STOP
+    transition: nil
+    #1 version-define: local r_v4_28 = "error"
+    #2 version-define reads=[r_v4_28]: local r_v2_29 = _env[r_v4_28]
+    #3 epoch-start: local r_v10_2 = "Tamper Detected!"
+    #4 version-define reads=[r_v2_29, r_v10_2]: local r_v4_29 = r_v2_29(r_v10_2)
+    #5 return-payload: ReturnVal = {}
+    #6 state-transition: state = nil
+
+  STATE 30 [ENTRY, STOP]
+    predecessors: none
+    successors: STOP
+    transition: nil
+    #1 version-define: local r_v2_30 = true
+    #2 effect-write reads=[r_v2_30]: upvalueValues[upvalues[1]] = r_v2_30
+    #3 return-payload: ReturnVal = {}
+    #4 state-transition: state = nil
+
+  STATE 31 [ENTRY, STOP]
+    predecessors: none
+    successors: STOP
+    transition: nil
+    #1 epoch-start: local r_v1_7 = "rLkPzM"
+    #2 epoch-start: local r_v3_5 = 1192387
+    #3 epoch-start reads=[r_v1_7, r_v3_5]: local r_v10_3 = r_v1_7 ^ r_v3_5
+    #4 version-define: local r_v4_30 = 7348123
+    #5 version-define reads=[r_v4_30, r_v10_3]: local r_v2_31 = r_v4_30 - r_v10_3
+    #6 epoch-mutate reads=[r_v2_31]: r_v10_3 = r_v2_31
+    #7 version-define: local r_v4_31 = "JwQnVe"
+    #8 version-define reads=[r_v4_31, r_v10_3]: local r_v2_32 = r_v4_31 / r_v10_3
+    #9 return-payload reads=[r_v2_32]: ReturnVal = { r_v2_32 }
+    #10 state-transition: state = nil
+
+  STATE 32 [ENTRY]
+    predecessors: none
+    successors: S33, S34
+    transition: r_v10_4 and 33 or 34
+    #1 epoch-start: local r_v1_8 = upvalueValues[upvalues[1]]
+    #2 epoch-start: local r_v5_6 = 2
+    #3 epoch-start: local r_v6_6 = 1
+    #4 epoch-start reads=[r_v1_8, r_v6_6, r_v5_6]: local r_v3_6 = r_v1_8(r_v6_6, r_v5_6)
+    #5 epoch-start: local r_v1_9 = 1
+    #6 epoch-start reads=[r_v3_6, r_v1_9]: local r_v10_4 = r_v3_6 == r_v1_9
+    #7 state-transition reads=[r_v10_4]: state = r_v10_4 and 33 or 34
+    #8 version-define reads=[r_v10_4]: local r_v4_32 = r_v10_4
+
+  STATE 33
+    predecessors: S32, S34
+    successors: S35, S36
+    transition: ReturnVal and 35 or 36
+    #1 state-transition: state = ReturnVal and 35 or 36
+
+  STATE 34
+    predecessors: S32
+    successors: S33
+    transition: 33
+    #1 epoch-start: local r_v1_10 = upvalueValues[upvalues[2]]
+    #2 epoch-start: local r_v3_7 = upvalueValues[upvalues[3]]
+    #3 epoch-start reads=[r_v1_10, r_v3_7]: local r_v10_5 = r_v1_10 == r_v3_7
+    #4 version-define reads=[r_v10_5]: local r_v4_33 = r_v10_5
+    #5 state-transition: state = 33
+
+  STATE 35
+    predecessors: S33
+    successors: S37, S38
+    transition: r_v1_12 and 37 or 38
+    #1 epoch-start: local r_v14_4 = createClosure5(49, {})
+    #2 version-define: local r_v4_34 = "tonumber"
+    #3 version-define reads=[r_v4_34]: local r_v2_33 = _env[r_v4_34]
+    #4 epoch-start: local r_v10_6 = upvalueValues[upvalues[4]]
+    #5 epoch-start: local r_v6_7 = "tostring"
+    #6 epoch-start reads=[r_v6_7]: local r_v3_8 = _env[r_v6_7]
+    #7 epoch-start: local r_v7_5 = "pcall"
+    #8 epoch-start reads=[r_v7_5]: local r_v8_6 = _env[r_v7_5]
+    #9 epoch-mutate reads=[r_v8_6, r_v14_4]: r_v7_5 = { r_v8_6(r_v14_4) }
+    #10 epoch-start reads=[r_v7_5]: local r_v9_5 = { unpack(r_v7_5) }
+    #11 epoch-start: local r_v8_7 = 2
+    #12 epoch-start reads=[r_v9_5, r_v8_7]: local r_v5_7 = r_v9_5[r_v8_7]
+    #13 epoch-mutate reads=[r_v3_8, r_v5_7]: r_v6_7 = r_v3_8(r_v5_7)
+    #14 epoch-start: local r_v3_9 = ":(%d*):"
+    #15 epoch-start reads=[r_v10_6, r_v6_7, r_v3_9]: local r_v1_11 = r_v10_6(r_v6_7, r_v3_9)
+    #16 epoch-mutate reads=[r_v1_11]: r_v10_6 = { r_v1_11() }
+    #17 version-define reads=[r_v2_33, r_v10_6]: local r_v4_35 = r_v2_33(unpack(r_v10_6))
+    #18 epoch-mutate reads=[r_v4_35]: r_v10_6 = r_v4_35
+    #19 epoch-start: local r_v1_12 = upvalueValues[upvalues[5]]
+    #20 state-transition reads=[r_v1_12]: state = r_v1_12 and 37 or 38
+    #21 version-define reads=[r_v1_12]: local r_v4_36 = r_v1_12
+
+  STATE 36
+    predecessors: S33, S38
+    successors: S39, S40
+    transition: r_v2_34 and 39 or 40
+    #1 version-define: local r_v2_34 = upvalueValues[upvalues[7]]
+    #2 state-transition reads=[r_v2_34]: state = r_v2_34 and 39 or 40
+
+  STATE 37
+    predecessors: S35
+    successors: S38
+    transition: 38
+    #1 epoch-start: local r_v3_10 = upvalueValues[upvalues[6]]
+    #2 epoch-mutate reads=[r_v3_10, r_v10_6]: r_v1_11 = r_v3_10 == r_v10_6
+    #3 version-define reads=[r_v1_11]: local r_v4_37 = r_v1_11
+    #4 state-transition: state = 38
+
+  STATE 38
+    predecessors: S35, S37
+    successors: S36
+    transition: 36
+    #1 effect-write: upvalueValues[upvalues[5]] = ReturnVal
+    #2 epoch-kill: r_v10_6 = nil
+    #3 state-transition: state = 36
+
+  STATE 39
+    predecessors: S36
+    successors: S40
+    transition: 40
+    #1 epoch-start: local r_v10_7 = "error"
+    #2 version-define reads=[r_v10_7]: local r_v2_35 = _env[r_v10_7]
+    #3 epoch-start: local r_v1_13 = upvalueValues[upvalues[8]]
+    #4 epoch-start: local r_v3_11 = 0
+    #5 epoch-mutate reads=[r_v2_35, r_v1_13, r_v3_11]: r_v10_7 = r_v2_35(r_v1_13, r_v3_11)
+    #6 state-transition: state = 40
+
+  STATE 40
+    predecessors: S36, S39
+    successors: S41
+    transition: 41
+    #1 version-define: local r_v2_36 = {}
+    #2 epoch-start reads=[r_v2_36]: local r_v10_8 = r_v2_36
+    #3 epoch-start: local r_v3_12 = upvalueValues[upvalues[9]]
+    #4 epoch-start reads=[r_v3_12]: local r_v6_8 = r_v3_12
+    #5 epoch-start: local r_v3_13 = 1
+    #6 epoch-start reads=[r_v3_13]: local r_v5_8 = r_v3_13
+    #7 epoch-start: local r_v3_14 = 0
+    #8 epoch-start reads=[r_v5_8, r_v3_14]: local r_v9_6 = r_v5_8 < r_v3_14
+    #9 epoch-start: local r_v1_14 = 1
+    #10 epoch-mutate reads=[r_v1_14, r_v5_8]: r_v3_13 = r_v1_14 - r_v5_8
+    #11 state-transition: state = 41
+
+  STATE 41
+    predecessors: S40, S42
+    successors: S42, S43
+    transition: r_v2_37 or r_v1_15
+    #1 epoch-start reads=[r_v9_6]: local r_v8_8 = not r_v9_6
+    #2 epoch-mutate reads=[r_v3_13, r_v5_8]: r_v3_13 = r_v3_13 + r_v5_8
+    #3 epoch-mutate reads=[r_v3_13, r_v6_8]: r_v1_14 = r_v3_13 <= r_v6_8
+    #4 epoch-mutate reads=[r_v8_8, r_v1_14]: r_v1_14 = r_v8_8 and r_v1_14
+    #5 epoch-start reads=[r_v3_13, r_v6_8]: local r_v8_9 = r_v3_13 >= r_v6_8
+    #6 epoch-mutate reads=[r_v9_6, r_v8_9]: r_v8_9 = r_v9_6 and r_v8_9
+    #7 epoch-mutate reads=[r_v8_9, r_v1_14]: r_v1_14 = r_v8_9 or r_v1_14
+    #8 epoch-start: local r_v8_10 = 42
+    #9 version-define reads=[r_v1_14, r_v8_10]: local r_v2_37 = r_v1_14 and r_v8_10
+    #10 epoch-start: local r_v1_15 = 43
+    #11 state-transition reads=[r_v2_37, r_v1_15]: state = r_v2_37 or r_v1_15
+
+  STATE 42
+    predecessors: S41
+    successors: S41
+    transition: 41
+    #1 version-define: local r_v2_38 = upvalueValues[upvalues[1]]
+    #2 epoch-start: local r_v7_6 = 0
+    #3 epoch-start: local r_v14_5 = 255
+    #4 epoch-start reads=[r_v2_38, r_v7_6, r_v14_5]: local r_v8_11 = r_v2_38(r_v7_6, r_v14_5)
+    #5 epoch-mutate reads=[r_v3_13]: r_v1_14 = r_v3_13
+    #6 effect-write reads=[r_v10_8, r_v1_14, r_v8_11]: r_v10_8[r_v1_14] = r_v8_11
+    #7 epoch-kill: r_v1_14 = nil
+    #8 state-transition: state = 41
+
+  STATE 43 [STOP]
+    predecessors: S41
+    successors: STOP
+    transition: nil
+    #1 version-define: local r_v2_39 = upvalueValues[upvalues[10]]
+    #2 epoch-start: local r_v1_16 = upvalueValues[upvalues[11]]
+    #3 effect-write reads=[r_v10_8, r_v2_39, r_v1_16]: r_v10_8[r_v2_39] = r_v1_16
+    #4 version-define: local r_v2_40 = upvalueValues[upvalues[12]]
+    #5 epoch-start reads=[r_v2_40, r_v10_8]: local r_v1_17 = { r_v2_40(r_v10_8) }
+    #6 return-payload reads=[r_v1_17]: ReturnVal = { unpack(r_v1_17) }
+    #7 state-transition: state = nil
+
+  STATE 44 [ENTRY, STOP]
+    predecessors: none
+    successors: STOP
+    transition: nil
+    #1 return-payload: ReturnVal = {}
+    #2 state-transition: state = nil
+
+  STATE 45 [ENTRY]
+    predecessors: none
+    successors: S46
+    transition: 46
+    #1 state-transition: state = 46
+
+  STATE 46
+    predecessors: S45, S47
+    successors: S47, S48
+    transition: r_v2_41 and 47 or 48
+    #1 version-define: local r_v2_41 = true
+    #2 state-transition reads=[r_v2_41]: state = r_v2_41 and 47 or 48
+
+  STATE 47
+    predecessors: S46
+    successors: S46
+    transition: 46
+    #1 version-define: local r_v4_38 = "l2"
+    #2 version-define reads=[r_v4_38]: local r_v2_42 = _env[r_v4_38]
+    #3 epoch-start: local r_v10_9 = "l1"
+    #4 version-define reads=[r_v10_9]: local r_v4_39 = _env[r_v10_9]
+    #5 epoch-start: local r_v10_10 = "l1"
+    #6 effect-write reads=[r_v10_10, r_v2_42]: _env[r_v10_10] = r_v2_42
+    #7 epoch-start: local r_v10_11 = "l2"
+    #8 effect-write reads=[r_v10_11, r_v4_39]: _env[r_v10_11] = r_v4_39
+    #9 epoch-start: local r_v10_12 = upvalueValues[upvalues[1]]
+    #10 epoch-start reads=[r_v10_12]: local r_v1_18 = r_v10_12()
+    #11 state-transition: state = 46
+
+  STATE 48 [STOP]
+    predecessors: S46
+    successors: STOP
+    transition: nil
+    #1 return-payload: ReturnVal = {}
+    #2 state-transition: state = nil
+
+  STATE 49 [ENTRY, STOP]
+    predecessors: none
+    successors: STOP
+    transition: nil
+    #1 epoch-start: local r_v3_15 = 831271
+    #2 epoch-start: local r_v1_19 = "tYxBqR"
+    #3 epoch-start reads=[r_v1_19, r_v3_15]: local r_v10_13 = r_v1_19 ^ r_v3_15
+    #4 version-define: local r_v4_40 = 4920137
+    #5 version-define reads=[r_v4_40, r_v10_13]: local r_v2_43 = r_v4_40 - r_v10_13
+    #6 epoch-mutate reads=[r_v2_43]: r_v10_13 = r_v2_43
+    #7 version-define: local r_v4_41 = "HdMvKs"
+    #8 version-define reads=[r_v4_41, r_v10_13]: local r_v2_44 = r_v4_41 / r_v10_13
+    #9 return-payload reads=[r_v2_44]: ReturnVal = { r_v2_44 }
+    #10 state-transition: state = nil

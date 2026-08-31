@@ -159,12 +159,12 @@ const liveInitializationTemporary = recoverBetaUpvalues({
 assert.equal(liveInitializationTemporary.safe, true);
 const liveCell = liveInitializationTemporary.cells[0];
 assert.equal(liveCell.bindingMode, "cell-register-binding");
-assert.match(liveCell.bindingName, /^u_v\d+$/);
+assert.equal(liveCell.bindingName, "r_v1_1");
 const liveRoot = liveInitializationTemporary.graph.states.find(state => state.id === 1).operations;
 const liveChild = liveInitializationTemporary.graph.states.find(state => state.id === 2).operations;
-assert(liveRoot.some(op => op.emittedText === `local ${liveCell.bindingName} = r_v2_1`));
+assert(liveRoot.some(op => op.emittedText === "local r_v1_1 = r_v2_1"));
 assert(liveRoot.some(op => op.rhs === "observe(r_v2_1)"));
-assert(liveChild.some(op => op.emittedText === `${liveCell.bindingName} = 9`));
+assert(liveChild.some(op => op.emittedText === "r_v1_1 = 9"));
 
 const captureBeforeInitialization = recoverBetaUpvalues({
     applied: true,
@@ -200,11 +200,9 @@ const captureBeforeInitialization = recoverBetaUpvalues({
 assert.equal(captureBeforeInitialization.safe, true);
 assert.equal(captureBeforeInitialization.applied, true);
 const captureBeforeRoot = captureBeforeInitialization.graph.states.find(state => state.id === 1).operations;
-const captureBeforeCell = captureBeforeInitialization.cells[0];
-assert.equal(captureBeforeCell.bindingMode, "hoisted-cell-binding");
-assert.match(captureBeforeCell.bindingName, /^u_v\d+$/);
-assert.equal(captureBeforeRoot[0].emittedText, `local ${captureBeforeCell.bindingName}`);
-assert(captureBeforeRoot.some(op => op.emittedText === `${captureBeforeCell.bindingName} = args[1]`));
+assert.equal(captureBeforeInitialization.cells[0].bindingMode, "hoisted-cell-binding");
+assert.equal(captureBeforeRoot[0].emittedText, "local r_v1_1");
+assert(captureBeforeRoot.some(op => op.emittedText === "r_v1_1 = args[1]"));
 assert(captureBeforeRoot.some(op => op.rhs === "createClosure2(2, {})"));
 
 
@@ -238,12 +236,10 @@ const dominatedMultiStateCell = recoverBetaUpvalues({
 });
 assert.equal(dominatedMultiStateCell.safe, true);
 assert.equal(dominatedMultiStateCell.applied, true);
-const dominatedCell = dominatedMultiStateCell.cells[0];
-assert.equal(dominatedCell.bindingMode, "hoisted-cell-binding");
-assert.match(dominatedCell.bindingName, /^u_v\d+$/);
+assert.equal(dominatedMultiStateCell.cells[0].bindingMode, "hoisted-cell-binding");
 const dominatedBody = dominatedMultiStateCell.graph.states.find(state => state.id === 3).operations;
-assert(dominatedBody.some(op => op.emittedText === `local ${dominatedCell.bindingName}`));
-assert(dominatedBody.some(op => op.emittedText === `${dominatedCell.bindingName} = current`));
+assert(dominatedBody.some(op => op.emittedText === "local cell"));
+assert(dominatedBody.some(op => op.emittedText === "cell = current"));
 assert(dominatedBody.some(op => op.rhs === "createClosure2(5, {})"));
 assert(!dominatedBody.some(op => String(op.emittedText || "").includes("releaseUpvalue")));
 
@@ -341,12 +337,10 @@ assert.equal(compoundCapturedWrite.applied, true);
 assert.equal(compoundCapturedWrite.stats.writeRewriteCount, 1);
 const compoundCapturedRoot = compoundCapturedWrite.graph.states.find(state => state.id === 1).operations;
 const compoundCapturedChild = compoundCapturedWrite.graph.states.find(state => state.id === 2).operations;
-const compoundBinding = compoundCapturedWrite.cells[0].bindingName;
-assert.match(compoundBinding, /^u_v\d+$/);
-assert(compoundCapturedRoot.some(op => op.emittedText === `${compoundBinding} += delta` && op.reads.includes(compoundBinding)));
+assert(compoundCapturedRoot.some(op => op.emittedText === "cell += delta" && op.reads.includes("cell")));
 assert(compoundCapturedRoot.some(op => op.rhs === "createClosure2(2, {})"));
 assert(!compoundCapturedRoot.some(op => String(op.emittedText || "").includes("releaseUpvalue")));
-assert(compoundCapturedChild.some(op => op.emittedTarget === "captured" && op.rhs === compoundBinding));
+assert(compoundCapturedChild.some(op => op.emittedTarget === "captured" && op.rhs === "cell"));
 
 const effectWriteCapturedRead = recoverBetaUpvalues({
     applied: true,
@@ -420,63 +414,5 @@ assert(overflowReuseRoot.some(op => op.rhs === "createClosure2(3, {})"));
 assert(overflowReuseChildA.some(op => op.emittedTarget === "capturedA" && op.rhs === "value"));
 assert(overflowReuseChildB.some(op => op.emittedTarget === "capturedB" && op.rhs === "other"));
 assert(!overflowReuseRoot.some(op => /allocUpvalue|releaseUpvalue|upvalueValues\[/.test(String(op.emittedText || ""))));
-
-
-const residualPrivateRelease = recoverBetaUpvalues({
-    applied: true,
-    graph: {
-        cfgComplete: true,
-        entries: [1, 2],
-        states: [
-            { id: 1, predecessors: [], successors: [], operations: [
-                { kind: "epoch-start", emittedTarget: "cell", emittedText: "local cell = allocUpvalue()", rhs: "allocUpvalue()", reads: [] },
-                { kind: "version-define", emittedTarget: "value", emittedText: "local value = 5", rhs: "5", reads: [] },
-                { kind: "effect-write", emittedText: "upvalueValues[cell] = value", reads: ["cell", "value"] },
-                { kind: "version-define", emittedTarget: "closure", emittedText: "local closure = createClosure2(2, { cell })", rhs: "createClosure2(2, { cell })", reads: ["cell"] },
-                { kind: "epoch-mutate", emittedTarget: "cellReleased", emittedText: "local cellReleased = releaseUpvalue(cell)", rhs: "releaseUpvalue(cell)", reads: ["cell"] },
-                { kind: "epoch-start", emittedTarget: "privateId", emittedText: "local privateId = 6", rhs: "6", reads: [] },
-                { kind: "epoch-start", emittedTarget: "privateRelease", emittedText: "local privateRelease = releaseUpvalue(privateId)", rhs: "releaseUpvalue(privateId)", reads: ["privateId"] },
-                ...terminalOps(),
-            ] },
-            { id: 2, predecessors: [], successors: [], operations: [
-                { kind: "version-define", emittedTarget: "captured", emittedText: "local captured = upvalueValues[upvalues[1]]", rhs: "upvalueValues[upvalues[1]]", reads: [] },
-                ...terminalOps(),
-            ] },
-        ],
-    },
-});
-assert.equal(residualPrivateRelease.safe, true);
-assert.equal(residualPrivateRelease.applied, true);
-assert.equal(residualPrivateRelease.stats.releaseRemovalCount, 2);
-assert(!residualPrivateRelease.graph.states.some(state =>
-    state.operations.some(op => String(op.emittedText || "").includes("releaseUpvalue("))
-));
-
-const liveResidualPrivateRelease = recoverBetaUpvalues({
-    applied: true,
-    graph: {
-        cfgComplete: true,
-        entries: [1, 2],
-        states: [
-            { id: 1, predecessors: [], successors: [], operations: [
-                { kind: "epoch-start", emittedTarget: "cell", emittedText: "local cell = allocUpvalue()", rhs: "allocUpvalue()", reads: [] },
-                { kind: "version-define", emittedTarget: "value", emittedText: "local value = 5", rhs: "5", reads: [] },
-                { kind: "effect-write", emittedText: "upvalueValues[cell] = value", reads: ["cell", "value"] },
-                { kind: "version-define", emittedTarget: "closure", emittedText: "local closure = createClosure2(2, { cell })", rhs: "createClosure2(2, { cell })", reads: ["cell"] },
-                { kind: "epoch-mutate", emittedTarget: "cellReleased", emittedText: "local cellReleased = releaseUpvalue(cell)", rhs: "releaseUpvalue(cell)", reads: ["cell"] },
-                { kind: "epoch-start", emittedTarget: "privateId", emittedText: "local privateId = 6", rhs: "6", reads: [] },
-                { kind: "epoch-start", emittedTarget: "privateRelease", emittedText: "local privateRelease = releaseUpvalue(privateId)", rhs: "releaseUpvalue(privateId)", reads: ["privateId"] },
-                { kind: "statement", emittedText: "consume(privateRelease)", reads: ["privateRelease"] },
-                ...terminalOps(),
-            ] },
-            { id: 2, predecessors: [], successors: [], operations: [
-                { kind: "version-define", emittedTarget: "captured", emittedText: "local captured = upvalueValues[upvalues[1]]", rhs: "upvalueValues[upvalues[1]]", reads: [] },
-                ...terminalOps(),
-            ] },
-        ],
-    },
-});
-assert.equal(liveResidualPrivateRelease.applied, false);
-assert(liveResidualPrivateRelease.reason.includes("retains unresolved VM upvalue machinery"));
 
 console.log("beta upvalue recovery tests passed");

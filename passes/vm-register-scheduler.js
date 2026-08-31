@@ -52,17 +52,14 @@ const WRITES_CACHE = new WeakMap();
 function cachedSet(cache, statement, overflowName, compute) {
     if (!statement || typeof statement !== "object") return new Set();
     const key = overflowName || "";
-    let entry = cache.get(statement);
-    if (!entry) {
-        const value = compute();
-        cache.set(statement, { key, value, extra: null });
-        return value;
+    let byContext = cache.get(statement);
+    if (!byContext) {
+        byContext = new Map();
+        cache.set(statement, byContext);
     }
-    if (entry.key === key) return entry.value;
-    if (entry.extra?.has(key)) return entry.extra.get(key);
+    if (byContext.has(key)) return byContext.get(key);
     const value = compute();
-    if (!entry.extra) entry.extra = new Map();
-    entry.extra.set(key, value);
+    byContext.set(key, value);
     return value;
 }
 
@@ -151,82 +148,16 @@ function getSingleWrittenRegister(statement, overflowName = null) {
     return registerIdentity(variables[0], overflowName);
 }
 
-function appendScheduleIndex(map, name, statement) {
-    let list = map.get(name);
-    if (!list) map.set(name, list = []);
-    list.push(statement);
-}
-
-function buildScheduleIndex(statements, overflowName = null) {
-    const indexByStatement = new Map();
-    const readersByName = new Map();
-    const writersByName = new Map();
-    for (let index = 0; index < statements.length; index++) {
-        const statement = statements[index];
-        indexByStatement.set(statement, index);
-        for (const name of statementReads(statement, overflowName)) appendScheduleIndex(readersByName, name, statement);
-        for (const name of statementWrites(statement, overflowName)) appendScheduleIndex(writersByName, name, statement);
-    }
-    return { indexByStatement, readersByName, writersByName };
-}
-
-function refreshScheduleIndex(scheduleIndex, statements, fromIndex, toIndex) {
-    if (!scheduleIndex) return;
-    const start = Math.max(0, Math.min(fromIndex, toIndex));
-    const end = Math.min(statements.length - 1, Math.max(fromIndex, toIndex));
-    for (let index = start; index <= end; index++) {
-        scheduleIndex.indexByStatement.set(statements[index], index);
-    }
-}
-
-function moveScheduledStatement(statements, fromIndex, toIndex, scheduleIndex = null) {
-    if (fromIndex === toIndex) return;
-    const [statement] = statements.splice(fromIndex, 1);
-    statements.splice(toIndex, 0, statement);
-    refreshScheduleIndex(scheduleIndex, statements, fromIndex, toIndex);
-}
-
-function indexedNearestAfter(list, afterIndex, indexByStatement) {
-    let bestStatement = null;
-    let bestIndex = Number.MAX_SAFE_INTEGER;
-    for (const statement of list || []) {
-        const index = indexByStatement.get(statement);
-        if (index > afterIndex && index < bestIndex) {
-            bestIndex = index;
-            bestStatement = statement;
-        }
-    }
-    return bestStatement ? { statement: bestStatement, index: bestIndex } : null;
-}
-
-function findNextRegisterTouch(statements, index, name, overflowName = null, scheduleIndex = null) {
-    if (scheduleIndex) {
-        const read = indexedNearestAfter(scheduleIndex.readersByName.get(name), index, scheduleIndex.indexByStatement);
-        const write = indexedNearestAfter(scheduleIndex.writersByName.get(name), index, scheduleIndex.indexByStatement);
-        if (!read) return write ? { index: write.index, kind: "write" } : null;
-        if (!write || read.index <= write.index) return { index: read.index, kind: "read" };
-        return { index: write.index, kind: "write" };
-    }
+function findNextRegisterTouch(statements, index, name, overflowName = null) {
     for (let i = index + 1; i < statements.length; i++) {
-        if (statementReads(statements[i], overflowName).has(name)) return { index: i, kind: "read" };
-        if (statementWrites(statements[i], overflowName).has(name)) return { index: i, kind: "write" };
+        if (statementReads(statements[i], overflowName).has(name)) {
+            return { index: i, kind: "read" };
+        }
+        if (statementWrites(statements[i], overflowName).has(name)) {
+            return { index: i, kind: "write" };
+        }
     }
     return null;
-}
-
-function findPreviousRegisterWrite(statements, index, name, overflowName = null, scheduleIndex = null) {
-    if (scheduleIndex) {
-        let bestIndex = -1;
-        for (const statement of scheduleIndex.writersByName.get(name) || []) {
-            const candidateIndex = scheduleIndex.indexByStatement.get(statement);
-            if (candidateIndex < index && candidateIndex > bestIndex) bestIndex = candidateIndex;
-        }
-        return bestIndex;
-    }
-    for (let i = index - 1; i >= 0; i--) {
-        if (statementWrites(statements[i], overflowName).has(name)) return i;
-    }
-    return -1;
 }
 
 function isPrimitiveSourceAssignment(statement, stateName, overflowName = null) {
@@ -363,26 +294,29 @@ function canonicalizeTerminalReturnPayload(statements, stateName, returnName, ov
     return { swaps: stopIndex - payloadIndex - 1, moved: 1 };
 }
 
-function sinkPureAssignmentsTowardNextTouch(statements, stateName, overflowName = null, scheduleIndex = null) {
+function sinkPureAssignmentsTowardNextTouch(statements, stateName, overflowName = null) {
     const originalOrder = [...statements];
     let swaps = 0;
     let moved = 0;
 
     for (const producer of originalOrder) {
-        const fromIndex = scheduleIndex
-            ? (scheduleIndex.indexByStatement.get(producer) ?? -1)
-            : statements.indexOf(producer);
+        const fromIndex = statements.indexOf(producer);
+        // Literal/nil loads have no producer of their own, so place them near
+        // the next read or overwrite of the destination register. Identifier
+        // copies are handled in the opposite direction below so they stay near
+        // the value that produced their RHS.
         if (fromIndex < 0 || !isPrimitiveSourceAssignment(producer, stateName, overflowName)) continue;
         const name = getSingleWrittenRegister(producer, overflowName);
         if (!name) continue;
 
-        const touch = findNextRegisterTouch(statements, fromIndex, name, overflowName, scheduleIndex);
+        const touch = findNextRegisterTouch(statements, fromIndex, name, overflowName);
         if (!touch || touch.index <= fromIndex + 1) continue;
+
         if (!canMoveDelayableRightAcrossRange(statements, fromIndex, touch.index - 1, stateName, overflowName)) continue;
 
-        const targetIndex = touch.index - 1;
-        const distance = targetIndex - fromIndex;
-        moveScheduledStatement(statements, fromIndex, targetIndex, scheduleIndex);
+        const distance = touch.index - fromIndex - 1;
+        statements.splice(fromIndex, 1);
+        statements.splice(touch.index - 1, 0, producer);
         swaps += distance;
         moved++;
     }
@@ -390,22 +324,26 @@ function sinkPureAssignmentsTowardNextTouch(statements, stateName, overflowName 
     return { swaps, moved };
 }
 
-function pullIdentifierCopiesTowardProducer(statements, stateName, overflowName = null, scheduleIndex = null) {
+function pullIdentifierCopiesTowardProducer(statements, stateName, overflowName = null) {
     const originalOrder = [...statements];
     let swaps = 0;
     let moved = 0;
 
     for (const consumer of originalOrder) {
-        let currentIndex = scheduleIndex
-            ? (scheduleIndex.indexByStatement.get(consumer) ?? -1)
-            : statements.indexOf(consumer);
+        let currentIndex = statements.indexOf(consumer);
         if (currentIndex <= 0 || !isDelayableAssignment(consumer, stateName, overflowName)) continue;
         const init = consumer.init || [];
         if (init.length !== 1) continue;
 
         const producerName = registerIdentity(init[0], overflowName);
         if (!producerName) continue;
-        const producerIndex = findPreviousRegisterWrite(statements, currentIndex, producerName, overflowName, scheduleIndex);
+        let producerIndex = -1;
+        for (let i = currentIndex - 1; i >= 0; i--) {
+            if (statementWrites(statements[i], overflowName).has(producerName)) {
+                producerIndex = i;
+                break;
+            }
+        }
         if (producerIndex < 0 || currentIndex === producerIndex + 1) continue;
 
         let didMove = false;
@@ -414,10 +352,6 @@ function pullIdentifierCopiesTowardProducer(statements, stateName, overflowName 
             if (hasRegisterHazard(previous, consumer, overflowName)) break;
             statements[currentIndex - 1] = consumer;
             statements[currentIndex] = previous;
-            if (scheduleIndex) {
-                scheduleIndex.indexByStatement.set(consumer, currentIndex - 1);
-                scheduleIndex.indexByStatement.set(previous, currentIndex);
-            }
             currentIndex--;
             swaps++;
             didMove = true;
@@ -428,24 +362,44 @@ function pullIdentifierCopiesTowardProducer(statements, stateName, overflowName 
     return { swaps, moved };
 }
 
-function sinkUnreadPureAssignmentsToStateTail(statements, stateName, overflowName = null, scheduleIndex = null) {
+function sinkUnreadPureAssignmentsToStateTail(statements, stateName, overflowName = null) {
     const originalOrder = [...statements];
     let swaps = 0;
     let moved = 0;
 
     for (const candidate of originalOrder) {
-        const fromIndex = scheduleIndex
-            ? (scheduleIndex.indexByStatement.get(candidate) ?? -1)
-            : statements.indexOf(candidate);
+        let fromIndex = statements.indexOf(candidate);
         if (fromIndex < 0 || !isDelayableAssignment(candidate, stateName, overflowName)) continue;
         const name = getSingleWrittenRegister(candidate, overflowName);
         if (!name) continue;
 
-        const touch = findNextRegisterTouch(statements, fromIndex, name, overflowName, scheduleIndex);
-        if (touch?.kind === "read") continue;
-        const nextWrite = touch?.kind === "write" ? touch.index : -1;
+        let nextRead = -1;
+        let nextWrite = -1;
+        for (let i = fromIndex + 1; i < statements.length; i++) {
+            if (statementReads(statements[i], overflowName).has(name)) {
+                nextRead = i;
+                break;
+            }
+            if (statementWrites(statements[i], overflowName).has(name)) {
+                nextWrite = i;
+                break;
+            }
+        }
+
+        // A read before any overwrite means this definition is active in the
+        // current state and should stay near that use.
+        if (nextRead >= 0) continue;
+
+        // If the value is overwritten without being read, keep both writes but
+        // group them. If the value is not touched again in this state, sink it
+        // to the actual end of the dispatcher leaf. Prometheus may write the
+        // next POS/state value early and still execute later statements, so a
+        // state assignment is not a textual end-of-block boundary.
         let targetIndex = nextWrite >= 0 ? nextWrite : statements.length;
 
+        // After Step 3, a proven Prometheus stop is canonicalized to a final
+        // state = nil. Keep that structural stop as the last statement and sink
+        // unread pure writes immediately before it, not past it.
         if (nextWrite < 0 && statements.length > 0) {
             const tail = statements[statements.length - 1];
             const tailVars = tail?.type === "AssignmentStatement" ? (tail.variables || []) : [];
@@ -457,11 +411,12 @@ function sinkUnreadPureAssignmentsToStateTail(statements, stateName, overflowNam
         }
 
         if (targetIndex <= fromIndex + 1) continue;
+
         if (!canMoveDelayableRightAcrossRange(statements, fromIndex, targetIndex - 1, stateName, overflowName)) continue;
 
-        const finalIndex = targetIndex - 1;
-        const distance = finalIndex - fromIndex;
-        moveScheduledStatement(statements, fromIndex, finalIndex, scheduleIndex);
+        const distance = targetIndex - fromIndex - 1;
+        statements.splice(fromIndex, 1);
+        statements.splice(targetIndex - 1, 0, candidate);
         swaps += distance;
         moved++;
     }
@@ -469,13 +424,19 @@ function sinkUnreadPureAssignmentsToStateTail(statements, stateName, overflowNam
     return { swaps, moved };
 }
 
-function findDirectProducerStatements(statements, index, overflowName = null, scheduleIndex = null) {
+function findDirectProducerStatements(statements, index, overflowName = null) {
     const reads = statementReads(statements[index], overflowName);
     const producers = new Set();
+
     for (const name of reads) {
-        const producerIndex = findPreviousRegisterWrite(statements, index, name, overflowName, scheduleIndex);
-        if (producerIndex >= 0) producers.add(statements[producerIndex]);
+        for (let i = index - 1; i >= 0; i--) {
+            if (statementWrites(statements[i], overflowName).has(name)) {
+                producers.add(statements[i]);
+                break;
+            }
+        }
     }
+
     return producers;
 }
 
@@ -491,16 +452,16 @@ function canMoveDelayableRightAcrossRange(statements, fromIndex, throughIndex, s
     return true;
 }
 
-function compactConsumerGap(statements, currentIndex, stateName, overflowName = null, scheduleIndex = null) {
-    const producers = findDirectProducerStatements(statements, currentIndex, overflowName, scheduleIndex);
+function compactConsumerGap(statements, currentIndex, stateName, overflowName = null) {
+    const current = statements[currentIndex];
+    const producers = findDirectProducerStatements(statements, currentIndex, overflowName);
     if (producers.size === 0) return { currentIndex, swaps: 0 };
 
     let earliestProducerIndex = currentIndex;
-    for (const producer of producers) {
-        const index = scheduleIndex
-            ? (scheduleIndex.indexByStatement.get(producer) ?? -1)
-            : statements.indexOf(producer);
-        if (index >= 0) earliestProducerIndex = Math.min(earliestProducerIndex, index);
+    for (let i = 0; i < currentIndex; i++) {
+        if (producers.has(statements[i])) {
+            earliestProducerIndex = Math.min(earliestProducerIndex, i);
+        }
     }
 
     let swaps = 0;
@@ -511,14 +472,16 @@ function compactConsumerGap(statements, currentIndex, stateName, overflowName = 
             index++;
             continue;
         }
+
         if (!canMoveDelayableRightAcrossRange(statements, index, currentIndex, stateName, overflowName)) {
             index++;
             continue;
         }
 
         const distance = currentIndex - index;
-        moveScheduledStatement(statements, index, currentIndex, scheduleIndex);
+        statements.splice(index, 1);
         currentIndex--;
+        statements.splice(currentIndex + 1, 0, candidate);
         swaps += distance;
         // Re-check the statement that shifted into this gap position.
     }
@@ -539,9 +502,9 @@ function hasRegisterHazard(left, right, overflowName = null) {
     );
 }
 
-function validateScheduledOrder(original, scheduled, stateName, overflowName = null, finalIndexOverride = null) {
+function validateScheduledOrder(original, scheduled, stateName, overflowName = null) {
     if (original.length !== scheduled.length) return false;
-    const finalIndex = finalIndexOverride || new Map(scheduled.map((statement, index) => [statement, index]));
+    const finalIndex = new Map(scheduled.map((statement, index) => [statement, index]));
     if (finalIndex.size !== original.length) return false;
     for (const statement of original) if (!finalIndex.has(statement)) return false;
 
@@ -569,36 +532,40 @@ function validateScheduledOrder(original, scheduled, stateName, overflowName = n
 
 function scheduleStatementList(statements, stateName, overflowName = null, returnName = null) {
     const scheduled = [...statements];
-    const schedulingBaseline = statements;
-    const originalOrder = statements;
-    const scheduleIndex = buildScheduleIndex(scheduled, overflowName);
+    const schedulingBaseline = [...scheduled];
+    const originalOrder = [...scheduled];
     let swaps = 0;
 
-    const sunk = sinkPureAssignmentsTowardNextTouch(scheduled, stateName, overflowName, scheduleIndex);
+    // First move pure register assignments toward the next semantic touch of
+    // the same register. This covers both producer -> read and write -> write
+    // compaction while preserving every assignment.
+    const sunk = sinkPureAssignmentsTowardNextTouch(scheduled, stateName, overflowName);
     swaps += sunk.swaps;
 
-    const pulled = pullIdentifierCopiesTowardProducer(scheduled, stateName, overflowName, scheduleIndex);
+    // Identifier-copy assignments are consumers too. Pull them left toward the
+    // nearest producer of their RHS when every crossed statement is register-
+    // independent. This handles chains such as z = D + G; ...; D = z.
+    const pulled = pullIdentifierCopiesTowardProducer(scheduled, stateName, overflowName);
     swaps += pulled.swaps;
 
+    // Then compact producer -> consumer gaps by pushing only independent pure
+    // loads out of the gap. Each move is still equivalent to dependency-safe
+    // adjacent swaps.
     for (const current of originalOrder) {
-        const currentIndex = scheduleIndex.indexByStatement.get(current) ?? -1;
+        const currentIndex = scheduled.indexOf(current);
         if (currentIndex <= 0) continue;
-        const result = compactConsumerGap(scheduled, currentIndex, stateName, overflowName, scheduleIndex);
+        const result = compactConsumerGap(scheduled, currentIndex, stateName, overflowName);
         swaps += result.swaps;
     }
 
-    const unread = sinkUnreadPureAssignmentsToStateTail(scheduled, stateName, overflowName, scheduleIndex);
+    // Finally, definitions that are never read again in this state are moved
+    // out of active chains. They are kept (never deleted): overwritten values
+    // are grouped with the next write, while live-out/unused values are placed
+    // at the actual end of the current dispatcher leaf.
+    const unread = sinkUnreadPureAssignmentsToStateTail(scheduled, stateName, overflowName);
     swaps += unread.swaps;
 
-    // No move means the scheduled list is still the original order. If anything
-    // moved, keep the full independent safety validator.
-    if (swaps > 0 && !validateScheduledOrder(
-        schedulingBaseline,
-        scheduled,
-        stateName,
-        overflowName,
-        scheduleIndex.indexByStatement
-    )) {
+    if (!validateScheduledOrder(schedulingBaseline, scheduled, stateName, overflowName)) {
         return {
             statements: [...statements],
             swaps: 0,
@@ -609,9 +576,17 @@ function scheduleStatementList(statements, stateName, overflowName = null, retur
         };
     }
 
+    // Step 3 has already identified the final POS/state write in each normalized
+    // dispatcher leaf. A direct numeric jump is pure control-flow bookkeeping,
+    // so keep it at the physical tail when no later statement reads or rewrites
+    // the state binding. Earlier temporary state writes are never moved.
     const directStateTransition = canonicalizeDirectNumericStateTransition(scheduled, stateName, overflowName);
     swaps += directStateTransition.swaps;
 
+    // Step 3 guarantees a proven terminal stop is the final state = nil.
+    // Canonicalize the compiler return payload immediately before that stop,
+    // but only across structurally pure VM bookkeeping such as fixed args[n]
+    // loads. This is a separate proven move from generic register scheduling.
     const terminalReturn = canonicalizeTerminalReturnPayload(scheduled, stateName, returnName, overflowName);
     swaps += terminalReturn.swaps;
 

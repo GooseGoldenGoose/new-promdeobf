@@ -2,8 +2,6 @@ const { findVmFunction, analyzeBlockTerminator } = require("./vm-state");
 const { findVmReturnRegister, findRegisterDeclaration } = require("./vm-register-names");
 const { applyTextEdits } = require("./text-edits");
 const { analyzeBetaRegisterLifetimes } = require("./beta-register-lifetimes");
-const { recoverBetaUpvalues } = require("./beta-upvalues");
-const { scheduleStatementList } = require("./vm-register-scheduler");
 
 const NUMERIC_NAME_COLLATOR = new Intl.Collator(undefined, { numeric: true });
 const luaparse = require("../parser/luaparse");
@@ -42,32 +40,6 @@ function isAtomicMultiCallAssignment(statement, candidateNames) {
     if (variables.length < 2 || init.length !== 1 || init[0]?.type !== "CallExpression" || !Array.isArray(init[0]?.range)) return false;
     if (!variables.every(variable => isIdentifier(variable) && candidateNames.has(variable.name) && Array.isArray(variable.range))) return false;
     return true;
-}
-
-function isAtomicParallelAssignment(statement, candidateNames) {
-    if (statement?.type !== "AssignmentStatement" || !Array.isArray(statement.range)) return false;
-    const variables = statement.variables || [];
-    const init = statement.init || [];
-    if (variables.length === 0 || init.length === 0) return false;
-    if (variables.length === 1 && init.length === 1) return false;
-    if (!variables.every(variable =>
-        Array.isArray(variable?.range) && (isIdentifier(variable) || isIndexedWriteTarget(variable))
-    )) return false;
-    if (!init.every(value => Array.isArray(value?.range))) return false;
-    return variables.some(variable => isIdentifier(variable) && candidateNames.has(variable.name));
-}
-
-const SIMPLE_REGISTER_COMPOUND_OPERATORS = new Set(["+", "-", "*", "/", "//", "%", "^", ".."]);
-
-function isSimpleRegisterCompoundAssignment(statement, candidateNames, specialNames = null) {
-    return statement?.type === "CompoundAssignmentStatement" &&
-        isIdentifier(statement.variable) &&
-        candidateNames.has(statement.variable.name) &&
-        (!specialNames || !specialNames.has(statement.variable.name)) &&
-        SIMPLE_REGISTER_COMPOUND_OPERATORS.has(statement.op) &&
-        Array.isArray(statement.range) &&
-        Array.isArray(statement.variable.range) &&
-        Array.isArray(statement.value?.range);
 }
 
 function numericValue(node) {
@@ -260,9 +232,9 @@ function canonicalizeTerminalReturnOperations(operations) {
 function parseBetaSource(source) {
     return luaparse.parse(source, {
         luaVersion: "luau",
-        comments: false,
-        scope: false,
-        locations: false,
+        comments: true,
+        scope: true,
+        locations: true,
         ranges: true,
     });
 }
@@ -412,55 +384,25 @@ function mapOfSetsEquals(a, b) {
 }
 
 function cloneSetMap(map) {
-    // Definition sets are immutable after publication; writes replace an entry's
-    // whole Set, so reaching maps can use copy-on-write instead of deep cloning.
-    return new Map(map || []);
+    const out = new Map();
+    for (const [key, value] of map) out.set(key, new Set(value));
+    return out;
 }
 
-function mergeDefinitionMaps(maps, entryState, candidateNames, singletonDefinitionSet = null) {
-    const merged = maps.length ? new Map(maps[0] || []) : new Map();
-    const owned = new Set();
-    for (let mapIndex = 1; mapIndex < maps.length; mapIndex++) {
-        for (const [name, defs] of maps[mapIndex] || []) {
-            const existing = merged.get(name);
-            if (!existing) {
-                merged.set(name, defs);
-                continue;
-            }
-            if (existing === defs) continue;
-            let needsUnion = false;
-            for (const def of defs) {
-                if (!existing.has(def)) { needsUnion = true; break; }
-            }
-            if (!needsUnion) continue;
-            let target = existing;
-            if (!owned.has(name)) {
-                target = new Set(existing);
-                merged.set(name, target);
-                owned.add(name);
-            }
+function mergeDefinitionMaps(maps, entryState, candidateNames) {
+    const merged = new Map();
+    for (const map of maps) {
+        for (const [name, defs] of map) {
+            let target = merged.get(name);
+            if (!target) merged.set(name, target = new Set());
             for (const def of defs) target.add(def);
         }
     }
     if (entryState !== null) {
         for (const name of candidateNames) {
-            const entryDefinition = `u:entry:${entryState}:${name}`;
             let target = merged.get(name);
-            if (!target) {
-                if (singletonDefinitionSet) {
-                    merged.set(name, singletonDefinitionSet(entryDefinition));
-                    continue;
-                }
-                target = new Set();
-                merged.set(name, target);
-                owned.add(name);
-            } else if (!owned.has(name)) {
-                if (target.has(entryDefinition)) continue;
-                target = new Set(target);
-                merged.set(name, target);
-                owned.add(name);
-            }
-            target.add(entryDefinition);
+            if (!target) merged.set(name, target = new Set());
+            target.add(`u:entry:${entryState}:${name}`);
         }
     }
     return merged;
@@ -510,7 +452,6 @@ function versionVmBlockRegisters(source, ast) {
         return { source, found: true, applied: false, reason: "No exact normalized VM state leaves were found" };
     }
 
-
     const baseIds = new Map();
     const versionCounts = new Map();
     const versions = [];
@@ -519,7 +460,6 @@ function versionVmBlockRegisters(source, ast) {
     let skippedAssignments = 0;
     let preservedFinalWrites = 0;
     let orderedEffectWriteCount = 0;
-    let nativeCompoundWriteCount = 0;
 
     function ensureBase(name) {
         if (!baseIds.has(name)) baseIds.set(name, nextBaseId++);
@@ -552,30 +492,6 @@ function versionVmBlockRegisters(source, ast) {
                 orderedEffectWriteCount++;
                 continue;
             }
-            if (isSimpleRegisterCompoundAssignment(statement, candidateNames, specialFinalNames)) {
-                const originalName = statement.variable.name;
-                const baseId = ensureBase(originalName);
-                const version = (versionCounts.get(originalName) || 0) + 1;
-                versionCounts.set(originalName, version);
-                const newName = `r_v${baseId}_${version}`;
-                plans.set(statement, {
-                    kind: "compound-write",
-                    originalName,
-                    newName,
-                    baseId,
-                    version,
-                    compoundOperator: statement.op,
-                });
-                lastDefinitions.set(originalName, `v:${newName}`);
-                versions.push({ blockState: stateId, originalName, baseId, version, newName });
-                nativeCompoundWriteCount++;
-                continue;
-            }
-            if (statement?.type === "CompoundAssignmentStatement") {
-                plans.set(statement, { kind: "effect-write" });
-                orderedEffectWriteCount++;
-                continue;
-            }
             if (statement?.type !== "AssignmentStatement") continue;
             const variables = statement.variables || [];
             const init = statement.init || [];
@@ -599,38 +515,6 @@ function versionVmBlockRegisters(source, ast) {
                     versions.push({ blockState: stateId, originalName, baseId, version, newName });
                 }
                 plans.set(statement, { kind: "multi-call-write", targets: targetPlans });
-                continue;
-            }
-
-            if (isAtomicParallelAssignment(statement, candidateNames)) {
-                const targetPlans = [];
-                const planByRegister = new Map();
-                for (const variable of variables) {
-                    if (!isIdentifier(variable) || !candidateNames.has(variable.name)) {
-                        targetPlans.push(null);
-                        continue;
-                    }
-                    const originalName = variable.name;
-                    let targetPlan = planByRegister.get(originalName);
-                    if (!targetPlan) {
-                        if (specialFinalNames.has(originalName)) {
-                            const rawDefinition = `u:${stateId}:${statement.range?.[0] ?? statementIndex}:${originalName}`;
-                            lastDefinitions.set(originalName, rawDefinition);
-                            targetPlan = { originalName, newName: originalName, preservePhysical: true };
-                        } else {
-                            const baseId = ensureBase(originalName);
-                            const version = (versionCounts.get(originalName) || 0) + 1;
-                            versionCounts.set(originalName, version);
-                            const newName = `r_v${baseId}_${version}`;
-                            targetPlan = { originalName, newName, baseId, version };
-                            lastDefinitions.set(originalName, `v:${newName}`);
-                            versions.push({ blockState: stateId, originalName, baseId, version, newName });
-                        }
-                        planByRegister.set(originalName, targetPlan);
-                    }
-                    targetPlans.push(targetPlan);
-                }
-                plans.set(statement, { kind: "multi-write", targets: targetPlans });
                 continue;
             }
 
@@ -777,12 +661,12 @@ function versionVmBlockRegisters(source, ast) {
         for (const block of blocks) {
             for (const statement of block.statements) {
                 const plan = block.plans.get(statement);
-                if (plan?.kind === "versioned" || plan?.kind === "compound-write") {
+                if (plan?.kind === "versioned") {
                     remapVersionPlan(plan, statement, block.stateId, true);
                     continue;
                 }
-                if (plan?.kind === "multi-call-write" || plan?.kind === "multi-write") {
-                    for (const targetPlan of new Set((plan.targets || []).filter(Boolean))) {
+                if (plan?.kind === "multi-call-write") {
+                    for (const targetPlan of plan.targets || []) {
                         remapVersionPlan(targetPlan, statement, block.stateId, false);
                     }
                 }
@@ -806,9 +690,9 @@ function versionVmBlockRegisters(source, ast) {
         for (const block of blocks) {
             for (const statement of block.statements) {
                 const plan = block.plans.get(statement);
-                if (plan?.kind === "versioned" || plan?.kind === "compound-write") plan.declareVersion = true;
-                if (plan?.kind === "multi-call-write" || plan?.kind === "multi-write") {
-                    for (const targetPlan of new Set((plan.targets || []).filter(Boolean))) {
+                if (plan?.kind === "versioned") plan.declareVersion = true;
+                if (plan?.kind === "multi-call-write") {
+                    for (const targetPlan of plan.targets || []) {
                         if (!targetPlan.preservePhysical) targetPlan.declareVersion = true;
                     }
                 }
@@ -826,41 +710,6 @@ function versionVmBlockRegisters(source, ast) {
     const inDefinitions = new Map(blocks.map(block => [block.stateId, new Map()]));
     const outDefinitions = new Map(blocks.map(block => [block.stateId, new Map()]));
     const crossBlockUsedVersions = new Set();
-    const emptyDefinitions = new Map();
-
-    // Definition Sets are immutable once published. Cache every singleton once
-    // and precompute each block's final transfer map so worklist revisits do not
-    // allocate the same one-element Sets repeatedly.
-    const singletonDefinitionSets = new Map();
-    function singletonDefinitionSet(definition) {
-        let set = singletonDefinitionSets.get(definition);
-        if (!set) {
-            set = new Set([definition]);
-            singletonDefinitionSets.set(definition, set);
-        }
-        return set;
-    }
-    const transferDefinitionsByState = new Map();
-    for (const block of blocks) {
-        if (!block.lastDefinitions?.size) continue;
-        const transfer = new Map();
-        for (const [name, definition] of block.lastDefinitions) {
-            transfer.set(name, singletonDefinitionSet(definition));
-        }
-        transferDefinitionsByState.set(block.stateId, transfer);
-    }
-
-    const entryDefinitionMaps = new Map();
-    function entryDefinitionMap(stateId) {
-        let map = entryDefinitionMaps.get(stateId);
-        if (map) return map;
-        map = new Map();
-        for (const name of candidateNames) {
-            map.set(name, singletonDefinitionSet(`u:entry:${stateId}:${name}`));
-        }
-        entryDefinitionMaps.set(stateId, map);
-        return map;
-    }
 
     if (cfgComplete) {
         // Worklist reaching definitions. A version can cross a state boundary only
@@ -871,24 +720,11 @@ function versionVmBlockRegisters(source, ast) {
         while (cursor < queue.length) {
             const block = queue[cursor++];
             queued.delete(block.stateId);
-            const predBlocks = predecessors.get(block.stateId) || [];
-            const isEntry = closureEntries.has(block.stateId) || predBlocks.length === 0;
-            let nextIn;
-            if (isEntry && predBlocks.length === 0) {
-                nextIn = entryDefinitionMap(block.stateId);
-            } else if (!isEntry && predBlocks.length === 1) {
-                nextIn = outDefinitions.get(predBlocks[0].stateId) || emptyDefinitions;
-            } else {
-                const predMaps = predBlocks.map(pred => outDefinitions.get(pred.stateId));
-                if (isEntry) predMaps.push(entryDefinitionMap(block.stateId));
-                nextIn = mergeDefinitionMaps(predMaps, null, candidateNames, singletonDefinitionSet);
-            }
-            const transfer = transferDefinitionsByState.get(block.stateId);
-            let nextOut = nextIn;
-            if (transfer?.size) {
-                nextOut = cloneSetMap(nextIn);
-                for (const [name, set] of transfer) nextOut.set(name, set);
-            }
+            const predMaps = (predecessors.get(block.stateId) || []).map(pred => outDefinitions.get(pred.stateId));
+            const isEntry = closureEntries.has(block.stateId) || predMaps.length === 0;
+            const nextIn = mergeDefinitionMaps(predMaps, isEntry ? block.stateId : null, candidateNames);
+            const nextOut = cloneSetMap(nextIn);
+            for (const [name, def] of block.lastDefinitions) nextOut.set(name, new Set([def]));
 
             const inChanged = !mapOfSetsEquals(nextIn, inDefinitions.get(block.stateId));
             const outChanged = !mapOfSetsEquals(nextOut, outDefinitions.get(block.stateId));
@@ -910,21 +746,10 @@ function versionVmBlockRegisters(source, ast) {
     // metadata so developer tools can visualize CFG + register-epoch flow without re-deriving it.
     const edits = [];
     const graphStates = [];
-    const uniqueVersionBaseCache = new WeakMap();
-    function initialUniqueVersions(definitions) {
-        let base = uniqueVersionBaseCache.get(definitions);
-        if (!base) {
-            base = uniqueVersionMap(definitions);
-            uniqueVersionBaseCache.set(definitions, base);
-        }
-        // The per-block map is mutated while statements are replayed. Clone only
-        // the compact unique-version map, not the full reaching-definition map.
-        return new Map(base);
-    }
     for (const block of blocks) {
         const graphOperations = [];
         const latestVersions = cfgComplete
-            ? initialUniqueVersions(inDefinitions.get(block.stateId) || emptyDefinitions)
+            ? uniqueVersionMap(inDefinitions.get(block.stateId) || new Map())
             : new Map();
         const incomingVersionNames = new Set(latestVersions.values());
 
@@ -957,71 +782,6 @@ function versionVmBlockRegisters(source, ast) {
                 continue;
             }
 
-            if (plan?.kind === "compound-write") {
-                const usedVersions = new Set();
-                const rhs = rewriteExpression(source, statement.value, latestVersions, usedVersions);
-                const priorName = latestVersions.get(plan.originalName) || null;
-                if (priorName) usedVersions.add(priorName);
-                for (const versionName of usedVersions) {
-                    if (incomingVersionNames.has(versionName)) crossBlockUsedVersions.add(versionName);
-                }
-
-                if (rhs !== null && priorName && priorName === plan.newName && plan.declareVersion === false) {
-                    const emittedText = `${plan.newName} ${plan.compoundOperator}= ${rhs}`;
-                    edits.push({ start: statement.range[0], end: statement.range[1], replacement: emittedText });
-                    graphOperations.push({
-                        index: graphOperations.length + 1,
-                        kind: "epoch-mutate",
-                        originalTarget: plan.originalName,
-                        emittedTarget: plan.newName,
-                        rhs,
-                        compoundOperator: plan.compoundOperator,
-                        reads: [...usedVersions],
-                        returnSinkSafe: false,
-                        originalText: source.slice(statement.range[0], statement.range[1]).trim(),
-                        emittedText,
-                        registerEpoch: plan.registerEpoch || null,
-                    });
-                    latestVersions.set(plan.originalName, plan.newName);
-                    continue;
-                }
-
-                if (rhs !== null && priorName) {
-                    const declarationPrefix = plan.declareVersion === false ? "" : "local ";
-                    const emittedText = `${declarationPrefix}${plan.newName} = ${priorName} ${plan.compoundOperator} (${rhs})`;
-                    edits.push({ start: statement.range[0], end: statement.range[1], replacement: emittedText });
-                    graphOperations.push({
-                        index: graphOperations.length + 1,
-                        kind: plan.registerEpoch ? (plan.declareVersion === false ? "epoch-mutate" : "epoch-start") : "version-define",
-                        originalTarget: plan.originalName,
-                        emittedTarget: plan.newName,
-                        rhs: `${priorName} ${plan.compoundOperator} (${rhs})`,
-                        compoundOperator: plan.compoundOperator,
-                        reads: [...usedVersions],
-                        returnSinkSafe: false,
-                        originalText: source.slice(statement.range[0], statement.range[1]).trim(),
-                        emittedText,
-                        registerEpoch: plan.registerEpoch || null,
-                    });
-                    latestVersions.set(plan.originalName, plan.newName);
-                    continue;
-                }
-
-                const rewritten = rewriteUnsupportedAssignmentReads(source, statement, latestVersions, usedVersions);
-                if (rewritten) {
-                    for (const edit of rewritten.edits) edits.push(edit);
-                }
-                graphOperations.push({
-                    index: graphOperations.length + 1,
-                    kind: "unsupported",
-                    originalText: source.slice(statement.range[0], statement.range[1]).trim(),
-                    emittedText: rewritten?.text?.trim() || source.slice(statement.range[0], statement.range[1]).trim(),
-                    reads: [...usedVersions],
-                });
-                latestVersions.delete(plan.originalName);
-                continue;
-            }
-
             if (statement?.type !== "AssignmentStatement") {
                 graphOperations.push({
                     index: graphOperations.length + 1,
@@ -1033,82 +793,6 @@ function versionVmBlockRegisters(source, ast) {
             }
             const variables = statement.variables || [];
             const init = statement.init || [];
-
-            if (plan?.kind === "multi-write") {
-                const usedVersions = new Set();
-                const rewritten = rewriteUnsupportedAssignmentReads(source, statement, latestVersions, usedVersions);
-                if (!rewritten) {
-                    graphOperations.push({
-                        index: graphOperations.length + 1,
-                        kind: "unsupported",
-                        originalText: source.slice(statement.range[0], statement.range[1]).trim(),
-                        emittedText: source.slice(statement.range[0], statement.range[1]).trim(),
-                        reads: [],
-                    });
-                    for (const targetPlan of new Set((plan.targets || []).filter(Boolean))) {
-                        latestVersions.delete(targetPlan.originalName);
-                    }
-                    continue;
-                }
-
-                const targetPlans = plan.targets || [];
-                const targetEdits = [...rewritten.edits];
-                const candidateOriginalTargets = [];
-                const candidateEmittedTargets = [];
-                const candidateEpochs = [];
-                const candidateDeclarations = [];
-                const declarationNames = [];
-                const declared = new Set();
-                for (let index = 0; index < variables.length; index++) {
-                    const targetPlan = targetPlans[index];
-                    if (!targetPlan) continue;
-                    targetEdits.push({
-                        start: variables[index].range[0],
-                        end: variables[index].range[1],
-                        replacement: targetPlan.newName,
-                    });
-                    candidateOriginalTargets.push(targetPlan.originalName);
-                    candidateEmittedTargets.push(targetPlan.newName);
-                    candidateEpochs.push(targetPlan.registerEpoch || null);
-                    const shouldDeclare = !targetPlan.preservePhysical && targetPlan.declareVersion !== false;
-                    candidateDeclarations.push(shouldDeclare);
-                    if (shouldDeclare && !declared.has(targetPlan.newName)) {
-                        declared.add(targetPlan.newName);
-                        declarationNames.push(targetPlan.newName);
-                    }
-                }
-                for (const versionName of usedVersions) {
-                    if (incomingVersionNames.has(versionName)) crossBlockUsedVersions.add(versionName);
-                }
-                const assignmentText = applyTextEdits(
-                    source.slice(statement.range[0], statement.range[1]),
-                    targetEdits,
-                    statement.range[0]
-                ).trim();
-                const declarationText = declarationNames.length ? `local ${declarationNames.join(", ")}\n` : "";
-                edits.push({
-                    start: statement.range[0],
-                    end: statement.range[1],
-                    replacement: declarationText + assignmentText,
-                });
-                graphOperations.push({
-                    index: graphOperations.length + 1,
-                    kind: "multi-write",
-                    originalTargets: candidateOriginalTargets,
-                    emittedTargets: candidateEmittedTargets,
-                    targetRegisterEpochs: candidateEpochs,
-                    targetDeclarations: candidateDeclarations,
-                    reads: [...usedVersions],
-                    originalText: source.slice(statement.range[0], statement.range[1]).trim(),
-                    emittedText: assignmentText,
-                    returnSinkSafe: false,
-                });
-                for (const targetPlan of new Set(targetPlans.filter(Boolean))) {
-                    if (targetPlan.preservePhysical) latestVersions.delete(targetPlan.originalName);
-                    else latestVersions.set(targetPlan.originalName, targetPlan.newName);
-                }
-                continue;
-            }
 
             if (plan?.kind === "multi-call-write") {
                 const usedVersions = new Set();
@@ -1354,7 +1038,6 @@ function versionVmBlockRegisters(source, ast) {
         versionedAssignmentCount: versions.length,
         preservedFinalWrites,
         orderedEffectWriteCount,
-        nativeCompoundWriteCount,
         skippedAssignments,
         cfgComplete,
         crossBlockVersionCount: crossBlockUsedVersions.size,
@@ -1368,990 +1051,6 @@ function versionVmBlockRegisters(source, ast) {
     };
 }
 
-function betaOperationSourceStatementCount(operation) {
-    if (operation?.kind !== "multi-write" && operation?.kind !== "multi-call-write") return 1;
-    const declarations = (operation.targetDeclarations || []).filter(Boolean).length;
-    if (!declarations) return 1;
-    if (
-        operation.kind === "multi-call-write" &&
-        declarations === (operation.emittedTargets || []).length &&
-        (operation.targetDeclarations || []).every(Boolean)
-    ) return 1;
-    return 2;
-}
-
-function renderRecoveredBetaOperation(operation) {
-    const text = String(operation?.emittedText || "").trim();
-    if (!text) return "";
-    if (operation.kind !== "multi-write" && operation.kind !== "multi-call-write") return text;
-    const targets = operation.emittedTargets || [];
-    const declarationNames = targets.filter((_, index) => operation.targetDeclarations?.[index]);
-    if (!declarationNames.length) return text;
-    if (
-        operation.kind === "multi-call-write" &&
-        declarationNames.length === targets.length &&
-        (operation.targetDeclarations || []).every(Boolean)
-    ) return `local ${text}`;
-    return `local ${[...new Set(declarationNames)].join(", ")}\n${text}`;
-}
-
-function assignBetaSourceOperationIds(graph) {
-    for (const state of graph.states || []) {
-        for (let index = 0; index < (state.operations || []).length; index++) {
-            state.operations[index].betaSourceOperationId = `${state.id}:${index + 1}`;
-        }
-    }
-}
-
-function mapBetaSourceOperationRanges(betaResult) {
-    const source = betaResult.source;
-    let ast;
-    try {
-        ast = parseBetaSource(source);
-    } catch (error) {
-        return { safe: false, reason: `Beta upvalue source parse failed: ${error.message}` };
-    }
-    const vm = findVmFunction(ast);
-    if (!vm) return { safe: false, reason: "Beta upvalue source VM function not found" };
-    const leaves = collectStateLeafClauses(vm.functionNode, betaResult.graph.stateName, []);
-    const statementsByState = new Map();
-    for (const leaf of leaves) {
-        const stateId = numericValue(leaf.condition.left) ?? numericValue(leaf.condition.right);
-        if (!Number.isInteger(stateId) || statementsByState.has(stateId)) {
-            return { safe: false, reason: `Beta upvalue source has ambiguous state leaf ${stateId}` };
-        }
-        statementsByState.set(stateId, (leaf.body || []).filter(statement => statement?.type !== "CommentStatement"));
-    }
-
-    const ranges = new Map();
-    for (const state of betaResult.graph.states || []) {
-        const statements = statementsByState.get(state.id);
-        if (!statements) return { safe: false, reason: `Beta upvalue source is missing state ${state.id}` };
-        let statementIndex = 0;
-        for (const operation of state.operations || []) {
-            const count = betaOperationSourceStatementCount(operation);
-            const first = statements[statementIndex];
-            const last = statements[statementIndex + count - 1];
-            if (!operation.betaSourceOperationId || !Array.isArray(first?.range) || !Array.isArray(last?.range)) {
-                return { safe: false, reason: `Beta upvalue source state ${state.id} lost operation ownership at ${operation.index}` };
-            }
-            ranges.set(operation.betaSourceOperationId, [first.range[0], last.range[1]]);
-            statementIndex += count;
-        }
-        if (statementIndex !== statements.length) {
-            return { safe: false, reason: `Beta upvalue source state ${state.id} statement/operation mismatch ${statements.length}/${statementIndex}` };
-        }
-    }
-    return { safe: true, ranges };
-}
-
-function betaScheduleStatementProxy(statement) {
-    if (statement?.type !== "LocalStatement") return statement;
-    const variables = statement.variables || [];
-    const init = statement.init || [];
-    if (variables.length !== 1 || init.length !== 1 || !isIdentifier(variables[0])) return statement;
-    // The VM scheduler operates on assignment statements. A beta local with one
-    // target/value has the same dependency shape for scheduling; keep the original
-    // source range so only order changes, never declaration syntax.
-    return { ...statement, type: "AssignmentStatement", betaLocalScheduleProxy: true };
-}
-
-function betaLineIndentAt(source, offset) {
-    const lineStart = Math.max(source.lastIndexOf("\n", Math.max(0, offset - 1)) + 1, 0);
-    const prefix = source.slice(lineStart, offset);
-    const match = prefix.match(/^[ \t]*/);
-    return match ? match[0] : "";
-}
-
-
-function betaTailExpressionIsPure(node) {
-    if (!node) return false;
-    if (isIdentifier(node) || ["NilLiteral", "BooleanLiteral", "NumericLiteral", "StringLiteral"].includes(node.type)) return true;
-    if (node.type === "ParenthesisExpression") return betaTailExpressionIsPure(node.expression);
-    if (node.type === "UnaryExpression") return betaTailExpressionIsPure(node.argument);
-    if (node.type === "BinaryExpression" || node.type === "LogicalExpression") return betaTailExpressionIsPure(node.left) && betaTailExpressionIsPure(node.right);
-    if (node.type === "TableConstructorExpression") return (node.fields || []).every(field => {
-        if (field?.type === "TableValue") return betaTailExpressionIsPure(field.value);
-        if (field?.type === "TableKeyString") return betaTailExpressionIsPure(field.value);
-        if (field?.type === "TableKey") return betaTailExpressionIsPure(field.key) && betaTailExpressionIsPure(field.value);
-        return false;
-    });
-    return false;
-}
-
-function collectBetaTailReads(node, out = new Set()) {
-    if (!node || typeof node !== "object") return out;
-    if (node.type === "Identifier") { out.add(node.name); return out; }
-    for (const key of Object.keys(node)) {
-        if (key === "range" || key === "loc") continue;
-        const value = node[key];
-        if (Array.isArray(value)) for (const child of value) collectBetaTailReads(child, out);
-        else if (value && typeof value === "object") collectBetaTailReads(value, out);
-    }
-    return out;
-}
-
-function betaSingleStatementAccess(statement) {
-    if (statement?.type !== "AssignmentStatement" && statement?.type !== "LocalStatement") return null;
-    const variables = statement.variables || [];
-    const init = statement.init || [];
-    if (variables.length !== 1 || init.length !== 1 || !isIdentifier(variables[0]) || !betaTailExpressionIsPure(init[0])) return null;
-    return { write: variables[0].name, reads: collectBetaTailReads(init[0]) };
-}
-
-function canCommuteBetaTailRight(candidate, crossed) {
-    const a = betaSingleStatementAccess(candidate);
-    const b = betaSingleStatementAccess(crossed);
-    if (!a || !b) return false;
-    if (a.write === b.write || a.reads.has(b.write) || b.reads.has(a.write)) return false;
-    return true;
-}
-
-function canonicalizeBetaTailStatements(statements, operations, stateName, returnName) {
-    const ss = [...statements];
-    const os = [...operations];
-    let stateMoved = false;
-    let returnMoved = false;
-    let stateIndex = -1;
-    for (let i = ss.length - 1; i >= 0; i--) {
-        if (betaSingleStatementAccess(ss[i])?.write === stateName) { stateIndex = i; break; }
-    }
-    if (stateIndex >= 0 && stateIndex !== ss.length - 1) {
-        const candidate = ss[stateIndex];
-        if (ss.slice(stateIndex + 1).every(x => canCommuteBetaTailRight(candidate, x))) {
-            const [st] = ss.splice(stateIndex, 1); const [op] = os.splice(stateIndex, 1);
-            ss.push(st); os.push(op); stateMoved = true;
-        }
-    }
-    stateIndex = ss.length - 1;
-    if (betaSingleStatementAccess(ss[stateIndex])?.write !== stateName) stateIndex = -1;
-    if (stateIndex >= 0 && returnName) {
-        let returnIndex = -1;
-        for (let i = stateIndex - 1; i >= 0; i--) {
-            if (os[i]?.kind === "return-payload" || os[i]?.emittedTarget === returnName) { returnIndex = i; break; }
-        }
-        if (returnIndex >= 0 && returnIndex !== stateIndex - 1) {
-            const payload = os[returnIndex];
-            const crossedOperations = os.slice(returnIndex + 1, stateIndex);
-            const sourceSafe = betaSingleStatementAccess(ss[returnIndex]) !== null &&
-                ss.slice(returnIndex + 1, stateIndex).every(x => canCommuteBetaTailRight(ss[returnIndex], x));
-            const compilerSafe = payload?.kind === "return-payload" &&
-                payload?.terminalCompilerReturnPayload === true &&
-                crossedOperations.every(operation => canSinkTerminalReturnAcross(payload, operation));
-            if (sourceSafe || compilerSafe) {
-                const [st] = ss.splice(returnIndex, 1); const [op] = os.splice(returnIndex, 1);
-                ss.splice(ss.length - 1, 0, st); os.splice(os.length - 1, 0, op); returnMoved = true;
-            }
-        }
-    }
-    return { statements: ss, operations: os, stateMoved, returnMoved };
-}
-
-function finalizeBetaRegisterSchedule(betaResult) {
-    if (!betaResult?.graph || !betaResult.applied) return betaResult;
-    let ast;
-    try {
-        ast = parseBetaSource(betaResult.source);
-    } catch (error) {
-        betaResult.finalRegisterSchedule = { applied: false, safe: false, reason: `Final beta schedule parse failed: ${error.message}` };
-        return betaResult;
-    }
-    const vm = findVmFunction(ast);
-    if (!vm) {
-        betaResult.finalRegisterSchedule = { applied: false, safe: false, reason: "Final beta schedule VM function not found" };
-        return betaResult;
-    }
-
-    const leaves = collectStateLeafClauses(vm.functionNode, betaResult.graph.stateName, []);
-    const leafByState = new Map();
-    for (const leaf of leaves) {
-        const stateId = numericValue(leaf.condition.left) ?? numericValue(leaf.condition.right);
-        if (!Number.isInteger(stateId) || leafByState.has(stateId)) {
-            betaResult.finalRegisterSchedule = { applied: false, safe: false, reason: `Final beta schedule has ambiguous state leaf ${stateId}` };
-            return betaResult;
-        }
-        leafByState.set(stateId, leaf);
-    }
-
-    const edits = [];
-    let blocksChanged = 0;
-    let atomicStatesSkipped = 0;
-    let stateTailMoves = 0;
-    let returnTailMoves = 0;
-
-    for (const state of betaResult.graph.states || []) {
-        const leaf = leafByState.get(state.id);
-        if (!leaf) {
-            betaResult.finalRegisterSchedule = { applied: false, safe: false, reason: `Final beta schedule is missing state ${state.id}` };
-            return betaResult;
-        }
-        const operations = state.operations || [];
-        if (operations.some(operation => betaOperationSourceStatementCount(operation) !== 1)) {
-            atomicStatesSkipped++;
-            continue;
-        }
-
-        const sourceStatements = (leaf.body || []).filter(statement => statement?.type !== "CommentStatement");
-        if (sourceStatements.length !== operations.length || sourceStatements.length < 2) continue;
-
-        const tail = canonicalizeBetaTailStatements(sourceStatements, operations, betaResult.graph.stateName, betaResult.graph.returnName);
-        if (!tail.stateMoved && !tail.returnMoved) continue;
-        if (tail.stateMoved) stateTailMoves++;
-        if (tail.returnMoved) returnTailMoves++;
-
-        const first = sourceStatements[0];
-        const last = sourceStatements[sourceStatements.length - 1];
-        if (!Array.isArray(first?.range) || !Array.isArray(last?.range)) {
-            betaResult.finalRegisterSchedule = { applied: false, safe: false, reason: `Final beta schedule lost source range in state ${state.id}` };
-            return betaResult;
-        }
-        const indent = betaLineIndentAt(betaResult.source, first.range[0]);
-        const newline = betaResult.source.includes("\r\n") ? "\r\n" : "\n";
-        const replacement = tail.statements
-            .map(statement => betaResult.source.slice(statement.range[0], statement.range[1]))
-            .join(newline + indent);
-        edits.push({ start: first.range[0], end: last.range[1], replacement });
-
-        state.operations = tail.operations;
-        for (let index = 0; index < state.operations.length; index++) state.operations[index].index = index + 1;
-        blocksChanged++;
-    }
-
-    const result = {
-        applied: edits.length > 0,
-        safe: true,
-        reason: null,
-        blocksChanged,
-        atomicStatesSkipped,
-        stateTailMoves,
-        returnTailMoves,
-    };
-    if (!edits.length) {
-        betaResult.finalRegisterSchedule = result;
-        return betaResult;
-    }
-
-    const output = applyTextEdits(betaResult.source, edits);
-    try {
-        parseBetaSource(output);
-    } catch (error) {
-        result.safe = false;
-        result.reason = `Final beta schedule reparse failed: ${error.message}`;
-        betaResult.finalRegisterSchedule = result;
-        return betaResult;
-    }
-    betaResult.source = output;
-    betaResult.finalRegisterSchedule = result;
-    return betaResult;
-}
-
-function isDeadStateSnapshotCopyOperation(operation, sourceName) {
-    if (!operation?.emittedTarget || typeof operation.rhs !== "string") return false;
-    if (!["version-define", "epoch-start"].includes(operation.kind)) return false;
-    if (!String(operation.emittedText || "").trim().startsWith("local ")) return false;
-    return operation.rhs.trim() === sourceName;
-}
-
-function finalizeBetaDeadStateSnapshots(betaResult) {
-    if (!betaResult?.graph || !betaResult.applied) return betaResult;
-    const stateName = betaResult.graph.stateName;
-    let sourceAst;
-    try { sourceAst = parseBetaSource(betaResult.source); }
-    catch (error) {
-        betaResult.deadStateSnapshots = { applied: false, safe: false, reason: `Dead state snapshot source parse failed: ${error.message}` };
-        return betaResult;
-    }
-    const sourceVm = findVmFunction(sourceAst);
-    if (!sourceVm) {
-        betaResult.deadStateSnapshots = { applied: false, safe: false, reason: "Dead state snapshot VM function not found" };
-        return betaResult;
-    }
-    const unresolvedOriginalUseCount = new Map();
-    const allOperations = [];
-    const writerByName = new Map();
-    const useCount = new Map();
-    for (const state of betaResult.graph.states || []) {
-        for (const operation of state.operations || []) {
-            allOperations.push({ state, operation });
-            if (operation.emittedTarget) {
-                if (writerByName.has(operation.emittedTarget)) writerByName.set(operation.emittedTarget, null);
-                else writerByName.set(operation.emittedTarget, { state, operation });
-            }
-            for (const read of operation.reads || []) useCount.set(read, (useCount.get(read) || 0) + 1);
-        }
-    }
-
-    const stateRooted = new Set();
-    const parentByTarget = new Map();
-    let changed = true;
-    while (changed) {
-        changed = false;
-        for (const { operation } of allOperations) {
-            const target = operation.emittedTarget;
-            if (!target || stateRooted.has(target) || writerByName.get(target)?.operation !== operation) continue;
-            const rhs = String(operation.rhs || "").trim();
-            if (isDeadStateSnapshotCopyOperation(operation, stateName)) {
-                stateRooted.add(target);
-                parentByTarget.set(target, null);
-                changed = true;
-                continue;
-            }
-            if (stateRooted.has(rhs) && isDeadStateSnapshotCopyOperation(operation, rhs)) {
-                stateRooted.add(target);
-                parentByTarget.set(target, rhs);
-                changed = true;
-            }
-        }
-    }
-
-    const removableTargets = new Set();
-    const remainingUses = new Map(useCount);
-    changed = true;
-    while (changed) {
-        changed = false;
-        for (const target of stateRooted) {
-            if (removableTargets.has(target) || (remainingUses.get(target) || 0) !== 0) continue;
-            const owner = writerByName.get(target);
-            if (!owner?.operation) continue;
-            removableTargets.add(target);
-            const parent = parentByTarget.get(target);
-            if (parent) remainingUses.set(parent, Math.max(0, (remainingUses.get(parent) || 0) - 1));
-            changed = true;
-        }
-    }
-
-    const removableOperations = new Set();
-    for (const target of removableTargets) {
-        const owner = writerByName.get(target);
-        if (owner?.operation) removableOperations.add(owner.operation);
-    }
-    if (!removableOperations.size) {
-        betaResult.deadStateSnapshots = { applied: false, safe: true, removedOperations: 0, removedRoots: 0, removedCopies: 0 };
-        return betaResult;
-    }
-
-    let ast;
-    try { ast = parseBetaSource(betaResult.source); }
-    catch (error) {
-        betaResult.deadStateSnapshots = { applied: false, safe: false, reason: `Dead state snapshot source parse failed: ${error.message}` };
-        return betaResult;
-    }
-    const vm = findVmFunction(ast);
-    if (!vm) {
-        betaResult.deadStateSnapshots = { applied: false, safe: false, reason: "Dead state snapshot VM function not found" };
-        return betaResult;
-    }
-    const leafByState = new Map();
-    for (const leaf of collectStateLeafClauses(vm.functionNode, stateName, [])) {
-        const id = numericValue(leaf.condition.left) ?? numericValue(leaf.condition.right);
-        if (!Number.isInteger(id) || leafByState.has(id)) {
-            betaResult.deadStateSnapshots = { applied: false, safe: false, reason: `Dead state snapshot ambiguous state leaf ${id}` };
-            return betaResult;
-        }
-        leafByState.set(id, leaf);
-    }
-
-    const edits = [];
-    for (const state of betaResult.graph.states || []) {
-        const leaf = leafByState.get(state.id);
-        if (!leaf) {
-            betaResult.deadStateSnapshots = { applied: false, safe: false, reason: `Dead state snapshot missing state ${state.id}` };
-            return betaResult;
-        }
-        const statements = (leaf.body || []).filter(statement => statement?.type !== "CommentStatement");
-        let statementIndex = 0;
-        for (const operation of state.operations || []) {
-            const count = betaOperationSourceStatementCount(operation);
-            const first = statements[statementIndex];
-            const last = statements[statementIndex + count - 1];
-            if (!Array.isArray(first?.range) || !Array.isArray(last?.range)) {
-                betaResult.deadStateSnapshots = { applied: false, safe: false, reason: `Dead state snapshot lost source ownership in state ${state.id}` };
-                return betaResult;
-            }
-            if (removableOperations.has(operation)) edits.push({ start: first.range[0], end: last.range[1], replacement: "" });
-            statementIndex += count;
-        }
-        if (statementIndex !== statements.length) {
-            betaResult.deadStateSnapshots = { applied: false, safe: false, reason: `Dead state snapshot statement/operation mismatch in state ${state.id}` };
-            return betaResult;
-        }
-    }
-
-    const output = applyTextEdits(betaResult.source, edits);
-    try { parseBetaSource(output); }
-    catch (error) {
-        betaResult.deadStateSnapshots = { applied: false, safe: false, reason: `Dead state snapshot reparse failed: ${error.message}` };
-        return betaResult;
-    }
-
-    let removedRoots = 0;
-    let removedCopies = 0;
-    for (const state of betaResult.graph.states || []) {
-        const kept = [];
-        for (const operation of state.operations || []) {
-            if (!removableOperations.has(operation)) { kept.push(operation); continue; }
-            if (String(operation.rhs || "").trim() === stateName) removedRoots++;
-            else removedCopies++;
-        }
-        state.operations = kept;
-        for (let index = 0; index < kept.length; index++) kept[index].index = index + 1;
-    }
-    betaResult.source = output;
-    betaResult.deadStateSnapshots = { applied: true, safe: true, removedOperations: removableOperations.size, removedRoots, removedCopies };
-    return betaResult;
-}
-
-function betaOperationWritesName(operation, name) {
-    if (operation?.emittedTarget === name) return true;
-    return Array.isArray(operation?.emittedTargets) && operation.emittedTargets.includes(name);
-}
-
-function isDeadStateInitializerDefinitionOperation(operation, stateName) {
-    if (!operation?.emittedTarget || typeof operation.rhs !== "string") return false;
-    if (operation.emittedTarget === stateName || operation.rhs.trim() !== stateName) return false;
-    if (!["version-define", "epoch-start", "epoch-mutate"].includes(operation.kind)) return false;
-    const text = String(operation.emittedText || "").trim();
-    return text === `local ${operation.emittedTarget} = ${stateName}` || text === `${operation.emittedTarget} = ${stateName}`;
-}
-
-function isDeadStateInitializerTransparentCopy(operation, sourceName) {
-    if (!operation?.emittedTarget || typeof operation.rhs !== "string") return false;
-    if (operation.emittedTarget === sourceName || operation.rhs.trim() !== sourceName) return false;
-    if (!["version-define", "epoch-start", "epoch-mutate"].includes(operation.kind)) return false;
-    const reads = operation.reads || [];
-    if (reads.some(read => read !== sourceName)) return false;
-    const text = String(operation.emittedText || "").trim();
-    return text === `local ${operation.emittedTarget} = ${sourceName}` || text === `${operation.emittedTarget} = ${sourceName}`;
-}
-
-function betaDefinitionDeadTransitively(graph, stateId, operationIndex, target) {
-    const stateById = new Map((graph.states || []).map(state => [state.id, state]));
-    const queue = [{ stateId, startIndex: operationIndex + 1, active: [target] }];
-    const visited = new Set();
-    const copyOperations = new Set();
-    while (queue.length) {
-        const point = queue.pop();
-        const active = new Set(point.active);
-        if (!active.size) continue;
-        const key = point.stateId + ':' + point.startIndex + ':' + [...active].sort().join(',');
-        if (visited.has(key)) continue;
-        visited.add(key);
-        const state = stateById.get(point.stateId);
-        if (!state) return { dead: false, copyOperations };
-        const operations = state.operations || [];
-        for (let index = point.startIndex; index < operations.length; index++) {
-            if (!active.size) break;
-            const operation = operations[index];
-            const activeReads = [...new Set((operation.reads || []).filter(read => active.has(read)))];
-            if (activeReads.length) {
-                const rhs = String(operation?.rhs || '').trim();
-                if (activeReads.length !== 1 || !active.has(rhs) || !isDeadStateInitializerTransparentCopy(operation, rhs)) {
-                    return { dead: false, copyOperations };
-                }
-                copyOperations.add(operation);
-                for (const name of [...active]) {
-                    if (betaOperationWritesName(operation, name)) active.delete(name);
-                }
-                active.add(operation.emittedTarget);
-                continue;
-            }
-            for (const name of [...active]) {
-                if (betaOperationWritesName(operation, name)) active.delete(name);
-            }
-        }
-        if (!active.size) continue;
-        if (!Array.isArray(state.successors)) return { dead: false, copyOperations };
-        for (const successor of state.successors) {
-            if (!Number.isInteger(successor) || !stateById.has(successor)) return { dead: false, copyOperations };
-            queue.push({ stateId: successor, startIndex: 0, active: [...active] });
-        }
-    }
-    return { dead: true, copyOperations };
-}
-
-function finalizeBetaDeadStateInitializers(betaResult) {
-    if (!betaResult?.graph || !betaResult.applied) return betaResult;
-    const graph = betaResult.graph;
-    const stateName = graph.stateName;
-    const operationLocation = new Map();
-    const writersByName = new Map();
-    for (const state of graph.states || []) {
-        const operations = state.operations || [];
-        for (let index = 0; index < operations.length; index++) {
-            const operation = operations[index];
-            operationLocation.set(operation, { stateId: state.id, index });
-            const written = new Set();
-            if (operation.emittedTarget) written.add(operation.emittedTarget);
-            for (const target of operation.emittedTargets || []) written.add(target);
-            for (const target of written) {
-                if (!writersByName.has(target)) writersByName.set(target, new Set());
-                writersByName.get(target).add(operation);
-            }
-        }
-    }
-
-    const candidates = [];
-    const reachedCopies = new Set();
-    for (const state of graph.states || []) {
-        const operations = state.operations || [];
-        for (let index = 0; index < operations.length; index++) {
-            const operation = operations[index];
-            if (!isDeadStateInitializerDefinitionOperation(operation, stateName)) continue;
-            const analysis = betaDefinitionDeadTransitively(graph, state.id, index, operation.emittedTarget);
-            if (!analysis.dead) continue;
-            candidates.push(operation);
-            for (const copy of analysis.copyOperations) reachedCopies.add(copy);
-        }
-    }
-    if (!candidates.length) {
-        betaResult.deadStateInitializers = { applied: false, safe: true, removedInitializers: 0, removedCopies: 0, clearedCopyInitializers: 0 };
-        return betaResult;
-    }
-
-    // A copy reached by a dead state definition is removable only when the
-    // definition created by that copy is independently dead from that point
-    // forward. This makes removal safe even if the copy state is reachable from
-    // another predecessor carrying a different source value.
-    const removableReachedCopies = new Set();
-    for (const operation of reachedCopies) {
-        const location = operationLocation.get(operation);
-        if (!location) continue;
-        const analysis = betaDefinitionDeadTransitively(graph, location.stateId, location.index, operation.emittedTarget);
-        if (analysis.dead) removableReachedCopies.add(operation);
-    }
-
-    const transformations = new Map();
-    const chooseTransformation = operation => {
-        const text = String(operation.emittedText || '').trim();
-        const isLocal = text.startsWith('local ');
-        const writerCount = (writersByName.get(operation.emittedTarget) || new Set()).size;
-        // If later writes reuse this lexical local, retain only its declaration.
-        // Otherwise the dead identifier-copy statement can disappear entirely.
-        return isLocal && writerCount > 1 ? 'bare' : 'remove';
-    };
-    for (const operation of candidates) transformations.set(operation, chooseTransformation(operation));
-    for (const operation of removableReachedCopies) {
-        if (!transformations.has(operation)) transformations.set(operation, chooseTransformation(operation));
-    }
-
-    let ast;
-    try { ast = parseBetaSource(betaResult.source); }
-    catch (error) {
-        betaResult.deadStateInitializers = { applied: false, safe: false, reason: 'Dead state initializer source parse failed: ' + error.message };
-        return betaResult;
-    }
-    const vm = findVmFunction(ast);
-    if (!vm) {
-        betaResult.deadStateInitializers = { applied: false, safe: false, reason: 'Dead state initializer VM function not found' };
-        return betaResult;
-    }
-    const leafByState = new Map();
-    for (const leaf of collectStateLeafClauses(vm.functionNode, stateName, [])) {
-        const id = numericValue(leaf.condition.left) ?? numericValue(leaf.condition.right);
-        if (!Number.isInteger(id) || leafByState.has(id)) {
-            betaResult.deadStateInitializers = { applied: false, safe: false, reason: 'Dead state initializer ambiguous state leaf ' + id };
-            return betaResult;
-        }
-        leafByState.set(id, leaf);
-    }
-
-    const edits = [];
-    for (const state of graph.states || []) {
-        const leaf = leafByState.get(state.id);
-        if (!leaf) {
-            betaResult.deadStateInitializers = { applied: false, safe: false, reason: 'Dead state initializer missing state ' + state.id };
-            return betaResult;
-        }
-        const statements = (leaf.body || []).filter(statement => statement?.type !== 'CommentStatement');
-        let statementIndex = 0;
-        for (const operation of state.operations || []) {
-            const count = betaOperationSourceStatementCount(operation);
-            const first = statements[statementIndex];
-            const last = statements[statementIndex + count - 1];
-            if (!Array.isArray(first?.range) || !Array.isArray(last?.range)) {
-                betaResult.deadStateInitializers = { applied: false, safe: false, reason: 'Dead state initializer lost source ownership in state ' + state.id };
-                return betaResult;
-            }
-            const transform = transformations.get(operation);
-            if (transform === 'bare') {
-                edits.push({ start: first.range[0], end: last.range[1], replacement: 'local ' + operation.emittedTarget });
-            } else if (transform === 'remove') {
-                edits.push({ start: first.range[0], end: last.range[1], replacement: '' });
-            }
-            statementIndex += count;
-        }
-        if (statementIndex !== statements.length) {
-            betaResult.deadStateInitializers = { applied: false, safe: false, reason: 'Dead state initializer statement/operation mismatch in state ' + state.id };
-            return betaResult;
-        }
-    }
-
-    const output = applyTextEdits(betaResult.source, edits);
-    try { parseBetaSource(output); }
-    catch (error) {
-        betaResult.deadStateInitializers = { applied: false, safe: false, reason: 'Dead state initializer reparse failed: ' + error.message };
-        return betaResult;
-    }
-
-    let removedCopies = 0;
-    let clearedCopyInitializers = 0;
-    let removedAssignments = 0;
-    const candidateSet = new Set(candidates);
-    for (const state of graph.states || []) {
-        const kept = [];
-        for (const operation of state.operations || []) {
-            const transform = transformations.get(operation);
-            if (transform === 'remove') {
-                if (candidateSet.has(operation)) {
-                    if (!String(operation.emittedText || '').trim().startsWith('local ')) removedAssignments++;
-                } else {
-                    removedCopies++;
-                }
-                continue;
-            }
-            if (transform === 'bare') {
-                if (!candidateSet.has(operation)) clearedCopyInitializers++;
-                operation.rhs = 'nil';
-                operation.reads = [];
-                operation.emittedText = 'local ' + operation.emittedTarget;
-                operation.returnSinkSafe = true;
-            }
-            kept.push(operation);
-        }
-        state.operations = kept;
-        for (let index = 0; index < kept.length; index++) kept[index].index = index + 1;
-    }
-    betaResult.source = output;
-    betaResult.deadStateInitializers = {
-        applied: true,
-        safe: true,
-        removedInitializers: candidates.length,
-        removedAssignments,
-        removedCopies,
-        clearedCopyInitializers,
-    };
-    return betaResult;
-}
-
-
-function isProvenDeadRegisterClear(operation, graph) {
-    if (operation?.kind !== "epoch-kill" || operation?.registerEpoch == null) return false;
-    if (String(operation.rhs || "").trim() !== "nil") return false;
-    if (!operation.emittedTarget || !operation.originalTarget) return false;
-    if (operation.originalTarget === graph.stateName || operation.originalTarget === graph.returnName) return false;
-    if (!/^(?:r\d+|__overflow_phys_\d+)$/.test(operation.originalTarget)) return false;
-    if ((operation.reads || []).length !== 0) return false;
-    if ((graph.recoveredUpvalueBindings || []).includes(operation.emittedTarget)) return false;
-    return String(operation.emittedText || "").trim() === `${operation.emittedTarget} = nil`;
-}
-
-function finalizeBetaDeadRegisterClears(betaResult) {
-    if (!betaResult?.graph || !betaResult.applied) return betaResult;
-    const graph = betaResult.graph;
-    const removable = new Set();
-    for (const state of graph.states || []) {
-        for (const operation of state.operations || []) {
-            if (isProvenDeadRegisterClear(operation, graph)) removable.add(operation);
-        }
-    }
-    if (!removable.size) {
-        betaResult.deadRegisterClears = { applied: false, safe: true, removedOperations: 0 };
-        return betaResult;
-    }
-
-    // A proven compiler lifetime kill is positive evidence that the surviving
-    // register epoch belongs to a real source local. Preserve that provenance
-    // before removing the cleanup statement so later temp recovery can distinguish
-    // source aliases from ordinary expression temporaries.
-    const sourceLifetimeNames = new Set();
-    for (const epoch of graph.epochs || []) {
-        if (epoch?.name && (epoch.events || []).some(event => event?.kind === "kill")) sourceLifetimeNames.add(epoch.name);
-    }
-    for (const state of graph.states || []) {
-        for (const operation of state.operations || []) {
-            if (operation?.emittedTarget && sourceLifetimeNames.has(operation.emittedTarget)) {
-                operation.compilerSourceLifetimeProven = true;
-            }
-        }
-    }
-    let ast;
-    try { ast = parseBetaSource(betaResult.source); }
-    catch (error) {
-        betaResult.deadRegisterClears = { applied: false, safe: false, reason: `Dead register clear source parse failed: ${error.message}`, removedOperations: 0 };
-        return betaResult;
-    }
-    const vm = findVmFunction(ast);
-    if (!vm) {
-        betaResult.deadRegisterClears = { applied: false, safe: false, reason: "Dead register clear VM function not found", removedOperations: 0 };
-        return betaResult;
-    }
-    const leafByState = new Map();
-    for (const leaf of collectStateLeafClauses(vm.functionNode, graph.stateName, [])) {
-        const id = numericValue(leaf.condition.left) ?? numericValue(leaf.condition.right);
-        if (!Number.isInteger(id) || leafByState.has(id)) {
-            betaResult.deadRegisterClears = { applied: false, safe: false, reason: `Dead register clear ambiguous state leaf ${id}`, removedOperations: 0 };
-            return betaResult;
-        }
-        leafByState.set(id, leaf);
-    }
-
-    const edits = [];
-    for (const state of graph.states || []) {
-        const leaf = leafByState.get(state.id);
-        if (!leaf) {
-            betaResult.deadRegisterClears = { applied: false, safe: false, reason: `Dead register clear missing state ${state.id}`, removedOperations: 0 };
-            return betaResult;
-        }
-        const statements = (leaf.body || []).filter(statement => statement?.type !== "CommentStatement");
-        let statementIndex = 0;
-        for (const operation of state.operations || []) {
-            const count = betaOperationSourceStatementCount(operation);
-            const first = statements[statementIndex];
-            const last = statements[statementIndex + count - 1];
-            if (!Array.isArray(first?.range) || !Array.isArray(last?.range)) {
-                betaResult.deadRegisterClears = { applied: false, safe: false, reason: `Dead register clear lost source ownership in state ${state.id}`, removedOperations: 0 };
-                return betaResult;
-            }
-            if (removable.has(operation)) {
-                if (count !== 1) {
-                    betaResult.deadRegisterClears = { applied: false, safe: false, reason: `Dead register clear is not a single owned statement in state ${state.id}`, removedOperations: 0 };
-                    return betaResult;
-                }
-                edits.push({ start: first.range[0], end: last.range[1], replacement: "" });
-            }
-            statementIndex += count;
-        }
-        if (statementIndex !== statements.length) {
-            betaResult.deadRegisterClears = { applied: false, safe: false, reason: `Dead register clear statement/operation mismatch in state ${state.id}`, removedOperations: 0 };
-            return betaResult;
-        }
-    }
-
-    const output = applyTextEdits(betaResult.source, edits);
-    try { parseBetaSource(output); }
-    catch (error) {
-        betaResult.deadRegisterClears = { applied: false, safe: false, reason: `Dead register clear reparse failed: ${error.message}`, removedOperations: 0 };
-        return betaResult;
-    }
-
-    for (const state of graph.states || []) {
-        state.operations = (state.operations || []).filter(operation => !removable.has(operation));
-        for (let index = 0; index < state.operations.length; index++) state.operations[index].index = index + 1;
-    }
-    betaResult.source = output;
-    betaResult.deadRegisterClears = { applied: true, safe: true, removedOperations: removable.size };
-    return betaResult;
-}
-
-function finalizeBetaRegisterUpvalues(betaResult) {
-    if (!betaResult?.graph || !betaResult.applied) return betaResult;
-    assignBetaSourceOperationIds(betaResult.graph);
-    const ownership = mapBetaSourceOperationRanges(betaResult);
-    if (!ownership.safe) {
-        betaResult.upvalueRecovery = { completed: true, applied: false, safe: false, reason: ownership.reason };
-        return betaResult;
-    }
-
-    const recovered = recoverBetaUpvalues(betaResult);
-    const recovery = {
-        completed: true,
-        applied: Boolean(recovered.applied),
-        safe: Boolean(recovered.safe),
-        reason: recovered.reason || null,
-        stats: recovered.stats || null,
-        cells: recovered.cells || [],
-        captures: recovered.captures || [],
-        sourceEditCount: 0,
-    };
-    if (!recovered.safe) {
-        betaResult.upvalueRecovery = recovery;
-        return betaResult;
-    }
-    if (!recovered.applied) {
-        betaResult.upvalueRecovery = recovery;
-        return betaResult;
-    }
-
-    const recoveredById = new Map();
-    for (const state of recovered.graph.states || []) {
-        for (const operation of state.operations || []) {
-            if (!operation.betaSourceOperationId || recoveredById.has(operation.betaSourceOperationId)) {
-                recovery.safe = false;
-                recovery.reason = `Recovered beta upvalue graph has ambiguous operation ownership in state ${state.id}`;
-                betaResult.upvalueRecovery = recovery;
-                return betaResult;
-            }
-            recoveredById.set(operation.betaSourceOperationId, operation);
-        }
-    }
-
-    const edits = [];
-    for (const state of betaResult.graph.states || []) {
-        for (const operation of state.operations || []) {
-            const id = operation.betaSourceOperationId;
-            const range = ownership.ranges.get(id);
-            const next = recoveredById.get(id);
-            if (!range) {
-                recovery.safe = false;
-                recovery.reason = `Recovered beta upvalue source lost operation ${id}`;
-                betaResult.upvalueRecovery = recovery;
-                return betaResult;
-            }
-            if (!next) {
-                edits.push({ start: range[0], end: range[1], replacement: "" });
-                continue;
-            }
-            const before = renderRecoveredBetaOperation(operation);
-            const after = renderRecoveredBetaOperation(next);
-            if (before !== after) edits.push({ start: range[0], end: range[1], replacement: after });
-        }
-    }
-
-    let output = applyTextEdits(betaResult.source, edits);
-    const cleanup = pruneUnusedPhysicalRegisterDeclaration(output);
-    output = cleanup.source;
-    try {
-        parseBetaSource(output);
-    } catch (error) {
-        recovery.safe = false;
-        recovery.reason = `Recovered beta upvalue source reparse failed: ${error.message}`;
-        betaResult.upvalueRecovery = recovery;
-        return betaResult;
-    }
-
-    recovery.sourceEditCount = edits.length;
-    betaResult.source = output;
-    betaResult.graph = recovered.graph;
-    betaResult.upvalueRecovery = recovery;
-    betaResult.prunedPhysicalRegisterDeclarations =
-        (betaResult.prunedPhysicalRegisterDeclarations || 0) + (cleanup.pruned || 0);
-    return betaResult;
-}
-
-
-function betaProtectedMultilineLines(source) {
-    const protectedLines = new Set();
-    let line = 1;
-    let i = 0;
-    let quote = null;
-    let quoteStartLine = null;
-    let quoteMultiline = false;
-    let longClose = null;
-    let longStartLine = null;
-    const markLong = endLine => {
-        if (longStartLine === null) return;
-        for (let value = longStartLine; value <= endLine; value++) protectedLines.add(value);
-    };
-    const longOpenAt = index => {
-        if (source[index] !== '[') return null;
-        let cursor = index + 1;
-        while (source[cursor] === '=') cursor++;
-        if (source[cursor] !== '[') return null;
-        const equals = source.slice(index + 1, cursor);
-        return { end: cursor + 1, close: ']' + equals + ']' };
-    };
-    while (i < source.length) {
-        const ch = source[i];
-        if (ch === '\n') {
-            if (longClose !== null) protectedLines.add(line);
-            if (quote !== null) {
-                quoteMultiline = true;
-                for (let value = quoteStartLine; value <= line; value++) protectedLines.add(value);
-            }
-            line++;
-            i++;
-            continue;
-        }
-        if (longClose !== null) {
-            if (source.startsWith(longClose, i)) {
-                markLong(line);
-                i += longClose.length;
-                longClose = null;
-                longStartLine = null;
-                continue;
-            }
-            i++;
-            continue;
-        }
-        if (quote !== null) {
-            if (ch === '\\') {
-                i += Math.min(2, source.length - i);
-                continue;
-            }
-            if (ch === quote) { quote = null; quoteStartLine = null; quoteMultiline = false; }
-            i++;
-            continue;
-        }
-        if (ch === '"' || ch === "'" || ch === '`') {
-            quote = ch;
-            quoteStartLine = line;
-            i++;
-            continue;
-        }
-        if (source.startsWith('--', i)) {
-            const opened = longOpenAt(i + 2);
-            if (opened) {
-                longClose = opened.close;
-                longStartLine = line;
-                i = opened.end;
-                continue;
-            }
-            const newline = source.indexOf('\n', i + 2);
-            i = newline === -1 ? source.length : newline;
-            continue;
-        }
-        const opened = longOpenAt(i);
-        if (opened) {
-            longClose = opened.close;
-            longStartLine = line;
-            i = opened.end;
-            continue;
-        }
-        i++;
-    }
-    if (longClose !== null) markLong(line);
-    return protectedLines;
-}
-
-function finalizeBetaWhitespaceCleanup(betaResult) {
-    if (!betaResult?.graph || !betaResult.applied || typeof betaResult.source !== 'string') return betaResult;
-    const source = betaResult.source;
-    const protectedLines = betaProtectedMultilineLines(source);
-    const newline = source.includes('\r\n') ? '\r\n' : '\n';
-    const lines = source.split(/\r?\n/);
-    const kept = [];
-    let removedLines = 0;
-    for (let index = 0; index < lines.length; index++) {
-        const lineNumber = index + 1;
-        const lineText = lines[index];
-        if (lineText.trim() === '' && !protectedLines.has(lineNumber)) {
-            removedLines++;
-            continue;
-        }
-        kept.push(protectedLines.has(lineNumber) ? lineText : lineText.replace(/[\t ]+$/g, ''));
-    }
-    while (kept.length && kept[kept.length - 1] === '') kept.pop();
-    const output = kept.join(newline) + newline;
-    if (output === source) {
-        betaResult.whitespaceCleanup = { applied: false, safe: true, removedLines: 0 };
-        return betaResult;
-    }
-    try { parseBetaSource(output); }
-    catch (error) {
-        betaResult.whitespaceCleanup = { applied: false, safe: false, reason: 'Beta whitespace cleanup reparse failed: ' + error.message, removedLines: 0 };
-        return betaResult;
-    }
-    betaResult.source = output;
-    betaResult.whitespaceCleanup = { applied: true, safe: true, removedLines };
-    return betaResult;
-}
-
 module.exports = {
     versionVmBlockRegisters,
-    finalizeBetaRegisterUpvalues,
-    finalizeBetaRegisterSchedule,
-    finalizeBetaDeadStateSnapshots,
-    finalizeBetaDeadStateInitializers,
-    finalizeBetaDeadRegisterClears,
-    finalizeBetaWhitespaceCleanup,
 };

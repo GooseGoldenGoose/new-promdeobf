@@ -1,11 +1,6 @@
 const assert = require("assert");
-const fs = require("fs");
-const os = require("os");
-const path = require("path");
-const { parseLua, parseLuaStructural, runDeobfuscator } = require("../main");
-const { versionVmBlockRegisters } = require("../passes/beta-register-versions");
+const { parseLua } = require("../main");
 const { solveBetaControlFlow, removeCompilerPosPreservationOperations } = require("../passes/beta-control-flow");
-const { solveBetaControlFlow: solveExperimentalBetaControlFlow } = require("../passes/beta-control-flow-overflow-experimental");
 
 const wrapperSource = `return (function(_env)
     return 1
@@ -39,14 +34,10 @@ assert.equal(result.environmentHeader, "local _env = getfenv()");
 assert.equal(result.terminalReturnPayloadSunk, true);
 assert.equal(result.terminalReturnLowered, true);
 assert.equal(result.terminalReturnText, "return");
-assert(result.source.startsWith("local _env = getfenv()\n\n"));
-assert(!result.source.includes("--headers"));
-assert(!result.source.includes("--body"));
-assert(!result.source.includes("local args = { ... }"));
+assert(result.source.startsWith("--headers\n\nlocal _env = getfenv()\nlocal args = { ... }\n\n--body\n\n"));
 assert(!result.source.includes("while state do"));
 assert(!result.source.includes("if state =="));
-assert(result.source.includes("r_v3_1 = nil"));
-assert(!result.source.trimEnd().endsWith("return"));
+assert(result.source.includes("r_v3_1 = nil\n\nreturn"));
 assert(!result.source.includes("ReturnVal ="));
 assert(!result.source.includes("state = nil"));
 parseLua(result.source, "<beta-cf-output>");
@@ -214,12 +205,10 @@ assert.equal(acyclicStructured.branchCount, 2);
 assert.equal(acyclicStructured.joinCount, 1);
 assert.equal(acyclicStructured.guardBranchCount, 1);
 assert.equal(acyclicStructured.terminalReturnCount, 2);
-assert(acyclicStructured.source.includes("if flag() then"));
-assert(!acyclicStructured.source.includes("local r_v3_1 = flag()"));
-assert(acyclicStructured.source.includes("if flag2() then"));
-assert(!acyclicStructured.source.includes("local r_v5_1 = flag2()"));
-assert(acyclicStructured.source.includes("local r_v2_1 = (1)"));
-assert(acyclicStructured.source.indexOf("local r_v2_1 = (1)") < acyclicStructured.source.indexOf("if flag2() then"));
+assert(acyclicStructured.source.includes("if r_v3_1 then"));
+assert(acyclicStructured.source.includes("if r_v5_1 then"));
+assert(acyclicStructured.source.includes("r_v2_1 = r_v4_1"));
+assert(acyclicStructured.source.indexOf("r_v2_1 = r_v4_1") < acyclicStructured.source.indexOf("local r_v5_1 = flag2()"));
 assert(acyclicStructured.source.indexOf("emit(r_v2_1)") < acyclicStructured.source.indexOf("emit2(r_v2_1)"));
 assert.equal((acyclicStructured.source.match(/\breturn\b/g) || []).length, 2);
 assert(!acyclicStructured.source.includes("ReturnVal ="));
@@ -255,8 +244,7 @@ const diamond = solveBetaControlFlow(ast, {
 });
 assert.equal(diamond.applied, true);
 assert.equal(diamond.joinCount, 1);
-assert(diamond.source.includes("if choose() then"));
-assert(!diamond.source.includes("local r_v9_1 = choose()"));
+assert(diamond.source.includes("if r_v9_1 then"));
 assert(diamond.source.includes("else"));
 assert(diamond.source.indexOf("left()") < diamond.source.indexOf("else"));
 assert(diamond.source.indexOf("else") < diamond.source.indexOf("right()"));
@@ -314,13 +302,13 @@ const sharedContinuationEarlyReturn = solveBetaControlFlow(ast, {
 });
 assert.equal(sharedContinuationEarlyReturn.applied, true);
 assert.equal(sharedContinuationEarlyReturn.mode, "acyclic-structured");
-assert(sharedContinuationEarlyReturn.source.includes("if chooseA() then"));
-assert(sharedContinuationEarlyReturn.source.includes("if chooseB() then"));
-assert(sharedContinuationEarlyReturn.source.includes("if chooseC() then"));
-assert(sharedContinuationEarlyReturn.source.includes("if chooseD() then"));
+assert(sharedContinuationEarlyReturn.source.includes("if r_v20_1 then"));
+assert(sharedContinuationEarlyReturn.source.includes("if r_v21_1 then"));
+assert(sharedContinuationEarlyReturn.source.includes("if r_v22_1 then"));
+assert(sharedContinuationEarlyReturn.source.includes("if r_v23_1 then"));
 assert.equal((sharedContinuationEarlyReturn.source.match(/finish\(\)/g) || []).length, 1);
 assert.equal((sharedContinuationEarlyReturn.source.match(/markL\(\)/g) || []).length, 1);
-assert(sharedContinuationEarlyReturn.source.indexOf("markG()") < sharedContinuationEarlyReturn.source.indexOf("if chooseC() then"));
+assert(sharedContinuationEarlyReturn.source.indexOf("markG()") < sharedContinuationEarlyReturn.source.indexOf("local r_v22_1 = chooseC()"));
 assert(sharedContinuationEarlyReturn.source.indexOf("markW()") < sharedContinuationEarlyReturn.source.indexOf("finish()"));
 assert(!sharedContinuationEarlyReturn.source.includes("state ="));
 parseLua(sharedContinuationEarlyReturn.source, "<beta-cf-shared-continuation-output>");
@@ -434,57 +422,15 @@ assert.equal(nestedClosureRegions.entryState, 1);
 assert.equal(nestedClosureRegions.stateCount, 3);
 assert.equal(nestedClosureRegions.closureRegionCount, 2);
 assert.equal(nestedClosureRegions.inlinedClosureFactoryCount, 1);
-assert(!nestedClosureRegions.source.includes("--headers"));
-assert(!nestedClosureRegions.source.includes("--body"));
-assert(nestedClosureRegions.source.includes("local r_v1_1 = function(r_v3_1, r_v4_1)"));
-assert(!nestedClosureRegions.source.includes("function(r_v3_1, r_v4_1)\n\n"));
-assert(!nestedClosureRegions.source.includes("local r_v3_1 = args[1]"));
-assert(!nestedClosureRegions.source.includes("local r_v4_1 = args[2]"));
+assert(nestedClosureRegions.source.includes("local r_v1_1 = function(...)"));
+assert(nestedClosureRegions.source.includes("local args = { ... }"));
+assert(nestedClosureRegions.source.includes("local r_v3_1 = args[1]"));
+assert(nestedClosureRegions.source.includes("local r_v4_1 = args[2]"));
 assert(nestedClosureRegions.source.includes("return r_v5_1"));
-assert(!nestedClosureRegions.source.trimEnd().endsWith("return"));
 assert(!nestedClosureRegions.source.includes("createClosure7("));
 assert(!nestedClosureRegions.source.includes("state ="));
 assert(!nestedClosureRegions.source.includes("ReturnVal ="));
 parseLua(nestedClosureRegions.source, "<beta-cf-nested-closure-output>");
-
-const nestedVarargClosureRegions = solveBetaControlFlow(ast, {
-    applied: true,
-    graph: {
-        cfgComplete: true,
-        entries: [1, 30],
-        states: [
-            {
-                id: 1,
-                predecessors: [],
-                successors: [],
-                operations: [
-                    { kind: "version-define", emittedTarget: "fn", emittedText: "local fn = createClosure(30, {})", rhs: "createClosure(30, {})", reads: [] },
-                    { kind: "version-define", emittedTarget: "result", emittedText: "local result = fn(\"x\", 1, 2)", rhs: "fn(\"x\", 1, 2)", reads: ["fn"] },
-                    { kind: "return-payload", terminalCompilerReturnPayload: true, returnExpressions: [], emittedText: "ReturnVal = {}", rhs: "{}", reads: [] },
-                    { kind: "state-transition", emittedTarget: "state", emittedText: "state = nil", rhs: "nil", reads: [] },
-                ],
-            },
-            {
-                id: 30,
-                predecessors: [],
-                successors: [],
-                operations: [
-                    { kind: "version-define", emittedTarget: "tail", emittedText: "local tail = { select(2, unpack(args)) }", rhs: "{ select(2, unpack(args)) }", reads: [] },
-                    { kind: "version-define", emittedTarget: "head", emittedText: "local head = args[1]", rhs: "args[1]", reads: [] },
-                    { kind: "version-define", emittedTarget: "count", emittedText: "local count = select(\"#\", unpack(tail))", rhs: "select(\"#\", unpack(tail))", reads: ["tail"] },
-                    { kind: "return-payload", terminalCompilerReturnPayload: true, returnExpressions: ["head", "count"], emittedText: "ReturnVal = { head, count }", rhs: "{ head, count }", reads: ["head", "count"] },
-                    { kind: "state-transition", emittedTarget: "state", emittedText: "state = nil", rhs: "nil", reads: [] },
-                ],
-            },
-        ],
-    },
-});
-assert.equal(nestedVarargClosureRegions.applied, true);
-assert(nestedVarargClosureRegions.source.includes("local fn = function(head, ...)"));
-assert(!nestedVarargClosureRegions.source.includes("local head = args[1]"));
-assert(!nestedVarargClosureRegions.source.includes("local tail ="));
-assert(nestedVarargClosureRegions.source.includes('local count = select("#", ...)'));
-parseLua(nestedVarargClosureRegions.source, "<beta-cf-nested-vararg-closure-output>");
 
 const capturedClosureRejected = solveBetaControlFlow(ast, {
     applied: true,
@@ -722,8 +668,7 @@ const numericForMutatedVariable = solveBetaControlFlow(ast, {
 });
 assert.equal(numericForMutatedVariable.applied, true);
 assert.equal(numericForMutatedVariable.numericForLoopCount, 1);
-assert(numericForMutatedVariable.source.includes("loopVar = (loopVar + 10)"));
-assert(!numericForMutatedVariable.source.includes("loopVar = next"));
+assert(numericForMutatedVariable.source.includes("loopVar = next"));
 assert(numericForMutatedVariable.source.includes("consume(loopVar)"));
 assert(!numericForMutatedVariable.source.includes("current = current + step"));
 parseLua(numericForMutatedVariable.source, "<beta-cf-numeric-for-mutated-variable-output>");
@@ -789,8 +734,7 @@ assert.equal(numericForBranchBody.numericForLoopCount, 1);
 assert.equal(numericForBranchBody.branchCount, 1);
 assert.equal(numericForBranchBody.joinCount, 1);
 assert(numericForBranchBody.source.includes("for loopVar = start, final, step do"));
-assert(numericForBranchBody.source.includes("if predicate(loopVar) then"));
-assert(!numericForBranchBody.source.includes("local branchCond = predicate(loopVar)"));
+assert(numericForBranchBody.source.includes("if branchCond then"));
 assert(numericForBranchBody.source.includes("markEven(loopVar)"));
 assert(numericForBranchBody.source.includes("markOdd(loopVar)"));
 assert(numericForBranchBody.source.includes("afterBranch(loopVar)"));
@@ -826,16 +770,16 @@ const whileGuardStructured = solveBetaControlFlow(ast, {
 assert.equal(whileGuardStructured.applied, true);
 assert.equal(whileGuardStructured.whileLoopCount, 1);
 assert.equal(whileGuardStructured.numericForLoopCount, 0);
-assert(whileGuardStructured.source.includes("while predicate() do"));
-assert(!whileGuardStructured.source.includes("if not (cond) then"));
-assert(!whileGuardStructured.source.includes("local cond = predicate()"));
+assert(whileGuardStructured.source.includes("while true do"));
+assert(whileGuardStructured.source.includes("if not (cond) then"));
+assert(whileGuardStructured.source.includes("break"));
 assert(whileGuardStructured.source.includes("local sink = consume()"));
 assert(!whileGuardStructured.source.includes("state ="));
-const whileIndex = whileGuardStructured.source.indexOf("while predicate() do");
-
-
+const whileIndex = whileGuardStructured.source.indexOf("while true do");
+const conditionIndex = whileGuardStructured.source.indexOf("local cond = predicate()");
+const guardIndex = whileGuardStructured.source.indexOf("if not (cond) then");
 const bodyIndex = whileGuardStructured.source.indexOf("local sink = consume()");
-assert(whileIndex >= 0 && whileIndex < bodyIndex);
+assert(whileIndex >= 0 && whileIndex < conditionIndex && conditionIndex < guardIndex && guardIndex < bodyIndex);
 parseLua(whileGuardStructured.source, "<beta-cf-while-guard-output>");
 
 
@@ -880,8 +824,7 @@ assert(repeatUntilStructured.source.includes("deadScratch = nil"));
 assert(repeatUntilStructured.source.includes("local setup = args"));
 assert(repeatUntilStructured.source.includes("repeat"));
 assert(repeatUntilStructured.source.includes("consume()"));
-assert(repeatUntilStructured.source.includes("until realFn()"));
-assert(!repeatUntilStructured.source.includes("local realCond = realFn()"));
+assert(repeatUntilStructured.source.includes("until realCond"));
 assert(!repeatUntilStructured.source.includes("junkFn"));
 assert(!repeatUntilStructured.source.includes("junkCond"));
 assert(!repeatUntilStructured.source.includes("state ="));
@@ -924,8 +867,7 @@ assert.equal(reorderedRepeatCondition.repeatLoopCount, 1);
 assert.equal(reorderedRepeatCondition.removedRepeatCompilerConditionOperationCount, 4);
 assert(!reorderedRepeatCondition.source.includes("junkA"));
 assert(!reorderedRepeatCondition.source.includes("junkB"));
-assert(reorderedRepeatCondition.source.includes("until realFn()"));
-assert(!reorderedRepeatCondition.source.includes("local realCond = realFn()"));
+assert(reorderedRepeatCondition.source.includes("until realCond"));
 parseLua(reorderedRepeatCondition.source, "<beta-cf-reordered-repeat-output>");
 
 const effectfulReorderedRepeatRejected = solveBetaControlFlow(ast, {
@@ -1023,8 +965,7 @@ const whileBreakStructured = solveBetaControlFlow(ast, {
 });
 assert.equal(whileBreakStructured.applied, true);
 assert.equal(whileBreakStructured.whileLoopCount, 1);
-assert(whileBreakStructured.source.includes("if shouldBreak() then"));
-assert(!whileBreakStructured.source.includes("local breakCond = shouldBreak()"));
+assert(whileBreakStructured.source.includes("if breakCond then"));
 assert(whileBreakStructured.source.includes("break"));
 assert(whileBreakStructured.source.includes("work()"));
 parseLua(whileBreakStructured.source, "<beta-cf-while-break-output>");
@@ -1058,8 +999,7 @@ const whileContinueStructured = solveBetaControlFlow(ast, {
 });
 assert.equal(whileContinueStructured.applied, true);
 assert.equal(whileContinueStructured.whileLoopCount, 1);
-assert(whileContinueStructured.source.includes("if shouldContinue() then"));
-assert(!whileContinueStructured.source.includes("local continueCond = shouldContinue()"));
+assert(whileContinueStructured.source.includes("if continueCond then"));
 assert(whileContinueStructured.source.includes("continue"));
 assert(whileContinueStructured.source.includes("work()"));
 parseLua(whileContinueStructured.source, "<beta-cf-while-continue-output>");
@@ -1094,8 +1034,7 @@ const whileReturnStructured = solveBetaControlFlow(ast, {
 });
 assert.equal(whileReturnStructured.applied, true);
 assert.equal(whileReturnStructured.whileLoopCount, 1);
-assert(whileReturnStructured.source.includes("if shouldReturn() then"));
-assert(!whileReturnStructured.source.includes("local returnCond = shouldReturn()"));
+assert(whileReturnStructured.source.includes("if returnCond then"));
 assert(whileReturnStructured.source.includes("return ret"));
 assert(!whileReturnStructured.source.includes("continue"));
 parseLua(whileReturnStructured.source, "<beta-cf-while-return-output>");
@@ -1335,7 +1274,7 @@ const overflowFactoryNormalized = solveBetaControlFlow(ast, {
     },
 });
 assert.equal(overflowFactoryNormalized.applied, true);
-assert(overflowFactoryNormalized.source.includes("function RegisterOverflow.v1()"));
+assert(overflowFactoryNormalized.source.includes("RegisterOverflow.v1 = function(...)"));
 assert(!overflowFactoryNormalized.source.includes("createClosure2("));
 assert(!overflowFactoryNormalized.source.includes("RegisterOverflow["));
 parseLua(overflowFactoryNormalized.source, "<beta-cf-overflow-factory-normalized>");
@@ -1388,160 +1327,5 @@ const dynamicOverflowRejected = solveBetaControlFlow(ast, {
 });
 assert.equal(dynamicOverflowRejected.applied, false);
 assert(dynamicOverflowRejected.reason.includes("non-static"));
-
-// Regression: a nested branch may have a local shared join that is itself a
-// proven terminal return, even when that join cannot reach the surrounding
-// partial continuation. Keep that terminal join local so it is emitted once.
-const terminalLocalJoinGraph = {
-    applied: true,
-    graph: {
-        cfgComplete: true,
-        stateName: "state",
-        entries: [1],
-        states: [
-            { id: 1, predecessors: [], successors: [2, 8], operations: [
-                { kind: "state-transition", emittedTarget: "state", rhs: "condOuter and 2 or 8", emittedText: "state = condOuter and 2 or 8", reads: ["condOuter"] },
-            ] },
-            { id: 2, predecessors: [1], successors: [3, 6], operations: [
-                { kind: "state-transition", emittedTarget: "state", rhs: "condMiddle and 3 or 6", emittedText: "state = condMiddle and 3 or 6", reads: ["condMiddle"] },
-            ] },
-            { id: 3, predecessors: [2], successors: [4, 5], operations: [
-                { kind: "state-transition", emittedTarget: "state", rhs: "condInner and 4 or 5", emittedText: "state = condInner and 4 or 5", reads: ["condInner"] },
-            ] },
-            { id: 4, predecessors: [3], successors: [5], operations: [
-                { kind: "statement", emittedText: "mark()", reads: [] },
-                { kind: "state-transition", emittedTarget: "state", rhs: "5", emittedText: "state = 5", reads: [] },
-            ] },
-            { id: 5, predecessors: [3, 4], successors: [], operations: [
-                { kind: "return-payload", terminalCompilerReturnPayload: true, returnExpressions: ["1"], emittedTarget: "ReturnVal", emittedText: "ReturnVal = { 1 }", rhs: "{ 1 }", reads: [] },
-                { kind: "state-transition", emittedTarget: "state", rhs: "nil", emittedText: "state = nil", reads: [] },
-            ] },
-            { id: 6, predecessors: [2], successors: [9], operations: [
-                { kind: "state-transition", emittedTarget: "state", rhs: "9", emittedText: "state = 9", reads: [] },
-            ] },
-            { id: 8, predecessors: [1], successors: [9], operations: [
-                { kind: "state-transition", emittedTarget: "state", rhs: "9", emittedText: "state = 9", reads: [] },
-            ] },
-            { id: 9, predecessors: [6, 8], successors: [], operations: [
-                { kind: "return-payload", terminalCompilerReturnPayload: true, returnExpressions: ["2"], emittedTarget: "ReturnVal", emittedText: "ReturnVal = { 2 }", rhs: "{ 2 }", reads: [] },
-                { kind: "state-transition", emittedTarget: "state", rhs: "nil", emittedText: "state = nil", reads: [] },
-            ] },
-        ],
-    },
-};
-const terminalLocalJoinProduction = solveBetaControlFlow(ast, terminalLocalJoinGraph);
-assert.equal(terminalLocalJoinProduction.applied, true);
-assert(terminalLocalJoinProduction.source.includes("mark()"));
-assert.equal((terminalLocalJoinProduction.source.match(/return 1/g) || []).length, 1);
-const terminalLocalJoinExperimental = solveExperimentalBetaControlFlow(ast, terminalLocalJoinGraph);
-assert.equal(terminalLocalJoinExperimental.applied, true);
-assert.equal((terminalLocalJoinExperimental.source.match(/return 1/g) || []).length, 1);
-parseLua(terminalLocalJoinProduction.source, "<beta-cf-terminal-local-join>");
-// Regression: scalar VM compound writes stay native through beta-CF once
-// lifetime analysis proves the read-modify-write belongs to one beta epoch.
-const nativeCompoundCfSource = `vm = function(state, args, upvalues, gcProxy)
-    local r1, r2, ReturnVal
-    while state do
-        if state == 1 then
-            r1 = 10
-            r2 = 2
-            r1 -= r2
-            ReturnVal = { r1 }
-            state = nil
-        end
-    end
-    state = #gcProxy
-    return unpack(ReturnVal)
-end
-root = createClosure(1, {})`;
-const nativeCompoundCfAst = parseLuaStructural(nativeCompoundCfSource, "<beta-cf-native-compound>");
-const nativeCompoundCfBeta = versionVmBlockRegisters(nativeCompoundCfSource, nativeCompoundCfAst);
-assert.equal(nativeCompoundCfBeta.nativeCompoundWriteCount, 1);
-const nativeCompoundCfResult = solveBetaControlFlow(nativeCompoundCfAst, nativeCompoundCfBeta);
-assert.equal(nativeCompoundCfResult.applied, true);
-assert(nativeCompoundCfResult.source.includes("-="));
-assert(!/\br1\s*-=/.test(nativeCompoundCfResult.source));
-parseLua(nativeCompoundCfResult.source, "<beta-cf-native-compound-output>");
-
-// Regression: Prometheus may compile a repeat condition once before the body and
-// again as the real post-test. A short-circuit condition can create nested suffix
-// matches inside the full duplicated region; recover only the unique maximal copy.
-const repeatShortCircuitInput = path.join(__dirname, "..", "sample", "36.txt");
-const repeatShortCircuitTemp = path.join(os.tmpdir(), `beta-cf-repeat-short-circuit-${process.pid}.lua`);
-try {
-    const normal = runDeobfuscator(repeatShortCircuitInput, repeatShortCircuitTemp, { analyzeBindings: false });
-    const normalAst = parseLuaStructural(normal.outputSource, "<beta-cf-repeat-short-circuit-normal>");
-    const beta = versionVmBlockRegisters(normal.outputSource, normalAst);
-    assert.equal(beta.applied, true);
-
-    const production = solveBetaControlFlow(normalAst, beta);
-    assert.equal(production.applied, true);
-    assert.equal(production.repeatLoopCount, 1);
-    assert.equal(production.removedRepeatCompilerConditionRegionCount, 1);
-    assert.equal(production.removedRepeatCompilerConditionStateCount, 4);
-    assert(production.source.includes('"short-repeat-body"'));
-
-    const experimental = solveExperimentalBetaControlFlow(normalAst, beta);
-    assert.equal(experimental.applied, true);
-    assert.equal(experimental.repeatLoopCount, 1);
-    assert.equal(experimental.removedRepeatCompilerConditionRegionCount, 1);
-    assert.equal(experimental.removedRepeatCompilerConditionStateCount, 4);
-} finally {
-    if (fs.existsSync(repeatShortCircuitTemp)) fs.unlinkSync(repeatShortCircuitTemp);
-}
-
-
-const parallelAtomicCfSource = `vm = function(state, args, upvalues, gcProxy)
-    local r1, r2, ReturnVal
-    while state do
-        if state == 1 then
-            r1 = 10
-            r2 = 20
-            r1, r2 = r2, r1
-            ReturnVal = consume(r1, r2)
-            ReturnVal = {}
-            state = nil
-        end
-    end
-    state = #gcProxy
-    return unpack(ReturnVal)
-end
-root = createClosure(1, {})`;
-const parallelAtomicCfAst = parseLua(parallelAtomicCfSource, "<beta-cf-parallel-atomic-input>");
-const parallelAtomicCfBeta = versionVmBlockRegisters(parallelAtomicCfSource, parallelAtomicCfAst);
-const parallelAtomicCfOp = parallelAtomicCfBeta.graph.states[0].operations.find(operation => operation.kind === "multi-write");
-assert(parallelAtomicCfOp);
-const parallelAtomicCf = solveBetaControlFlow(parallelAtomicCfAst, parallelAtomicCfBeta);
-assert.equal(parallelAtomicCf.applied, true);
-assert(parallelAtomicCf.source.includes(parallelAtomicCfOp.emittedText));
-assert(parallelAtomicCf.source.includes(`consume(${parallelAtomicCfOp.emittedTargets[0]},${parallelAtomicCfOp.emittedTargets[1]})`) ||
-    parallelAtomicCf.source.includes(`consume(${parallelAtomicCfOp.emittedTargets[0]}, ${parallelAtomicCfOp.emittedTargets[1]})`));
-parseLua(parallelAtomicCf.source, "<beta-cf-parallel-atomic-output>");
-
-const complexCompoundCfSource = `vm = function(state, args, upvalues, gcProxy)
-    local r1, r2, r3, ReturnVal
-    while state do
-        if state == 1 then
-            r1 = bucket
-            r2 = indexValue
-            r3 = delta
-            r1[getIndex(r2)] += r3
-            r1.value *= r2
-            ReturnVal = {}
-            state = nil
-        end
-    end
-    state = #gcProxy
-    return unpack(ReturnVal)
-end
-root = createClosure(1, {})`;
-const complexCompoundCfAst = parseLua(complexCompoundCfSource, "<beta-cf-complex-compound-input>");
-const complexCompoundCfBeta = versionVmBlockRegisters(complexCompoundCfSource, complexCompoundCfAst);
-const complexCompoundCf = solveBetaControlFlow(complexCompoundCfAst, complexCompoundCfBeta);
-assert.equal(complexCompoundCf.applied, true);
-assert.equal((complexCompoundCf.source.match(/getIndex\(/g) || []).length, 1);
-assert(complexCompoundCf.source.includes("+="));
-assert(complexCompoundCf.source.includes("*="));
-parseLua(complexCompoundCf.source, "<beta-cf-complex-compound-output>");
 
 console.log("beta control-flow tests passed");

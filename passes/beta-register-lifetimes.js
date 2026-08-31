@@ -10,9 +10,6 @@ function isNilLiteral(node) {
     return node?.type === "NilLiteral";
 }
 
-const EMPTY_DEFINITION_SET = new Set();
-const EMPTY_DEFINITION_MAP = new Map();
-
 function setEquals(a, b) {
     if (a === b) return true;
     if (!a || !b || a.size !== b.size) return false;
@@ -30,40 +27,17 @@ function mapOfSetsEquals(a, b) {
 }
 
 function cloneSetMap(map) {
-    // Reaching-definition sets are immutable after they are stored. Transfer and
-    // statement replay replace a written register's whole Set instead of mutating
-    // inherited Sets, so a shallow Map copy is sufficient (copy-on-write).
-    return new Map(map || []);
+    const out = new Map();
+    for (const [key, values] of map || []) out.set(key, new Set(values));
+    return out;
 }
 
 function mergeSetMaps(maps) {
-    if (!maps.length) return new Map();
-    if (maps.length === 1) return new Map(maps[0] || []);
-
-    // Sets stored in reaching maps are immutable. Start by sharing the first
-    // predecessor's Sets and clone only a name whose later predecessor actually
-    // contributes a different definition.
-    const out = new Map(maps[0] || []);
-    const owned = new Set();
-    for (let mapIndex = 1; mapIndex < maps.length; mapIndex++) {
-        for (const [key, values] of maps[mapIndex] || []) {
-            const existing = out.get(key);
-            if (!existing) {
-                out.set(key, values);
-                continue;
-            }
-            if (existing === values) continue;
-            let needsUnion = false;
-            for (const value of values) {
-                if (!existing.has(value)) { needsUnion = true; break; }
-            }
-            if (!needsUnion) continue;
-            let target = existing;
-            if (!owned.has(key)) {
-                target = new Set(existing);
-                out.set(key, target);
-                owned.add(key);
-            }
+    const out = new Map();
+    for (const map of maps) {
+        for (const [key, values] of map || []) {
+            let target = out.get(key);
+            if (!target) out.set(key, target = new Set());
             for (const value of values) target.add(value);
         }
     }
@@ -149,18 +123,10 @@ function statementReadNames(statement, candidateNames) {
 }
 
 function statementWrittenNames(statement, candidateNames) {
-    if (statement?.type === "CompoundAssignmentStatement") {
-        return isIdentifier(statement.variable) && candidateNames.has(statement.variable.name)
-            ? [statement.variable.name]
-            : [];
-    }
     if (statement?.type !== "AssignmentStatement" && statement?.type !== "LocalStatement") return [];
     const out = [];
-    const seen = new Set();
     for (const variable of statement.variables || []) {
-        if (!isIdentifier(variable) || !candidateNames.has(variable.name) || seen.has(variable.name)) continue;
-        seen.add(variable.name);
-        out.push(variable.name);
+        if (isIdentifier(variable) && candidateNames.has(variable.name)) out.push(variable.name);
     }
     return out;
 }
@@ -259,14 +225,7 @@ function analyzeBetaRegisterLifetimes({
                     plan?.kind === "multi-call-write" &&
                     variables.length >= 2 && init.length === 1 && init[0]?.type === "CallExpression" &&
                     variables.some(variable => isIdentifier(variable, name));
-                const atomicParallel =
-                    plan?.kind === "multi-write" &&
-                    variables.some(variable => isIdentifier(variable, name));
-                const compoundMutation =
-                    plan?.kind === "compound-write" &&
-                    statement?.type === "CompoundAssignmentStatement" &&
-                    isIdentifier(statement.variable, name);
-                const supported = (exactSingle && plan?.kind === "versioned") || atomicMultiCall || atomicParallel || compoundMutation;
+                const supported = (exactSingle && plan?.kind === "versioned") || atomicMultiCall;
                 const id = supported
                     ? `d${nextDefinitionId++}`
                     : `u:${block.stateId}:${statement.range?.[0] ?? statementIndex}:${name}`;
@@ -276,13 +235,11 @@ function analyzeBetaRegisterLifetimes({
                     blockState: block.stateId,
                     statementIndex,
                     statement,
-                    rhs: exactSingle ? init[0] : (atomicMultiCall ? init[0] : (compoundMutation ? statement.value : null)),
+                    rhs: exactSingle ? init[0] : (atomicMultiCall ? init[0] : null),
                     supported,
-                    compoundMutation,
                     isNil: exactSingle && supported && isNilLiteral(init[0]),
                     sourceOffset: statement.range?.[0] ?? Number.MAX_SAFE_INTEGER,
                     useCount: 0,
-                    reachingSet: new Set([id]),
                 };
                 definitions.push(definition);
                 definitionById.set(id, definition);
@@ -292,38 +249,29 @@ function analyzeBetaRegisterLifetimes({
         }
     }
 
-    // Worklist transfer only needs the last definition of each register in a
-    // block. Precompute those immutable singleton sets once instead of replaying
-    // every statement and allocating a new Set on every worklist visit.
-    const transferDefinitionsByState = new Map();
-    for (const definition of definitions) {
-        let byName = transferDefinitionsByState.get(definition.blockState);
-        if (!byName) transferDefinitionsByState.set(definition.blockState, byName = new Map());
-        byName.set(definition.name, definition.reachingSet);
-    }
-
     const inDefinitions = new Map(blocks.map(block => [block.stateId, new Map()]));
     const outDefinitions = new Map(blocks.map(block => [block.stateId, new Map()]));
-    const entryUnknownMaps = new Map();
+    const entryUnknown = new Map();
 
-    function entryUnknownMap(stateId) {
-        let map = entryUnknownMaps.get(stateId);
-        if (map) return map;
-        map = new Map();
-        for (const name of valueNames) {
-            const id = `u:entry:${stateId}:${name}`;
+    function entryUnknownId(stateId, name) {
+        const key = `${stateId}\0${name}`;
+        let id = entryUnknown.get(key);
+        if (!id) {
+            id = `u:entry:${stateId}:${name}`;
+            entryUnknown.set(key, id);
             unknownDefinitionIds.add(id);
-            map.set(name, new Set([id]));
         }
-        entryUnknownMaps.set(stateId, map);
-        return map;
+        return id;
     }
 
     function transfer(block, incoming) {
-        const writes = transferDefinitionsByState.get(block.stateId);
-        if (!writes?.size) return incoming;
         const current = cloneSetMap(incoming);
-        for (const [name, reachingSet] of writes) current.set(name, reachingSet);
+        for (const statement of block.statements) {
+            for (const name of cachedStatementWrittenNames(statement, valueNames)) {
+                const definition = definitionByStatementAndName.get(definitionKey(statement, name));
+                if (definition) current.set(name, new Set([definition.id]));
+            }
+        }
         return current;
     }
 
@@ -334,21 +282,15 @@ function analyzeBetaRegisterLifetimes({
         while (cursor < queue.length) {
             const block = queue[cursor++];
             queued.delete(block.stateId);
-            const predBlocks = predecessors.get(block.stateId) || [];
-            const isEntry = closureEntries.has(block.stateId) || predBlocks.length === 0;
-            let nextIn;
-            if (isEntry && predBlocks.length === 0) {
-                // Entry maps are immutable and identical on every revisit.
-                nextIn = entryUnknownMap(block.stateId);
-            } else if (!isEntry && predBlocks.length === 1) {
-                // Published reaching maps/Sets are immutable. A linear edge can
-                // share the predecessor map directly; transfer() copies only if
-                // this block actually writes a register.
-                nextIn = outDefinitions.get(predBlocks[0].stateId) || EMPTY_DEFINITION_MAP;
-            } else {
-                const predMaps = predBlocks.map(pred => outDefinitions.get(pred.stateId));
-                if (isEntry) predMaps.push(entryUnknownMap(block.stateId));
-                nextIn = mergeSetMaps(predMaps);
+            const predMaps = (predecessors.get(block.stateId) || []).map(pred => outDefinitions.get(pred.stateId));
+            const nextIn = mergeSetMaps(predMaps);
+            const isEntry = closureEntries.has(block.stateId) || predMaps.length === 0;
+            if (isEntry) {
+                for (const name of valueNames) {
+                    let defs = nextIn.get(name);
+                    if (!defs) nextIn.set(name, defs = new Set());
+                    defs.add(entryUnknownId(block.stateId, name));
+                }
             }
             const nextOut = transfer(block, nextIn);
             const inChanged = !mapOfSetsEquals(nextIn, inDefinitions.get(block.stateId));
@@ -366,7 +308,8 @@ function analyzeBetaRegisterLifetimes({
         }
     } else {
         for (const block of blocks) {
-            const incoming = entryUnknownMap(block.stateId);
+            const incoming = new Map();
+            for (const name of valueNames) incoming.set(name, new Set([entryUnknownId(block.stateId, name)]));
             inDefinitions.set(block.stateId, incoming);
             outDefinitions.set(block.stateId, transfer(block, incoming));
         }
@@ -375,19 +318,19 @@ function analyzeBetaRegisterLifetimes({
     const reachingBeforeStatement = new Map();
     const uses = [];
     for (const block of blocks) {
-        const incoming = inDefinitions.get(block.stateId) || EMPTY_DEFINITION_MAP;
-        const current = cloneSetMap(incoming);
+        const current = cloneSetMap(inDefinitions.get(block.stateId) || new Map());
         for (let statementIndex = 0; statementIndex < block.statements.length; statementIndex++) {
             const statement = block.statements[statementIndex];
             const reads = cachedStatementReadNames(statement, valueNames);
             const writes = cachedStatementWrittenNames(statement, valueNames);
-            // Only write-bearing statements need a later reaching-before snapshot.
-            // Read-only statements can attach the immutable reaching Set directly
-            // to their use records.
-            const before = writes.length ? new Map() : null;
+            const before = new Map();
+            for (const name of new Set([...reads, ...writes])) {
+                const definitions = current.get(name);
+                if (definitions) before.set(name, new Set(definitions));
+            }
+            reachingBeforeStatement.set(statement, before);
             for (const name of reads) {
-                const reaching = current.get(name) || EMPTY_DEFINITION_SET;
-                if (before && reaching.size) before.set(name, reaching);
+                const reaching = new Set(before.get(name) || []);
                 const use = { blockState: block.stateId, statementIndex, statement, name, reachingDefinitionIds: reaching };
                 uses.push(use);
                 for (const defId of reaching) {
@@ -395,17 +338,9 @@ function analyzeBetaRegisterLifetimes({
                     if (definition) definition.useCount++;
                 }
             }
-            if (before) {
-                for (const name of writes) {
-                    if (before.has(name)) continue;
-                    const reaching = current.get(name);
-                    if (reaching) before.set(name, reaching);
-                }
-                reachingBeforeStatement.set(statement, before);
-            }
             for (const name of writes) {
                 const definition = definitionByStatementAndName.get(definitionKey(statement, name));
-                if (definition) current.set(name, definition.reachingSet);
+                if (definition) current.set(name, new Set([definition.id]));
             }
         }
     }
@@ -517,18 +452,17 @@ function analyzeBetaRegisterLifetimes({
     }
 
     // Cleanup is only accepted after def/use proof: direct nil, nil value never read,
-    // and all reaching prior values are known non-nil ordinary definitions. The prior
-    // value does not need to have been read: Prometheus also releases reserved/scratch
-    // registers whose current value was never consumed. Explicit source `x = nil`
-    // normally compiles through a temporary then a copy into x, so the nil temporary
-    // itself has a use and does not satisfy this direct-cleanup rule.
+    // all reaching prior values are known non-nil ordinary definitions, and at least
+    // one prior value was actually used. Explicit source `x = nil` normally compiles
+    // through a temporary then a copy into x, so the nil temporary itself has a use and
+    // does not satisfy this rule.
     const cleanupCandidates = [];
     const cleanupByStatement = new Map();
     let nextCleanupId = 1;
     for (const definition of definitions) {
         if (!ordinaryNames.has(definition.name)) continue;
         if (!definition.supported || !definition.isNil || definition.useCount !== 0) continue;
-        const priorIds = reachingBeforeStatement.get(definition.statement)?.get(definition.name) || EMPTY_DEFINITION_SET;
+        const priorIds = new Set(reachingBeforeStatement.get(definition.statement)?.get(definition.name) || []);
         if (!priorIds.size) continue;
         let blocked = false;
         const priorDefinitions = [];
@@ -545,6 +479,7 @@ function analyzeBetaRegisterLifetimes({
             priorDefinitions.push(prior);
         }
         if (blocked || !priorDefinitions.length) continue;
+        if (!priorDefinitions.some(prior => prior.useCount > 0)) continue;
 
         const cleanup = {
             id: `k${nextCleanupId++}`,
@@ -570,7 +505,7 @@ function analyzeBetaRegisterLifetimes({
         const deps = new Set();
         const before = reachingBeforeStatement.get(definition.statement) || new Map();
         for (const readName of cachedStatementReadNames(definition.statement, valueNames)) {
-            const reaching = before.get(readName) || EMPTY_DEFINITION_SET;
+            const reaching = new Set(before.get(readName) || []);
             if (!reaching.size) continue;
             if ([...reaching].some(id => unknownDefinitionIds.has(id))) continue;
             let valid = true;
@@ -623,28 +558,6 @@ function analyzeBetaRegisterLifetimes({
         for (let index = 1; index < concrete.length; index++) unionFind.union(concrete[0], concrete[index]);
     }
 
-    // Native compound assignment is direct read-modify-write evidence for the
-    // same physical register. Merge the post-write definition with every proven
-    // concrete reaching definition observed by that compound read. Unlike generic
-    // arithmetic assignment, this syntax itself proves storage continuity.
-    let compoundMutationMergeCount = 0;
-    for (const definition of ordinaryDefinitions) {
-        if (!definition.compoundMutation) continue;
-        const priorIds = reachingBeforeStatement.get(definition.statement)?.get(definition.name) || EMPTY_DEFINITION_SET;
-        if (!priorIds.size || [...priorIds].some(id => unknownDefinitionIds.has(id))) continue;
-        const priorConcrete = [...priorIds].filter(id => {
-            const prior = definitionById.get(id);
-            return prior && ordinaryDefinitionIds.has(id) && prior.name === definition.name;
-        });
-        if (priorConcrete.length !== priorIds.size) continue;
-        for (const priorId of priorConcrete) {
-            const beforeRoot = unionFind.find(definition.id);
-            const priorRoot = unionFind.find(priorId);
-            unionFind.union(definition.id, priorId);
-            if (beforeRoot !== priorRoot) compoundMutationMergeCount++;
-        }
-    }
-
     // Value dependence alone does not prove source-binding ownership: a scratch
     // register can help compute a value that is later copied back into that same
     // physical register. Build the transitive dependency closure here, but merge
@@ -667,51 +580,11 @@ function analyzeBetaRegisterLifetimes({
         }
         dependencyClosureByDefinitionId.set(definition.id, seen);
     }
-    function expressionContainsCall(node) {
-        if (!node || typeof node !== "object") return false;
-        if (node.type === "CallExpression") return true;
-        for (const [key, value] of Object.entries(node)) {
-            if (key === "loc" || key === "range") continue;
-            if (Array.isArray(value)) {
-                for (const child of value) {
-                    if (expressionContainsCall(child)) return true;
-                }
-            } else if (value && typeof value === "object" && expressionContainsCall(value)) {
-                return true;
-            }
-        }
-        return false;
-    }
-
-    function dependencyPathCrossesCall(fromId, targetId) {
-        const queue = [...(dependenciesByDefinitionId.get(fromId) || [])].map(id => ({ id, crossedCall: false }));
-        const seen = new Set();
-        let cursor = 0;
-        while (cursor < queue.length) {
-            const item = queue[cursor++];
-            const seenKey = item.id + "\0" + (item.crossedCall ? "1" : "0");
-            if (seen.has(seenKey)) continue;
-            seen.add(seenKey);
-            const dependency = definitionById.get(item.id);
-            if (!dependency?.supported) continue;
-            const crossedCall = item.crossedCall || expressionContainsCall(dependency.rhs);
-            if (item.id === targetId) {
-                if (crossedCall) return true;
-                continue;
-            }
-            for (const parentId of dependenciesByDefinitionId.get(item.id) || []) {
-                queue.push({ id: parentId, crossedCall });
-            }
-        }
-        return false;
-    }
 
     // Compiler-backed ownership signal: after a physical register is reserved as a
     // VAR_REGISTER, later source assignments write it from another register. Use
     // only proven anchors, then walk backward through same-register writes that are
     // linked by value provenance or where both writes are simple identifier copies.
-    // A call result copied back into a reused physical register is a lifetime barrier:
-    // argument scratch reaching the call does not prove ownership of the returned value.
     function mergeBackwardCopyChain(seedIds) {
         let mergeCount = 0;
         const queue = [...seedIds];
@@ -729,7 +602,7 @@ function analyzeBetaRegisterLifetimes({
             // transitively depends on them. Only compiler write-back copies can
             // prove continuity with an earlier same-register definition.
             if (!isIdentifier(current.rhs)) continue;
-            const priorIds = reachingBeforeStatement.get(current.statement)?.get(current.name) || EMPTY_DEFINITION_SET;
+            const priorIds = new Set(reachingBeforeStatement.get(current.statement)?.get(current.name) || []);
             if (!priorIds.size || [...priorIds].some(id => unknownDefinitionIds.has(id))) continue;
             for (const priorId of priorIds) {
                 const prior = definitionById.get(priorId);
@@ -737,8 +610,6 @@ function analyzeBetaRegisterLifetimes({
                 const provenanceLinked = dependencyClosureByDefinitionId.get(currentId)?.has(priorId) === true;
                 const copyLinked = isIdentifier(current.rhs) && isIdentifier(prior.rhs);
                 const alreadyLinked = unionFind.find(currentId) === unionFind.find(priorId);
-                const crossesCallBoundary = provenanceLinked && dependencyPathCrossesCall(currentId, priorId);
-                if (crossesCallBoundary && !copyLinked && !alreadyLinked) continue;
                 if (!provenanceLinked && !copyLinked && !alreadyLinked) continue;
                 const beforeRoot = unionFind.find(currentId);
                 const priorRoot = unionFind.find(priorId);
@@ -770,7 +641,7 @@ function analyzeBetaRegisterLifetimes({
             const before = reachingBeforeStatement.get(statement) || new Map();
             const returnedNames = new Set(cachedStatementReadNames(statement, ordinaryNames));
             for (const name of returnedNames) {
-                const ids = before.get(name) || EMPTY_DEFINITION_SET;
+                const ids = new Set(before.get(name) || []);
                 if (!ids.size || [...ids].some(id => unknownDefinitionIds.has(id))) continue;
                 const seeds = [];
                 let valid = true;
@@ -937,7 +808,6 @@ function analyzeBetaRegisterLifetimes({
             useCount: uses.length,
             provenanceEdgeCount,
             anchoredCopyMergeCount,
-            compoundMutationMergeCount,
             cleanupAnchoredCopyMergeCount,
             terminalReturnAnchorCount,
             terminalReturnCopyMergeCount,

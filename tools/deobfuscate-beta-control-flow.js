@@ -20,11 +20,7 @@ function generateDeobfuscatedControlFlow(inputPath, normalOutputPath = null, con
     // VM binding recovery is diagnostic-only for normal output. The beta pipeline
     // rebuilds its own register/lifetime/capture proof, so skip that duplicate
     // analysis when normal output is immediately handed to beta-CF in-process.
-    const normal = runDeobfuscator(inputPath, normalPath, {
-        analyzeBindings: false,
-        structuralIntermediateAsts: true,
-        structuralOutputAst: true,
-    });
+    const normal = runDeobfuscator(inputPath, normalPath, { analyzeBindings: false });
     const generated = generateBetaControlFlowFromSource(
         normal.outputSource,
         normal.outputAst,
@@ -39,7 +35,6 @@ function main() {
         throw new Error("Usage: node tools/deobfuscate-beta-control-flow.js <sample.txt> [normal.lua] [output.beta.cf.lua]");
     }
     const result = generateDeobfuscatedControlFlow(inputPath, process.argv[3] || null, process.argv[4] || null);
-    if (!result.normal.formatterSkipped) console.log(`Input formatted before parse: ${result.normal.formatted}`);
     console.log(`Normal output: ${result.normalOutputPath}`);
     console.log(`Beta-CF output: ${result.outputPath}`);
     console.log(`States: ${result.controlFlow.stateCount}`);

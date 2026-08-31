@@ -14,8 +14,9 @@ for %%F in ("%sampleName%") do (
 
 if not defined inputExt set "inputFile=%inputFile%.txt"
 set "inputPath=sample\%inputFile%"
-set "normalPath=output\%outputName%.normal.lua"
-set "productionPath=output\%outputName%.lua"
+set "normalPath=output\%outputName%.lua"
+set "betaPath=output\%outputName%.beta.lua"
+set "cfPath=output\%outputName%.beta.cf.lua"
 
 if not exist "%inputPath%" (
     echo [ERROR] "%inputPath%" not found.
@@ -25,30 +26,40 @@ if not exist "%inputPath%" (
 if not exist "output" mkdir "output"
 
 echo.
-echo [1] Normal intermediate
-echo [2] Production
+echo [1] Normal
+echo [2] Beta
+echo [3] CF
 set "mode=%~2"
-if not defined mode set /p "mode=Select deobf mode [normal/production]: "
+if not defined mode set /p "mode=Select deobf mode [normal/beta/cf]: "
 if /i "%mode%"=="1" set "mode=normal"
-if /i "%mode%"=="2" set "mode=production"
-if /i "%mode%"=="prod" set "mode=production"
-if /i "%mode%"=="cf" set "mode=production"
-echo Input: "%inputPath%"
+if /i "%mode%"=="2" set "mode=beta"
+if /i "%mode%"=="3" set "mode=cf"
 
 echo.
+echo Input: "%inputPath%"
+
+node main.js "%inputPath%" "%normalPath%"
+if errorlevel 1 goto :failed
+
 if /i "%mode%"=="normal" (
-    node main.js "%inputPath%" "%normalPath%"
-    if errorlevel 1 goto :failed
     echo.
     echo Done: "%normalPath%"
     exit /b 0
 )
 
-if /i "%mode%"=="production" (
-    node tools\deobfuscate.js "%inputPath%" "%productionPath%"
+if /i "%mode%"=="beta" (
+    node tools\beta-register-versions.js "%normalPath%" "%betaPath%"
     if errorlevel 1 goto :failed
     echo.
-    echo Done: "%productionPath%"
+    echo Done: "%betaPath%"
+    exit /b 0
+)
+
+if /i "%mode%"=="cf" (
+    node tools\beta-control-flow.js "%normalPath%" "%cfPath%"
+    if errorlevel 1 goto :failed
+    echo.
+    echo Done: "%cfPath%"
     exit /b 0
 )
 

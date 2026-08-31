@@ -1,0 +1,31 @@
+flowchart LR
+  ENTRY([ENTRY])
+  STOP([STOP])
+  S1["State 1 [entry]<br/>#1 version-define: local r_v1_1 = createClosure4(2, {})<br/>#2 epoch-start: local r_v2_1 = r_v1_1<br/>#3 version-define: local r_v1_2 = {}<br/>#4 epoch-start: local r_v3_1 = r_v1_2<br/>#5 version-define: local r_v1_3 = createClosure5(3, {})<br/>#6 version-define: local r_v4_1 = 'hee'<br/>#7 effect-write: r_v3_1[r_v4_1] = r_v1_3<br/>#8 version-define: local r_v4_2 = createClosure3(4, {})<br/>#9 version-define: local r_v1_4 = 'yai'<br/>#10 effect-write: r_v3_1[r_v1_4] = r_v4_2<br/>#11 version-define: local r_v1_5 = 'yai'<br/>#12 version-define: local r_v1_6 = r_v3_1[r_v1_5]<br/>#13 version-define: local r_v1_7 = r_v1_6(r_v3_1)<br/>#14 version-define: local r_v1_8 = 'hee'<br/>#15 version-define: local r_v1_9 = r_v3_1[r_v1_8]<br/>#16 version-define: local r_v1_10 = r_v1_9(r_v3_1)<br/>#17 epoch-start: local r_v5_1 = args<br/>#18 version-define: local r_v2_2 = nil<br/>#19 epoch-kill: r_v3_1 = nil<br/>#20 return-payload: ReturnVal = {}<br/>#21 state-transition: state = nil"]
+  S2["State 2 [entry]<br/>#1 version-define: local r_v4_3 = 'print'<br/>#2 version-define: local r_v1_11 = _env[r_v4_3]<br/>#3 epoch-start: local r_v5_2 = 'g'<br/>#4 version-define: local r_v4_4 = r_v1_11(r_v5_2)<br/>#5 return-payload: ReturnVal = {}<br/>#6 state-transition: state = nil"]
+  S3["State 3 [entry]<br/>#1 epoch-start: local r_v5_3 = args[1]<br/>#2 version-define: local r_v4_5 = 'print'<br/>#3 version-define: local r_v1_12 = _env[r_v4_5]<br/>#4 epoch-start: local r_v2_3 = 'hee'<br/>#5 version-define: local r_v4_6 = r_v1_12(r_v2_3, r_v5_3)<br/>#6 epoch-kill: r_v5_3 = nil<br/>#7 return-payload: ReturnVal = {}<br/>#8 state-transition: state = nil"]
+  S4["State 4 [entry]<br/>#1 epoch-start: local r_v5_4 = args[1]<br/>#2 version-define: local r_v4_7 = 'print'<br/>#3 version-define: local r_v1_13 = _env[r_v4_7]<br/>#4 epoch-start: local r_v2_4 = 'yai'<br/>#5 version-define: local r_v4_8 = r_v1_13(r_v2_4, r_v5_4)<br/>#6 epoch-kill: r_v5_4 = nil<br/>#7 return-payload: ReturnVal = {}<br/>#8 state-transition: state = nil"]
+  ENTRY --> S1
+  ENTRY --> S2
+  ENTRY --> S3
+  ENTRY --> S4
+  S1 --> STOP
+  S2 --> STOP
+  S3 --> STOP
+  S4 --> STOP
+  L0(["r2 = r_v2_1"])
+  L0 -. start .-> S1
+  L1(["r2 = r_v2_3"])
+  L1 -. start/read .-> S3
+  L2(["r2 = r_v2_4"])
+  L2 -. start/read .-> S4
+  L3(["r3 = r_v3_1"])
+  L3 -. start/read/read/read/read/read/read/kill .-> S1
+  L4(["r1 = r_v5_1"])
+  L4 -. start .-> S1
+  L5(["r1 = r_v5_2"])
+  L5 -. start/read .-> S2
+  L6(["r1 = r_v5_3"])
+  L6 -. start/read/kill .-> S3
+  L7(["r1 = r_v5_4"])
+  L7 -. start/read/kill .-> S4

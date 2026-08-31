@@ -32,7 +32,7 @@ function walk(node, visit) {
     return true;
 }
 
-const PARSE_CACHE_LIMIT = 131072;
+const PARSE_CACHE_LIMIT = 32768;
 const expressionParseCache = new Map();
 const statementParseCache = new Map();
 
@@ -583,21 +583,7 @@ function containsVmUpvalueMachinery(text) {
     return found;
 }
 
-function deadPrivateReleaseCandidate(operation) {
-    const parsed = parseExpression(operationRhsText(operation));
-    const expression = parsed?.expression;
-    if (!isCall(expression, "releaseUpvalue", 1)) return null;
-    const argument = expression.arguments[0];
-    const pureArgument = isIdentifier(argument) ||
-        argument?.type === "NilLiteral" ||
-        argument?.type === "BooleanLiteral" ||
-        argument?.type === "NumericLiteral" ||
-        argument?.type === "StringLiteral";
-    if (!pureArgument || !operation?.emittedTarget) return null;
-    return { resultName: operation.emittedTarget };
-}
-
-function recoverBetaUpvaluesImpl(betaResult) {
+function recoverBetaUpvalues(betaResult) {
     const originalGraph = betaResult?.graph || betaResult;
     if (!originalGraph?.cfgComplete || !Array.isArray(originalGraph.states) || !Array.isArray(originalGraph.entries)) {
         return { applied: false, safe: false, reason: "Beta upvalue recovery requires a complete beta CFG" };
@@ -610,42 +596,6 @@ function recoverBetaUpvaluesImpl(betaResult) {
     const positions = operationPositions(graph, ownerByState);
     const overflowAnalysis = buildOverflowStorageAnalysis(graph);
 
-    // Index the immutable beta positions once. Large graphs can have tens of
-    // thousands of operations and hundreds of captured cells; rescanning the
-    // full position list for every cell makes recovery unnecessarily quadratic.
-    const positionsByOwnerState = new Map();
-    const positionsByEmittedTarget = new Map();
-    const positionsByRead = new Map();
-    const statesByOwner = new Map();
-    for (const state of graph.states || []) {
-        const ownerEntry = ownerByState.get(state.id);
-        if (!statesByOwner.has(ownerEntry)) statesByOwner.set(ownerEntry, []);
-        statesByOwner.get(ownerEntry).push(state.id);
-    }
-    for (const position of positions) {
-        const ownerStateKey = `${position.ownerEntry}:${position.stateId}`;
-        if (!positionsByOwnerState.has(ownerStateKey)) positionsByOwnerState.set(ownerStateKey, []);
-        positionsByOwnerState.get(ownerStateKey).push(position);
-        const target = position.operation?.emittedTarget;
-        if (target) {
-            if (!positionsByEmittedTarget.has(target)) positionsByEmittedTarget.set(target, []);
-            positionsByEmittedTarget.get(target).push(position);
-        }
-        for (const read of position.operation?.reads || []) {
-            if (!positionsByRead.has(read)) positionsByRead.set(read, []);
-            positionsByRead.get(read).push(position);
-        }
-    }
-
-    function positionsWritingStorageKey(storageKey, ownerEntry) {
-        if (!String(storageKey).startsWith("overflow-def:")) {
-            return (positionsByEmittedTarget.get(storageKey) || []).filter(position => position.ownerEntry === ownerEntry);
-        }
-        return positions.filter(position =>
-            position.ownerEntry === ownerEntry && operationTargetStorageKey(position, overflowAnalysis) === storageKey
-        );
-    }
-
     // CFG dominance is computed per closure owner. A captured cell does not need
     // its whole owner function to be single-state: it is sufficient for the
     // allocation point to dominate every owner-side occurrence of that cell.
@@ -654,7 +604,9 @@ function recoverBetaUpvaluesImpl(betaResult) {
     // dominate.
     const dominatorsByState = new Map();
     for (const ownerEntry of graph.entries) {
-        const ownerStateIds = statesByOwner.get(ownerEntry) || [];
+        const ownerStateIds = graph.states
+            .filter(state => ownerByState.get(state.id) === ownerEntry)
+            .map(state => state.id);
         const ownerSet = new Set(ownerStateIds);
         const allOwnerStates = new Set(ownerStateIds);
         const dominators = new Map();
@@ -698,10 +650,11 @@ function recoverBetaUpvaluesImpl(betaResult) {
             if (isIdentifier(node)) usedBindingNames.add(node.name);
         });
     }
-    let nextSyntheticUpvalueBindingId = 1;
-    function allocateCellStorageBindingName() {
-        while (usedBindingNames.has(`u_v${nextSyntheticUpvalueBindingId}`)) nextSyntheticUpvalueBindingId++;
-        const name = `u_v${nextSyntheticUpvalueBindingId++}`;
+    let nextOverflowCellBindingId = 1;
+    function allocateCellStorageBindingName(storageName) {
+        if (/^[A-Za-z_][A-Za-z0-9_]*$/.test(String(storageName || ""))) return storageName;
+        while (usedBindingNames.has(`r_overflow_cell_${nextOverflowCellBindingId}`)) nextOverflowCellBindingId++;
+        const name = `r_overflow_cell_${nextOverflowCellBindingId++}`;
         usedBindingNames.add(name);
         return name;
     }
@@ -716,7 +669,7 @@ function recoverBetaUpvaluesImpl(betaResult) {
         cells.set(allocation.cellName, {
             id: allocation.cellName,
             registerName: allocation.cellName,
-            storageBindingName: null,
+            storageBindingName: allocateCellStorageBindingName(allocation.cellName),
             ownerEntry: position.ownerEntry,
             allocation: position,
             initialization: null,
@@ -734,7 +687,9 @@ function recoverBetaUpvaluesImpl(betaResult) {
     const cellIdByRegister = new Map([...cells.keys()].map(name => [name, name]));
     const aliasCopyOperations = new Set();
     for (const cell of cells.values()) {
-        const sameState = positionsByOwnerState.get(`${cell.ownerEntry}:${cell.allocation.stateId}`) || [];
+        const sameState = positions.filter(position =>
+            position.ownerEntry === cell.ownerEntry && position.stateId === cell.allocation.stateId
+        );
         for (const candidate of sameState) {
             if (candidate.operationIndex <= cell.allocation.operationIndex) continue;
             const copy = storageCopyFromOperation(candidate, overflowAnalysis);
@@ -747,7 +702,9 @@ function recoverBetaUpvaluesImpl(betaResult) {
             });
             if (initializationsBeforeCopy.length !== 1) continue;
 
-            const aliasWrites = positionsWritingStorageKey(copy.targetName, cell.ownerEntry);
+            const aliasWrites = positions.filter(position =>
+                position.ownerEntry === cell.ownerEntry && operationTargetStorageKey(position, overflowAnalysis) === copy.targetName
+            );
             if (!aliasWrites.length || aliasWrites.some(position => {
                 if (position.operation === candidate.operation) return false;
                 return releaseCellFromOperation(position, overflowAnalysis)?.cellName !== copy.targetName;
@@ -850,41 +807,25 @@ function recoverBetaUpvaluesImpl(betaResult) {
         for (const cellId of slots.values()) capturedCellIds.add(cellId);
     }
 
-    // Build captured-storage uses once and reuse them for dominance and escape
-    // validation. This replaces a cell-by-cell full graph statement walk.
-    const capturedStorageKeys = new Set();
-    for (const cellId of capturedCellIds) {
-        const cell = cells.get(cellId);
-        capturedStorageKeys.add(cell.registerName);
-        for (const alias of cell.aliases) capturedStorageKeys.add(alias);
-    }
-    const storageUseIndex = buildStorageUseIndex(positions, capturedStorageKeys, overflowAnalysis);
-    if (storageUseIndex.error) {
-        return { applied: false, safe: false, reason: storageUseIndex.error };
-    }
-
     for (const cellId of capturedCellIds) {
         const cell = cells.get(cellId);
         if (!cell) return { applied: false, safe: false, reason: `Captured cell ${cellId} has no allocUpvalue definition` };
 
-        const cellRegisterNames = [cell.registerName, ...cell.aliases];
-        const ownerFootprint = [];
-        const ownerFootprintSeen = new Set();
-        for (const registerName of cellRegisterNames) {
-            for (const use of storageUseIndex.usesByStorageKey.get(registerName) || []) {
-                const position = use.position;
-                if (position.ownerEntry !== cell.ownerEntry || ownerFootprintSeen.has(position)) continue;
-                ownerFootprintSeen.add(position);
-                ownerFootprint.push(position);
-            }
-        }
+        const cellRegisterNames = new Set([cell.registerName, ...cell.aliases]);
+        const ownerFootprint = positions.filter(position => {
+            if (position.ownerEntry !== cell.ownerEntry) return false;
+            return [...cellRegisterNames].some(name => {
+                const count = countStorageKeyUsesAtPosition(position, name, overflowAnalysis);
+                return count !== null && count > 0;
+            });
+        });
         if (!ownerFootprint.length || ownerFootprint.some(position => !dominates(cell.allocation.stateId, position.stateId))) {
             return { applied: false, safe: false, reason: `Captured cell ${cellId} has owner-side uses not dominated by its allocation state` };
         }
 
         const candidates = [];
-        const allocationStatePositions = positionsByOwnerState.get(`${cell.ownerEntry}:${cell.allocation.stateId}`) || [];
-        for (const position of allocationStatePositions) {
+        for (const position of positions) {
+            if (position.ownerEntry !== cell.ownerEntry || position.stateId !== cell.allocation.stateId) continue;
             if (position.operationIndex <= cell.allocation.operationIndex) continue;
             const write = indexedWriteFromOperation(position.operation);
             if (!write) continue;
@@ -899,9 +840,9 @@ function recoverBetaUpvaluesImpl(betaResult) {
         const initValue = cell.initialization.value;
         if (isIdentifier(initValue)) {
             const candidateName = initValue.name;
-            const candidateWrites = positionsByEmittedTarget.get(candidateName) || [];
+            const candidateWrites = positions.filter(position => position.operation?.emittedTarget === candidateName);
             const candidateDeclaration = candidateWrites.length === 1 ? candidateWrites[0] : null;
-            const candidateReads = positionsByRead.get(candidateName) || [];
+            const candidateReads = positions.filter(position => (position.operation?.reads || []).includes(candidateName));
             const onlyFeedsInitialization = candidateReads.length === 1 && candidateReads[0].operation === cell.initialization.operation;
             if (
                 candidateDeclaration &&
@@ -913,27 +854,9 @@ function recoverBetaUpvaluesImpl(betaResult) {
             ) {
                 cell.bindingName = candidateName;
                 cell.bindingMode = "existing-beta-binding";
-            } else {
-                // Prometheus often stores a compiler value into the cell and then
-                // immediately copies that value into the actual source register.
-                // Prefer that adjacent surviving beta binding when the copy is exact.
-                const postInitCopies = candidateReads.filter(position =>
-                    position.ownerEntry === cell.ownerEntry &&
-                    position.stateId === cell.initialization.stateId &&
-                    position.operationIndex === cell.initialization.operationIndex + 1 &&
-                    position.operation?.rhs === candidateName &&
-                    typeof position.operation?.emittedTarget === "string" &&
-                    position.operation.emittedTarget !== cell.registerName &&
-                    String(position.operation.emittedText || "").trimStart().startsWith("local ")
-                );
-                if (postInitCopies.length === 1) {
-                    cell.bindingName = postInitCopies[0].operation.emittedTarget;
-                    cell.bindingMode = "post-init-beta-binding";
-                }
             }
         }
         if (!cell.bindingName) {
-            cell.storageBindingName ||= allocateCellStorageBindingName();
             cell.bindingName = cell.storageBindingName;
             cell.bindingMode = "cell-register-binding";
         }
@@ -964,7 +887,6 @@ function recoverBetaUpvaluesImpl(betaResult) {
             return { applied: false, safe: false, reason: `Captured cell ${cellId} has a factory capture with ambiguous order relative to initialization` };
         }
         if (captureBeforeInitialization) {
-            cell.storageBindingName ||= allocateCellStorageBindingName();
             cell.bindingName = cell.storageBindingName;
             cell.bindingMode = "hoisted-cell-binding";
         }
@@ -976,6 +898,21 @@ function recoverBetaUpvaluesImpl(betaResult) {
         const cell = cells.get(cellId);
         localCellNames.add(cell.registerName);
         for (const alias of cell.aliases) localCellNames.add(alias);
+    }
+
+    // Validate every direct allocation storage identity and every proven compiler alias
+    // before deleting the VM cell representation. Build the use index once so this
+    // proof stays O(operations + relevant uses), rather than rescanning every
+    // operation for every captured-cell alias.
+    const capturedStorageKeys = new Set();
+    for (const cellId of capturedCellIds) {
+        const cell = cells.get(cellId);
+        capturedStorageKeys.add(cell.registerName);
+        for (const alias of cell.aliases) capturedStorageKeys.add(alias);
+    }
+    const storageUseIndex = buildStorageUseIndex(positions, capturedStorageKeys, overflowAnalysis);
+    if (storageUseIndex.error) {
+        return { applied: false, safe: false, reason: storageUseIndex.error };
     }
 
     for (const cellId of capturedCellIds) {
@@ -1058,7 +995,7 @@ function recoverBetaUpvaluesImpl(betaResult) {
             removals.add(cell.allocation.operation);
         }
 
-        if (cell.bindingMode === "existing-beta-binding" || cell.bindingMode === "post-init-beta-binding") {
+        if (cell.bindingMode === "existing-beta-binding") {
             removals.add(cell.initialization.operation);
         } else {
             const initRhsText = cell.initialization.parsed.source.slice(cell.initialization.value.range[0], cell.initialization.value.range[1]);
@@ -1106,8 +1043,8 @@ function recoverBetaUpvaluesImpl(betaResult) {
         const releaseCellId = release ? cellIdByRegister.get(release.cellName) : null;
         if (releaseCellId && capturedCellIds.has(releaseCellId)) {
             if (release.resultName && release.resultName !== release.cellName) {
-                const resultIsRead = (positionsByRead.get(release.resultName) || []).some(item =>
-                    item.operation !== operation
+                const resultIsRead = positions.some(item =>
+                    item.operation !== operation && (item.operation?.reads || []).includes(release.resultName)
                 );
                 if (resultIsRead) {
                     return { applied: false, safe: false, reason: "releaseUpvalue result " + release.resultName + " is still live after captured-cell recovery" };
@@ -1189,41 +1126,6 @@ function recoverBetaUpvaluesImpl(betaResult) {
         for (let index = 0; index < next.length; index++) next[index].index = index + 1;
     }
 
-    // Some compiler cleanup paths materialize an upvalue id as an ordinary beta
-    // value before calling releaseUpvalue(id), so the release can no longer be
-    // linked to the original allocUpvalue register. Only erase that residual VM
-    // bookkeeping after every other upvalue operation has already been recovered,
-    // the release argument is side-effect-free, and its assignment result is dead.
-    const residualMachinery = [];
-    let residualMachineryIsReleaseOnly = true;
-    for (const state of graph.states) {
-        for (const operation of state.operations || []) {
-            if (!containsVmUpvalueMachinery(String(operation.emittedText || ""))) continue;
-            const candidate = deadPrivateReleaseCandidate(operation);
-            if (!candidate) {
-                residualMachineryIsReleaseOnly = false;
-                break;
-            }
-            residualMachinery.push({ state, operation, ...candidate });
-        }
-        if (!residualMachineryIsReleaseOnly) break;
-    }
-    if (residualMachineryIsReleaseOnly && residualMachinery.length) {
-        const allReleaseResultsDead = residualMachinery.every(candidate =>
-            graph.states.every(state => (state.operations || []).every(operation =>
-                operation === candidate.operation || !(operation.reads || []).includes(candidate.resultName)
-            ))
-        );
-        if (allReleaseResultsDead) {
-            const deadReleaseOperations = new Set(residualMachinery.map(candidate => candidate.operation));
-            for (const state of graph.states) {
-                state.operations = (state.operations || []).filter(operation => !deadReleaseOperations.has(operation));
-                for (let index = 0; index < state.operations.length; index++) state.operations[index].index = index + 1;
-            }
-            releaseRemovalCount += residualMachinery.length;
-        }
-    }
-
     // No recovered closure region may retain VM upvalue table accesses after the
     // transform. If it does, the cell graph was incomplete and we fail closed.
     for (const state of graph.states) {
@@ -1259,30 +1161,7 @@ function recoverBetaUpvaluesImpl(betaResult) {
                 bindingMode: cell.bindingMode,
             };
         }),
-        captures: [...captureCellsByEntry.entries()]
-            .sort((left, right) => left[0] - right[0])
-            .map(([entry, slots]) => ({
-                entry,
-                slots: [...slots.entries()]
-                    .sort((left, right) => left[0] - right[0])
-                    .map(([slot, cellId]) => ({ slot, cellId, bindingName: bindingByCell.get(cellId) || null })),
-            })),
     };
-}
-
-function recoverBetaUpvalues(betaResult) {
-    // Parsed operation snippets are only useful within one recovery. A large
-    // graph such as spacial6 has more than 32k unique snippets, so keeping a
-    // larger per-run cache avoids clear-and-reparse thrashing while still
-    // releasing all cached parse trees before control-flow structuring.
-    expressionParseCache.clear();
-    statementParseCache.clear();
-    try {
-        return recoverBetaUpvaluesImpl(betaResult);
-    } finally {
-        expressionParseCache.clear();
-        statementParseCache.clear();
-    }
 }
 
 module.exports = {

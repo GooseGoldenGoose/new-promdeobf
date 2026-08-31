@@ -12,7 +12,6 @@ const { scheduleVmRegisterUses } = require("./passes/vm-register-scheduler");
 const { renameVmRegisterBindings } = require("./passes/vm-register-names");
 const { renameSemanticBindings } = require("./passes/semantic-names");
 const { applyTextEdits } = require("./passes/text-edits");
-const { formatInputBeforeParse } = require("./passes/input-formatter");
 
 const ROOT = __dirname;
 const DEFAULT_INPUT = path.join(ROOT, "sample", "1.txt");
@@ -49,19 +48,11 @@ function parseLuaStructural(source, filename = "<input>") {
     }
 }
 
-function loadAst(inputPath = DEFAULT_INPUT, options = {}) {
-    const formattedInput = options.formatInput === false
-        ? {
-            inputPath: path.resolve(inputPath),
-            source: fs.readFileSync(path.resolve(inputPath), "utf8"),
-            alreadyFormatted: null,
-            formatted: false,
-            formatterPath: null,
-            formatterSkipped: true,
-        }
-        : formatInputBeforeParse(inputPath, options.formatter || {});
-    const ast = parseLua(formattedInput.source, formattedInput.inputPath);
-    return { ...formattedInput, ast };
+function loadAst(inputPath = DEFAULT_INPUT) {
+    const absoluteInput = path.resolve(inputPath);
+    const source = fs.readFileSync(absoluteInput, "utf8");
+    const ast = parseLua(source, absoluteInput);
+    return { inputPath: absoluteInput, source, ast };
 }
 
 function writeAst(ast, outputPath = DEFAULT_AST_OUTPUT) {
@@ -79,7 +70,7 @@ function writeSource(source, outputPath = DEFAULT_OUTPUT) {
 }
 
 function runDeobfuscator(inputPath = DEFAULT_INPUT, outputPath = DEFAULT_OUTPUT, options = {}) {
-    const loaded = loadAst(inputPath, options);
+    const loaded = loadAst(inputPath);
 
     const constantArray = inlinePrometheusConstantArray(loaded.source, loaded.ast);
     const stage1Source = constantArray.found ? constantArray.source : loaded.source;
@@ -132,19 +123,17 @@ function runDeobfuscator(inputPath = DEFAULT_INPUT, outputPath = DEFAULT_OUTPUT,
             : parseLua(createClosure.source, `${inputPath} <after createClosure rename>`);
         vmHelpers = renameVmHelperBindings(createClosure.source, createClosureAst, parseLua);
     }
-    const downstreamParse = options.structuralIntermediateAsts === true ? parseLuaStructural : parseLua;
-
     const semanticNames = vmHelpers.found
         ? renameSemanticBindings(vmHelpers.source, vmHelpers.ast || parseLua(vmHelpers.source, `${inputPath} <before semantic naming>`), parseLua)
         : { source: vmHelpers.source, found: false, applied: false, mapping: [], skipped: [] };
     const semanticNamedSource = semanticNames.applied ? semanticNames.source : vmHelpers.source;
     const semanticNamedAst = semanticNames.applied
-        ? downstreamParse(semanticNamedSource, `${inputPath} <after semantic naming>`)
+        ? parseLua(semanticNamedSource, `${inputPath} <after semantic naming>`)
         : (vmHelpers.ast || null);
 
-    const splitAssignments = splitSafeParallelAssignmentsFully(semanticNamedSource, downstreamParse, 8, semanticNamedAst);
+    const splitAssignments = splitSafeParallelAssignmentsFully(semanticNamedSource, parseLua, 8, semanticNamedAst);
 
-    const vmStateAst = splitAssignments.ast || downstreamParse(splitAssignments.source, `${inputPath} <before VM state recovery>`);
+    const vmStateAst = splitAssignments.ast || parseLua(splitAssignments.source, `${inputPath} <before VM state recovery>`);
     const vmState = recoverVmStateGraph(splitAssignments.source, vmStateAst);
     const analyzeBindings = options.analyzeBindings !== false;
     const vmBindings = analyzeBindings
@@ -152,20 +141,18 @@ function runDeobfuscator(inputPath = DEFAULT_INPUT, outputPath = DEFAULT_OUTPUT,
         : { found: false, skipped: true, reason: "VM binding diagnostics disabled for fast pipeline handoff" };
     const vmStateApplied = vmState.found && vmState.normalized;
     const normalizedSource = vmStateApplied ? vmState.source : splitAssignments.source;
-    const normalizedAst = downstreamParse(normalizedSource, `${inputPath} <before VM register scheduling>`);
+    const normalizedAst = parseLua(normalizedSource, `${inputPath} <before VM register scheduling>`);
     const registerSchedule = vmStateApplied
         ? scheduleVmRegisterUses(normalizedSource, normalizedAst)
         : { source: normalizedSource, found: false, applied: false, blocksChanged: 0, swaps: 0 };
     const scheduledSource = registerSchedule.applied ? registerSchedule.source : normalizedSource;
-    const scheduledAst = downstreamParse(scheduledSource, `${inputPath} <before VM register naming>`);
+    const scheduledAst = parseLua(scheduledSource, `${inputPath} <before VM register naming>`);
     const registerNames = vmStateApplied
         ? renameVmRegisterBindings(scheduledSource, scheduledAst)
         : { source: scheduledSource, found: false, applied: false, mapping: [] };
     const finalSource = registerNames.applied ? registerNames.source : scheduledSource;
 
-    const outputAst = options.structuralOutputAst === true
-        ? parseLuaStructural(finalSource, outputPath)
-        : parseLua(finalSource, outputPath);
+    const outputAst = parseLua(finalSource, outputPath);
     const resolvedOutput = writeSource(finalSource, outputPath);
 
     return {
@@ -205,7 +192,6 @@ function main() {
 
     console.log(`Input: ${result.inputPath}`);
     console.log(`AST root: ${result.ast.type}`);
-    if (!result.formatterSkipped) console.log(`Input formatted before parse: ${result.formatted}`);
     console.log(`ConstantArray found: ${constants.found}`);
     if (constants.found) {
         console.log(`Constant entries: ${constants.constants.length}`);
