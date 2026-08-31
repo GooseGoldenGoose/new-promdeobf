@@ -971,29 +971,31 @@ function parsePreCfStatement(text) {
         return ast.body?.length === 1 ? ast.body[0] : null;
     } catch { return null; }
 }
-function hasLexicalBindingNamed(node, name) {
-    let found = false;
+function collectLexicalBindingNames(node) {
+    const names = new Set();
     function walk(value) {
-        if (found || !isAstNode(value)) return;
+        if (!isAstNode(value)) return;
         if (value.type === "LocalStatement") {
-            for (const variable of value.variables || []) if (variable?.type === "Identifier" && variable.name === name) { found = true; return; }
+            for (const variable of value.variables || []) if (variable?.type === "Identifier") names.add(variable.name);
         } else if (value.type === "FunctionDeclaration") {
-            if (value.isLocal && value.identifier?.type === "Identifier" && value.identifier.name === name) { found = true; return; }
-            for (const parameter of value.parameters || []) if (parameter?.type === "Identifier" && parameter.name === name) { found = true; return; }
+            if (value.isLocal && value.identifier?.type === "Identifier") names.add(value.identifier.name);
+            for (const parameter of value.parameters || []) if (parameter?.type === "Identifier") names.add(parameter.name);
         } else if (value.type === "ForNumericStatement") {
-            if (value.variable?.type === "Identifier" && value.variable.name === name) { found = true; return; }
+            if (value.variable?.type === "Identifier") names.add(value.variable.name);
         } else if (value.type === "ForGenericStatement") {
-            for (const variable of value.variables || []) if (variable?.type === "Identifier" && variable.name === name) { found = true; return; }
+            for (const variable of value.variables || []) if (variable?.type === "Identifier") names.add(variable.name);
         }
         for (const [key, child] of Object.entries(value)) {
             if (key === "loc" || key === "range") continue;
             if (Array.isArray(child)) for (const item of child) walk(item);
             else if (isAstNode(child)) walk(child);
-            if (found) return;
         }
     }
     walk(node);
-    return found;
+    return names;
+}
+function hasLexicalBindingNamed(node, name) {
+    return collectLexicalBindingNames(node).has(name);
 }
 function globalWriteInfo(operation) {
     if (operation?.kind !== "effect-write") return null;
@@ -1023,6 +1025,7 @@ function finalizePreCfGlobalWrites(betaResult) {
         betaResult.preCfGlobalWrites = { applied: false, safe: true, folds: 0, keyTempsRemoved: 0, refused: 0, environmentProven: environment.proven === true };
         return betaResult;
     }
+    const lexicalBindingNames = collectLexicalBindingNames(environment.functionNode);
     const proof = buildPreCfTempProofIndex(betaResult);
     const ownership = mapPreCfOperationRanges(betaResult);
     if (!ownership.safe) { betaResult.preCfGlobalWrites = { applied: false, safe: false, reason: ownership.reason }; return betaResult; }
@@ -1042,7 +1045,7 @@ function finalizePreCfGlobalWrites(betaResult) {
                 globalName = luaStringLiteralValue(keyProducer?.rhs);
                 if (!keyProducer || !["version-define", "epoch-start"].includes(keyProducer.kind) || !globalName) { refused++; continue; }
             }
-            if (!isValidGlobalIdentifierName(globalName) || hasLexicalBindingNamed(environment.functionNode, globalName)) { refused++; continue; }
+            if (!isValidGlobalIdentifierName(globalName) || lexicalBindingNames.has(globalName)) { refused++; continue; }
             if (info.rhsBinding) {
                 rhsFacts = proof.byBinding.get(info.rhsBinding);
                 if (rhsFacts?.singleDefinition && rhsFacts.singleUse && !rhsFacts.captured && rhsFacts.sameState &&

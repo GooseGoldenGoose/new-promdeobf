@@ -883,3 +883,6 @@ PRE-CF indexed-write batching: `finalizePreCfIndexedWriteTemps` now batches inde
 ## PRE-CF call-argument batching (2026-08-31)
 - `finalizePreCfCallArgumentTemps` now batches independent proven call-argument transport candidates by operation ownership, caches RHS parses within each batch round, maps source ownership once per batch, applies one source edit set, reparses once, and groups graph removals by state. Existing semantic gates remain unchanged.
 - spacial6 profile: 1,346 folds in 1.604 s, 3 batch rounds / 6 parse rounds. Focused call-argument PASS; combined gate PASS: 43 focused suites + 66/66 canonical samples.
+## PRE-CF global-write lexical index optimization (2026-08-31)
+- `finalizePreCfGlobalWrites` now collects lexical binding names once from the already-parsed scoped AST instead of rescanning the whole AST once per recovered global write. Semantic collision checks are unchanged.
+- spacial6 profile: ~3.0 s -> 0.796 s for 74 folds. Focused global-write PASS; combined gate PASS: 43 focused suites + 66/66 canonical samples.
