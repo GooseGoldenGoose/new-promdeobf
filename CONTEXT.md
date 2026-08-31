@@ -223,3 +223,11 @@ For structural fixes:
 - Existing callers keep importing `./passes/beta-control-flow`, so new CF work can be implemented incrementally behind the same entry point.
 - Old helper export names remain present as explicit unimplemented fail-closed stubs for compatibility while the new solver is rebuilt case-by-case.
 
+
+Latest scheduler canonicalization improvement:
+
+- Source-lifetime register writes remain non-delayable, but unrelated TEMP assignments may now cross non-boundary writes in that lifetime when RAW/WAR/WAW proof allows it.
+- Only the final proven direct `rN = nil` source-lifetime cleanup is a hard crossing boundary for unrelated TEMP motion.
+- This restores tighter compiler-handler grouping without allowing TEMP scheduling to leak across source lifetime end.
+- Real `sample/1.txt` scheduling improved from 13 to 27 dependency-safe swaps; call-local producers now group as `r2 = 3 -> r3 = r5(r2)`, `r4 = 1 -> r5(r4)`, and `r1 = "baseline" -> final print call`.
+- Scheduler, VM state reachability, and VM register naming regressions pass, including a new source-lifetime boundary test.

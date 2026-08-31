@@ -34,6 +34,7 @@ function registerIdentity(node, overflowName) {
 
 const BORROWED_STATE_TEMP_WRITES = new WeakSet();
 const ANCHORED_LIFETIME_WRITES = new WeakSet();
+const LIFETIME_BOUNDARY_WRITES = new WeakSet();
 
 function isDelayableAssignment(statement, stateName, overflowName = null) {
     if (statement?.type !== "AssignmentStatement") return false;
@@ -136,7 +137,7 @@ function intersects(a, b) {
 
 function canSwapRightAssignmentWithLeftStatement(delayable, current, stateName, overflowName = null) {
     if (!isDelayableAssignment(delayable, stateName, overflowName)) return false;
-    if (ANCHORED_LIFETIME_WRITES.has(current)) return false;
+    if (LIFETIME_BOUNDARY_WRITES.has(current)) return false;
 
     const delayReads = statementReads(delayable, overflowName);
     const delayWrites = statementWrites(delayable, overflowName);
@@ -564,7 +565,10 @@ function markAnchoredLifetimeWrites(statements, stateName, overflowName = null, 
                 break;
             }
         }
-        if (!touchedLater) protectedRegisters.add(target);
+        if (!touchedLater) {
+            protectedRegisters.add(target);
+            LIFETIME_BOUNDARY_WRITES.add(statement);
+        }
     }
 
     if (protectedRegisters.size === 0) return 0;

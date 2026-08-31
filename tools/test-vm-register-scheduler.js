@@ -277,7 +277,6 @@ function scheduleOverflow(source, overflowName = "Overflow") {
     assert.ok(out.indexOf("Other[1] = 10") < out.indexOf("Y = Other[1]"), "ordinary table access was treated as overflow storage");
 }
 
-console.log("vm register scheduler regression: ok");
 
 {
     const source = [
@@ -306,3 +305,20 @@ console.log("vm register scheduler regression: ok");
     assert.ok(out.indexOf('K = "print"') + 1 === out.indexOf('F = _env[K]'), 'GETGLOBAL temp chain was not canonicalized');
     assert.ok(out.indexOf('A = 1') + 1 === out.indexOf('R = F(A)'), 'literal argument temp was not canonicalized toward the call');
 }
+
+{
+    const source = [
+        'X = 2',
+        'A = 1',
+        'K = "print"',
+        'F = _env[K]',
+        'R = F(A, X)',
+        'A = nil',
+    ].join("\n");
+    const out = schedule(source);
+    assert.ok(out.indexOf('A = 1') < out.indexOf('X = 2'), 'TEMP could not cross a non-boundary source lifetime write');
+    assert.ok(out.indexOf('X = 2') + 1 === out.indexOf('R = F(A, X)'), 'call-local TEMP was not compacted beside its consumer');
+    assert.ok(out.indexOf('R = F(A, X)') < out.indexOf('A = nil'), 'TEMP scheduling crossed the source lifetime cleanup boundary');
+}
+
+console.log("vm register scheduler regression: ok");
