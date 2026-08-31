@@ -825,12 +825,18 @@ function finalizePreCfDiscardedCallResults(betaResult) {
     return betaResult;
 }
 
+const preCfRhsParseCache = new Map();
 function parsePreCfRhs(rhs) {
+    const key = String(rhs || "");
+    if (preCfRhsParseCache.has(key)) return preCfRhsParseCache.get(key);
+    let result = null;
     try {
-        const ast = parsePreCfSource(`return ${rhs}`);
+        const ast = parsePreCfSource(`return ${key}`);
         const statement = ast.body?.[0];
-        return statement?.type === "ReturnStatement" && statement.arguments?.length === 1 ? statement.arguments[0] : null;
-    } catch { return null; }
+        result = statement?.type === "ReturnStatement" && statement.arguments?.length === 1 ? statement.arguments[0] : null;
+    } catch {}
+    preCfRhsParseCache.set(key, result);
+    return result;
 }
 
 function isSafePreCfScalarExpression(node) {
@@ -2701,6 +2707,7 @@ function finalizePreCfPostReturnAllConvergence(betaResult) {
 }
 
 function finalizePreCfTempRecovery(betaResult) {
+    preCfRhsParseCache.clear();
     const stages = [
         finalizePreCfCopyTemps,
         finalizePreCfClosureTemps,
@@ -2733,6 +2740,7 @@ function finalizePreCfTempRecovery(betaResult) {
         const failedKey = Object.keys(betaResult).find(name => name.startsWith("preCf") && name !== "preCfTempRecovery" && betaResult[name]?.safe === false);
         if (failedKey) {
             betaResult.preCfTempRecovery = { applied: stageNames.length > 0, safe: false, failedStage: stage.name, reason: betaResult[failedKey]?.reason || "PRE-CF stage failed closed", stages: stageNames };
+            preCfRhsParseCache.clear();
             return betaResult;
         }
         stageNames.push(stage.name);
@@ -2740,6 +2748,7 @@ function finalizePreCfTempRecovery(betaResult) {
     const foldKeys = ["preCfCopyTemps", "preCfClosureTemps", "preCfCallResultDestinations", "preCfTableDestinations", "preCfTableEntryTemps", "preCfIndexKeyTemps", "preCfGlobalWrites", "preCfIndexedWriteTemps", "preCfClosureWriteDestinations", "preCfScalarTemps", "preCfGlobalLookups", "preCfLookupTemps", "preCfCallSetupChains", "preCfCallArgumentTemps", "preCfCallBaseTemps", "preCfNamecalls", "preCfDiscardedCallResults", "preCfEffectCallArgumentTemps", "preCfEffectCallBaseTemps", "preCfReturnTemps", "preCfLiteralReturnTemps", "preCfReturnAllTemps", "preCfMultiReturnTemps"];
     const folds = foldKeys.reduce((sum, key) => sum + Number(betaResult[key]?.folds || 0), 0);
     betaResult.preCfTempRecovery = { applied: folds > 0, safe: true, folds, stages: stageNames };
+    preCfRhsParseCache.clear();
     return betaResult;
 }
 module.exports = {

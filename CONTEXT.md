@@ -963,3 +963,10 @@ PRE-CF indexed-write batching: `finalizePreCfIndexedWriteTemps` now batches inde
 - Correctness passed: syntax; numeric/generic/while/repeat focused suites; main beta-CF; combined 43 focused suites + 66/66 canonical samples. `spacial6` remained 3799 states / 554 closures, reparsed, had zero unwanted scaffold, and matched the frozen final byte-for-byte on all 3 runs (SHA-256 `14d488e79025f385dc79038cf557a5f74a5390e9924647772d9086bf4a5d4145`).
 - Warm runs were 44.915 s / 43.693 s / 42.769 s; median 43.693 s versus Step-3 median 40.279 s. The optimization was clearly slower and was fully reverted.
 - No solver code from this attempt was kept. Next roadmap step is Step 8: profile parser calls/cache opportunities on immutable source strings.
+
+## Performance plan Step 8 - solve-scoped PRE-CF RHS parse cache (2026-08-31)
+- Profiling showed transition parsing was already cached. Remaining parser self-time included about 29.2 ms in `parsePreCfRhs`; `parseOperationExpression` was ~2.2 ms and nested-signature parsing ~4.5 ms, so only the immutable RHS parser was changed.
+- `parsePreCfRhs` now caches parsed expressions by exact RHS string for one `finalizePreCfTempRecovery` solve. The cache is cleared at solve start, successful finish, and fail-closed exit. Callers only inspect the parsed AST/ranges; no cached tree is transformed.
+- Verification: syntax PASS; scalar/call-setup/RETURN_ALL focused suites PASS; combined gate PASS: 43 focused suites + 66/66 canonical samples.
+- `spacial6` warm runs: 40.101 s / 39.891 s / 40.487 s; median 40.101 s versus Step-3 baseline 40.279 s. Every run recovered 3799 states / 554 closures, reparsed, had zero unwanted scaffold, and matched the frozen final byte-for-byte (SHA-256 `14d488e79025f385dc79038cf557a5f74a5390e9924647772d9086bf4a5d4145`).
+- Next roadmap step: Step 9 shared post-CF facts; keep transforms separate and share immutable analysis only.
