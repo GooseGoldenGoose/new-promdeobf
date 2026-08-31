@@ -939,3 +939,9 @@ PRE-CF indexed-write batching: `finalizePreCfIndexedWriteTemps` now batches inde
 - Verification: syntax PASS; beta CF + closure-signature focused PASS; combined gate PASS: 43 focused suites + 66/66 canonical samples.
 - `spacial6` warm runs: 41.099 s / 40.268 s / 40.279 s; median 40.279 s versus Step-2 median 40.942 s. Every run recovered 3799 states / 554 closures, reparsed, had zero unwanted scaffold, and matched the frozen final byte-for-byte (SHA-256 `14d488e79025f385dc79038cf557a5f74a5390e9924647772d9086bf4a5d4145`).
 - Next roadmap step: shared loop graph indexes. Do not combine it with this step.
+
+## Performance plan Step 4 - shared loop graph indexes rejected (2026-08-31)
+- Tried one immutable per-graph loop index shared by numeric/generic/while/repeat matchers, caching `stateById`, predecessors, read counts, and SCCs; graph replacement after a collapse naturally invalidated it by object identity.
+- Correctness passed: syntax, numeric/generic/while/repeat focused suites, main beta-CF, combined 43 focused suites + 66/66 canonical samples; `spacial6` remained 3799 states / 554 closures, reparsed, had zero unwanted scaffold, and was byte-identical 3/3 with SHA-256 `14d488e79025f385dc79038cf557a5f74a5390e9924647772d9086bf4a5d4145`.
+- Warm runs were 40.850 s / 40.672 s / 40.170 s; median 40.672 s versus Step-3 median 40.279 s. Because the performance-only change showed no measured gain, it was fully reverted.
+- No solver code from this attempt was kept. Next roadmap experiment is Step 5, batching independent loop collapses.
