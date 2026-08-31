@@ -886,3 +886,7 @@ PRE-CF indexed-write batching: `finalizePreCfIndexedWriteTemps` now batches inde
 ## PRE-CF global-write lexical index optimization (2026-08-31)
 - `finalizePreCfGlobalWrites` now collects lexical binding names once from the already-parsed scoped AST instead of rescanning the whole AST once per recovered global write. Semantic collision checks are unchanged.
 - spacial6 profile: ~3.0 s -> 0.796 s for 74 folds. Focused global-write PASS; combined gate PASS: 43 focused suites + 66/66 canonical samples.
+
+## PRE-CF effect-call base batching (2026-08-31)
+- `finalizePreCfEffectCallBaseTemps` now batches independent proven compiler-global call-base aliases by exact producer/consumer operation ownership. One proof snapshot, one ownership map, one edit application, one reparse, and grouped graph removals are used per batch; existing provenance and adjacency gates are unchanged.
+- spacial6 profile: 225 folds in 0.380 s, 1 batch round / 2 parse rounds. Focused call-base PASS; combined gate PASS: 43 focused suites + 66/66 canonical samples.

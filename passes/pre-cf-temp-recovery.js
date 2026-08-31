@@ -1911,54 +1911,70 @@ function finalizePreCfEffectCallBaseTemps(betaResult) {
         return betaResult;
     }
     let folds = 0;
+    let parseRounds = 0;
+    let batchRounds = 0;
     const maxRounds = (betaResult.graph.states || []).reduce((n, state) => n + (state.operations || []).length, 0) + 1;
     for (let round = 0; round < maxRounds; round++) {
         const proof = buildPreCfTempProofIndex(betaResult);
-        let candidate = null;
+        const candidates = [];
+        const claimedOperations = new Set();
         for (const facts of proof.byBinding.values()) {
             if (!facts.safeSameStateTransport || !facts.adjacent) continue;
             const producer = facts.producer.operation;
             const consumer = facts.consumer.operation;
-            if (consumer?.kind !== "effect-call") continue;
+            if (claimedOperations.has(producer) || claimedOperations.has(consumer) || consumer?.kind !== "effect-call") continue;
             const globalName = producer?.compilerGlobalLookupRecovered;
             if (typeof globalName !== "string" || producer.rhs !== globalName) continue;
             if (!String(producer.emittedText || "").trim().startsWith("local ")) continue;
             const rewrittenRhs = rewriteDirectCallBase(consumer.rhs, facts.name, globalName);
             if (!rewrittenRhs) continue;
-            candidate = { facts, producer, consumer, rewrittenRhs };
-            break;
+            candidates.push({ facts, producer, consumer, rewrittenRhs });
+            claimedOperations.add(producer);
+            claimedOperations.add(consumer);
         }
-        if (!candidate) break;
-        const ownership = mapPreCfOperationRanges(betaResult);
+        if (!candidates.length) break;
+        const ownership = mapPreCfOperationRanges(betaResult); parseRounds++;
         if (!ownership.safe) {
-            betaResult.preCfEffectCallBaseTemps = { applied: folds > 0, safe: false, reason: ownership.reason, folds };
+            betaResult.preCfEffectCallBaseTemps = { applied: folds > 0, safe: false, reason: ownership.reason, folds, parseRounds, batchRounds };
             return betaResult;
         }
-        const producerRange = ownership.ranges.get(candidate.producer);
-        const consumerRange = ownership.ranges.get(candidate.consumer);
-        if (!producerRange || !consumerRange) {
-            betaResult.preCfEffectCallBaseTemps = { applied: folds > 0, safe: false, reason: "PRE-CF effect-call base recovery lost exact source ownership", folds };
-            return betaResult;
+        const edits = [];
+        for (const candidate of candidates) {
+            const producerRange = ownership.ranges.get(candidate.producer);
+            const consumerRange = ownership.ranges.get(candidate.consumer);
+            if (!producerRange || !consumerRange) {
+                betaResult.preCfEffectCallBaseTemps = { applied: folds > 0, safe: false, reason: "PRE-CF effect-call base recovery lost exact source ownership", folds, parseRounds, batchRounds };
+                return betaResult;
+            }
+            edits.push(
+                { start: producerRange[0], end: producerRange[1], replacement: "" },
+                { start: consumerRange[0], end: consumerRange[1], replacement: candidate.rewrittenRhs },
+            );
         }
-        const output = applySourceEdits(betaResult.source, [
-            { start: producerRange[0], end: producerRange[1], replacement: "" },
-            { start: consumerRange[0], end: consumerRange[1], replacement: candidate.rewrittenRhs },
-        ]);
-        try { parsePreCfSource(output); }
+        let output;
+        try { output = applySourceEdits(betaResult.source, edits); parsePreCfSource(output); parseRounds++; }
         catch (error) {
-            betaResult.preCfEffectCallBaseTemps = { applied: folds > 0, safe: false, reason: `PRE-CF effect-call base recovery reparse failed: ${error.message}`, folds };
+            betaResult.preCfEffectCallBaseTemps = { applied: folds > 0, safe: false, reason: `PRE-CF effect-call base recovery reparse failed: ${error.message}`, folds, parseRounds, batchRounds };
             return betaResult;
         }
         betaResult.source = output;
-        candidate.consumer.rhs = candidate.rewrittenRhs;
-        candidate.consumer.emittedText = candidate.rewrittenRhs;
-        candidate.consumer.reads = [...new Set((candidate.consumer.reads || []).filter(name => name !== candidate.facts.name))];
-        const state = betaResult.graph.states.find(item => item.id === candidate.facts.producer.stateId);
-        state.operations.splice(candidate.facts.producer.offset, 1);
-        for (let i = 0; i < state.operations.length; i++) state.operations[i].index = i + 1;
-        folds++;
+        const removalsByState = new Map();
+        for (const candidate of candidates) {
+            candidate.consumer.rhs = candidate.rewrittenRhs;
+            candidate.consumer.emittedText = candidate.rewrittenRhs;
+            candidate.consumer.reads = [...new Set((candidate.consumer.reads || []).filter(name => name !== candidate.facts.name))];
+            if (!removalsByState.has(candidate.facts.producer.stateId)) removalsByState.set(candidate.facts.producer.stateId, new Set());
+            removalsByState.get(candidate.facts.producer.stateId).add(candidate.producer);
+        }
+        for (const [stateId, removals] of removalsByState) {
+            const state = proof.stateById.get(stateId);
+            state.operations = state.operations.filter(operation => !removals.has(operation));
+            for (let i = 0; i < state.operations.length; i++) state.operations[i].index = i + 1;
+        }
+        folds += candidates.length;
+        batchRounds++;
     }
-    betaResult.preCfEffectCallBaseTemps = { applied: folds > 0, safe: true, folds };
+    betaResult.preCfEffectCallBaseTemps = { applied: folds > 0, safe: true, folds, parseRounds, batchRounds };
     return betaResult;
 }
 
