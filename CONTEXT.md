@@ -861,3 +861,7 @@ Latest post-Step-47 work - compiler IIFE / anonymous closure expression recovery
 - Existing proof rules and `canDeclareRetargetedTableDestination` semantics are unchanged; only execution scheduling changed. Consumer removals are grouped by state and each affected state is reindexed once per batch.
 - `spacial6` stage benchmark: 38 folds improved from 16.073 s to 0.634 s, with 1 batch round / 2 ownership+validation parse rounds on the measured run.
 - Focused table-destination test PASS; full combined gate PASS: 43 focused suites + 66/66 canonical samples.
+## PRE-CF table-entry batching (2026-08-31)
+- inalizePreCfTableEntryTemps now batches source-disjoint table-constructor literal-entry folds per graph snapshot instead of reparsing/remapping after each table.
+- spacial6: 36 folds, 1 batch round, 2 parse rounds, ~0.724 s versus ~10.685 s before batching.
+- Focused table-entry test PASS; combined PRE-CF+CF gate PASS: 43 focused suites, 66/66 canonical samples.

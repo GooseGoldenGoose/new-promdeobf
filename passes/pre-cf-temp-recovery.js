@@ -548,15 +548,17 @@ function finalizePreCfTableEntryTemps(betaResult) {
         betaResult.preCfTableEntryTemps = { applied: false, safe: false, reason: "PRE-CF table entry recovery requires a complete beta graph" };
         return betaResult;
     }
-    let folds = 0;
+    let folds = 0, parseRounds = 0, batchRounds = 0;
     const captured = new Set(betaResult.graph.recoveredUpvalueBindings || []);
     const maxRounds = (betaResult.graph.states || []).reduce((n, state) => n + (state.operations || []).length, 0) + 1;
     for (let round = 0; round < maxRounds; round++) {
-        let candidate = null;
+        const candidates = [];
+        const claimedOperations = new Set();
         for (const state of betaResult.graph.states || []) {
             const operations = state.operations || [];
             for (let tableOffset = 0; tableOffset < operations.length; tableOffset++) {
                 const tableOp = operations[tableOffset];
+                if (claimedOperations.has(tableOp)) continue;
                 if (!["version-define", "epoch-start", "epoch-mutate"].includes(tableOp?.kind) || !tableOp.emittedTarget) continue;
                 const tableExpression = parsePreCfRhs(tableOp.rhs);
                 if (tableExpression?.type !== "TableConstructorExpression" || !Array.isArray(tableExpression.range)) continue;
@@ -575,6 +577,7 @@ function finalizePreCfTableEntryTemps(betaResult) {
                     }
                     if (producerOffset < 0) continue;
                     const producer = operations[producerOffset];
+                    if (claimedOperations.has(producer)) continue;
                     if (!isCopyOperation(producer) || !String(producer.emittedText || "").trim().startsWith("local ")) continue;
                     const producerExpression = parsePreCfRhs(producer.rhs);
                     if (!isLiteralOnlyPreCfScalarExpression(producerExpression)) continue;
@@ -593,58 +596,62 @@ function finalizePreCfTableEntryTemps(betaResult) {
                         }
                         if (blocked || (!killed && (state.successors || []).length !== 0)) continue;
                     }
-                    replacements.push({
-                        name,
-                        producer,
-                        producerOffset,
-                        start: use.range[0] - tableExpression.range[0],
-                        end: use.range[1] - tableExpression.range[0],
-                        replacement: producer.rhs,
-                    });
+                    replacements.push({ name, producer, producerOffset, start: use.range[0] - tableExpression.range[0], end: use.range[1] - tableExpression.range[0], replacement: producer.rhs });
                     producers.add(producer);
                 }
                 if (!replacements.length) continue;
+                if ([...producers].some(op => claimedOperations.has(op))) continue;
                 let rhs = tableOp.rhs;
                 for (const edit of [...replacements].sort((a, b) => b.start - a.start)) rhs = rhs.slice(0, edit.start) + edit.replacement + rhs.slice(edit.end);
                 const prefix = String(tableOp.emittedText || "").trim().startsWith("local ") ? "local " : "";
                 const emittedText = `${prefix}${tableOp.emittedTarget} = ${rhs}`;
-                candidate = { state, tableOp, tableOffset, replacements, producers, rhs, emittedText };
-                break;
+                const candidate = { state, tableOp, replacements, producers, rhs, emittedText };
+                candidates.push(candidate);
+                claimedOperations.add(tableOp);
+                for (const producer of producers) claimedOperations.add(producer);
             }
-            if (candidate) break;
         }
-        if (!candidate) break;
-        const ownership = mapPreCfOperationRanges(betaResult);
-        if (!ownership.safe) { betaResult.preCfTableEntryTemps = { applied: folds > 0, safe: false, reason: ownership.reason, folds }; return betaResult; }
-        const tableRange = ownership.ranges.get(candidate.tableOp);
-        const producerRanges = [...candidate.producers].map(op => ownership.ranges.get(op));
-        if (!tableRange || producerRanges.some(range => !range)) {
-            betaResult.preCfTableEntryTemps = { applied: folds > 0, safe: false, reason: "PRE-CF table entry recovery lost exact source ownership", folds };
-            return betaResult;
+        if (!candidates.length) break;
+        const ownership = mapPreCfOperationRanges(betaResult); parseRounds++;
+        if (!ownership.safe) { betaResult.preCfTableEntryTemps = { applied: folds > 0, safe: false, reason: ownership.reason, folds, parseRounds, batchRounds }; return betaResult; }
+        const edits = [];
+        for (const candidate of candidates) {
+            const tableRange = ownership.ranges.get(candidate.tableOp);
+            const producerRanges = [...candidate.producers].map(op => ownership.ranges.get(op));
+            if (!tableRange || producerRanges.some(range => !range)) {
+                betaResult.preCfTableEntryTemps = { applied: folds > 0, safe: false, reason: "PRE-CF table entry recovery lost exact source ownership", folds, parseRounds, batchRounds };
+                return betaResult;
+            }
+            edits.push({ start: tableRange[0], end: tableRange[1], replacement: candidate.emittedText });
+            edits.push(...producerRanges.map(range => ({ start: range[0], end: range[1], replacement: "" })));
         }
-        const edits = [
-            { start: tableRange[0], end: tableRange[1], replacement: candidate.emittedText },
-            ...producerRanges.map(range => ({ start: range[0], end: range[1], replacement: "" })),
-        ];
-        const output = applySourceEdits(betaResult.source, edits);
-        try { parsePreCfSource(output); }
+        let output;
+        try { output = applySourceEdits(betaResult.source, edits); parsePreCfSource(output); parseRounds++; }
         catch (error) {
-            betaResult.preCfTableEntryTemps = { applied: folds > 0, safe: false, reason: `PRE-CF table entry recovery reparse failed: ${error.message}`, folds };
+            betaResult.preCfTableEntryTemps = { applied: folds > 0, safe: false, reason: `PRE-CF table entry recovery reparse failed: ${error.message}`, folds, parseRounds, batchRounds };
             return betaResult;
         }
         betaResult.source = output;
-        candidate.tableOp.rhs = candidate.rhs;
-        const removedNames = new Set(candidate.replacements.map(item => item.name));
-        candidate.tableOp.reads = (candidate.tableOp.reads || []).filter(name => !removedNames.has(name));
-        candidate.tableOp.emittedText = candidate.emittedText;
-        candidate.state.operations = candidate.state.operations.filter(op => !candidate.producers.has(op));
-        for (let i = 0; i < candidate.state.operations.length; i++) candidate.state.operations[i].index = i + 1;
-        folds += candidate.replacements.length;
+        const producersByState = new Map();
+        for (const candidate of candidates) {
+            candidate.tableOp.rhs = candidate.rhs;
+            const removedNames = new Set(candidate.replacements.map(item => item.name));
+            candidate.tableOp.reads = (candidate.tableOp.reads || []).filter(name => !removedNames.has(name));
+            candidate.tableOp.emittedText = candidate.emittedText;
+            if (!producersByState.has(candidate.state.id)) producersByState.set(candidate.state.id, new Set());
+            for (const producer of candidate.producers) producersByState.get(candidate.state.id).add(producer);
+            folds += candidate.replacements.length;
+        }
+        for (const [stateId, producers] of producersByState) {
+            const state = betaResult.graph.states.find(item => item.id === stateId);
+            state.operations = state.operations.filter(op => !producers.has(op));
+            for (let i = 0; i < state.operations.length; i++) state.operations[i].index = i + 1;
+        }
+        batchRounds++;
     }
-    betaResult.preCfTableEntryTemps = { applied: folds > 0, safe: true, folds };
+    betaResult.preCfTableEntryTemps = { applied: folds > 0, safe: true, folds, parseRounds, batchRounds };
     return betaResult;
 }
-
 function finalizePreCfIndexKeyTemps(betaResult) {
     if (!betaResult?.graph || typeof betaResult.source !== "string" || betaResult.graph.cfgComplete !== true) {
         betaResult.preCfIndexKeyTemps = { applied: false, safe: false, reason: "PRE-CF index key recovery requires a complete beta graph" };
