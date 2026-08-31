@@ -873,3 +873,8 @@ PRE-CF indexed-write batching: `finalizePreCfIndexedWriteTemps` now batches inde
 - `finalizePreCfClosureTemps()` now batches independent proven closure retarget/copy removals per proof snapshot with operation/name conflict guards, one ownership map, one edit application, and one reparse per batch.
 - spacial6: 13 folds, 1 batch round / 2 parse rounds, ~8.6 s -> 0.473 s.
 - Focused closure-temp PASS; combined gate PASS: 43 focused suites + 66/66 canonical samples.
+
+## PRE-CF batching performance step 6 (2026-08-31)
+- `finalizePreCfCallSetupChains()` now discovers candidates from the existing proof index grouped by shared consumer instead of scanning/parsing nearly every copy operation. RHS parsing is cached within the stage. Independent exact single-use setup chains are batched by operation ownership; harmless shared read dependencies no longer serialize batches.
+- spacial6: 18,225 folds, 1 batch round / 2 parse rounds, 0.627 s. The old implementation/profile remained stuck in this stage for several minutes and was cancelled.
+- Focused call-setup PASS; combined gate PASS: 43 focused suites + 66/66 canonical samples.

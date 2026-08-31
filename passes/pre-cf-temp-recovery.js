@@ -1542,8 +1542,8 @@ function isStablePreCfCallSetupExpression(node) {
     return ["Identifier", "NumericLiteral", "StringLiteral", "BooleanLiteral", "NilLiteral"].includes(node.type);
 }
 
-function rewriteDirectCallSetup(rhs, replacements) {
-    const expression = parsePreCfRhs(rhs);
+function rewriteDirectCallSetup(rhs, replacements, expression = null) {
+    expression = expression || parsePreCfRhs(rhs);
     if (expression?.type !== "CallExpression" || expression.base?.type !== "Identifier") return null;
     const offset = "return ".length;
     const edits = [];
@@ -1567,72 +1567,117 @@ function finalizePreCfCallSetupChains(betaResult) {
         return betaResult;
     }
     let folds = 0;
+    let parseRounds = 0;
+    let batchRounds = 0;
+    const rhsExpressionCache = new Map();
+    const parseCached = (rhs) => {
+        if (!rhsExpressionCache.has(rhs)) rhsExpressionCache.set(rhs, parsePreCfRhs(rhs));
+        return rhsExpressionCache.get(rhs);
+    };
     const maxRounds = (betaResult.graph.states || []).reduce((n, state) => n + (state.operations || []).length, 0) + 1;
     for (let round = 0; round < maxRounds; round++) {
         const proof = buildPreCfTempProofIndex(betaResult);
-        let candidate = null;
-        for (const state of betaResult.graph.states || []) {
-            const operations = state.operations || [];
-            for (let consumerOffset = 0; consumerOffset < operations.length; consumerOffset++) {
-                const consumer = operations[consumerOffset];
-                if (!isCopyOperation(consumer)) continue;
-                const call = parsePreCfRhs(consumer.rhs);
-                if (call?.type !== "CallExpression" || call.base?.type !== "Identifier") continue;
-                const directNames = new Set([call.base.name, ...(call.arguments || []).filter(arg => arg?.type === "Identifier").map(arg => arg.name)]);
-                const replacements = new Map();
-                const producerItems = [];
-                for (let producerOffset = consumerOffset - 1; producerOffset >= 0; producerOffset--) {
-                    const producer = operations[producerOffset];
-                    if (!isCopyOperation(producer) || !directNames.has(producer.emittedTarget)) break;
-                    const facts = proof.byBinding.get(producer.emittedTarget);
-                    if (!facts?.safeSameStateTransport || facts.producer?.operation !== producer || facts.consumer?.operation !== consumer) break;
-                    const producerExpr = parsePreCfRhs(producer.rhs);
-                    if (!isStablePreCfCallSetupExpression(producerExpr)) break;
-                    replacements.set(producer.emittedTarget, producer.rhs);
-                    producerItems.push({ facts, producer });
-                }
-                if (producerItems.length < 2 || !replacements.has(call.base.name)) continue;
-                const rewritten = rewriteDirectCallSetup(consumer.rhs, replacements);
-                if (!rewritten || rewritten.consumed.size !== producerItems.length) continue;
-                candidate = { state, consumer, producerItems, rewritten };
-                break;
+        const candidates = [];
+        const factsByConsumer = new Map();
+        for (const facts of proof.byBinding.values()) {
+            if (!facts.safeSameStateTransport) continue;
+            const producer = facts.producer?.operation;
+            const consumer = facts.consumer?.operation;
+            if (!producer || !consumer || !isCopyOperation(producer) || !isCopyOperation(consumer)) continue;
+            if (!factsByConsumer.has(consumer)) factsByConsumer.set(consumer, []);
+            factsByConsumer.get(consumer).push({ facts, producer });
+        }
+        for (const [consumer, grouped] of factsByConsumer) {
+            if (grouped.length < 2) continue;
+            const consumerLocation = proof.locations.get(consumer);
+            const state = proof.stateById.get(consumerLocation?.stateId);
+            if (!consumerLocation || !state) continue;
+            const call = parseCached(consumer.rhs);
+            if (call?.type !== "CallExpression" || call.base?.type !== "Identifier") continue;
+            const directNames = new Set([call.base.name, ...(call.arguments || []).filter(arg => arg?.type === "Identifier").map(arg => arg.name)]);
+            const eligibleByOperation = new Map();
+            for (const item of grouped) if (directNames.has(item.facts.name)) eligibleByOperation.set(item.producer, item);
+            const replacements = new Map();
+            const producerItems = [];
+            for (let producerOffset = consumerLocation.offset - 1; producerOffset >= 0; producerOffset--) {
+                const producer = state.operations[producerOffset];
+                const item = eligibleByOperation.get(producer);
+                if (!item) break;
+                const producerExpr = parseCached(producer.rhs);
+                if (!isStablePreCfCallSetupExpression(producerExpr)) break;
+                replacements.set(item.facts.name, producer.rhs);
+                producerItems.push(item);
             }
-            if (candidate) break;
+            if (producerItems.length < 2 || !replacements.has(call.base.name)) continue;
+            const rewritten = rewriteDirectCallSetup(consumer.rhs, replacements, call);
+            if (!rewritten || rewritten.consumed.size !== producerItems.length) continue;
+            const touchedNames = new Set([...(consumer.reads || []), ...operationWrites(consumer)]);
+            for (const item of producerItems) {
+                touchedNames.add(item.facts.name);
+                for (const name of item.producer.reads || []) touchedNames.add(name);
+                for (const name of operationWrites(item.producer)) touchedNames.add(name);
+            }
+            candidates.push({ state, consumer, producerItems, rewritten, touchedNames });
         }
-        if (!candidate) break;
-        const ownership = mapPreCfOperationRanges(betaResult);
+        if (!candidates.length) break;
+
+        const accepted = [];
+        const claimedOperations = new Set();
+        for (const candidate of candidates) {
+            const operations = [candidate.consumer, ...candidate.producerItems.map(item => item.producer)];
+            if (operations.some(operation => claimedOperations.has(operation))) continue;
+            accepted.push(candidate);
+            for (const operation of operations) claimedOperations.add(operation);
+        }
+        if (!accepted.length) break;
+
+        const ownership = mapPreCfOperationRanges(betaResult); parseRounds++;
         if (!ownership.safe) {
-            betaResult.preCfCallSetupChains = { applied: folds > 0, safe: false, reason: ownership.reason, folds };
+            betaResult.preCfCallSetupChains = { applied: folds > 0, safe: false, reason: ownership.reason, folds, parseRounds, batchRounds };
             return betaResult;
         }
-        const producerRanges = candidate.producerItems.map(item => ownership.ranges.get(item.producer));
-        const consumerRange = ownership.ranges.get(candidate.consumer);
-        if (producerRanges.some(range => !range) || !consumerRange) {
-            betaResult.preCfCallSetupChains = { applied: folds > 0, safe: false, reason: "PRE-CF call setup chain recovery lost exact source ownership", folds };
-            return betaResult;
+        const edits = [];
+        for (const candidate of accepted) {
+            const producerRanges = candidate.producerItems.map(item => ownership.ranges.get(item.producer));
+            const consumerRange = ownership.ranges.get(candidate.consumer);
+            if (producerRanges.some(range => !range) || !consumerRange) {
+                betaResult.preCfCallSetupChains = { applied: folds > 0, safe: false, reason: "PRE-CF call setup chain recovery lost exact source ownership", folds, parseRounds, batchRounds };
+                return betaResult;
+            }
+            const prefix = String(candidate.consumer.emittedText || "").trim().startsWith("local ") ? "local " : "";
+            candidate.emittedText = `${prefix}${candidate.consumer.emittedTarget} = ${candidate.rewritten.rhs}`;
+            edits.push(
+                ...producerRanges.map(range => ({ start: range[0], end: range[1], replacement: "" })),
+                { start: consumerRange[0], end: consumerRange[1], replacement: candidate.emittedText },
+            );
         }
-        const prefix = String(candidate.consumer.emittedText || "").trim().startsWith("local ") ? "local " : "";
-        const emittedText = `${prefix}${candidate.consumer.emittedTarget} = ${candidate.rewritten.rhs}`;
-        const output = applySourceEdits(betaResult.source, [
-            ...producerRanges.map(range => ({ start: range[0], end: range[1], replacement: "" })),
-            { start: consumerRange[0], end: consumerRange[1], replacement: emittedText },
-        ]);
-        try { parsePreCfSource(output); }
+        let output;
+        try { output = applySourceEdits(betaResult.source, edits); parsePreCfSource(output); parseRounds++; }
         catch (error) {
-            betaResult.preCfCallSetupChains = { applied: folds > 0, safe: false, reason: `PRE-CF call setup chain recovery reparse failed: ${error.message}`, folds };
+            betaResult.preCfCallSetupChains = { applied: folds > 0, safe: false, reason: `PRE-CF call setup chain recovery reparse failed: ${error.message}`, folds, parseRounds, batchRounds };
             return betaResult;
         }
         betaResult.source = output;
-        const removedNames = new Set(candidate.producerItems.map(item => item.facts.name));
-        const addedReads = candidate.producerItems.flatMap(item => item.producer.reads || []);
-        candidate.consumer.rhs = candidate.rewritten.rhs;
-        candidate.consumer.reads = [...new Set([...(candidate.consumer.reads || []).filter(name => !removedNames.has(name)), ...addedReads])];
-        candidate.consumer.emittedText = emittedText;
-        for (const offset of candidate.producerItems.map(item => item.facts.producer.offset).sort((a, b) => b - a)) candidate.state.operations.splice(offset, 1);
-        for (let i = 0; i < candidate.state.operations.length; i++) candidate.state.operations[i].index = i + 1;
-        folds += candidate.producerItems.length;
+        const removalsByState = new Map();
+        for (const candidate of accepted) {
+            const removedNames = new Set(candidate.producerItems.map(item => item.facts.name));
+            const addedReads = candidate.producerItems.flatMap(item => item.producer.reads || []);
+            candidate.consumer.rhs = candidate.rewritten.rhs;
+            candidate.consumer.reads = [...new Set([...(candidate.consumer.reads || []).filter(name => !removedNames.has(name)), ...addedReads])];
+            candidate.consumer.emittedText = candidate.emittedText;
+            if (!removalsByState.has(candidate.state.id)) removalsByState.set(candidate.state.id, new Set());
+            const removals = removalsByState.get(candidate.state.id);
+            for (const item of candidate.producerItems) removals.add(item.producer);
+            folds += candidate.producerItems.length;
+        }
+        for (const [stateId, removals] of removalsByState) {
+            const state = proof.stateById.get(stateId);
+            state.operations = state.operations.filter(operation => !removals.has(operation));
+            for (let i = 0; i < state.operations.length; i++) state.operations[i].index = i + 1;
+        }
+        batchRounds++;
     }
-    betaResult.preCfCallSetupChains = { applied: folds > 0, safe: true, folds };
+    betaResult.preCfCallSetupChains = { applied: folds > 0, safe: true, folds, parseRounds, batchRounds };
     return betaResult;
 }
 
