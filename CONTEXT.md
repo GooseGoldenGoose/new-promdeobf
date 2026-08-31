@@ -958,3 +958,8 @@ PRE-CF indexed-write batching: `finalizePreCfIndexedWriteTemps` now batches inde
 - No acyclic CFG algorithm/code change was made. Optimizing postdominators/reachability at this point would add risk/complexity for negligible expected gain.
 - Combined regression gate still PASS: 43 focused suites + 66/66 canonical samples.
 - Next roadmap step is Step 7: reduce repeated whole-graph loop rebuilding, but only keep it if measured wall-clock median improves.
+## Performance plan Step 7 - incremental loop graph mutation rejected (2026-08-31)
+- Tried replacing full predecessor recomputation/full-state cloning after each loop collapse with a local graph-region replacement. Only removed states, the rewritten preheader, and states whose incoming edges changed were rebuilt; predecessor order was preserved by scanning surviving source states in original order.
+- Correctness passed: syntax; numeric/generic/while/repeat focused suites; main beta-CF; combined 43 focused suites + 66/66 canonical samples. `spacial6` remained 3799 states / 554 closures, reparsed, had zero unwanted scaffold, and matched the frozen final byte-for-byte on all 3 runs (SHA-256 `14d488e79025f385dc79038cf557a5f74a5390e9924647772d9086bf4a5d4145`).
+- Warm runs were 44.915 s / 43.693 s / 42.769 s; median 43.693 s versus Step-3 median 40.279 s. The optimization was clearly slower and was fully reverted.
+- No solver code from this attempt was kept. Next roadmap step is Step 8: profile parser calls/cache opportunities on immutable source strings.
