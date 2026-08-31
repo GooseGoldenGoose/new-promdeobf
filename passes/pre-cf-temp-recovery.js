@@ -167,9 +167,22 @@ function mapPreCfOperationRanges(betaResult) {
     return { safe: true, ranges };
 }
 function applySourceEdits(source, edits) {
-    let output = source;
-    for (const edit of [...edits].sort((a, b) => b.start - a.start)) output = output.slice(0, edit.start) + edit.replacement + output.slice(edit.end);
-    return output;
+    const text = String(source);
+    if (!Array.isArray(edits) || edits.length === 0) return text;
+    const sorted = [...edits].sort((a, b) => a.start - b.start || a.end - b.end);
+    const parts = [];
+    let cursor = 0;
+    for (const edit of sorted) {
+        const start = Number(edit?.start);
+        const end = Number(edit?.end);
+        if (!Number.isInteger(start) || !Number.isInteger(end) || start < cursor || end < start || end > text.length) {
+            throw new Error(`Invalid or overlapping PRE-CF source edit ${start}:${end}`);
+        }
+        parts.push(text.slice(cursor, start), String(edit.replacement ?? ""));
+        cursor = end;
+    }
+    parts.push(text.slice(cursor));
+    return parts.join("");
 }
 function isCopyOperation(operation) { return operation && (operation.kind === "version-define" || operation.kind === "epoch-start"); }
 function finalizePreCfCopyTemps(betaResult) {
@@ -289,17 +302,19 @@ function finalizePreCfCallResultDestinations(betaResult) {
         return betaResult;
     }
     let folds = 0;
+    let parseRounds = 0;
+    let batchRounds = 0;
     const maxRounds = (betaResult.graph.states || []).reduce((n, state) => n + (state.operations || []).length, 0) + 1;
     for (let round = 0; round < maxRounds; round++) {
         const proof = buildPreCfTempProofIndex(betaResult);
-        let candidate = null;
+        const candidates = [];
         for (const facts of proof.byBinding.values()) {
             if (!facts.singleDefinition || !facts.singleUse || facts.captured || !facts.sameState) continue;
             const producer = facts.producer?.operation, consumer = facts.consumer?.operation;
             if (!isCompilerCallResultOperation(producer, betaResult.graph)) continue;
             if (!["version-define", "epoch-start", "epoch-mutate"].includes(consumer?.kind) || consumer.rhs !== facts.name) continue;
             if (!consumer.registerEpoch || !/^(?:r\d+|__overflow_phys_\d+)$/.test(String(consumer.originalTarget || ""))) continue;
-            const state = betaResult.graph.states.find(item => item.id === facts.producer.stateId);
+            const state = proof.stateById.get(facts.producer.stateId);
             if (!state) continue;
             const producerOffset = facts.producer.offset, consumerOffset = facts.consumer.offset;
             if (!(consumerOffset > producerOffset)) continue;
@@ -314,44 +329,71 @@ function finalizePreCfCallResultDestinations(betaResult) {
                 }
             }
             if (unsafeGap) continue;
-            candidate = { facts, state, producer, consumer, producerOffset, consumerOffset, actualTarget };
-            break;
+            const touchedNames = new Set([facts.name, actualTarget, ...(producer.reads || []), ...operationWrites(producer), ...(consumer.reads || []), ...operationWrites(consumer)]);
+            candidates.push({ facts, state, producer, consumer, producerOffset, consumerOffset, actualTarget, touchedNames });
         }
-        if (!candidate) break;
-        const ownership = mapPreCfOperationRanges(betaResult);
+        if (!candidates.length) break;
+
+        const accepted = [];
+        const claimedOperations = new Set();
+        const claimedNames = new Set();
+        for (const candidate of candidates) {
+            if (claimedOperations.has(candidate.producer) || claimedOperations.has(candidate.consumer)) continue;
+            if ([...candidate.touchedNames].some(name => claimedNames.has(name))) continue;
+            accepted.push(candidate);
+            claimedOperations.add(candidate.producer);
+            claimedOperations.add(candidate.consumer);
+            for (const name of candidate.touchedNames) claimedNames.add(name);
+        }
+        if (!accepted.length) break;
+
+        const ownership = mapPreCfOperationRanges(betaResult); parseRounds++;
         if (!ownership.safe) {
-            betaResult.preCfCallResultDestinations = { applied: folds > 0, safe: false, reason: ownership.reason, folds };
+            betaResult.preCfCallResultDestinations = { applied: folds > 0, safe: false, reason: ownership.reason, folds, parseRounds, batchRounds };
             return betaResult;
         }
-        const producerRange = ownership.ranges.get(candidate.producer);
-        const consumerRange = ownership.ranges.get(candidate.consumer);
-        if (!producerRange || !consumerRange) {
-            betaResult.preCfCallResultDestinations = { applied: folds > 0, safe: false, reason: "PRE-CF call-result destination recovery lost exact source ownership", folds };
-            return betaResult;
+        const edits = [];
+        for (const candidate of accepted) {
+            const producerRange = ownership.ranges.get(candidate.producer);
+            const consumerRange = ownership.ranges.get(candidate.consumer);
+            if (!producerRange || !consumerRange) {
+                betaResult.preCfCallResultDestinations = { applied: folds > 0, safe: false, reason: "PRE-CF call-result destination recovery lost exact source ownership", folds, parseRounds, batchRounds };
+                return betaResult;
+            }
+            const prefix = String(candidate.consumer.emittedText || "").trim().startsWith("local ") ? "local " : "";
+            candidate.emittedText = `${prefix}${candidate.actualTarget} = ${candidate.producer.rhs}`;
+            edits.push(
+                { start: producerRange[0], end: producerRange[1], replacement: candidate.emittedText },
+                { start: consumerRange[0], end: consumerRange[1], replacement: "" },
+            );
         }
-        const prefix = String(candidate.consumer.emittedText || "").trim().startsWith("local ") ? "local " : "";
-        const emittedText = `${prefix}${candidate.actualTarget} = ${candidate.producer.rhs}`;
-        const output = applySourceEdits(betaResult.source, [
-            { start: producerRange[0], end: producerRange[1], replacement: emittedText },
-            { start: consumerRange[0], end: consumerRange[1], replacement: "" },
-        ]);
-        try { parsePreCfSource(output); }
+        let output;
+        try { output = applySourceEdits(betaResult.source, edits); parsePreCfSource(output); parseRounds++; }
         catch (error) {
-            betaResult.preCfCallResultDestinations = { applied: folds > 0, safe: false, reason: `PRE-CF call-result destination recovery reparse failed: ${error.message}`, folds };
+            betaResult.preCfCallResultDestinations = { applied: folds > 0, safe: false, reason: `PRE-CF call-result destination recovery reparse failed: ${error.message}`, folds, parseRounds, batchRounds };
             return betaResult;
         }
         betaResult.source = output;
-        candidate.producer.emittedTarget = candidate.actualTarget;
-        candidate.producer.originalTarget = candidate.consumer.originalTarget;
-        candidate.producer.registerEpoch = candidate.consumer.registerEpoch;
-        candidate.producer.compilerCallResultRetargeted = true;
-        candidate.producer.kind = candidate.consumer.kind;
-        candidate.producer.emittedText = emittedText;
-        candidate.state.operations.splice(candidate.consumerOffset, 1);
-        for (let i = 0; i < candidate.state.operations.length; i++) candidate.state.operations[i].index = i + 1;
-        folds++;
+        const removalsByState = new Map();
+        for (const candidate of accepted) {
+            candidate.producer.emittedTarget = candidate.actualTarget;
+            candidate.producer.originalTarget = candidate.consumer.originalTarget;
+            candidate.producer.registerEpoch = candidate.consumer.registerEpoch;
+            candidate.producer.compilerCallResultRetargeted = true;
+            candidate.producer.kind = candidate.consumer.kind;
+            candidate.producer.emittedText = candidate.emittedText;
+            if (!removalsByState.has(candidate.facts.producer.stateId)) removalsByState.set(candidate.facts.producer.stateId, []);
+            removalsByState.get(candidate.facts.producer.stateId).push(candidate.consumerOffset);
+        }
+        for (const [stateId, offsets] of removalsByState) {
+            const state = proof.stateById.get(stateId);
+            for (const offset of [...new Set(offsets)].sort((a, b) => b - a)) state.operations.splice(offset, 1);
+            for (let i = 0; i < state.operations.length; i++) state.operations[i].index = i + 1;
+        }
+        folds += accepted.length;
+        batchRounds++;
     }
-    betaResult.preCfCallResultDestinations = { applied: folds > 0, safe: true, folds };
+    betaResult.preCfCallResultDestinations = { applied: folds > 0, safe: true, folds, parseRounds, batchRounds };
     return betaResult;
 }
 

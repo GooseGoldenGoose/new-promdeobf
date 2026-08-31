@@ -847,3 +847,11 @@ Latest post-Step-47 work - compiler IIFE / anonymous closure expression recovery
 - Recovery is intentionally limited to zero-argument calls so field lookup is not moved across argument evaluation.
 - Exact compiler A/B test: direct `a.iter()` now emits `for ... in r_v2_1.iter() do`; source `local f = a.iter; for ... in f() do` remains an alias call.
 - Focused generic-for/namecall suites PASS; full combined gate PASS: 43 focused suites + 66/66 canonical samples.
+
+
+## PRE-CF batching performance step 1 (2026-08-31)
+- Optimized `applySourceEdits` to build output in one forward pass and fail closed on invalid/overlapping edit ranges instead of repeatedly slicing the full multi-MB source once per edit.
+- Batched `finalizePreCfCallResultDestinations` so independent proven candidates from the same graph snapshot are applied together, with one ownership map/reparse per batch. Existing semantic proof rules were unchanged.
+- spacial6 profile for this stage: call-result destination recovery improved from 56.925 s to 2.395 s for 134 folds, using 5 batch rounds / 10 parse rounds.
+- Focused call-result tests PASS and the full combined gate remains 43 focused suites + 66/66 canonical samples.
+- Continue performance work one PRE-CF stage at a time. Next measured hotspot after this step is table destination recovery.
