@@ -890,3 +890,7 @@ PRE-CF indexed-write batching: `finalizePreCfIndexedWriteTemps` now batches inde
 ## PRE-CF effect-call base batching (2026-08-31)
 - `finalizePreCfEffectCallBaseTemps` now batches independent proven compiler-global call-base aliases by exact producer/consumer operation ownership. One proof snapshot, one ownership map, one edit application, one reparse, and grouped graph removals are used per batch; existing provenance and adjacency gates are unchanged.
 - spacial6 profile: 225 folds in 0.380 s, 1 batch round / 2 parse rounds. Focused call-base PASS; combined gate PASS: 43 focused suites + 66/66 canonical samples.
+
+## PRE-CF RETURN_ALL batching (2026-08-31)
+- `finalizePreCfReturnAllTemps` now batches independent proven RETURN_ALL pack-to-consumer transports by exact producer/consumer operation ownership. One proof snapshot, one ownership map, one edit application, one reparse, and grouped graph removals are used per batch; existing same-state, single-use, gap, capture, final-unpack, and consumer-kind gates are unchanged.
+- spacial6 profile: 97 folds in 0.553 s, 1 batch round / 2 parse rounds. Focused RETURN_ALL PASS; combined gate PASS: 43 focused suites + 66/66 canonical samples.

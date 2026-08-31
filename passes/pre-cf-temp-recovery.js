@@ -2415,15 +2415,18 @@ function finalizePreCfReturnAllTemps(betaResult) {
         return betaResult;
     }
     let folds = 0;
+    let parseRounds = 0;
+    let batchRounds = 0;
     const maxRounds = (betaResult.graph.states || []).reduce((n, state) => n + (state.operations || []).length, 0) + 1;
     for (let round = 0; round < maxRounds; round++) {
         const proof = buildPreCfTempProofIndex(betaResult);
-        let candidate = null;
+        const candidates = [];
+        const claimedOperations = new Set();
         for (const state of betaResult.graph.states || []) {
             const ops = state.operations || [];
             for (let offset = 0; offset + 1 < ops.length; offset++) {
                 const packOp = ops[offset];
-                if (!isCopyOperation(packOp) || !packOp.emittedTarget) continue;
+                if (claimedOperations.has(packOp) || !isCopyOperation(packOp) || !packOp.emittedTarget) continue;
                 const packName = packOp.emittedTarget;
                 if (betaResult.graph.recoveredUpvalueBindings?.includes(packName)) continue;
                 const packFacts = proof.byBinding.get(packName);
@@ -2431,14 +2434,10 @@ function finalizePreCfReturnAllTemps(betaResult) {
                 if (!packFacts.safeSameStateTransport || packFacts.consumer?.stateId !== state.id) continue;
                 const consumerOffset = packFacts.consumer.offset;
                 const consumer = packFacts.consumer.operation;
-                if (!(consumerOffset > offset)) continue;
+                if (claimedOperations.has(consumer) || !(consumerOffset > offset)) continue;
                 const innerCall = parsePackedSingleCall(packOp.rhs);
                 if (!innerCall) continue;
 
-                // Moving the packed call to its final RETURN_ALL consumer is allowed
-                // across compiler bookkeeping only. Such gaps must be literal-only
-                // scalar definitions: no calls/indexes/metamethods, no pack use, and
-                // no mutation/read dependency with the packed call's input bindings.
                 const producerReads = new Set(packOp.reads || []);
                 let blocked = false;
                 for (let gapOffset = offset + 1; gapOffset < consumerOffset; gapOffset++) {
@@ -2463,53 +2462,66 @@ function finalizePreCfReturnAllTemps(betaResult) {
                     consumerKind = rewritten ? "return-payload" : null;
                 }
                 if (!rewritten || !consumerKind) continue;
-                candidate = { state, offset, consumerOffset, packOp, consumer, packName, rewritten, consumerKind };
-                break;
+                candidates.push({ state, offset, consumerOffset, packOp, consumer, packName, rewritten, consumerKind });
+                claimedOperations.add(packOp);
+                claimedOperations.add(consumer);
             }
-            if (candidate) break;
         }
-        if (!candidate) break;
-        const ownership = mapPreCfOperationRanges(betaResult);
+        if (!candidates.length) break;
+        const ownership = mapPreCfOperationRanges(betaResult); parseRounds++;
         if (!ownership.safe) {
-            betaResult.preCfReturnAllTemps = { applied: folds > 0, safe: false, reason: ownership.reason, folds };
+            betaResult.preCfReturnAllTemps = { applied: folds > 0, safe: false, reason: ownership.reason, folds, parseRounds, batchRounds };
             return betaResult;
         }
-        const packRange = ownership.ranges.get(candidate.packOp);
-        const consumerRange = ownership.ranges.get(candidate.consumer);
-        if (!packRange || !consumerRange) {
-            betaResult.preCfReturnAllTemps = { applied: folds > 0, safe: false, reason: "PRE-CF RETURN_ALL recovery lost exact source ownership", folds };
-            return betaResult;
+        const edits = [];
+        for (const candidate of candidates) {
+            const packRange = ownership.ranges.get(candidate.packOp);
+            const consumerRange = ownership.ranges.get(candidate.consumer);
+            if (!packRange || !consumerRange) {
+                betaResult.preCfReturnAllTemps = { applied: folds > 0, safe: false, reason: "PRE-CF RETURN_ALL recovery lost exact source ownership", folds, parseRounds, batchRounds };
+                return betaResult;
+            }
+            const isLocal = String(candidate.consumer.emittedText || "").trim().startsWith("local ");
+            candidate.emittedText = candidate.consumerKind === "return-payload"
+                ? `${candidate.consumer.emittedTarget || betaResult.graph.returnName || "ReturnVal"} = ${candidate.rewritten.rhs}`
+                : candidate.consumerKind === "effect-call"
+                    ? candidate.rewritten.rhs
+                    : `${isLocal ? "local " : ""}${candidate.consumer.emittedTarget} = ${candidate.rewritten.rhs}`;
+            edits.push(
+                { start: packRange[0], end: packRange[1], replacement: "" },
+                { start: consumerRange[0], end: consumerRange[1], replacement: candidate.emittedText },
+            );
         }
-        const isLocal = String(candidate.consumer.emittedText || "").trim().startsWith("local ");
-        const emittedText = candidate.consumerKind === "return-payload"
-            ? `${candidate.consumer.emittedTarget || betaResult.graph.returnName || "ReturnVal"} = ${candidate.rewritten.rhs}`
-            : candidate.consumerKind === "effect-call"
-                ? candidate.rewritten.rhs
-                : `${isLocal ? "local " : ""}${candidate.consumer.emittedTarget} = ${candidate.rewritten.rhs}`;
-        const output = applySourceEdits(betaResult.source, [
-            { start: packRange[0], end: packRange[1], replacement: "" },
-            { start: consumerRange[0], end: consumerRange[1], replacement: emittedText },
-        ]);
-        try { parsePreCfSource(output); }
+        let output;
+        try { output = applySourceEdits(betaResult.source, edits); parsePreCfSource(output); parseRounds++; }
         catch (error) {
-            betaResult.preCfReturnAllTemps = { applied: folds > 0, safe: false, reason: `PRE-CF RETURN_ALL recovery reparse failed: ${error.message}`, folds };
+            betaResult.preCfReturnAllTemps = { applied: folds > 0, safe: false, reason: `PRE-CF RETURN_ALL recovery reparse failed: ${error.message}`, folds, parseRounds, batchRounds };
             return betaResult;
         }
         betaResult.source = output;
-        candidate.consumer.rhs = candidate.rewritten.rhs;
-        if (candidate.consumerKind === "return-payload") candidate.consumer.returnExpressions = candidate.rewritten.returnExpressions;
-        candidate.consumer.emittedText = emittedText;
-        const rewrittenExpression = parsePreCfRhs(candidate.rewritten.rhs);
-        const stillReadsUnpack = collectIdentifierCount(rewrittenExpression, "unpack") > 0;
-        candidate.consumer.reads = [...new Set([
-            ...(candidate.consumer.reads || []).filter(name => name !== candidate.packName && (name !== "unpack" || stillReadsUnpack)),
-            ...(candidate.packOp.reads || []),
-        ])];
-        candidate.state.operations.splice(candidate.offset, 1);
-        for (let i = 0; i < candidate.state.operations.length; i++) candidate.state.operations[i].index = i + 1;
-        folds++;
+        const removalsByState = new Map();
+        for (const candidate of candidates) {
+            candidate.consumer.rhs = candidate.rewritten.rhs;
+            if (candidate.consumerKind === "return-payload") candidate.consumer.returnExpressions = candidate.rewritten.returnExpressions;
+            candidate.consumer.emittedText = candidate.emittedText;
+            const rewrittenExpression = parsePreCfRhs(candidate.rewritten.rhs);
+            const stillReadsUnpack = collectIdentifierCount(rewrittenExpression, "unpack") > 0;
+            candidate.consumer.reads = [...new Set([
+                ...(candidate.consumer.reads || []).filter(name => name !== candidate.packName && (name !== "unpack" || stillReadsUnpack)),
+                ...(candidate.packOp.reads || []),
+            ])];
+            if (!removalsByState.has(candidate.state.id)) removalsByState.set(candidate.state.id, new Set());
+            removalsByState.get(candidate.state.id).add(candidate.packOp);
+        }
+        for (const [stateId, removals] of removalsByState) {
+            const state = proof.stateById.get(stateId);
+            state.operations = state.operations.filter(operation => !removals.has(operation));
+            for (let i = 0; i < state.operations.length; i++) state.operations[i].index = i + 1;
+        }
+        folds += candidates.length;
+        batchRounds++;
     }
-    betaResult.preCfReturnAllTemps = { applied: folds > 0, safe: true, folds };
+    betaResult.preCfReturnAllTemps = { applied: folds > 0, safe: true, folds, parseRounds, batchRounds };
     return betaResult;
 }
 
