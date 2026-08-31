@@ -951,3 +951,10 @@ PRE-CF indexed-write batching: `finalizePreCfIndexedWriteTemps` now batches inde
 - Correctness passed: syntax; numeric/generic/while/repeat focused suites; main beta-CF; combined 43 focused suites + 66/66 canonical samples. `spacial6` remained 3799 states / 554 closures, reparsed, had zero unwanted scaffold, and matched the frozen final byte-for-byte on all 3 runs (SHA-256 `14d488e79025f385dc79038cf557a5f74a5390e9924647772d9086bf4a5d4145`).
 - Warm runs were 41.013 s / 39.784 s / 40.356 s; median 40.356 s versus Step-3 median 40.279 s. Because the performance-only change showed no measurable improvement, it was fully reverted.
 - No solver code from this attempt was kept. Next roadmap step is Step 6: profile/optimize acyclic postdominator/reachability work only if measurements justify it.
+
+## Performance plan Step 6 - acyclic postdominator/reachability optimization rejected (2026-08-31)
+- Profiled the existing production CPU profile before changing solver code, as required by the roadmap.
+- `computePostdominators` accounted for about 11.232 ms self-time total; `computeReachableStateSetsWithExit` about 1.123 ms; `computeReachableStateSets` had 0 sampled self-time. Combined measured self-time was about 12 ms versus ~42 s end-to-end, so this stage is not a meaningful performance hotspot.
+- No acyclic CFG algorithm/code change was made. Optimizing postdominators/reachability at this point would add risk/complexity for negligible expected gain.
+- Combined regression gate still PASS: 43 focused suites + 66/66 canonical samples.
+- Next roadmap step is Step 7: reduce repeated whole-graph loop rebuilding, but only keep it if measured wall-clock median improves.
