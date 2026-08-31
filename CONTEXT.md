@@ -1,4 +1,4 @@
-# Prometheus Lua/Luau Deobfuscator - Live Handoff
+﻿# Prometheus Lua/Luau Deobfuscator - Live Handoff
 
 ## Reset Authority
 
@@ -30,7 +30,7 @@ Treat later PRE-CF/post-CF optimizer work as abandoned unless the user explicitl
 - Stage only files belonging to the current task.
 - Commit focused changes and push `origin/main`.
 - Fail closed on incomplete structural proof.
-- End project turns exactly: `Done for this turn — you can prompt now.`
+- End project turns exactly: `Done for this turn โ€” you can prompt now.`
 
 Known tracked user dirt to preserve:
 
@@ -203,3 +203,11 @@ For structural fixes:
 8. existing fixtures
 9. `spacial6` when relevant
 10. update context, focused commit, push
+## Fresh Beta CF Solver Reset
+
+- `passes/beta-control-flow-old.js` is the exact previous beta control-flow solver preserved unchanged (same Git blob as pre-reset `passes/beta-control-flow.js`).
+- `passes/beta-control-flow.js` is now a fresh fail-closed solver shell.
+- The fresh solver does not silently call or fall back to the old solver.
+- Existing callers keep importing `./passes/beta-control-flow`, so new CF work can be implemented incrementally behind the same entry point.
+- Old helper export names remain present as explicit unimplemented fail-closed stubs for compatibility while the new solver is rebuilt case-by-case.
+
