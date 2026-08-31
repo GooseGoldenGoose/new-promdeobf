@@ -33,9 +33,11 @@ function registerIdentity(node, overflowName) {
 }
 
 const BORROWED_STATE_TEMP_WRITES = new WeakSet();
+const ANCHORED_LIFETIME_WRITES = new WeakSet();
 
 function isDelayableAssignment(statement, stateName, overflowName = null) {
     if (statement?.type !== "AssignmentStatement") return false;
+    if (ANCHORED_LIFETIME_WRITES.has(statement)) return false;
     const variables = statement.variables || [];
     const init = statement.init || [];
     if (variables.length !== 1 || init.length !== 1) return false;
@@ -134,6 +136,7 @@ function intersects(a, b) {
 
 function canSwapRightAssignmentWithLeftStatement(delayable, current, stateName, overflowName = null) {
     if (!isDelayableAssignment(delayable, stateName, overflowName)) return false;
+    if (ANCHORED_LIFETIME_WRITES.has(current)) return false;
 
     const delayReads = statementReads(delayable, overflowName);
     const delayWrites = statementWrites(delayable, overflowName);
@@ -535,6 +538,45 @@ function validateScheduledOrder(original, scheduled, stateName, overflowName = n
     return true;
 }
 
+function markAnchoredLifetimeWrites(statements, stateName, overflowName = null, returnName = null) {
+    const protectedRegisters = new Set();
+
+    // In straight-line compiler output, a source-variable lifetime normally
+    // ends with a direct register = nil cleanup. Source `a = nil` itself is
+    // emitted through a temporary and copied into the VAR register, so protect
+    // the complete physical-register chain when its final touch is such a
+    // cleanup. This intentionally errs conservative: a temp that happens to
+    // match the shape is merely left unscheduled.
+    for (let index = 0; index < statements.length; index++) {
+        const statement = statements[index];
+        if (statement?.type !== "AssignmentStatement") continue;
+        const variables = statement.variables || [];
+        const init = statement.init || [];
+        if (variables.length !== 1 || init.length !== 1 || init[0]?.type !== "NilLiteral") continue;
+        const target = registerIdentity(variables[0], overflowName);
+        if (!target || target === stateName || target === returnName) continue;
+
+        let touchedLater = false;
+        for (let i = index + 1; i < statements.length; i++) {
+            if (statementReads(statements[i], overflowName).has(target) ||
+                statementWrites(statements[i], overflowName).has(target)) {
+                touchedLater = true;
+                break;
+            }
+        }
+        if (!touchedLater) protectedRegisters.add(target);
+    }
+
+    if (protectedRegisters.size === 0) return 0;
+    let marked = 0;
+    for (const statement of statements) {
+        const writes = statementWrites(statement, overflowName);
+        if (![...protectedRegisters].some(name => writes.has(name))) continue;
+        ANCHORED_LIFETIME_WRITES.add(statement);
+        marked++;
+    }
+    return marked;
+}
 function markBorrowedStateTempWrites(statements, stateName) {
     let finalStateWriteIndex = -1;
     for (let index = statements.length - 1; index >= 0; index--) {
@@ -560,6 +602,7 @@ function markBorrowedStateTempWrites(statements, stateName) {
 }
 
 function scheduleStatementList(statements, stateName, overflowName = null, returnName = null) {
+    const anchoredLifetimeWrites = markAnchoredLifetimeWrites(statements, stateName, overflowName, returnName);
     const borrowedStateTemps = markBorrowedStateTempWrites(statements, stateName);
     const scheduled = [...statements];
     const schedulingBaseline = [...scheduled];
@@ -604,6 +647,7 @@ function scheduleStatementList(statements, stateName, overflowName = null, retur
             unreadSinks: 0,
             safetyRejected: true,
             borrowedStateTemps,
+            anchoredLifetimeWrites,
         };
     }
 
@@ -630,6 +674,7 @@ function scheduleStatementList(statements, stateName, overflowName = null, retur
         directStateTransitionMoves: directStateTransition.moved,
         safetyRejected: false,
         borrowedStateTemps,
+        anchoredLifetimeWrites,
     };
 }
 

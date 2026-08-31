@@ -278,3 +278,31 @@ function scheduleOverflow(source, overflowName = "Overflow") {
 }
 
 console.log("vm register scheduler regression: ok");
+
+{
+    const source = [
+        'A = 1',
+        'K = "print"',
+        'F = _env[K]',
+        'X = 2',
+        'R = F(A)',
+        'A = nil',
+    ].join("\n");
+    const out = schedule(source);
+    assert.strictEqual(out[0], 'A = 1', 'source-variable producer with final nil cleanup was pulled into the call temp chain');
+    assert.ok(out.indexOf('A = 1') < out.indexOf('R = F(A)'), 'source-variable definition moved past its use');
+    assert.strictEqual(out[out.length - 1], 'A = nil', 'source-variable cleanup did not remain at lifetime tail');
+}
+
+{
+    const source = [
+        'X = 2',
+        'K = "print"',
+        'A = 1',
+        'F = _env[K]',
+        'R = F(A)',
+    ].join("\n");
+    const out = schedule(source);
+    assert.ok(out.indexOf('K = "print"') + 1 === out.indexOf('F = _env[K]'), 'GETGLOBAL temp chain was not canonicalized');
+    assert.ok(out.indexOf('A = 1') + 1 === out.indexOf('R = F(A)'), 'literal argument temp was not canonicalized toward the call');
+}

@@ -153,6 +153,14 @@ Safety invariants:
 - keep final branch/jump/stop state transitions anchored
 - only move pure primitive/register-copy assignments when proven independent
 
+Latest scheduler change:
+
+- Static canonicalization now protects wider-lifetime register chains identified by a final direct `rN = nil` cleanup in the current straight-line leaf.
+- All writes to such a register are scheduling anchors, and delayable TEMP writes may not cross those anchors.
+- This prevents source locals such as `local a = 1; print(a)` from being pulled into a call-local TEMP chain while still allowing direct TEMP chains such as GETGLOBAL key/load and literal call arguments to compact deterministically.
+- The rule is intentionally conservative and loop-specific nil behavior remains deferred to later control-flow-aware handling.
+- Scheduler regression, VM state reachability, and register naming regressions pass.
+
 Latest change after reset:
 
 - Recognize earlier overwritten `state` assignments with primitive/register RHS as borrowed POS-register temporary writes.
