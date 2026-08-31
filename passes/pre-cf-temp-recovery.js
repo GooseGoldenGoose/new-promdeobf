@@ -1687,98 +1687,118 @@ function finalizePreCfCallArgumentTemps(betaResult) {
         return betaResult;
     }
     let folds = 0;
+    let parseRounds = 0;
+    let batchRounds = 0;
     const maxRounds = (betaResult.graph.states || []).reduce((n, state) => n + (state.operations || []).length, 0) + 1;
     for (let round = 0; round < maxRounds; round++) {
         const proof = buildPreCfTempProofIndex(betaResult);
-        let candidate = null;
+        const candidates = [];
+        const claimedOperations = new Set();
+        const parsedRhs = new Map();
+        const parseRhsCached = operation => {
+            if (!parsedRhs.has(operation)) parsedRhs.set(operation, parsePreCfRhs(operation?.rhs));
+            return parsedRhs.get(operation);
+        };
 
         for (const facts of proof.byBinding.values()) {
             if (!facts.safeSameStateTransport || !facts.adjacent) continue;
             const producer = facts.producer.operation;
             const consumer = facts.consumer.operation;
+            if (claimedOperations.has(producer) || claimedOperations.has(consumer)) continue;
             if (!isCopyOperation(producer) || !isCopyOperation(consumer)) continue;
-            const producerExpr = parsePreCfRhs(producer.rhs);
+            const producerExpr = parseRhsCached(producer);
             if (producerExpr?.type !== "CallExpression" || isPreCfClosureFactoryCall(producerExpr, betaResult.graph)) continue;
             const rewritten = rewriteDirectCallArgument(consumer.rhs, facts.name, `(${producer.rhs})`);
             if (!rewritten) continue;
             if (!Array.isArray(consumer.reads) || !consumer.reads.includes(rewritten.baseName)) continue;
-            candidate = { consumer, producerItems: [{ facts, producer }], rewritten };
-            break;
+            candidates.push({ state: proof.stateById.get(facts.producer.stateId), consumer, producerItems: [{ facts, producer }], rewritten });
+            claimedOperations.add(producer);
+            claimedOperations.add(consumer);
         }
 
-        if (!candidate) {
-            for (const state of betaResult.graph.states || []) {
-                const operations = state.operations || [];
-                for (let consumerOffset = 0; consumerOffset < operations.length; consumerOffset++) {
-                    const consumer = operations[consumerOffset];
-                    if (!isCopyOperation(consumer)) continue;
-                    const consumerExpr = parsePreCfRhs(consumer.rhs);
-                    if (consumerExpr?.type !== "CallExpression" || consumerExpr.base?.type !== "Identifier") continue;
-                    if (!Array.isArray(consumer.reads) || !consumer.reads.includes(consumerExpr.base.name)) continue;
+        for (const state of betaResult.graph.states || []) {
+            const operations = state.operations || [];
+            for (let consumerOffset = 0; consumerOffset < operations.length; consumerOffset++) {
+                const consumer = operations[consumerOffset];
+                if (claimedOperations.has(consumer) || !isCopyOperation(consumer)) continue;
+                const consumerExpr = parseRhsCached(consumer);
+                if (consumerExpr?.type !== "CallExpression" || consumerExpr.base?.type !== "Identifier") continue;
+                if (!Array.isArray(consumer.reads) || !consumer.reads.includes(consumerExpr.base.name)) continue;
 
-                    const replacements = new Map();
-                    const producerItems = [];
-                    for (let producerOffset = consumerOffset - 1; producerOffset >= 0; producerOffset--) {
-                        const producer = operations[producerOffset];
-                        if (!isCopyOperation(producer)) break;
-                        const facts = proof.byBinding.get(producer.emittedTarget);
-                        if (!facts || !facts.safeSameStateTransport) break;
-                        if (facts.producer.operation !== producer || facts.consumer.operation !== consumer) break;
-                        const producerExpr = parsePreCfRhs(producer.rhs);
-                        if (!isMovableCallArgumentScalarExpression(producerExpr) && !isStaticLookupExpression(producerExpr)) break;
-                        replacements.set(facts.name, producer.rhs);
-                        producerItems.push({ facts, producer });
-                    }
-                    if (!producerItems.length) continue;
-                    const hasLookupProducer = producerItems.some(item => isStaticLookupExpression(parsePreCfRhs(item.producer.rhs)));
-                    if (hasLookupProducer && !callArgumentLookupTailProof(consumer.rhs, producerItems)) continue;
-                    const rewritten = rewriteDirectCallArguments(consumer.rhs, replacements);
-                    if (!rewritten || rewritten.consumed.length !== producerItems.length) continue;
-                    candidate = { consumer, producerItems, rewritten };
-                    break;
+                const replacements = new Map();
+                const producerItems = [];
+                let conflict = false;
+                for (let producerOffset = consumerOffset - 1; producerOffset >= 0; producerOffset--) {
+                    const producer = operations[producerOffset];
+                    if (!isCopyOperation(producer)) break;
+                    const facts = proof.byBinding.get(producer.emittedTarget);
+                    if (!facts || !facts.safeSameStateTransport) break;
+                    if (facts.producer.operation !== producer || facts.consumer.operation !== consumer) break;
+                    if (claimedOperations.has(producer)) { conflict = true; break; }
+                    const producerExpr = parseRhsCached(producer);
+                    if (!isMovableCallArgumentScalarExpression(producerExpr) && !isStaticLookupExpression(producerExpr)) break;
+                    replacements.set(facts.name, producer.rhs);
+                    producerItems.push({ facts, producer });
                 }
-                if (candidate) break;
+                if (conflict || !producerItems.length) continue;
+                const hasLookupProducer = producerItems.some(item => isStaticLookupExpression(parseRhsCached(item.producer)));
+                if (hasLookupProducer && !callArgumentLookupTailProof(consumer.rhs, producerItems)) continue;
+                const rewritten = rewriteDirectCallArguments(consumer.rhs, replacements);
+                if (!rewritten || rewritten.consumed.length !== producerItems.length) continue;
+                candidates.push({ state, consumer, producerItems, rewritten });
+                claimedOperations.add(consumer);
+                for (const item of producerItems) claimedOperations.add(item.producer);
             }
         }
 
-        if (!candidate) break;
-        const ownership = mapPreCfOperationRanges(betaResult);
+        if (!candidates.length) break;
+        const ownership = mapPreCfOperationRanges(betaResult); parseRounds++;
         if (!ownership.safe) {
-            betaResult.preCfCallArgumentTemps = { applied: folds > 0, safe: false, reason: ownership.reason, folds };
+            betaResult.preCfCallArgumentTemps = { applied: folds > 0, safe: false, reason: ownership.reason, folds, parseRounds, batchRounds };
             return betaResult;
         }
-        const producerRanges = candidate.producerItems.map(item => ownership.ranges.get(item.producer));
-        const consumerRange = ownership.ranges.get(candidate.consumer);
-        if (producerRanges.some(range => !range) || !consumerRange) {
-            betaResult.preCfCallArgumentTemps = { applied: folds > 0, safe: false, reason: "PRE-CF call-argument recovery lost exact source ownership", folds };
-            return betaResult;
+        const edits = [];
+        for (const candidate of candidates) {
+            const producerRanges = candidate.producerItems.map(item => ownership.ranges.get(item.producer));
+            const consumerRange = ownership.ranges.get(candidate.consumer);
+            if (producerRanges.some(range => !range) || !consumerRange) {
+                betaResult.preCfCallArgumentTemps = { applied: folds > 0, safe: false, reason: "PRE-CF call-argument recovery lost exact source ownership", folds, parseRounds, batchRounds };
+                return betaResult;
+            }
+            const prefix = String(candidate.consumer.emittedText || "").trim().startsWith("local ") ? "local " : "";
+            candidate.emittedText = `${prefix}${candidate.consumer.emittedTarget} = ${candidate.rewritten.rhs}`;
+            edits.push(
+                ...producerRanges.map(range => ({ start: range[0], end: range[1], replacement: "" })),
+                { start: consumerRange[0], end: consumerRange[1], replacement: candidate.emittedText },
+            );
         }
-        const prefix = String(candidate.consumer.emittedText || "").trim().startsWith("local ") ? "local " : "";
-        const emittedText = `${prefix}${candidate.consumer.emittedTarget} = ${candidate.rewritten.rhs}`;
-        const output = applySourceEdits(betaResult.source, [
-            ...producerRanges.map(range => ({ start: range[0], end: range[1], replacement: "" })),
-            { start: consumerRange[0], end: consumerRange[1], replacement: emittedText },
-        ]);
-        try { parsePreCfSource(output); }
+        let output;
+        try { output = applySourceEdits(betaResult.source, edits); parsePreCfSource(output); parseRounds++; }
         catch (error) {
-            betaResult.preCfCallArgumentTemps = { applied: folds > 0, safe: false, reason: `PRE-CF call-argument recovery reparse failed: ${error.message}`, folds };
+            betaResult.preCfCallArgumentTemps = { applied: folds > 0, safe: false, reason: `PRE-CF call-argument recovery reparse failed: ${error.message}`, folds, parseRounds, batchRounds };
             return betaResult;
         }
         betaResult.source = output;
-        const stateId = candidate.producerItems[0].facts.producer.stateId;
-        const state = betaResult.graph.states.find(item => item.id === stateId);
-        const removedNames = new Set(candidate.producerItems.map(item => item.facts.name));
-        const addedReads = candidate.producerItems.flatMap(item => item.producer.reads || []);
-        candidate.consumer.rhs = candidate.rewritten.rhs;
-        candidate.consumer.reads = [...new Set([...(candidate.consumer.reads || []).filter(name => !removedNames.has(name)), ...addedReads])];
-        candidate.consumer.emittedText = emittedText;
-        for (const offset of candidate.producerItems.map(item => item.facts.producer.offset).sort((a, b) => b - a)) {
-            state.operations.splice(offset, 1);
+        const removalsByState = new Map();
+        for (const candidate of candidates) {
+            const removedNames = new Set(candidate.producerItems.map(item => item.facts.name));
+            const addedReads = candidate.producerItems.flatMap(item => item.producer.reads || []);
+            candidate.consumer.rhs = candidate.rewritten.rhs;
+            candidate.consumer.reads = [...new Set([...(candidate.consumer.reads || []).filter(name => !removedNames.has(name)), ...addedReads])];
+            candidate.consumer.emittedText = candidate.emittedText;
+            if (!removalsByState.has(candidate.state.id)) removalsByState.set(candidate.state.id, new Set());
+            const removals = removalsByState.get(candidate.state.id);
+            for (const item of candidate.producerItems) removals.add(item.producer);
+            folds += candidate.producerItems.length;
         }
-        for (let i = 0; i < state.operations.length; i++) state.operations[i].index = i + 1;
-        folds += candidate.producerItems.length;
+        for (const [stateId, removals] of removalsByState) {
+            const state = proof.stateById.get(stateId);
+            state.operations = state.operations.filter(operation => !removals.has(operation));
+            for (let i = 0; i < state.operations.length; i++) state.operations[i].index = i + 1;
+        }
+        batchRounds++;
     }
-    betaResult.preCfCallArgumentTemps = { applied: folds > 0, safe: true, folds };
+    betaResult.preCfCallArgumentTemps = { applied: folds > 0, safe: true, folds, parseRounds, batchRounds };
     return betaResult;
 }
 

@@ -878,3 +878,8 @@ PRE-CF indexed-write batching: `finalizePreCfIndexedWriteTemps` now batches inde
 - `finalizePreCfCallSetupChains()` now discovers candidates from the existing proof index grouped by shared consumer instead of scanning/parsing nearly every copy operation. RHS parsing is cached within the stage. Independent exact single-use setup chains are batched by operation ownership; harmless shared read dependencies no longer serialize batches.
 - spacial6: 18,225 folds, 1 batch round / 2 parse rounds, 0.627 s. The old implementation/profile remained stuck in this stage for several minutes and was cancelled.
 - Focused call-setup PASS; combined gate PASS: 43 focused suites + 66/66 canonical samples.
+
+
+## PRE-CF call-argument batching (2026-08-31)
+- `finalizePreCfCallArgumentTemps` now batches independent proven call-argument transport candidates by operation ownership, caches RHS parses within each batch round, maps source ownership once per batch, applies one source edit set, reparses once, and groups graph removals by state. Existing semantic gates remain unchanged.
+- spacial6 profile: 1,346 folds in 1.604 s, 3 batch rounds / 6 parse rounds. Focused call-argument PASS; combined gate PASS: 43 focused suites + 66/66 canonical samples.
