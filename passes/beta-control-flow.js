@@ -1660,6 +1660,84 @@ function recoverStructuredCompilerReturnAllForwarding(nodes, graph) {
     return folds;
 }
 
+function recoverStructuredSourcePackUnpackForwarding(nodes, graph) {
+    const captured = new Set(graph?.recoveredUpvalueBindings || []);
+    let folds = 0;
+
+    function collectFacts(root) {
+        const reads = new Map();
+        const definitions = new Map();
+        function visit(body) {
+            for (const node of body || []) {
+                for (const name of node.reads || []) reads.set(name, (reads.get(name) || 0) + 1);
+                if (node.type === "raw" && node.operation?.emittedTarget) {
+                    const name = node.operation.emittedTarget;
+                    definitions.set(name, (definitions.get(name) || 0) + 1);
+                }
+                if (node.type === "if") { visit(node.thenBody); visit(node.elseBody); }
+                else if (node.type === "numeric-for" || node.type === "generic-for") visit(node.body);
+                else if (node.type === "while-guard" || node.type === "repeat-until") { visit(node.conditionBody); visit(node.body); }
+            }
+        }
+        visit(root);
+        return { reads, definitions };
+    }
+
+    function visitBody(body, facts) {
+        for (let index = 1; index < (body || []).length; index++) {
+            const packNode = body[index - 1];
+            const consumerNode = body[index];
+            const pack = packNode?.type === "raw" ? packNode.operation : null;
+            const packName = pack?.emittedTarget;
+            if (pack && packName && pack.compilerSourceLifetimeProven === true && !captured.has(packName) &&
+                (facts.reads.get(packName) || 0) === 1 && (facts.definitions.get(packName) || 0) === 1 &&
+                consumerNode?.type === "raw" && consumerNode.operation?.kind === "effect-call") {
+                const packExpr = parseOperationExpression(pack);
+                const fields = packExpr?.type === "TableConstructorExpression" ? (packExpr.fields || []) : [];
+                const innerCall = fields.length === 1 && fields[0]?.type === "TableValue" && fields[0].value?.type === "CallExpression" ? fields[0].value : null;
+                const innerCallText = innerCall ? sourceTextForParsedExpressionNode(String(pack.rhs || ""), innerCall) : null;
+                const parsedConsumer = parseControlFlowStatement(consumerNode.text);
+                const statement = parsedConsumer?.statement;
+                const expression = statement?.type === "CallStatement" ? statement.expression : null;
+                const args = expression?.type === "CallExpression" ? (expression.arguments || []) : [];
+                const last = args[args.length - 1];
+                const unpackArgs = last?.type === "CallExpression" && isIdentifier(last.base, "unpack") ? (last.arguments || []) : [];
+                if (innerCallText && unpackArgs.length === 1 && isIdentifier(unpackArgs[0], packName) && Array.isArray(last.range)) {
+                    const rewritten = parsedConsumer.source.slice(0, last.range[0]) + innerCallText + parsedConsumer.source.slice(last.range[1]);
+                    if (parseControlFlowStatement(rewritten)) {
+                        consumerNode.text = rewritten;
+                        const nextReads = [];
+                        for (const read of consumerNode.reads || []) {
+                            if (read === packName) nextReads.push(...(pack.reads || []));
+                            else nextReads.push(read);
+                        }
+                        consumerNode.reads = [...new Set(nextReads)];
+                        consumerNode.operation.emittedText = rewritten;
+                        consumerNode.operation.rhs = rewritten;
+                        consumerNode.operation.reads = [...consumerNode.reads];
+                        consumerNode.operation.sourcePackUnpackRecovered = true;
+                        body.splice(index - 1, 1);
+                        folds++;
+                        return true;
+                    }
+                }
+            }
+            if (consumerNode?.type === "if") {
+                if (visitBody(consumerNode.thenBody, facts) || visitBody(consumerNode.elseBody, facts)) return true;
+            } else if (consumerNode?.type === "numeric-for" || consumerNode?.type === "generic-for") {
+                if (visitBody(consumerNode.body, facts)) return true;
+            } else if (consumerNode?.type === "while-guard" || consumerNode?.type === "repeat-until") {
+                if (visitBody(consumerNode.conditionBody, facts) || visitBody(consumerNode.body, facts)) return true;
+            }
+        }
+        return false;
+    }
+
+    let changed = true;
+    while (changed) changed = visitBody(nodes, collectFacts(nodes));
+    return folds;
+}
+
 function recoverStructuredLogicalConditionPrograms(nodes, graph) {
     let folds = 0;
     const capturedBindings = graph?.recoveredUpvalueBindings || [];
@@ -6744,6 +6822,7 @@ function solveAcyclicStructured(originalAst, graph) {
     const postCfCompilerGlobalAliasRecoveryCount = recoverStructuredCompilerGlobalAliases(structured.nodes, graph);
     const postCfCompilerClosureTempRecoveryCount = recoverStructuredCompilerClosureTemps(structured.nodes, graph);
     const postCfCompilerReturnAllRecoveryCount = recoverStructuredCompilerReturnAllForwarding(structured.nodes, graph);
+    const sourcePackUnpackRecoveryCount = recoverStructuredSourcePackUnpackForwarding(structured.nodes, graph);
     postCfCompilerValueRecoveryCount += recoverStructuredCompilerValueTemps(structured.nodes, graph);
     const postCfCompilerLogicalCarrierRecoveryCount = recoverStructuredCompilerLogicalCarriers(structured.nodes, graph);
     // Dead scalar/copy cleanup can expose a compiler condition leaf that was not
@@ -7632,6 +7711,7 @@ module.exports = {
     recoverStructuredCompilerGlobalAliases,
     recoverStructuredCompilerClosureTemps,
     recoverStructuredCompilerReturnAllForwarding,
+    recoverStructuredSourcePackUnpackForwarding,
     normalizeRecoveredLogicalExpression,
     normalizeStructuredSingleValueExpression,
     recoverStructuredExpressionPresentation,

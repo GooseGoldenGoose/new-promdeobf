@@ -4,6 +4,7 @@ const {
     recoverStructuredCompilerValueTemps,
     recoverStructuredCompilerLogicalCarriers,
     recoverStructuredAdjacentLocalInitializers,
+    recoverStructuredSourcePackUnpackForwarding,
     recoverStructuredPostCfStaticMembers,
 } = require("../passes/beta-control-flow");
 
@@ -236,6 +237,25 @@ for (const assignment of [
     ];
     assert.equal(recoverStructuredAdjacentLocalInitializers(nodes), 0);
     assert.equal(nodes.length, 2);
+}
+
+
+// Source-owned single-use { call() } forwarded into final unpack consumer.
+{
+    const pack = raw("packed", "{ returnsMany(\"A\", \"B\", \"C\") }", ["returnsMany"], { compilerSourceLifetimeProven: true });
+    const use = { type: "raw", text: 'print("PACKED", unpack(packed))', reads: ["print", "unpack", "packed"], operation: { kind: "effect-call", rhs: 'print("PACKED", unpack(packed))', emittedText: 'print("PACKED", unpack(packed))', reads: ["print", "unpack", "packed"] } };
+    const nodes = [pack, use];
+    assert.equal(recoverStructuredSourcePackUnpackForwarding(nodes, { recoveredUpvalueBindings: [] }), 1);
+    assert.equal(nodes.length, 1);
+    assert.equal(nodes[0].text, 'print("PACKED", returnsMany("A", "B", "C"))');
+}
+
+for (const nodes of [
+    [raw("packed", "{ f() }", ["f"]), { type: "raw", text: "sink(unpack(packed))", reads: ["sink", "unpack", "packed"], operation: { kind: "effect-call", rhs: "sink(unpack(packed))", emittedText: "sink(unpack(packed))", reads: ["sink", "unpack", "packed"] } }],
+    [raw("packed", "{ f() }", ["f"], { compilerSourceLifetimeProven: true }), { type: "raw", text: "touch(packed)", reads: ["touch", "packed"], operation: { kind: "effect-call", rhs: "touch(packed)", emittedText: "touch(packed)", reads: ["touch", "packed"] } }, { type: "raw", text: "sink(unpack(packed))", reads: ["sink", "unpack", "packed"], operation: { kind: "effect-call", rhs: "sink(unpack(packed))", emittedText: "sink(unpack(packed))", reads: ["sink", "unpack", "packed"] } }],
+    [raw("packed", "{ f() }", ["f"], { compilerSourceLifetimeProven: true }), { type: "raw", text: "sink(unpack(packed), 1)", reads: ["sink", "unpack", "packed"], operation: { kind: "effect-call", rhs: "sink(unpack(packed), 1)", emittedText: "sink(unpack(packed), 1)", reads: ["sink", "unpack", "packed"] } }],
+]) {
+    assert.equal(recoverStructuredSourcePackUnpackForwarding(nodes, { recoveredUpvalueBindings: [] }), 0);
 }
 
 console.log("beta CF post-CF compiler value temps: PASS");
