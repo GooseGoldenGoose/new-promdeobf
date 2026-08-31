@@ -1,4 +1,4 @@
-﻿const assert = require('assert');
+const assert = require('assert');
 const { parseLua } = require('../main');
 const { solveBetaControlFlow, recoverGenericForPackedIterator } = require('../passes/beta-control-flow');
 
@@ -161,4 +161,45 @@ function packedFieldIteratorFixture(sourceAlias = false) {
     assert(!recovered.removeOperations.has(fixture.method));
 }
 
+function twoExpressionIteratorFixture({ sourceIteratorAlias = false, sourceMethodAlias = false } = {}) {
+    const nextGlobal = { kind: 'version-define', originalTarget: 'state', emittedTarget: 'nextGlobal', rhs: 'next', emittedText: 'local nextGlobal = next', reads: [], compilerGlobalLookupRecovered: 'next' };
+    const sourceIter = sourceIteratorAlias ? { kind: 'epoch-start', originalTarget: 'r20', emittedTarget: 'sourceIter', rhs: 'nextGlobal', emittedText: 'local sourceIter = nextGlobal', reads: ['nextGlobal'], registerEpoch: 'r20:epoch:1' } : null;
+    const receiver = { kind: 'version-define', originalTarget: 'ReturnVal', emittedTarget: 'receiver', rhs: 'game', emittedText: 'local receiver = game', reads: [], compilerGlobalLookupRecovered: 'game' };
+    const sourceMethod = sourceMethodAlias ? { kind: 'epoch-start', originalTarget: 'r21', emittedTarget: 'sourceMethod', rhs: 'receiver["GetChildren"]', emittedText: 'local sourceMethod = receiver["GetChildren"]', reads: ['receiver'], registerEpoch: 'r21:epoch:1' } : null;
+    const method = sourceMethodAlias
+        ? { kind: 'epoch-start', originalTarget: 'r22', emittedTarget: 'method', rhs: 'sourceMethod', emittedText: 'local method = sourceMethod', reads: ['sourceMethod'], registerEpoch: 'r22:epoch:1' }
+        : { kind: 'epoch-start', originalTarget: 'r22', emittedTarget: 'method', rhs: 'receiver["GetChildren"]', emittedText: 'local method = receiver["GetChildren"]', reads: ['receiver'], registerEpoch: 'r22:epoch:1' };
+    const pack = { kind: 'epoch-start', originalTarget: 'r23', emittedTarget: 'pack', rhs: '{ method(receiver) }', emittedText: 'local pack = { method(receiver) }', reads: ['method', 'receiver'], registerEpoch: 'r23:epoch:1' };
+    const invariant = { kind: 'epoch-start', originalTarget: 'r24', emittedTarget: 'invariant', rhs: 'pack[1]', emittedText: 'local invariant = pack[1]', reads: ['pack'], registerEpoch: 'r24:epoch:1' };
+    const control = { kind: 'epoch-start', originalTarget: 'r25', emittedTarget: 'control', rhs: 'pack[2]', emittedText: 'local control = pack[2]', reads: ['pack'], registerEpoch: 'r25:epoch:1' };
+    const iterator = { kind: 'epoch-start', originalTarget: 'r26', emittedTarget: 'iterator', rhs: sourceIteratorAlias ? 'sourceIter' : 'nextGlobal', emittedText: `local iterator = ${sourceIteratorAlias ? 'sourceIter' : 'nextGlobal'}`, reads: [sourceIteratorAlias ? 'sourceIter' : 'nextGlobal'], registerEpoch: 'r26:epoch:1' };
+    const transition = { kind: 'state-transition', originalTarget: 'state', emittedTarget: 'state', rhs: '2', emittedText: 'state = 2', reads: [] };
+    const iteratorStep = { kind: 'multi-call-write', emittedTargets: ['control', 'value'], reads: ['iterator', 'invariant', 'control'] };
+    const preOps = [nextGlobal, ...(sourceIter ? [sourceIter] : []), receiver, ...(sourceMethod ? [sourceMethod] : []), method, pack, invariant, control, iterator, transition];
+    const graph = { stateName: 'state', returnName: 'ReturnVal', recoveredUpvalueBindings: [], states: [{ id: 1, operations: preOps }, { id: 2, operations: [iteratorStep] }] };
+    return { graph, preOps, roots: [iterator, invariant, control], iteratorStep, transition, method, sourceMethod, transitionIndex: preOps.length - 1 };
+}
+
+{
+    const fixture = twoExpressionIteratorFixture();
+    const recovered = recoverGenericForPackedIterator(fixture.graph, fixture.preOps, fixture.transitionIndex, fixture.roots, fixture.iteratorStep, fixture.transition);
+    assert(recovered);
+    assert.deepEqual(recovered.expressions, ['next', 'game:GetChildren()']);
+    assert(recovered.removeOperations.has(fixture.method));
+}
+
+{
+    const fixture = twoExpressionIteratorFixture({ sourceIteratorAlias: true });
+    const recovered = recoverGenericForPackedIterator(fixture.graph, fixture.preOps, fixture.transitionIndex, fixture.roots, fixture.iteratorStep, fixture.transition);
+    assert.equal(recovered, null);
+}
+
+{
+    const fixture = twoExpressionIteratorFixture({ sourceMethodAlias: true });
+    const recovered = recoverGenericForPackedIterator(fixture.graph, fixture.preOps, fixture.transitionIndex, fixture.roots, fixture.iteratorStep, fixture.transition);
+    assert(recovered);
+    assert.deepEqual(recovered.expressions, ['next', 'method(receiver)']);
+    assert(!recovered.removeOperations.has(fixture.method));
+    assert(!recovered.removeOperations.has(fixture.sourceMethod));
+}
 console.log('beta CF generic-for temps: PASS');

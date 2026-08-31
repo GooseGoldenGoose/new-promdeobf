@@ -1011,3 +1011,14 @@ PRE-CF indexed-write batching: `finalizePreCfIndexedWriteTemps` now batches inde
 - Fixed post-CF compiler value recovery so only producer nodes actually consumed by the recovered expression are deleted. Proven unrelated bookkeeping/source-live nodes inside an allowed gap are preserved. This fixes the stress fixture dropping the live LocalPlayer binding while still recovering the iterator chain.
 - Fixed PRE-CF scalar transport to refuse compound-assignment consumers (compoundOperator present). Native +=/other compound mutation keeps its old-value read instead of being rewritten as a plain assignment. Stress repeat/while counters now remain native compound mutations.
 - Focused regressions cover retained unrelated nodes and compound scalar refusal. Combined gate PASS: 44 focused suites + 66/66 canonical samples.
+
+## 2026-08-31 temp cleanup / source-lifetime provenance
+
+- Proven dead beta `epoch-kill` register clears now annotate the surviving same-epoch operations with `compilerSourceLifetimeProven` before the cleanup statement is removed. This is positive evidence for a real source local lifetime from the local Prometheus compiler.
+- Temp recovery uses that marker instead of treating every physical register epoch as source-owned. Direct compiler globals/call setup may inline; source aliases with a proven lifetime kill remain locals.
+- PRE-CF grouped call setup now accepts static member lookups when the entire contiguous producer group is compiler-owned, allowing `math`/`random`/literal setup to collapse to `math.random(...)`.
+- PRE-CF scalar recovery preserves compound read-modify-write syntax while consuming safe scalar temps, e.g. `local t=1; x += t` -> `x += 1`.
+- Post-CF compiler value recovery now also consumes proven producer suffixes into immediate `if` conditions and effect calls; source-lifetime-marked producers are barriers.
+- Generic-for two-expression recovery from the prior working tree is retained: proven direct `next, obj:GetChildren()` recovers, while source iterator/method aliases fail closed.
+- Stress fixture remains 72 states / 8 closures. Current output removes direct print/math/random/constant setup temps, preserves `local alias = print`, and leaves the requested short-circuit `while true` structure unchanged.
+- Verification: focused suites pass; combined gate is 44 focused suites + 66/66 canonical. A/B beta-CF: direct `print("X")` emits direct print; `local f=print; f("X")` remains a local alias.

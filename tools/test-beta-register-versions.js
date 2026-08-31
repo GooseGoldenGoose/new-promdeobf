@@ -1339,6 +1339,7 @@ assert.equal(unreadCleanupFinal.deadRegisterClears.removedOperations, 1);
 assert(!unreadCleanupFinal.source.includes(`${unreadCleanupOps[0].emittedTarget} = nil`));
 assert.equal(unreadCleanupFinal.graph.states.flatMap(state => state.operations).filter(operation => operation.kind === "epoch-kill").length, 0);
 assert.equal(unreadCleanupFinal.graph.states.flatMap(state => state.operations).filter(operation => operation.originalTarget === "r1").length, 2);
+assert.equal(unreadCleanupFinal.graph.states.flatMap(state => state.operations).find(operation => operation.originalTarget === "r1")?.compilerSourceLifetimeProven, true);
 parseLua(unreadCleanupFinal.source, "<beta-unread-cleanup-final-output>");
 
 const semanticNilSource = `vm = function(state, args, upvalues, gcProxy)

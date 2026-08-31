@@ -93,4 +93,12 @@ assert.equal(normalizeRecoveredLogicalExpression("A() and (B() or C())"), "A() a
 assert.equal(normalizeRecoveredLogicalExpression("not (A() or B())"), "not (A() or B())");
 assert.equal(normalizeRecoveredLogicalExpression("(A() or B()) and C()"), "(A() or B()) and C()");
 
+{
+    const sourceAlias = alias("sourceAlias", "print");
+    sourceAlias.operation.registerEpoch = "r1:epoch:1";
+    sourceAlias.operation.compilerSourceLifetimeProven = true;
+    const nodes = [sourceAlias, raw({ kind: "effect-call", rhs: 'sourceAlias("X")', emittedText: 'sourceAlias("X")', reads: ["sourceAlias"] })];
+    assert.equal(recoverStructuredCompilerGlobalAliases(nodes, { recoveredUpvalueBindings: [] }), 0);
+    assert.equal(nodes.length, 2);
+}
 console.log("beta CF compiler global aliases: PASS");

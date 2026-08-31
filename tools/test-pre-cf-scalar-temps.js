@@ -102,17 +102,19 @@ for (const [rhs, reads] of [["f()", []], ["obj[k]", []], ["a_v and b_v", ["a_v",
     assert(beta.source.includes("local temp_v = a_v"), beta.source);
 }
 
-// Native compound mutation is not ordinary scalar transport; its old-value read must survive.
+// Native compound mutation may consume a proven compiler scalar temp while preserving read-modify-write semantics.
 {
     const beta = makeBeta("1", []);
     const consumer = beta.graph.states[0].operations[3];
     consumer.kind = "epoch-mutate";
     consumer.compoundOperator = "+";
+    consumer.reads = ["sink_v", "temp_v"];
     consumer.emittedText = "sink_v += temp_v";
     beta.source = beta.source.replace("local sink_v = temp_v", "sink_v += temp_v");
     finalizePreCfScalarTemps(beta);
-    assert.equal(beta.preCfScalarTemps.folds, 0, beta.source);
-    assert(beta.source.includes("local temp_v = 1"), beta.source);
-    assert(beta.source.includes("sink_v += temp_v"), beta.source);
+    assert.equal(beta.preCfScalarTemps.folds, 1, beta.source);
+    assert(!beta.source.includes("local temp_v = 1"), beta.source);
+    assert(beta.source.includes("sink_v += 1"), beta.source);
+    assert.deepEqual(consumer.reads, ["sink_v"]);
 }
 console.log("pre-CF scalar temps: PASS");

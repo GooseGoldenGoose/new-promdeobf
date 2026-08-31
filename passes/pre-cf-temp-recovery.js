@@ -864,7 +864,8 @@ function finalizePreCfScalarTemps(betaResult) {
             const producer = facts.producer.operation;
             const consumer = facts.consumer.operation;
             if (claimed.has(producer) || claimed.has(consumer)) continue;
-            if (!isCopyOperation(producer) || !["version-define", "epoch-start", "epoch-mutate", "upvalue-write"].includes(consumer?.kind) || consumer.rhs !== facts.name || consumer.compoundOperator) continue;
+            if (!isCopyOperation(producer) || !["version-define", "epoch-start", "epoch-mutate", "upvalue-write"].includes(consumer?.kind) || consumer.rhs !== facts.name) continue;
+            if (consumer.compoundOperator && producer.compilerSourceLifetimeProven) continue;
             const expression = parsePreCfRhs(producer.rhs);
             if (!expression || expression.type === "Identifier" || !isSafePreCfScalarExpression(expression)) continue;
             candidates.push({ facts, producer, consumer });
@@ -886,7 +887,9 @@ function finalizePreCfScalarTemps(betaResult) {
                 return betaResult;
             }
             const prefix = String(candidate.consumer.emittedText || "").trim().startsWith("local ") ? "local " : "";
-            candidate.emittedText = `${prefix}${candidate.consumer.emittedTarget} = ${candidate.producer.rhs}`;
+            candidate.emittedText = candidate.consumer.compoundOperator
+                ? `${candidate.consumer.emittedTarget} ${candidate.consumer.compoundOperator}= ${candidate.producer.rhs}`
+                : `${prefix}${candidate.consumer.emittedTarget} = ${candidate.producer.rhs}`;
             edits.push({ start: producerRange[0], end: producerRange[1], replacement: "" }, { start: consumerRange[0], end: consumerRange[1], replacement: candidate.emittedText });
             accepted.push(candidate);
         }
@@ -900,7 +903,9 @@ function finalizePreCfScalarTemps(betaResult) {
         const byState = new Map();
         for (const candidate of accepted) {
             candidate.consumer.rhs = candidate.producer.rhs;
-            candidate.consumer.reads = [...(candidate.producer.reads || [])];
+            candidate.consumer.reads = candidate.consumer.compoundOperator
+                ? [...new Set([...(candidate.consumer.reads || []).filter(name => name !== candidate.facts.name), ...(candidate.producer.reads || [])])]
+                : [...(candidate.producer.reads || [])];
             candidate.consumer.emittedText = candidate.emittedText;
             if (!byState.has(candidate.facts.producer.stateId)) byState.set(candidate.facts.producer.stateId, []);
             byState.get(candidate.facts.producer.stateId).push(candidate.facts.producer.offset);
@@ -1548,7 +1553,7 @@ function rewriteDirectCallArguments(rhs, replacements) {
 
 function isStablePreCfCallSetupExpression(node) {
     if (!node) return false;
-    return ["Identifier", "NumericLiteral", "StringLiteral", "BooleanLiteral", "NilLiteral"].includes(node.type);
+    return ["Identifier", "NumericLiteral", "StringLiteral", "BooleanLiteral", "NilLiteral"].includes(node.type) || isStaticLookupExpression(node);
 }
 
 function rewriteDirectCallSetup(rhs, replacements, expression = null) {
@@ -1614,6 +1619,7 @@ function finalizePreCfCallSetupChains(betaResult) {
                 if (!item) break;
                 const producerExpr = parseCached(producer.rhs);
                 if (!isStablePreCfCallSetupExpression(producerExpr)) break;
+                if (producer.compilerSourceLifetimeProven) break;
                 replacements.set(item.facts.name, producer.rhs);
                 producerItems.push(item);
             }
@@ -1930,7 +1936,7 @@ function finalizePreCfEffectCallBaseTemps(betaResult) {
             const consumer = facts.consumer.operation;
             if (claimedOperations.has(producer) || claimedOperations.has(consumer) || consumer?.kind !== "effect-call") continue;
             const globalName = producer?.compilerGlobalLookupRecovered;
-            if (typeof globalName !== "string" || producer.rhs !== globalName) continue;
+            if (typeof globalName !== "string" || producer.rhs !== globalName || producer.compilerSourceLifetimeProven) continue;
             if (!String(producer.emittedText || "").trim().startsWith("local ")) continue;
             const rewrittenRhs = rewriteDirectCallBase(consumer.rhs, facts.name, globalName);
             if (!rewrittenRhs) continue;
@@ -1996,6 +2002,7 @@ function rewriteDirectCallBase(rhs, tempName, replacement) {
 }
 
 function isSafeCallBaseProducer(operation) {
+    if (operation?.compilerSourceLifetimeProven) return false;
     const expression = parsePreCfRhs(operation?.rhs);
     if (!expression) return false;
     if (expression.type === "Identifier") {

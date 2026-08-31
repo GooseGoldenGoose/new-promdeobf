@@ -53,4 +53,15 @@ for (const [producer, reads, consumer, consumerReads] of [
     assert(beta.source.includes(`local temp_v = ${producer}`));
 }
 
+// Physical-epoch identifier call bases may be genuine source aliases; preserve them.
+{
+    const beta = makeBeta("source_v", ["source_v"], "temp_v(1)", ["temp_v"]);
+    const producer = beta.graph.states[0].operations.find(operation => operation.emittedTarget === "temp_v");
+    producer.kind = "epoch-start";
+    producer.registerEpoch = "r1:epoch:1";
+    producer.compilerSourceLifetimeProven = true;
+    finalizePreCfCallBaseTemps(beta);
+    assert.equal(beta.preCfCallBaseTemps.folds, 0, beta.source);
+    assert(beta.source.includes("local temp_v = source_v"), beta.source);
+}
 console.log("pre-CF call base temps: PASS");

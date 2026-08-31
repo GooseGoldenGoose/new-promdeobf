@@ -1318,7 +1318,7 @@ function recoverStructuredCompilerGlobalAliases(nodes, graph) {
         const operation = node.operation || {};
         const name = operation.emittedTarget;
         const globalName = operation.compilerGlobalLookupRecovered;
-        if (!name || captured.has(name) || typeof globalName !== "string") return null;
+        if (!name || captured.has(name) || typeof globalName !== "string" || operation.compilerSourceLifetimeProven) return null;
         if (!/^[A-Za-z_][A-Za-z0-9_]*$/.test(globalName) || POST_CF_MEMBER_KEYWORDS.has(globalName)) return null;
         if (String(operation.rhs || "").trim() !== globalName) return null;
         if (!String(operation.emittedText || node.text || "").trim().startsWith("local ")) return null;
@@ -1813,7 +1813,7 @@ function recoverStructuredCompilerValueTemps(nodes, graph) {
             for (const node of slice) {
                 const operation = node.operation || {};
                 const name = operation.emittedTarget;
-                if (!name || (facts.definitions.get(name) || 0) !== 1) { safe = false; break; }
+                if (!name || (facts.definitions.get(name) || 0) !== 1 || operation.compilerSourceLifetimeProven) { safe = false; break; }
                 if (consumed.has(name)) {
                     if (captured.has(name) || (facts.reads.get(name) || 0) !== 1) { safe = false; break; }
                     if (name !== target) {
@@ -1852,6 +1852,33 @@ function recoverStructuredCompilerValueTemps(nodes, graph) {
     function visit(body, facts) {
         for (let index = 0; index < (body || []).length; index++) {
             const node = body[index];
+            if (node?.type === "raw" && node.operation?.kind === "effect-call" && index > 0) {
+                const recovered = recoverSuffix(body.slice(0, index), node.text, node.reads, facts);
+                if (recovered) {
+                    node.text = recovered.rewritten;
+                    node.reads = recovered.reads;
+                    node.operation.rhs = recovered.rewritten;
+                    node.operation.emittedText = recovered.rewritten;
+                    node.operation.reads = [...recovered.reads];
+                    for (let removeIndex = index - 1; removeIndex >= recovered.start; removeIndex--) {
+                        if (recovered.consumedNodes.has(body[removeIndex])) body.splice(removeIndex, 1);
+                    }
+                    folds += recovered.removedCount;
+                    return true;
+                }
+            }
+            if (node?.type === "if" && index > 0) {
+                const recovered = recoverSuffix(body.slice(0, index), node.condition, node.reads, facts);
+                if (recovered) {
+                    node.condition = recovered.rewritten;
+                    node.reads = recovered.reads;
+                    for (let removeIndex = index - 1; removeIndex >= recovered.start; removeIndex--) {
+                        if (recovered.consumedNodes.has(body[removeIndex])) body.splice(removeIndex, 1);
+                    }
+                    folds += recovered.removedCount;
+                    return true;
+                }
+            }
             if (node?.type === "generic-for" && node.compilerIteratorRecovered === true && (node.expressions || []).length === 1 && index > 0) {
                 const prefix = body.slice(0, index);
                 const recovered = recoverSuffix(prefix, node.expressions[0], node.reads, facts);
@@ -4344,8 +4371,39 @@ function recoverGenericForPackedIterator(graph, preOps, preTransitionIndex, iter
         return null;
     }
 
-    const traced = iteratorRoots.map((operation, index) => traceSlot(operation, index + 1));
-    if (traced.some(item => !item)) return null;
+    function traceCompilerGlobalIterator(rootOperation) {
+        let current = rootOperation;
+        let currentIndex = preOps.indexOf(current);
+        if (currentIndex < 0) return null;
+        const chain = [];
+        const seen = new Set();
+        for (let depth = 0; depth < 4; depth++) {
+            if (!current?.emittedTarget || captured.has(current.emittedTarget) || seen.has(current)) return null;
+            seen.add(current);
+            chain.push(current);
+            const globalName = current.compilerGlobalLookupRecovered;
+            if (typeof globalName === 'string' && /^[A-Za-z_][A-Za-z0-9_]*$/.test(globalName) &&
+                !POST_CF_MEMBER_KEYWORDS.has(globalName) && String(current.rhs || '').trim() === globalName) {
+                return chain.length === 2 ? { expression: globalName, chain } : null;
+            }
+            const expression = parseOperationExpression(current);
+            if (expression?.type !== 'Identifier') return null;
+            const next = priorDefinition(expression.name, currentIndex);
+            if (!next) return null;
+            current = next.operation;
+            currentIndex = next.index;
+        }
+        return null;
+    }
+
+    let leadingIterator = null;
+    let traced = iteratorRoots.map((operation, index) => traceSlot(operation, index + 1));
+    if (traced.some(item => !item)) {
+        const tailTraced = [traceSlot(iteratorRoots[1], 1), traceSlot(iteratorRoots[2], 2)];
+        leadingIterator = traceCompilerGlobalIterator(iteratorRoots[0]);
+        if (!leadingIterator || tailTraced.some(item => !item)) return null;
+        traced = tailTraced;
+    }
     const packName = traced[0].packName;
     if (!packName || traced.some(item => item.packName !== packName)) return null;
     const firstChainIndex = Math.min(...traced.flatMap(item => item.chain.map(operation => preOps.indexOf(operation))));
@@ -4370,11 +4428,43 @@ function recoverGenericForPackedIterator(graph, preOps, preTransitionIndex, iter
     // multi-return expansion without generic call inlining.
     const outerCall = field.value;
     const outerArgs = outerCall.arguments || [];
+    let directReceiverAliasName = null;
 
     // Direct source field calls compile through a short-lived field snapshot before
     // the iterator pack, while a genuine source alias owns a normal register epoch.
     // Fold only the exact compiler scratch shape and only for zero-argument calls,
     // so lookup timing cannot move across argument evaluation.
+    if (outerArgs.length >= 1 && isIdentifier(outerCall.base) && isIdentifier(outerArgs[0])) {
+        const selfName = outerArgs[0].name;
+        const methodDefItem = priorDefinition(outerCall.base.name, packDefItem.index);
+        const methodDef = methodDefItem?.operation || null;
+        const methodExpression = methodDef ? parseOperationExpression(methodDef) : null;
+        let memberName = null;
+        if (methodExpression?.type === 'IndexExpression' && isIdentifier(methodExpression.base, selfName)) {
+            memberName = plainPostCfMemberName(methodExpression.index);
+        } else if (methodExpression?.type === 'MemberExpression' && isIdentifier(methodExpression.base, selfName) && methodExpression.identifier?.type === 'Identifier') {
+            const candidate = methodExpression.identifier.name;
+            if (/^[A-Za-z_][A-Za-z0-9_]*$/.test(candidate) && !POST_CF_MEMBER_KEYWORDS.has(candidate)) memberName = candidate;
+        }
+        const adjacent = methodDefItem?.index === packDefItem.index - 1;
+        if (methodDef && adjacent && memberName && !captured.has(outerCall.base.name)) {
+            const argTexts = outerArgs.slice(1).map(arg => sourceTextForParsedExpressionNode(String(packDef.rhs || ''), arg));
+            if (argTexts.every(text => text !== null)) {
+                callText = `${selfName}:${memberName}(${argTexts.join(', ')})`;
+                directReceiverAliasName = selfName;
+                extraRemoveOperations.add(methodDef);
+                recoveredCallReads.delete(outerCall.base.name);
+                recoveredCallReads.delete(selfName);
+                for (const read of methodDef.reads || []) recoveredCallReads.add(read);
+                for (const arg of outerArgs.slice(1)) {
+                    const text = sourceTextForParsedExpressionNode(String(packDef.rhs || ''), arg);
+                    const parsedArg = text ? parseTransitionExpression(text)?.expression : null;
+                    if (parsedArg) for (const name of collectExpressionIdentifiers(parsedArg)) recoveredCallReads.add(name);
+                }
+            }
+        }
+    }
+
     if (outerArgs.length === 0 && isIdentifier(outerCall.base)) {
         const methodDefItem = priorDefinition(outerCall.base.name, packDefItem.index);
         const methodDef = methodDefItem?.operation || null;
@@ -4468,7 +4558,28 @@ function recoverGenericForPackedIterator(graph, preOps, preTransitionIndex, iter
         }
     }
 
-    const removeOperations = new Set([packDef, ...traced.flatMap(item => item.chain), ...extraRemoveOperations]);
+    if (directReceiverAliasName) {
+        const aliasDefItem = priorDefinition(directReceiverAliasName, packDefItem.index);
+        const aliasDef = aliasDefItem?.operation || null;
+        const globalName = aliasDef?.compilerGlobalLookupRecovered;
+        if (aliasDef && typeof globalName === 'string' && /^[A-Za-z_][A-Za-z0-9_]*$/.test(globalName) && !POST_CF_MEMBER_KEYWORDS.has(globalName)) {
+            const readerOps = [];
+            for (const state of graph.states || []) {
+                for (const operation of state.operations || []) {
+                    if ((operation.reads || []).includes(directReceiverAliasName)) readerOps.push(operation);
+                }
+            }
+            const ownedReaders = new Set([packDef, ...extraRemoveOperations]);
+            if (readerOps.every(operation => ownedReaders.has(operation))) {
+                if (callText.startsWith(`${directReceiverAliasName}:`)) {
+                    callText = globalName + callText.slice(directReceiverAliasName.length);
+                }
+                extraRemoveOperations.add(aliasDef);
+                recoveredCallReads.delete(directReceiverAliasName);
+            }
+        }
+    }
+    const removeOperations = new Set([packDef, ...traced.flatMap(item => item.chain), ...(leadingIterator?.chain || []), ...extraRemoveOperations]);
     const removedNames = new Set([...removeOperations].map(operation => operation.emittedTarget).filter(Boolean));
     const allowedReaders = new Set([...removeOperations, iteratorStep, preTransition, ...(structuralOperations || [])]);
     const bodyReaderOperations = new Set(bodyOperations || []);
@@ -4493,7 +4604,7 @@ function recoverGenericForPackedIterator(graph, preOps, preTransitionIndex, iter
     }
 
     return {
-        expressions: [callText],
+        expressions: leadingIterator ? [leadingIterator.expression, callText] : [callText],
         reads: [...callReads],
         removeOperations,
     };

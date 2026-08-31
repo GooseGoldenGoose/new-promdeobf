@@ -2059,6 +2059,19 @@ function finalizeBetaDeadRegisterClears(betaResult) {
         return betaResult;
     }
 
+    // A proven compiler lifetime kill is positive evidence that the surviving
+    // register epoch belongs to a real source local. Preserve that provenance
+    // before removing the cleanup statement so later temp recovery can distinguish
+    // source aliases from ordinary expression temporaries.
+    const sourceLifetimeEpochs = new Set([...removable].map(operation => operation.registerEpoch).filter(Boolean));
+    for (const state of graph.states || []) {
+        for (const operation of state.operations || []) {
+            if (operation?.registerEpoch && sourceLifetimeEpochs.has(operation.registerEpoch)) {
+                operation.compilerSourceLifetimeProven = true;
+            }
+        }
+    }
+
     let ast;
     try { ast = parseBetaSource(betaResult.source); }
     catch (error) {

@@ -45,4 +45,16 @@ for (const beta of [
     assert.equal(beta.preCfCallSetupChains.folds, 0, beta.source);
 }
 
+// A compiler-decoded global living in a physical epoch may be a genuine source alias.
+// Keep it unless stronger compiler-scratch provenance exists.
+{
+    const beta = makeBeta();
+    const base = beta.graph.states[0].operations[0];
+    base.compilerGlobalLookupRecovered = "pcall";
+    base.registerEpoch = "r1:epoch:1";
+    base.compilerSourceLifetimeProven = true;
+    finalizePreCfCallSetupChains(beta);
+    assert.equal(beta.preCfCallSetupChains.folds, 0, beta.source);
+    assert(beta.source.includes("local base_v = pcall"), beta.source);
+}
 console.log("pre-CF call setup chains: PASS");
