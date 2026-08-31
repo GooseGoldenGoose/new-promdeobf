@@ -1891,6 +1891,94 @@ function recoverStructuredCompilerValueTemps(nodes, graph) {
     function visit(body, facts) {
         for (let index = 0; index < (body || []).length; index++) {
             const node = body[index];
+
+            // Fold an adjacent compiler-only value temp into a scalar shell such as
+            //     local t = math.random(1, 2)
+            //     local c = t == 1
+            // without moving the producer across any other dynamic expression.
+            if (node?.type === "raw" && node.operation?.emittedTarget && index > 0 &&
+                ["version-define", "epoch-start", "epoch-mutate", "upvalue-write"].includes(node.operation.kind)) {
+                const producerNode = body[index - 1];
+                const producer = producerNode?.type === "raw" ? producerNode.operation : null;
+                const target = producer?.emittedTarget;
+                const producerRhsText = String(producer?.rhs || "").trim();
+                const directArgsLoad = /^\(?\s*args\s*\[\s*\d+\s*\]\s*\)?$/.test(producerRhsText);
+                if (target && !producer.compilerSourceLifetimeProven && !captured.has(target) &&
+                    !directArgsLoad && !(producer.reads || []).includes("args") && staticArgsIndex(parseOperationExpression(producer)) === null &&
+                    (facts.definitions.get(target) || 0) === 1 && (facts.reads.get(target) || 0) === 1) {
+                    const parsedConsumer = parseTransitionExpression(node.operation.rhs);
+                    function scalarShell(current) {
+                        if (!current) return false;
+                        if (current.type === "Identifier") return current.name === target;
+                        if (["NumericLiteral", "StringLiteral", "BooleanLiteral", "NilLiteral"].includes(current.type)) return true;
+                        if (current.type === "UnaryExpression") return scalarShell(current.argument);
+                        if (current.type === "BinaryExpression" || current.type === "LogicalExpression") return scalarShell(current.left) && scalarShell(current.right);
+                        return false;
+                    }
+                    if (parsedConsumer?.expression && scalarShell(parsedConsumer.expression) &&
+                        collectExpressionVariableIdentifierRanges(parsedConsumer.expression, target).length === 1) {
+                        const rewritten = substituteExact(node.operation.rhs, target, producer.rhs);
+                        if (rewritten) {
+                            const wasLocal = String(node.operation.emittedText || node.text || "").trim().startsWith("local ");
+                            const operator = node.operation.compoundOperator ? ` ${node.operation.compoundOperator}= ` : " = ";
+                            const text = `${wasLocal ? "local " : ""}${node.operation.emittedTarget}${operator}${rewritten}`;
+                            node.text = text;
+                            node.operation.rhs = rewritten;
+                            node.operation.emittedText = text;
+                            node.reads = replacedReads(node.reads, target, producer.reads || []);
+                            node.operation.reads = [...node.reads];
+                            body.splice(index - 1, 1);
+                            folds++;
+                            return true;
+                        }
+                    }
+                }
+            }
+
+            // Return-tail transport is safe only when the final producer is compiler-owned,
+            // the target occupies one return slot, and earlier slots are pure values.
+            // Repeating this pass peels chains from right to left.
+            if (node?.type === "raw" && node.operation?.kind === "return" && index > 0 &&
+                Array.isArray(node.operation.returnExpressions) && node.operation.returnExpressions.length) {
+                const producerNode = body[index - 1];
+                const producer = producerNode?.type === "raw" ? producerNode.operation : null;
+                const target = producer?.emittedTarget;
+                const returnProducerExpression = parseOperationExpression(producer);
+                const returnProducerProven = Boolean(producer?.registerEpoch) ||
+                    (producer?.kind === "version-define" && returnProducerExpression?.type === "Identifier");
+                if (target && returnProducerProven && !producer.compilerSourceLifetimeProven && !captured.has(target) &&
+                    (facts.definitions.get(target) || 0) === 1 && (facts.reads.get(target) || 0) === 1) {
+                    const slot = node.operation.returnExpressions.findIndex(text => String(text || "").trim() === target);
+                    const earlierPure = slot >= 0 && node.operation.returnExpressions.slice(0, slot).every(text => {
+                        const parsed = parseTransitionExpression(String(text || "").trim())?.expression;
+                        return parsed && ["Identifier", "NumericLiteral", "StringLiteral", "BooleanLiteral", "NilLiteral"].includes(parsed.type);
+                    });
+                    let producerHasCall = false;
+                    walk(parseOperationExpression(producer), current => {
+                        if (current?.type === "CallExpression") { producerHasCall = true; return false; }
+                    });
+                    if (earlierPure && !producerHasCall) {
+                        const prefix = body.slice(0, index);
+                        const recovered = recoverSuffix(prefix, target, node.reads, facts);
+                        if (recovered) {
+                            const expressions = [...node.operation.returnExpressions];
+                            expressions[slot] = recovered.rewritten;
+                            const text = expressions.length ? `return ${expressions.join(", ")}` : "return";
+                            node.text = text;
+                            node.operation.returnExpressions = expressions;
+                            node.operation.emittedText = text;
+                            node.reads = recovered.reads;
+                            node.operation.reads = [...recovered.reads];
+                            for (let removeIndex = index - 1; removeIndex >= recovered.start; removeIndex--) {
+                                if (recovered.consumedNodes.has(body[removeIndex])) body.splice(removeIndex, 1);
+                            }
+                            folds += recovered.removedCount;
+                            return true;
+                        }
+                    }
+                }
+            }
+
             if (node?.type === "raw" && node.operation?.kind === "effect-call" && index > 0) {
                 const recovered = recoverSuffix(body.slice(0, index), node.text, node.reads, facts);
                 if (recovered) {
@@ -1972,6 +2060,96 @@ function recoverStructuredCompilerValueTemps(nodes, graph) {
     }
     return folds;
 }
+function recoverStructuredCompilerLogicalCarriers(nodes, graph) {
+    const captured = new Set(graph?.recoveredUpvalueBindings || []);
+    let folds = 0;
+
+    function collectReads(root) {
+        const reads = new Map();
+        function visit(body) {
+            for (const node of body || []) {
+                for (const name of node.reads || []) reads.set(name, (reads.get(name) || 0) + 1);
+                if (node?.type === "if") { visit(node.thenBody); visit(node.elseBody); }
+                else if (node?.type === "numeric-for" || node?.type === "generic-for") visit(node.body);
+                else if (node?.type === "while-guard") { visit(node.conditionBody); visit(node.body); }
+                else if (node?.type === "repeat-until") { visit(node.body); visit(node.conditionBody); }
+            }
+        }
+        visit(root);
+        return reads;
+    }
+
+    function identifierCondition(text) {
+        const expression = parseTransitionExpression(String(text || "").trim())?.expression;
+        return expression?.type === "Identifier" ? expression.name : null;
+    }
+
+    function negatedIdentifierCondition(text) {
+        const expression = parseTransitionExpression(String(text || "").trim())?.expression;
+        return expression?.type === "UnaryExpression" && expression.operator === "not" && expression.argument?.type === "Identifier"
+            ? expression.argument.name
+            : null;
+    }
+
+    function noElse(node) {
+        return !node?.elseBody || node.elseBody.length === 0;
+    }
+
+    let changed = true;
+    while (changed) {
+        changed = false;
+        const reads = collectReads(nodes);
+        function visit(body) {
+            for (let index = 0; index + 3 < (body || []).length; index++) {
+                const lhsNode = body[index];
+                const copyNode = body[index + 1];
+                const fallbackIf = body[index + 2];
+                const finalIf = body[index + 3];
+                const lhsOp = lhsNode?.type === "raw" ? lhsNode.operation : null;
+                const copyOp = copyNode?.type === "raw" ? copyNode.operation : null;
+                const fallbackNode = fallbackIf?.type === "if" && noElse(fallbackIf) && fallbackIf.thenBody?.length === 1
+                    ? fallbackIf.thenBody[0]
+                    : null;
+                const fallbackOp = fallbackNode?.type === "raw" ? fallbackNode.operation : null;
+                if (!lhsOp?.emittedTarget || !copyOp?.emittedTarget || !fallbackOp || finalIf?.type !== "if" || !noElse(finalIf)) continue;
+
+                const conditionName = lhsOp.emittedTarget;
+                const resultName = copyOp.emittedTarget;
+                if (captured.has(conditionName) || captured.has(resultName)) continue;
+                if (lhsOp.compilerSourceLifetimeProven || copyOp.compilerSourceLifetimeProven || fallbackOp.compilerSourceLifetimeProven) continue;
+                if (!lhsOp.registerEpoch || !copyOp.registerEpoch || fallbackOp.registerEpoch !== copyOp.registerEpoch) continue;
+                if (String(copyOp.rhs || "").trim() !== conditionName) continue;
+                if (fallbackOp.emittedTarget !== resultName) continue;
+                if (negatedIdentifierCondition(fallbackIf.condition) !== conditionName) continue;
+                if (identifierCondition(finalIf.condition) !== resultName) continue;
+                if ((reads.get(conditionName) || 0) !== 2 || (reads.get(resultName) || 0) !== 1) continue;
+
+                const lhs = String(lhsOp.rhs || "").trim();
+                const rhs = String(fallbackOp.rhs || "").trim();
+                if (!parseTransitionExpression(lhs)?.expression || !parseTransitionExpression(rhs)?.expression) continue;
+                const condition = `(${lhs}) or (${rhs})`;
+                if (!parseTransitionExpression(condition)?.expression) continue;
+
+                finalIf.condition = condition;
+                finalIf.reads = [...new Set([...(lhsOp.reads || []), ...(fallbackOp.reads || [])])];
+                body.splice(index, 3);
+                folds += 3;
+                changed = true;
+                return true;
+            }
+            for (const node of body || []) {
+                if (node?.type === "if") { if (visit(node.thenBody) || visit(node.elseBody)) return true; }
+                else if (node?.type === "numeric-for" || node?.type === "generic-for") { if (visit(node.body)) return true; }
+                else if (node?.type === "while-guard") { if (visit(node.conditionBody) || visit(node.body)) return true; }
+                else if (node?.type === "repeat-until") { if (visit(node.body) || visit(node.conditionBody)) return true; }
+            }
+            return false;
+        }
+        changed = visit(nodes);
+    }
+    return folds;
+}
+
 function recoverStructuredLoopBranchConditionTemps(nodes, graph) {
     const captured = new Set(graph?.recoveredUpvalueBindings || []);
     let folds = 0;
@@ -3305,6 +3483,45 @@ function hoistEscapingEpochDeclarations(nodes) {
     }
 
     return { applied: count > 0, safe: true, count };
+}
+
+function recoverStructuredAdjacentLocalInitializers(nodes) {
+    let folds = 0;
+    function visit(body) {
+        for (let index = 0; index + 1 < (body || []).length; index++) {
+            const declaration = body[index];
+            const assignment = body[index + 1];
+            if (declaration?.type !== "raw" || assignment?.type !== "raw") continue;
+            const match = /^\s*local\s+([A-Za-z_][A-Za-z0-9_]*)\s*$/.exec(String(declaration.text || ""));
+            if (!match) continue;
+            const name = match[1];
+            const assignmentMatch = new RegExp(`^\\s*${name.replace(/[.*+?^${}()|[\\]\\]/g, "\\$&")}\\s*=\\s*([\\s\\S]+)$`).exec(String(assignment.text || ""));
+            if (!assignmentMatch) continue;
+            const rhs = assignmentMatch[1].trim();
+            if ((assignment.reads || []).includes("args")) continue;
+            const parsed = parseTransitionExpression(rhs)?.expression;
+            if (!parsed || staticArgsIndex(parsed) !== null || collectExpressionVariableIdentifierRanges(parsed, name).length !== 0) continue;
+            if ((assignment.reads || []).includes(name)) continue;
+            const text = `local ${name} = ${rhs}`;
+            if (!parseControlFlowStatement(text)) continue;
+            assignment.text = text;
+            if (assignment.operation) {
+                assignment.operation.emittedText = text;
+                assignment.operation.kind = "version-define";
+            }
+            body.splice(index, 1);
+            folds++;
+            index--;
+        }
+        for (const node of body || []) {
+            if (node?.type === "if") { visit(node.thenBody); visit(node.elseBody); }
+            else if (node?.type === "numeric-for" || node?.type === "generic-for") visit(node.body);
+            else if (node?.type === "while-guard") { visit(node.conditionBody); visit(node.body); }
+            else if (node?.type === "repeat-until") { visit(node.body); visit(node.conditionBody); }
+        }
+    }
+    visit(nodes);
+    return folds;
 }
 
 function validateStructuredLocalScopes(nodes) {
@@ -6528,6 +6745,7 @@ function solveAcyclicStructured(originalAst, graph) {
     const postCfCompilerClosureTempRecoveryCount = recoverStructuredCompilerClosureTemps(structured.nodes, graph);
     const postCfCompilerReturnAllRecoveryCount = recoverStructuredCompilerReturnAllForwarding(structured.nodes, graph);
     postCfCompilerValueRecoveryCount += recoverStructuredCompilerValueTemps(structured.nodes, graph);
+    const postCfCompilerLogicalCarrierRecoveryCount = recoverStructuredCompilerLogicalCarriers(structured.nodes, graph);
     // Dead scalar/copy cleanup can expose a compiler condition leaf that was not
     // adjacent during the first structured condition pass. Re-run the exact same
     // fail-closed proof after those deletions; this does not cross any surviving
@@ -6541,6 +6759,7 @@ function solveAcyclicStructured(originalAst, graph) {
     if (!epochHoisting.safe) return { applied: false, reason: epochHoisting.reason || "Beta epoch declaration hoisting failed closed" };
     const scopeError = validateStructuredLocalScopes(structured.nodes);
     if (scopeError) return { applied: false, reason: scopeError };
+    const adjacentLocalInitializerRecoveryCount = recoverStructuredAdjacentLocalInitializers(structured.nodes);
 
     const bodyText = formatStructuredNodes(structured.nodes);
     const presented = buildPresentedSource(originalAst, bodyText, { registerOverflowUsed: graph.registerOverflowUsed === true });
@@ -6565,9 +6784,11 @@ function solveAcyclicStructured(originalAst, graph) {
         postCfCompilerClosureTempRecoveryCount,
         postCfCompilerReturnAllRecoveryCount,
         postCfCompilerValueRecoveryCount,
+        postCfCompilerLogicalCarrierRecoveryCount,
         postCfStaticMemberRecoveryCount,
         postCfFunctionDeclarationRecoveryCount,
         structuredExpressionPresentationRecoveryCount,
+        adjacentLocalInitializerRecoveryCount,
         joinCount,
         guardBranchCount,
         terminalReturnCount,
@@ -7406,6 +7627,8 @@ module.exports = {
     recoverStructuredPostCfDeadScalarLocals,
     recoverStructuredLogicalConditionPrograms,
     recoverStructuredCompilerValueTemps,
+    recoverStructuredCompilerLogicalCarriers,
+    recoverStructuredAdjacentLocalInitializers,
     recoverStructuredCompilerGlobalAliases,
     recoverStructuredCompilerClosureTemps,
     recoverStructuredCompilerReturnAllForwarding,

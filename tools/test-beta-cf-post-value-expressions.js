@@ -2,6 +2,8 @@
 const assert = require("assert");
 const {
     recoverStructuredCompilerValueTemps,
+    recoverStructuredCompilerLogicalCarriers,
+    recoverStructuredAdjacentLocalInitializers,
     recoverStructuredPostCfStaticMembers,
 } = require("../passes/beta-control-flow");
 
@@ -152,4 +154,88 @@ function raw(target, rhs, reads = [], extra = {}) {
     assert.strictEqual(nodes[0], keep);
     assert.equal(nodes[1].expressions[0], "pairs(game.ReplicatedStorage:GetChildren())");
 }
+
+
+// Compiler-owned return transport peels right-to-left without touching source returns.
+{
+    const nodes = [
+        raw("copy", "index", ["index"], { registerEpoch: "r1:epoch:1" }),
+        raw("base", "tbl", ["tbl"], { registerEpoch: "r2:epoch:1" }),
+        raw("key", "index", ["index"], { registerEpoch: "r3:epoch:1" }),
+        raw("value", "base[key]", ["base", "key"], { registerEpoch: "r4:epoch:1" }),
+        {
+            type: "raw",
+            text: "return copy, value",
+            reads: ["copy", "value"],
+            operation: { kind: "return", emittedText: "return copy, value", returnExpressions: ["copy", "value"], reads: ["copy", "value"] },
+        },
+    ];
+    assert.equal(recoverStructuredCompilerValueTemps(nodes, { recoveredUpvalueBindings: [] }), 4);
+    assert.equal(nodes.length, 1);
+    assert.equal(nodes[0].text, "return index, tbl[index]");
+}
+
+{
+    const nodes = [
+        raw("sourceValue", "left + right", ["left", "right"], { registerEpoch: null }),
+        {
+            type: "raw",
+            text: "return sourceValue",
+            reads: ["sourceValue"],
+            operation: { kind: "return", emittedText: "return sourceValue", returnExpressions: ["sourceValue"], reads: ["sourceValue"] },
+        },
+    ];
+    assert.equal(recoverStructuredCompilerValueTemps(nodes, { recoveredUpvalueBindings: [] }), 0);
+    assert.equal(nodes.length, 2);
+}
+
+// Exact compiler OR carrier reconstruction preserves one-time evaluation.
+{
+    const resultEpoch = "r5:epoch:1";
+    const fallback = {
+        type: "raw",
+        text: "result = rhs()",
+        reads: ["rhs"],
+        operation: { kind: "epoch-mutate", emittedTarget: "result", rhs: "rhs()", reads: ["rhs"], emittedText: "result = rhs()", registerEpoch: resultEpoch },
+    };
+    const nodes = [
+        raw("cond", "lhs()", ["lhs"], { registerEpoch: "r4:epoch:1" }),
+        raw("result", "cond", ["cond"], { registerEpoch: resultEpoch }),
+        { type: "if", condition: "not cond", reads: ["cond"], thenBody: [fallback], elseBody: null },
+        { type: "if", condition: "result", reads: ["result"], thenBody: [], elseBody: null },
+    ];
+    assert.equal(recoverStructuredCompilerLogicalCarriers(nodes, { recoveredUpvalueBindings: [] }), 3);
+    assert.equal(nodes.length, 1);
+    assert.equal(nodes[0].condition, "(lhs()) or (rhs())");
+    assert.deepEqual(nodes[0].reads.sort(), ["lhs", "rhs"].sort());
+}
+
+// Adjacent declaration initialization is presentation-only and refuses args/self reads.
+{
+    const declaration = {
+        type: "raw", text: "local carrier", reads: [],
+        operation: { kind: "phi-declare", emittedTarget: "carrier", emittedText: "local carrier", reads: [] },
+    };
+    const assignment = {
+        type: "raw", text: "carrier = source", reads: ["source"],
+        operation: { kind: "epoch-mutate", emittedTarget: "carrier", rhs: "source", emittedText: "carrier = source", reads: ["source"] },
+    };
+    const nodes = [declaration, assignment];
+    assert.equal(recoverStructuredAdjacentLocalInitializers(nodes), 1);
+    assert.equal(nodes.length, 1);
+    assert.equal(nodes[0].text, "local carrier = source");
+}
+
+for (const assignment of [
+    { text: "carrier = args[1]", rhs: "args[1]", reads: ["args"] },
+    { text: "carrier = use(carrier)", rhs: "use(carrier)", reads: ["use", "carrier"] },
+]) {
+    const nodes = [
+        { type: "raw", text: "local carrier", reads: [], operation: { kind: "phi-declare", emittedTarget: "carrier", emittedText: "local carrier", reads: [] } },
+        { type: "raw", text: assignment.text, reads: [...assignment.reads], operation: { kind: "epoch-mutate", emittedTarget: "carrier", rhs: assignment.rhs, emittedText: assignment.text, reads: [...assignment.reads] } },
+    ];
+    assert.equal(recoverStructuredAdjacentLocalInitializers(nodes), 0);
+    assert.equal(nodes.length, 2);
+}
+
 console.log("beta CF post-CF compiler value temps: PASS");

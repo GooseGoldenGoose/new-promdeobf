@@ -2731,6 +2731,10 @@ function finalizePreCfMultiReturnTemps(betaResult) {
                     directUses.push({ op: op2, slots: staticUses.uses.map(use => use.slot), offset: location.offset });
                 }
                 if (invalidPackRead || (extracts.length === 0 && directUses.length === 0)) continue;
+                // When every slot is consumed directly, only effect-call consumers are safe to
+                // rewrite with synthesized scalar destinations. Non-local assignments must keep
+                // their original destination semantics and fail closed.
+                if (extracts.length === 0 && directUses.some(item => item.op?.kind !== "effect-call")) continue;
 
                 const extractSlots = extracts.map(item => item.slot);
                 if (new Set(extractSlots).size !== extractSlots.length) continue;
@@ -2745,12 +2749,29 @@ function finalizePreCfMultiReturnTemps(betaResult) {
                 if (!sortedSlots.length || sortedSlots.some((slot, index) => slot !== index + 1)) continue;
                 const extractedBySlot = new Map(extracts.map(item => [item.slot, item]));
                 const missingSlots = sortedSlots.filter(slot => !extractedBySlot.has(slot));
-                if (missingSlots.length > 1) continue;
+
+                const occupiedNames = new Set(proof.byBinding.keys());
+                const reservedTargets = new Set(extracts.map(item => item.op.emittedTarget));
+                const firstMissingSlot = missingSlots[0] ?? null;
+                function uniqueDirectSlotTarget(slot) {
+                    if (slot === firstMissingSlot && !reservedTargets.has(packName)) {
+                        reservedTargets.add(packName);
+                        occupiedNames.add(packName);
+                        return packName;
+                    }
+                    const base = `${packName}_ret${slot}`;
+                    let candidate = base;
+                    let suffix = 2;
+                    while (occupiedNames.has(candidate) || reservedTargets.has(candidate)) candidate = `${base}_${suffix++}`;
+                    occupiedNames.add(candidate);
+                    reservedTargets.add(candidate);
+                    return candidate;
+                }
 
                 const slotTargets = new Map();
                 for (const slot of sortedSlots) {
                     const extract = extractedBySlot.get(slot);
-                    slotTargets.set(slot, extract ? extract.op.emittedTarget : packName);
+                    slotTargets.set(slot, extract ? extract.op.emittedTarget : uniqueDirectSlotTarget(slot));
                 }
                 const rewrittenDirectUses = [];
                 let rewriteFailed = false;

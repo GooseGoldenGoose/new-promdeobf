@@ -98,6 +98,20 @@ function makeBeta({ packRhs = "{ f() }", extracts = [["a_v", 1], ["b_v", 2]], ex
     assert(beta.source.includes("local pack_v = { f() }"), beta.source);
 }
 
+
+{
+    const beta = makeBeta({ extracts: [] });
+    beta.source = beta.source.replace("            state = nil", "            print(pack_v[1], pack_v[2])\n            state = nil");
+    beta.graph.states[0].operations.splice(-1, 0, { kind: "effect-call", rhs: "print(pack_v[1], pack_v[2])", reads: ["print", "pack_v"], emittedText: "print(pack_v[1], pack_v[2])" });
+    beta.graph.states[0].operations.forEach((op, i) => op.index = i + 1);
+    finalizePreCfMultiReturnTemps(beta);
+    assert.equal(beta.preCfMultiReturnTemps.folds, 1, beta.source);
+    assert(beta.source.includes("local pack_v, pack_v_ret2 = f()"), beta.source);
+    assert(beta.source.includes("print(pack_v, pack_v_ret2)"), beta.source);
+    assert(!beta.source.includes("pack_v[1]"), beta.source);
+    assert(!beta.source.includes("pack_v[2]"), beta.source);
+}
+
 for (const beta of [
     makeBeta({ extracts: [["b_v", 2]] }),
     makeBeta({ extracts: [["a_v", 1], ["c_v", 3]] }),
