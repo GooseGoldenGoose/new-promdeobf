@@ -1,6 +1,6 @@
 const fs=require("fs");
 const luaparse=require("../parser/luaparse");
-const {versionVmBlockRegisters}=require("../passes/beta-register-versions");
+const {versionVmBlockRegisters}=require("../passes/beta-register-versions-old");
 const {recoverBetaUpvalues}=require("../passes/beta-upvalues");
 const {forwardControlOnlyJoinBranches,collapseCompilerStructuredLoops}=require("../passes/beta-control-flow");
 const source=fs.readFileSync("output/spacial.lua","utf8");

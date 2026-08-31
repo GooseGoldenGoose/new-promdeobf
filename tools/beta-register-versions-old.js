@@ -1,7 +1,7 @@
 const fs = require("fs");
 const path = require("path");
 const { parseLuaStructural } = require("../main");
-const { versionVmBlockRegisters } = require("../passes/beta-register-versions");
+const { versionVmBlockRegisters } = require("../passes/beta-register-versions-old");
 
 function defaultOutputPath(inputPath) {
     const parsed = path.parse(path.resolve(inputPath));
@@ -10,7 +10,7 @@ function defaultOutputPath(inputPath) {
 
 function main() {
     const inputArg = process.argv[2];
-    if (!inputArg) throw new Error("Usage: node tools/beta-register-versions.js <output.lua> [output.beta.lua]");
+    if (!inputArg) throw new Error("Usage: node tools/beta-register-versions-old.js <output.lua> [output.beta.lua]");
 
     const inputPath = path.resolve(inputArg);
     const outputPath = path.resolve(process.argv[3] || defaultOutputPath(inputPath));

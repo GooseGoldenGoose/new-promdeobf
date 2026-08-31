@@ -1,6 +1,6 @@
 const fs=require("fs");
 const luaparse=require("../parser/luaparse");
-const {versionVmBlockRegisters}=require("../passes/beta-register-versions");
+const {versionVmBlockRegisters}=require("../passes/beta-register-versions-old");
 const source=fs.readFileSync("output/spacial.lua","utf8");
 const ast=luaparse.parse(source,{luaVersion:"luau",comments:true,scope:true,locations:true,ranges:true});
 const beta=versionVmBlockRegisters(source,ast);

@@ -1,4 +1,4 @@
-﻿# Prometheus Lua/Luau Deobfuscator - Live Handoff
+# Prometheus Lua/Luau Deobfuscator - Live Handoff
 
 ## Reset Authority
 
@@ -92,14 +92,11 @@ parse
 -> normal output
 ```
 
-Beta path:
+Beta path (fresh/reset):
 
 ```text
 normal output
--> beta register versions
--> beta register lifetimes
--> beta upvalue recovery
--> beta control-flow structuring
+-> fresh beta control-flow pipeline (not wired yet)
 -> structural Lua/Luau
 ```
 
@@ -110,11 +107,19 @@ passes/vm-state.js
 passes/vm-bindings.js
 passes/vm-register-scheduler.js
 passes/vm-register-names.js
-passes/beta-register-versions.js
+passes/beta-register-versions-old.js
 passes/beta-register-lifetimes.js
 passes/beta-upvalues.js
 passes/beta-control-flow.js
 ```
+
+## Retired Beta Register Versioning
+
+- Legacy implementation is preserved at `passes/beta-register-versions-old.js`.
+- Legacy CLI is `tools/beta-register-versions-old.js`.
+- It is out of the active beta pipeline and active beta CF does not invoke it.
+- Legacy graph/version diagnostics may still import the `-old` pass explicitly.
+- Do not revive it implicitly; build new register recovery only when explicitly requested.
 
 ## Register / Lifetime Rule
 

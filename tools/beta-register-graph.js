@@ -2,7 +2,7 @@ const fs = require("fs");
 const path = require("path");
 const childProcess = require("child_process");
 const { parseLua } = require("../main");
-const { versionVmBlockRegisters } = require("../passes/beta-register-versions");
+const { versionVmBlockRegisters } = require("../passes/beta-register-versions-old");
 
 function defaultBasePath(inputPath) {
     const parsed = path.parse(path.resolve(inputPath));

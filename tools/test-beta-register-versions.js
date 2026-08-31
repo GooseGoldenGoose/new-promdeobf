@@ -1,6 +1,6 @@
 const assert = require("assert");
 const { parseLua } = require("../main");
-const { versionVmBlockRegisters } = require("../passes/beta-register-versions");
+const { versionVmBlockRegisters } = require("../passes/beta-register-versions-old");
 
 const source = `vm = function(state, args, upvalues, gcProxy)
     local r1, r2, ReturnVal
