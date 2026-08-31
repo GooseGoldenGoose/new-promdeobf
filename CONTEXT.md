@@ -931,3 +931,11 @@ PRE-CF indexed-write batching: `finalizePreCfIndexedWriteTemps` now batches inde
 - Verification: syntax PASS; beta control-flow focused PASS; combined gate PASS: 43 focused suites + 66/66 canonical samples.
 - `spacial6` warm runs: 40.942 s / 40.311 s / 41.154 s; median 40.942 s. Every run recovered 3799 states / 554 closures, reparsed successfully, contained zero `RegisterOverflow[`, `createClosure`, `upvalueValues[`, or `ReturnVal =` scaffold, and was byte-for-byte identical to the frozen Step-1/Step-2 baseline (SHA-256 `14d488e79025f385dc79038cf557a5f74a5390e9924647772d9086bf4a5d4145`).
 - Next roadmap step: cache repeated closure-factory parsing/signature recovery; do not combine with this step.
+
+## Performance plan Step 3 - closure factory/signature cache (2026-08-31)
+- Closure factory calls are now parsed once during closure-site collection and stored by original operation identity. `regionGraph()` carries that immutable parsed result by state/operation position through overflow normalization instead of reparsing each factory RHS while embedding solved children.
+- Recovered nested child signatures are cached per solved child entry + factory name, so repeated allocations of the same child body do not reparse/recover the same body signature.
+- Performance-only: no closure ownership, capture, signature proof, graph mutation, or emitted-source rules changed.
+- Verification: syntax PASS; beta CF + closure-signature focused PASS; combined gate PASS: 43 focused suites + 66/66 canonical samples.
+- `spacial6` warm runs: 41.099 s / 40.268 s / 40.279 s; median 40.279 s versus Step-2 median 40.942 s. Every run recovered 3799 states / 554 closures, reparsed, had zero unwanted scaffold, and matched the frozen final byte-for-byte (SHA-256 `14d488e79025f385dc79038cf557a5f74a5390e9924647772d9086bf4a5d4145`).
+- Next roadmap step: shared loop graph indexes. Do not combine it with this step.

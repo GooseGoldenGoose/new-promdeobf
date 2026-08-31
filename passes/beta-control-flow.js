@@ -6226,13 +6226,14 @@ function partitionClosureRegions(graph) {
     return { ownerByState, stateById, statesByOwner };
 }
 
-function collectClosureFactorySites(graph, ownerByState) {
+function collectClosureFactorySites(graph, ownerByState, closureFactoryByOperation) {
     const entrySet = new Set(graph.entries);
     const sites = [];
     for (const state of graph.states) {
         const parentEntry = ownerByState.get(state.id);
         for (const operation of state.operations || []) {
             const call = parseClosureFactoryCall(operation.rhs);
+            if (call) closureFactoryByOperation.set(operation, call);
             if (!call || !entrySet.has(call.entry)) continue;
             sites.push({
                 stateId: state.id,
@@ -6642,8 +6643,9 @@ function replaceClosureFactoryOperation(operation, functionExpression, closureIn
     };
 }
 
-function regionGraph(graph, entry, ownerByState, statesByOwner, solvedBodies) {
+function regionGraph(graph, entry, ownerByState, statesByOwner, solvedBodies, closureFactoryByOperation, signatureByChildFactory) {
     const rawStates = [];
+    const closureFactoryCallsByState = new Map();
     const ownedStates = statesByOwner.get(entry);
     if (!ownedStates) return { error: `Closure entry ${entry} has no indexed state region` };
     for (const state of ownedStates) {
@@ -6652,11 +6654,13 @@ function regionGraph(graph, entry, ownerByState, statesByOwner, solvedBodies) {
         if (successors.some(id => ownerByState.get(id) !== entry)) {
             return { error: `Closure entry ${entry} has a CFG edge into another closure region` };
         }
+        const sourceOperations = state.operations || [];
+        closureFactoryCallsByState.set(state.id, sourceOperations.map(operation => closureFactoryByOperation.get(operation) || null));
         rawStates.push({
             ...state,
             predecessors,
             successors,
-            operations: (state.operations || []).map(operation => ({ ...operation })),
+            operations: sourceOperations.map(operation => ({ ...operation })),
         });
     }
 
@@ -6665,14 +6669,20 @@ function regionGraph(graph, entry, ownerByState, statesByOwner, solvedBodies) {
 
     const states = normalized.graph.states.map(state => {
         const operations = [];
-        for (const operation of state.operations || []) {
-            const call = parseClosureFactoryCall(operation.rhs);
+        const closureFactoryCalls = closureFactoryCallsByState.get(state.id) || [];
+        for (const [operationIndex, operation] of (state.operations || []).entries()) {
+            const call = closureFactoryCalls[operationIndex] || null;
             const child = call ? solvedBodies.get(call.entry) : null;
             if (call && child) {
                 if (call.captureCount !== 0) {
                     return { error: `Closure entry ${call.entry} has ${call.captureCount} capture value(s); capture reconstruction is not implemented` };
                 }
-                const signature = recoverNestedFunctionSignature(child.bodyText, call.factoryName);
+                const signatureKey = `${call.entry}\0${call.factoryName}`;
+                let signature = signatureByChildFactory.get(signatureKey);
+                if (!signature) {
+                    signature = recoverNestedFunctionSignature(child.bodyText, call.factoryName);
+                    signatureByChildFactory.set(signatureKey, signature);
+                }
                 const replacement = replaceClosureFactoryOperation(
                     operation,
                     nestedFunctionExpression(signature.bodyText, {
@@ -6744,7 +6754,8 @@ function solveClosureRegions(originalAst, graph) {
     const partition = partitionClosureRegions(graph);
     if (partition.error) return { applied: false, reason: partition.error };
 
-    const sites = collectClosureFactorySites(graph, partition.ownerByState);
+    const closureFactoryByOperation = new WeakMap();
+    const sites = collectClosureFactorySites(graph, partition.ownerByState, closureFactoryByOperation);
     const referencedEntries = new Set(sites.map(site => site.entry));
     const rootEntries = graph.entries.filter(entry => !referencedEntries.has(entry));
     if (rootEntries.length !== 1) {
@@ -6787,9 +6798,18 @@ function solveClosureRegions(originalAst, graph) {
 
     const solvedBodies = new Map();
     const solvedResults = new Map();
+    const signatureByChildFactory = new Map();
 
     for (const entry of ordered.order) {
-        const region = regionGraph(graph, entry, partition.ownerByState, partition.statesByOwner, solvedBodies);
+        const region = regionGraph(
+            graph,
+            entry,
+            partition.ownerByState,
+            partition.statesByOwner,
+            solvedBodies,
+            closureFactoryByOperation,
+            signatureByChildFactory
+        );
         if (region.error) return { applied: false, reason: region.error };
         const solved = solveSingleEntryControlFlow(originalAst, region.graph);
         if (!solved.applied) {
