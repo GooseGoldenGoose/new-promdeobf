@@ -1787,7 +1787,44 @@ function recoverStructuredCompilerValueTemps(nodes, graph) {
         visit(ast);
         return found;
     }
-    function recoverSuffix(owner, expression, reads, facts) {
+    function producerDependencyStarts(owner, target, facts) {
+        const indexByName = new Map();
+        for (let index = 0; index < (owner || []).length; index++) {
+            const node = owner[index];
+            const name = node?.type === "raw" ? node.operation?.emittedTarget : null;
+            if (!name || (facts.definitions.get(name) || 0) !== 1) continue;
+            indexByName.set(name, index);
+        }
+        const targetIndex = indexByName.get(target);
+        if (!Number.isInteger(targetIndex)) return [];
+        const pending = [{ name: target, before: owner.length }];
+        const starts = new Set([targetIndex]);
+        const visited = new Set();
+        while (pending.length) {
+            const current = pending.pop();
+            const key = `${current.name}\0${current.before}`;
+            if (visited.has(key)) continue;
+            visited.add(key);
+            const index = indexByName.get(current.name);
+            if (!Number.isInteger(index) || index >= current.before) continue;
+            const node = owner[index];
+            const operation = node?.operation || {};
+            starts.add(index);
+            if (operation.compilerSourceLifetimeProven || captured.has(current.name)) continue;
+            for (const read of operation.reads || []) {
+                if ((facts.definitions.get(read) || 0) !== 1 || (facts.reads.get(read) || 0) !== 1 || captured.has(read)) continue;
+                const dependencyIndex = indexByName.get(read);
+                if (!Number.isInteger(dependencyIndex) || dependencyIndex >= index) continue;
+                const dependency = owner[dependencyIndex]?.operation || {};
+                if (dependency.compilerSourceLifetimeProven) continue;
+                starts.add(dependencyIndex);
+                pending.push({ name: read, before: index });
+            }
+        }
+        return [...starts].sort((a, b) => a - b);
+    }
+
+    function recoverSuffix(owner, expression, reads, facts, options = {}) {
         if (!(owner || []).length) return null;
         const last = owner[owner.length - 1];
         const target = last?.type === "raw" ? last.operation?.emittedTarget : null;
@@ -1802,7 +1839,9 @@ function recoverStructuredCompilerValueTemps(nodes, graph) {
         if (targetProducerContainsCall && identifierUsedAsCallBase(parsed.expression, target)) return null;
         if ((facts.definitions.get(target) || 0) !== 1 || (facts.reads.get(target) || 0) !== 1) return null;
 
-        for (let start = 0; start < owner.length; start++) {
+        const starts = Number.isInteger(options.start) ? [options.start] : producerDependencyStarts(owner, target, facts);
+        for (const start of starts) {
+            if (start < 0 || start >= owner.length) continue;
             const slice = owner.slice(start);
             if (slice.some(node => node?.type !== "raw")) continue;
             const recovered = recoverCfOrderedProducerChain(slice, target, [...captured], { compact: true });
@@ -6714,13 +6753,9 @@ function staticArgsIndex(node) {
     return Number.isInteger(index) && index >= 1 ? index : null;
 }
 
-function varargTailInfo(node) {
-    if (node?.type !== "TableConstructorExpression") return null;
-    const fields = node.fields || [];
-    if (fields.length !== 1 || fields[0]?.type !== "TableValue") return null;
-    const call = fields[0].value;
-    if (call?.type !== "CallExpression" || !isIdentifier(call.base, "select")) return null;
-    const args = call.arguments || [];
+function directVarargSelectInfo(node) {
+    if (node?.type !== "CallExpression" || !isIdentifier(node.base, "select")) return null;
+    const args = node.arguments || [];
     if (args.length !== 2) return null;
     const offset = numericValue(args[0]);
     if (offset === null || offset < 1) return null;
@@ -6728,7 +6763,14 @@ function varargTailInfo(node) {
     if (unpackCall?.type !== "CallExpression" || !isIdentifier(unpackCall.base, "unpack")) return null;
     const unpackArgs = unpackCall.arguments || [];
     if (unpackArgs.length !== 1 || !isIdentifier(unpackArgs[0], "args")) return null;
-    return { offset, call, unpackCall };
+    return { offset, call: node, unpackCall };
+}
+
+function varargTailInfo(node) {
+    if (node?.type !== "TableConstructorExpression") return null;
+    const fields = node.fields || [];
+    if (fields.length !== 1 || fields[0]?.type !== "TableValue") return null;
+    return directVarargSelectInfo(fields[0].value);
 }
 
 function singleUninitializedLocalFor(body, name, excludedStatements = new Set()) {
@@ -6778,6 +6820,33 @@ function recoverNestedFunctionSignature(bodyText, factoryName) {
         return { recovered: false, bodyText };
     }
 
+    const directVarargCalls = [];
+    function collectDirectVarargCalls(node) {
+        if (!isNode(node)) return;
+        if (node.type === "FunctionDeclaration") return;
+        const info = directVarargSelectInfo(node);
+        if (info && Array.isArray(node.range)) {
+            const insideTail = tail?.call?.range && node.range[0] >= tail.call.range[0] && node.range[1] <= tail.call.range[1];
+            if (!insideTail) directVarargCalls.push({ ...info, range: node.range });
+            return;
+        }
+        for (const childKey of Object.keys(node)) {
+            if (childKey === "loc" || childKey === "range") continue;
+            const value = node[childKey];
+            if (Array.isArray(value)) for (const child of value) collectDirectVarargCalls(child);
+            else if (isNode(value)) collectDirectVarargCalls(value);
+        }
+    }
+    for (const statement of body) collectDirectVarargCalls(statement);
+    if (!varargFactory && directVarargCalls.length) return { recovered: false, bodyText };
+    if (directVarargCalls.length) {
+        const offsets = new Set(directVarargCalls.map(item => item.offset));
+        if (offsets.size !== 1) return { recovered: false, bodyText };
+        const directOffset = directVarargCalls[0].offset;
+        if (tail && directOffset !== tail.offset) return { recovered: false, bodyText };
+        if (!tail) fixedCount = directOffset - 1;
+    }
+
     const directSlots = new Set();
     const directSlotRanges = [];
     let argsSafe = true;
@@ -6819,6 +6888,7 @@ function recoverNestedFunctionSignature(bodyText, factoryName) {
         if (!Array.isArray(tail.unpackCall.range)) return { recovered: false, bodyText };
         excludedArgsRanges.push(tail.unpackCall.range);
     }
+    for (const directVararg of directVarargCalls) excludedArgsRanges.push(directVararg.range);
     const rangeInsideExcluded = range => Array.isArray(range) && excludedArgsRanges.some(excluded => range[0] >= excluded[0] && range[1] <= excluded[1]);
     function scanStatementArgs(node, parent = null, key = null) {
         if (!isNode(node) || !argsSafe) return;
@@ -6852,7 +6922,7 @@ function recoverNestedFunctionSignature(bodyText, factoryName) {
     if (!argsSafe) return { recovered: false, bodyText };
 
     const highestUsedSlot = Math.max(0, ...parameterLoads.keys(), ...directSlots);
-    if (tail) {
+    if (tail || directVarargCalls.length) {
         if (highestUsedSlot > fixedCount) return { recovered: false, bodyText };
     } else {
         fixedCount = highestUsedSlot;
@@ -6904,6 +6974,10 @@ function recoverNestedFunctionSignature(bodyText, factoryName) {
             edits.push({ start: declaration.statement.range[0], end: declaration.statement.range[1], replacement: "" });
             removedStatements.add(declaration.statement);
         }
+    }
+
+    for (const directVararg of directVarargCalls) {
+        edits.push({ start: directVararg.range[0], end: directVararg.range[1], replacement: "..." });
     }
 
     for (const range of directSlotRanges) {
@@ -6967,7 +7041,7 @@ function recoverNestedFunctionSignature(bodyText, factoryName) {
         recovered: true,
         bodyText: rewrittenBody,
         parameters: parameterNames,
-        vararg: Boolean(tail),
+        vararg: Boolean(tail || directVarargCalls.length),
         fixedParameterCount: fixedCount,
     };
 }

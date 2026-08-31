@@ -167,4 +167,40 @@ for (const beta of [
     assert(beta.source.includes("local pack_v = { inner_v() }"), beta.source);
 }
 
+
+function makeTableTailBeta(consumerRhs = "{ 7, unpack(pack_v) }") {
+    const lines = [
+        "            local pack_v = { inner_v() }",
+        `            local out_v = ${consumerRhs}`,
+        "            state = nil",
+    ];
+    const operations = [
+        { kind: "version-define", emittedTarget: "pack_v", rhs: "{ inner_v() }", reads: ["inner_v"], emittedText: "local pack_v = { inner_v() }" },
+        { kind: "version-define", emittedTarget: "out_v", rhs: consumerRhs, reads: ["unpack", "pack_v"], emittedText: `local out_v = ${consumerRhs}`, compilerSourceLifetimeProven: true },
+        { kind: "state-transition", emittedTarget: "state", rhs: "nil", reads: [], emittedText: "state = nil" },
+    ];
+    operations.forEach((op, i) => op.index = i + 1);
+    return {
+        source: `vm = function(state, args, upvalues, gcProxy)\n    local ReturnVal\n    while state do\n        if state == 1 then\n${lines.join("\n")}\n        end\n    end\n    return ReturnVal\nend`,
+        graph: { cfgComplete: true, stateName: "state", recoveredUpvalueBindings: [], states: [{ id: 1, successors: [], operations }] },
+    };
+}
+
+{
+    const beta = makeTableTailBeta();
+    finalizePreCfReturnAllTemps(beta);
+    assert.equal(beta.preCfReturnAllTemps.folds, 1, beta.source);
+    assert(beta.source.includes("local out_v = { 7, inner_v() }"), beta.source);
+    assert(!beta.source.includes("local pack_v ="), beta.source);
+    assert.equal(beta.graph.states[0].operations[0].compilerSourceLifetimeProven, true);
+    assert.deepEqual(beta.graph.states[0].operations[0].reads.sort(), ["inner_v"].sort());
+}
+
+{
+    const beta = makeTableTailBeta("{ unpack(pack_v), 7 }");
+    finalizePreCfReturnAllTemps(beta);
+    assert.equal(beta.preCfReturnAllTemps.folds, 0, beta.source);
+    assert(beta.source.includes("local pack_v = { inner_v() }"), beta.source);
+}
+
 console.log("pre-CF RETURN_ALL temps: PASS");

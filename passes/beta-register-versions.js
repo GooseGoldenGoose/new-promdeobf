@@ -2063,15 +2063,17 @@ function finalizeBetaDeadRegisterClears(betaResult) {
     // register epoch belongs to a real source local. Preserve that provenance
     // before removing the cleanup statement so later temp recovery can distinguish
     // source aliases from ordinary expression temporaries.
-    const sourceLifetimeEpochs = new Set([...removable].map(operation => operation.registerEpoch).filter(Boolean));
+    const sourceLifetimeNames = new Set();
+    for (const epoch of graph.epochs || []) {
+        if (epoch?.name && (epoch.events || []).some(event => event?.kind === "kill")) sourceLifetimeNames.add(epoch.name);
+    }
     for (const state of graph.states || []) {
         for (const operation of state.operations || []) {
-            if (operation?.registerEpoch && sourceLifetimeEpochs.has(operation.registerEpoch)) {
+            if (operation?.emittedTarget && sourceLifetimeNames.has(operation.emittedTarget)) {
                 operation.compilerSourceLifetimeProven = true;
             }
         }
     }
-
     let ast;
     try { ast = parseBetaSource(betaResult.source); }
     catch (error) {

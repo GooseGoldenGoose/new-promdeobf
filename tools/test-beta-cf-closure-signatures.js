@@ -50,6 +50,23 @@ for (const body of [
     assert.equal(r.recovered, false, body + "\n" + r.bodyText);
 }
 
+// Direct compiler vararg select can recover to native ... when the offset matches fixed parameters.
+r = recover("return select(1, unpack(args))", "createClosure");
+assert.equal(r.recovered, true, r.bodyText);
+assert.deepEqual(r.parameters, []);
+assert.equal(r.vararg, true);
+assert(r.bodyText.includes("return ..."), r.bodyText);
+
+r = recover("local first = args[1]\nreturn first, select(2, unpack(args))", "createClosure");
+assert.equal(r.recovered, true, r.bodyText);
+assert.deepEqual(r.parameters, ["first"]);
+assert.equal(r.vararg, true);
+assert(r.bodyText.includes("return first, ..."), r.bodyText);
+
+// Mismatched direct vararg offsets remain ambiguous and fail closed.
+r = recover("return select(1, unpack(args)), select(2, unpack(args))", "createClosure");
+assert.equal(r.recovered, false, r.bodyText);
+
 // Existing vararg tail shape stays vararg and keeps positional slots.
 r = recover("local first = args[1]\nlocal rest = { select(2, unpack(args)) }\nreturn first, unpack(rest)", "createClosure");
 assert.equal(r.recovered, true, r.bodyText);

@@ -1461,6 +1461,36 @@ function collectIdentifierCount(node, name) {
     return count;
 }
 
+function rewriteSinglePreCfIdentifier(rhs, name, replacement) {
+    const expression = parsePreCfRhs(rhs);
+    if (!expression || collectIdentifierCount(expression, name) !== 1) return null;
+    let match = null;
+    (function visit(node) {
+        if (!isAstNode(node) || match) return;
+        if (node.type === "Identifier" && node.name === name && Array.isArray(node.range)) {
+            match = node.range;
+            return;
+        }
+        for (const [key, value] of Object.entries(node)) {
+            if (key === "loc" || key === "range") continue;
+            if (Array.isArray(value)) for (const child of value) visit(child);
+            else if (isAstNode(value)) visit(value);
+        }
+    })(expression);
+    if (!match) return null;
+    const prefixLength = "return ".length;
+    const start = match[0] - prefixLength;
+    const end = match[1] - prefixLength;
+    if (start < 0 || end < start || String(rhs).slice(start, end) !== name) return null;
+    let rendered = String(replacement || "").trim();
+    const replacementExpression = parsePreCfRhs(rendered);
+    if (!replacementExpression) return null;
+    if (!["Identifier", "NumericLiteral", "StringLiteral", "BooleanLiteral", "NilLiteral", "MemberExpression", "IndexExpression"].includes(replacementExpression.type)) {
+        rendered = `(${rendered})`;
+    }
+    const output = String(rhs).slice(0, start) + rendered + String(rhs).slice(end);
+    return parsePreCfRhs(output) ? output : null;
+}
 function isStableCallPrefixExpression(node) {
     return ["Identifier", "NumericLiteral", "StringLiteral", "BooleanLiteral", "NilLiteral"].includes(node?.type);
 }
@@ -1556,6 +1586,14 @@ function isStablePreCfCallSetupExpression(node) {
     return ["Identifier", "NumericLiteral", "StringLiteral", "BooleanLiteral", "NilLiteral"].includes(node.type) || isStaticLookupExpression(node);
 }
 
+function callSetupExpressionForRhs(rhs, expression = null) {
+    expression = expression || parsePreCfRhs(rhs);
+    if (expression?.type === "CallExpression") return expression;
+    if (expression?.type !== "TableConstructorExpression" || (expression.fields || []).length !== 1) return null;
+    const field = expression.fields[0];
+    return field?.type === "TableValue" && field.value?.type === "CallExpression" ? field.value : null;
+}
+
 function rewriteDirectCallSetup(rhs, replacements, expression = null) {
     expression = expression || parsePreCfRhs(rhs);
     if (expression?.type !== "CallExpression" || expression.base?.type !== "Identifier") return null;
@@ -1597,7 +1635,7 @@ function finalizePreCfCallSetupChains(betaResult) {
             if (!facts.safeSameStateTransport) continue;
             const producer = facts.producer?.operation;
             const consumer = facts.consumer?.operation;
-            if (!producer || !consumer || !isCopyOperation(producer) || !isCopyOperation(consumer)) continue;
+            if (!producer || !consumer || !isCopyOperation(producer) || !(isCopyOperation(consumer) || consumer.kind === "multi-call-write")) continue;
             if (!factsByConsumer.has(consumer)) factsByConsumer.set(consumer, []);
             factsByConsumer.get(consumer).push({ facts, producer });
         }
@@ -1606,8 +1644,9 @@ function finalizePreCfCallSetupChains(betaResult) {
             const consumerLocation = proof.locations.get(consumer);
             const state = proof.stateById.get(consumerLocation?.stateId);
             if (!consumerLocation || !state) continue;
-            const call = parseCached(consumer.rhs);
-            if (call?.type !== "CallExpression" || call.base?.type !== "Identifier") continue;
+            const consumerExpression = parseCached(consumer.rhs);
+            const call = callSetupExpressionForRhs(consumer.rhs, consumerExpression);
+            if (call?.base?.type !== "Identifier") continue;
             const directNames = new Set([call.base.name, ...(call.arguments || []).filter(arg => arg?.type === "Identifier").map(arg => arg.name)]);
             const eligibleByOperation = new Map();
             for (const item of grouped) if (directNames.has(item.facts.name)) eligibleByOperation.set(item.producer, item);
@@ -1623,7 +1662,11 @@ function finalizePreCfCallSetupChains(betaResult) {
                 replacements.set(item.facts.name, producer.rhs);
                 producerItems.push(item);
             }
-            if (producerItems.length < 2 || !replacements.has(call.base.name)) continue;
+            if (producerItems.length < 2) continue;
+            if (!replacements.has(call.base.name)) {
+                if (!producerItems.every(item => isMovableCallArgumentScalarExpression(parseCached(item.producer.rhs)))) continue;
+                if (!Array.isArray(consumer.reads) || !consumer.reads.includes(call.base.name)) continue;
+            }
             const rewritten = rewriteDirectCallSetup(consumer.rhs, replacements, call);
             if (!rewritten || rewritten.consumed.size !== producerItems.length) continue;
             const touchedNames = new Set([...(consumer.reads || []), ...operationWrites(consumer)]);
@@ -1659,8 +1702,13 @@ function finalizePreCfCallSetupChains(betaResult) {
                 betaResult.preCfCallSetupChains = { applied: folds > 0, safe: false, reason: "PRE-CF call setup chain recovery lost exact source ownership", folds, parseRounds, batchRounds };
                 return betaResult;
             }
-            const prefix = String(candidate.consumer.emittedText || "").trim().startsWith("local ") ? "local " : "";
-            candidate.emittedText = `${prefix}${candidate.consumer.emittedTarget} = ${candidate.rewritten.rhs}`;
+            const existingText = String(candidate.consumer.emittedText || "");
+            const equals = existingText.indexOf(" = ");
+            if (equals < 0) {
+                betaResult.preCfCallSetupChains = { applied: folds > 0, safe: false, reason: "PRE-CF call setup consumer has no replaceable assignment text", folds, parseRounds, batchRounds };
+                return betaResult;
+            }
+            candidate.emittedText = existingText.slice(0, equals + 3) + candidate.rewritten.rhs;
             edits.push(
                 ...producerRanges.map(range => ({ start: range[0], end: range[1], replacement: "" })),
                 { start: consumerRange[0], end: consumerRange[1], replacement: candidate.emittedText },
@@ -2295,77 +2343,109 @@ function finalizePreCfLiteralReturnTemps(betaResult) {
         return betaResult;
     }
     let folds = 0;
+    let parseRounds = 0;
+    let batchRounds = 0;
     const maxRounds = (betaResult.graph.states || []).reduce((n, state) => n + (state.operations || []).length, 0) + 1;
     for (let round = 0; round < maxRounds; round++) {
         const proof = buildPreCfTempProofIndex(betaResult);
-        let candidate = null;
+        const candidates = [];
+        const claimedOperations = new Set();
         for (const state of betaResult.graph.states || []) {
             const ops = state.operations || [];
             for (let payloadOffset = 0; payloadOffset < ops.length; payloadOffset++) {
                 const payload = ops[payloadOffset];
-                if (payload?.kind !== "return-payload" || payload.terminalCompilerReturnPayload !== true || !Array.isArray(payload.returnExpressions) || !payload.returnExpressions.length) continue;
+                if (claimedOperations.has(payload) || payload?.kind !== "return-payload" || payload.terminalCompilerReturnPayload !== true || !Array.isArray(payload.returnExpressions) || !payload.returnExpressions.length) continue;
+                const parsedExpressions = payload.returnExpressions.map(text => parsePreCfRhs(String(text || "").trim()));
                 const replacements = [];
                 const producers = new Set();
                 for (let slot = 0; slot < payload.returnExpressions.length; slot++) {
                     const expressionText = String(payload.returnExpressions[slot] || "").trim();
-                    const expression = parsePreCfRhs(expressionText);
-                    if (expression?.type !== "Identifier") continue;
-                    const name = expression.name;
-                    const facts = proof.byBinding.get(name);
-                    if (!facts?.safeSameStateTransport || facts.consumer?.operation !== payload || facts.consumer?.stateId !== state.id || facts.producer.offset >= payloadOffset) continue;
-                    const producer = facts.producer.operation;
-                    if (!isCopyOperation(producer) || !producer.emittedTarget || !String(producer.emittedText || "").trim().startsWith("local ")) continue;
-                    const producerExpression = parsePreCfRhs(producer.rhs);
-                    if (!isLiteralOnlyPreCfScalarExpression(producerExpression)) continue;
-                    replacements.push({ slot, name, producer, rhs: String(producer.rhs || "").trim() });
-                    producers.add(producer);
+                    const expression = parsedExpressions[slot];
+                    if (!expression) continue;
+                    const candidateNames = expression.type === "Identifier"
+                        ? [expression.name]
+                        : [...new Set(payload.reads || [])].filter(name => collectIdentifierCount(expression, name) === 1);
+                    for (const name of candidateNames) {
+                        let totalOccurrences = 0;
+                        for (const parsed of parsedExpressions) totalOccurrences += parsed ? collectIdentifierCount(parsed, name) : 0;
+                        if (totalOccurrences !== 1) continue;
+                        const facts = proof.byBinding.get(name);
+                        if (!facts?.safeSameStateTransport || facts.consumer?.operation !== payload || facts.consumer?.stateId !== state.id || facts.producer.offset >= payloadOffset) continue;
+                        const producer = facts.producer.operation;
+                        if (claimedOperations.has(producer) || !isCopyOperation(producer) || !producer.emittedTarget || !String(producer.emittedText || "").trim().startsWith("local ") || producer.compilerSourceLifetimeProven) continue;
+                        const producerExpression = parsePreCfRhs(producer.rhs);
+                        let replacement = null;
+                        if (isLiteralOnlyPreCfScalarExpression(producerExpression)) replacement = String(producer.rhs || "").trim();
+                        else if (facts.adjacent) replacement = renderReturnTransportExpression(producer, betaResult.graph);
+                        if (!replacement) continue;
+                        const replacementRhs = expression.type === "Identifier" && expression.name === name
+                            ? replacement
+                            : rewriteSinglePreCfIdentifier(expressionText, name, replacement);
+                        if (!replacementRhs) continue;
+                        replacements.push({ slot, name, producer, rhs: replacementRhs });
+                        producers.add(producer);
+                        break;
+                    }
                 }
                 if (!replacements.length) continue;
-                candidate = { state, payload, payloadOffset, replacements, producers };
-                break;
+                candidates.push({ state, payload, payloadOffset, replacements, producers });
+                claimedOperations.add(payload);
+                for (const producer of producers) claimedOperations.add(producer);
             }
-            if (candidate) break;
         }
-        if (!candidate) break;
+        if (!candidates.length) break;
 
-        const ownership = mapPreCfOperationRanges(betaResult);
+        const ownership = mapPreCfOperationRanges(betaResult); parseRounds++;
         if (!ownership.safe) {
-            betaResult.preCfLiteralReturnTemps = { applied: folds > 0, safe: false, reason: ownership.reason, folds };
+            betaResult.preCfLiteralReturnTemps = { applied: folds > 0, safe: false, reason: ownership.reason, folds, parseRounds, batchRounds };
             return betaResult;
         }
-        const payloadRange = ownership.ranges.get(candidate.payload);
-        const producerRanges = [...candidate.producers].map(operation => ownership.ranges.get(operation));
-        if (!payloadRange || producerRanges.some(range => !range)) {
-            betaResult.preCfLiteralReturnTemps = { applied: folds > 0, safe: false, reason: "PRE-CF literal return recovery lost exact source ownership", folds };
-            return betaResult;
+        const edits = [];
+        for (const candidate of candidates) {
+            const payloadRange = ownership.ranges.get(candidate.payload);
+            const producerRanges = [...candidate.producers].map(operation => ownership.ranges.get(operation));
+            if (!payloadRange || producerRanges.some(range => !range)) {
+                betaResult.preCfLiteralReturnTemps = { applied: folds > 0, safe: false, reason: "PRE-CF literal return recovery lost exact source ownership", folds, parseRounds, batchRounds };
+                return betaResult;
+            }
+            candidate.expressions = [...candidate.payload.returnExpressions];
+            for (const replacement of candidate.replacements) candidate.expressions[replacement.slot] = replacement.rhs;
+            candidate.rhs = `{ ${candidate.expressions.join(", ")} }`;
+            candidate.emittedText = `${candidate.payload.emittedTarget || betaResult.graph.returnName || "ReturnVal"} = ${candidate.rhs}`;
+            edits.push(
+                ...producerRanges.map(range => ({ start: range[0], end: range[1], replacement: "" })),
+                { start: payloadRange[0], end: payloadRange[1], replacement: candidate.emittedText },
+            );
         }
-        const expressions = [...candidate.payload.returnExpressions];
-        for (const replacement of candidate.replacements) expressions[replacement.slot] = replacement.rhs;
-        const rhs = `{ ${expressions.join(", ")} }`;
-        const emittedText = `${candidate.payload.emittedTarget || betaResult.graph.returnName || "ReturnVal"} = ${rhs}`;
-        const output = applySourceEdits(betaResult.source, [
-            ...producerRanges.map(range => ({ start: range[0], end: range[1], replacement: "" })),
-            { start: payloadRange[0], end: payloadRange[1], replacement: emittedText },
-        ]);
-        try { parsePreCfSource(output); }
+        let output;
+        try { output = applySourceEdits(betaResult.source, edits); parsePreCfSource(output); parseRounds++; }
         catch (error) {
-            betaResult.preCfLiteralReturnTemps = { applied: folds > 0, safe: false, reason: `PRE-CF literal return recovery reparse failed: ${error.message}`, folds };
+            betaResult.preCfLiteralReturnTemps = { applied: folds > 0, safe: false, reason: `PRE-CF literal return recovery reparse failed: ${error.message}`, folds, parseRounds, batchRounds };
             return betaResult;
         }
         betaResult.source = output;
-        candidate.payload.returnExpressions = expressions;
-        candidate.payload.rhs = rhs;
-        candidate.payload.emittedText = emittedText;
-        const removedNames = new Set(candidate.replacements.map(item => item.name));
-        candidate.payload.reads = [...new Set([
-            ...(candidate.payload.reads || []).filter(name => !removedNames.has(name)),
-            ...candidate.replacements.flatMap(item => item.producer.reads || []),
-        ])];
-        candidate.state.operations = candidate.state.operations.filter(operation => !candidate.producers.has(operation));
-        for (let i = 0; i < candidate.state.operations.length; i++) candidate.state.operations[i].index = i + 1;
-        folds += candidate.replacements.length;
+        const removalsByState = new Map();
+        for (const candidate of candidates) {
+            candidate.payload.returnExpressions = candidate.expressions;
+            candidate.payload.rhs = candidate.rhs;
+            candidate.payload.emittedText = candidate.emittedText;
+            const removedNames = new Set(candidate.replacements.map(item => item.name));
+            candidate.payload.reads = [...new Set([
+                ...(candidate.payload.reads || []).filter(name => !removedNames.has(name)),
+                ...candidate.replacements.flatMap(item => item.producer.reads || []),
+            ])];
+            if (!removalsByState.has(candidate.state.id)) removalsByState.set(candidate.state.id, new Set());
+            for (const producer of candidate.producers) removalsByState.get(candidate.state.id).add(producer);
+            folds += candidate.replacements.length;
+        }
+        for (const [stateId, removals] of removalsByState) {
+            const state = proof.stateById.get(stateId);
+            state.operations = state.operations.filter(operation => !removals.has(operation));
+            for (let i = 0; i < state.operations.length; i++) state.operations[i].index = i + 1;
+        }
+        batchRounds++;
     }
-    betaResult.preCfLiteralReturnTemps = { applied: folds > 0, safe: true, folds };
+    betaResult.preCfLiteralReturnTemps = { applied: folds > 0, safe: true, folds, parseRounds, batchRounds };
     return betaResult;
 }
 
@@ -2395,6 +2475,23 @@ function rewriteReturnAllFinalCallArgument(rhs, packName, replacement) {
         rhs: rhs.slice(0, start) + replacement + rhs.slice(end),
         baseName: expression.base.name,
     };
+}
+
+function rewriteReturnAllFinalTableField(rhs, packName, replacement) {
+    const expression = parsePreCfRhs(rhs);
+    if (expression?.type !== "TableConstructorExpression" || collectIdentifierCount(expression, packName) !== 1) return null;
+    const fields = expression.fields || [];
+    if (!fields.length) return null;
+    const tailField = fields[fields.length - 1];
+    if (tailField?.type !== "TableValue") return null;
+    const tail = tailField.value;
+    if (!isExactReturnAllUnpackExpression(tail, packName) || !Array.isArray(tail.range)) return null;
+    const prefixLength = "return ".length;
+    const start = tail.range[0] - prefixLength;
+    const end = tail.range[1] - prefixLength;
+    if (start < 0 || end < start) return null;
+    const rewritten = String(rhs).slice(0, start) + replacement + String(rhs).slice(end);
+    return parsePreCfRhs(rewritten) ? { rhs: rewritten } : null;
 }
 
 function isExactReturnAllUnpackExpression(expression, packName) {
@@ -2467,6 +2564,10 @@ function finalizePreCfReturnAllTemps(betaResult) {
                 if (isCopyOperation(consumer) && consumer.emittedTarget) {
                     rewritten = rewriteReturnAllFinalCallArgument(consumer.rhs, packName, innerCall);
                     consumerKind = rewritten ? "call-argument" : null;
+                    if (!rewritten) {
+                        rewritten = rewriteReturnAllFinalTableField(consumer.rhs, packName, innerCall);
+                        consumerKind = rewritten ? "table-tail" : null;
+                    }
                 } else if (consumer?.kind === "effect-call") {
                     rewritten = rewriteReturnAllFinalCallArgument(consumer.rhs, packName, innerCall);
                     consumerKind = rewritten ? "effect-call" : null;
@@ -2545,6 +2646,45 @@ function parseStaticPackSlot(rhs, packName) {
     return Number.isInteger(slot) && slot >= 1 ? slot : null;
 }
 
+function collectStaticPackSlotUses(rhs, packName) {
+    const expression = parsePreCfRhs(rhs);
+    if (!expression) return null;
+    const uses = [];
+    let invalid = false;
+    (function walk(node) {
+        if (!node || typeof node !== "object" || invalid) return;
+        if (node.type === "IndexExpression" && node.base?.type === "Identifier" && node.base.name === packName) {
+            const slot = numericLiteralValue(node.index);
+            if (!Number.isInteger(slot) || slot < 1 || !Array.isArray(node.range)) { invalid = true; return; }
+            uses.push({ slot, range: node.range });
+        }
+        for (const [key, value] of Object.entries(node)) {
+            if (key === "range" || key === "loc") continue;
+            if (Array.isArray(value)) for (const child of value) walk(child);
+            else if (value && typeof value === "object") walk(value);
+        }
+    })(expression);
+    if (invalid || !uses.length) return null;
+    if (collectIdentifierCount(expression, packName) !== uses.length) return null;
+    return { expression, uses };
+}
+
+function rewriteStaticPackSlotUses(rhs, packName, slotTargets) {
+    const parsed = collectStaticPackSlotUses(rhs, packName);
+    if (!parsed) return null;
+    const offset = "return ".length;
+    const edits = [];
+    const usedTargets = new Set();
+    for (const use of parsed.uses) {
+        const target = slotTargets.get(use.slot);
+        if (!target) return null;
+        edits.push({ start: use.range[0] - offset, end: use.range[1] - offset, replacement: target });
+        usedTargets.add(target);
+    }
+    let out = String(rhs);
+    for (const edit of edits.sort((a, b) => b.start - a.start)) out = out.slice(0, edit.start) + edit.replacement + out.slice(edit.end);
+    return parsePreCfRhs(out) ? { rhs: out, usedTargets: [...usedTargets] } : null;
+}
 function finalizePreCfMultiReturnTemps(betaResult) {
     if (!betaResult?.graph || typeof betaResult.source !== "string" || betaResult.graph.cfgComplete !== true) {
         betaResult.preCfMultiReturnTemps = { applied: false, safe: false, reason: "PRE-CF multi-return recovery requires a complete beta graph" };
@@ -2573,50 +2713,81 @@ function finalizePreCfMultiReturnTemps(betaResult) {
                 const readLocations = proof.reads?.get(packName) || [];
                 if (readLocations.length !== packFacts.readCount) continue;
                 const extracts = [];
+                const directUses = [];
                 let invalidPackRead = false;
                 for (const location of readLocations) {
                     const op2 = location.operation;
-                    if (location.stateId !== state.id || location.offset <= offset || !isCopyOperation(op2) || !op2.emittedTarget || !String(op2.emittedText || "").trim().startsWith("local ")) {
-                        invalidPackRead = true;
-                        break;
+                    if (location.stateId !== state.id || location.offset <= offset) { invalidPackRead = true; break; }
+                    const exactSlot = isCopyOperation(op2) && op2.emittedTarget && String(op2.emittedText || "").trim().startsWith("local ")
+                        ? parseStaticPackSlot(op2.rhs, packName)
+                        : null;
+                    if (exactSlot !== null) {
+                        extracts.push({ op: op2, slot: exactSlot, offset: location.offset });
+                        continue;
                     }
-                    const slot = parseStaticPackSlot(op2.rhs, packName);
-                    if (slot === null) { invalidPackRead = true; break; }
-                    extracts.push({ op: op2, slot, offset: location.offset });
+                    if (!(op2?.kind === "effect-call" || (isCopyOperation(op2) && op2.emittedTarget))) { invalidPackRead = true; break; }
+                    const staticUses = collectStaticPackSlotUses(op2.rhs, packName);
+                    if (!staticUses) { invalidPackRead = true; break; }
+                    directUses.push({ op: op2, slots: staticUses.uses.map(use => use.slot), offset: location.offset });
                 }
-                if (invalidPackRead || extracts.length === 0) continue;
+                if (invalidPackRead || (extracts.length === 0 && directUses.length === 0)) continue;
 
-                const slots = extracts.map(item => item.slot);
-                const uniqueSlots = new Set(slots);
-                if (uniqueSlots.size !== slots.length) continue;
-                const sortedSlots = [...slots].sort((a, b) => a - b);
-                if (sortedSlots.some((slot, index) => slot !== index + 1)) continue;
+                const extractSlots = extracts.map(item => item.slot);
+                if (new Set(extractSlots).size !== extractSlots.length) continue;
                 if (extracts.some(item => {
                     const facts = proof.byBinding.get(item.op.emittedTarget);
                     return !facts?.singleDefinition || facts.producer?.operation !== item.op || facts.captured;
                 })) continue;
 
-                const targetNames = new Set(extracts.map(item => item.op.emittedTarget));
-                const lastExtractOffset = Math.max(...extracts.map(item => item.offset));
-                const extractOps = new Set(extracts.map(item => item.op));
+                const allSlots = new Set(extractSlots);
+                for (const use of directUses) for (const slot of use.slots) allSlots.add(slot);
+                const sortedSlots = [...allSlots].sort((a, b) => a - b);
+                if (!sortedSlots.length || sortedSlots.some((slot, index) => slot !== index + 1)) continue;
+                const extractedBySlot = new Map(extracts.map(item => [item.slot, item]));
+                const missingSlots = sortedSlots.filter(slot => !extractedBySlot.has(slot));
+                if (missingSlots.length > 1) continue;
+
+                const slotTargets = new Map();
+                for (const slot of sortedSlots) {
+                    const extract = extractedBySlot.get(slot);
+                    slotTargets.set(slot, extract ? extract.op.emittedTarget : packName);
+                }
+                const rewrittenDirectUses = [];
+                let rewriteFailed = false;
+                for (const use of directUses) {
+                    const rewritten = rewriteStaticPackSlotUses(use.op.rhs, packName, slotTargets);
+                    if (!rewritten) { rewriteFailed = true; break; }
+                    const isLocal = String(use.op.emittedText || "").trim().startsWith("local ");
+                    const emittedText = use.op.kind === "effect-call"
+                        ? rewritten.rhs
+                        : `${isLocal ? "local " : ""}${use.op.emittedTarget} = ${rewritten.rhs}`;
+                    rewrittenDirectUses.push({ ...use, rewritten, emittedText });
+                }
+                if (rewriteFailed) continue;
+
+                const targetNames = new Set([...slotTargets.values()]);
+                const lastRelevantOffset = Math.max(offset, ...extracts.map(item => item.offset), ...directUses.map(item => item.offset));
+                const ownedOps = new Set([packOp, ...extracts.map(item => item.op), ...directUses.map(item => item.op)]);
                 let targetVisibleTooEarly = false;
-                for (let gapOffset = offset + 1; gapOffset <= lastExtractOffset; gapOffset++) {
+                for (let gapOffset = offset + 1; gapOffset <= lastRelevantOffset; gapOffset++) {
                     const gapOp = ops[gapOffset];
-                    if (extractOps.has(gapOp)) continue;
+                    if (ownedOps.has(gapOp)) continue;
                     if ((gapOp.reads || []).some(name => targetNames.has(name)) || operationWrites(gapOp).some(name => targetNames.has(name))) {
                         targetVisibleTooEarly = true;
                         break;
                     }
                 }
                 if (targetVisibleTooEarly) continue;
-                if (extracts.some(item => claimedOperations.has(item.op))) continue;
+                if (extracts.some(item => claimedOperations.has(item.op)) || directUses.some(item => claimedOperations.has(item.op))) continue;
 
-                const orderedExtracts = [...extracts].sort((a, b) => a.slot - b.slot);
-                const targets = orderedExtracts.map(item => item.op.emittedTarget);
+                const targets = sortedSlots.map(slot => slotTargets.get(slot));
+                if (new Set(targets).size !== targets.length) continue;
                 const emittedText = `local ${targets.join(", ")} = ${call}`;
-                candidates.push({ state, offset, packOp, call, extracts, orderedExtracts, targets, emittedText });
+                const targetEpochs = sortedSlots.map(slot => extractedBySlot.get(slot)?.op?.registerEpoch || (slotTargets.get(slot) === packName ? packOp.registerEpoch || null : null));
+                candidates.push({ state, offset, packOp, call, extracts, directUses: rewrittenDirectUses, targets, targetEpochs, emittedText });
                 claimedOperations.add(packOp);
                 for (const item of extracts) claimedOperations.add(item.op);
+                for (const item of directUses) claimedOperations.add(item.op);
             }
         }
         if (!candidates.length) break;
@@ -2630,13 +2801,15 @@ function finalizePreCfMultiReturnTemps(betaResult) {
         for (const candidate of candidates) {
             const packRange = ownership.ranges.get(candidate.packOp);
             const extractRanges = candidate.extracts.map(item => ownership.ranges.get(item.op));
-            if (!packRange || extractRanges.some(range => !range)) {
+            const directUseRanges = candidate.directUses.map(item => ownership.ranges.get(item.op));
+            if (!packRange || extractRanges.some(range => !range) || directUseRanges.some(range => !range)) {
                 betaResult.preCfMultiReturnTemps = { applied: folds > 0, safe: false, reason: "PRE-CF multi-return recovery lost exact source ownership", folds, parseRounds, batchRounds };
                 return betaResult;
             }
             edits.push(
                 { start: packRange[0], end: packRange[1], replacement: candidate.emittedText },
                 ...extractRanges.map(range => ({ start: range[0], end: range[1], replacement: "" })),
+                ...candidate.directUses.map((item, index) => ({ start: directUseRanges[index][0], end: directUseRanges[index][1], replacement: item.emittedText })),
             );
         }
         let output;
@@ -2656,7 +2829,7 @@ function finalizePreCfMultiReturnTemps(betaResult) {
                 kind: "multi-call-write",
                 emittedTargets: candidate.targets,
                 targetDeclarations: candidate.targets.map(() => true),
-                targetRegisterEpochs: candidate.orderedExtracts.map(item => item.op.registerEpoch || null),
+                targetRegisterEpochs: candidate.targetEpochs,
                 rhs: candidate.call,
                 reads,
                 emittedText: candidate.emittedText,
@@ -2666,6 +2839,11 @@ function finalizePreCfMultiReturnTemps(betaResult) {
             replacementsByState.get(candidate.state.id).set(candidate.packOp, multiOp);
             if (!removalsByState.has(candidate.state.id)) removalsByState.set(candidate.state.id, new Set());
             for (const item of candidate.extracts) removalsByState.get(candidate.state.id).add(item.op);
+            for (const item of candidate.directUses) {
+                item.op.rhs = item.rewritten.rhs;
+                item.op.reads = [...new Set([...(item.op.reads || []).filter(name => name !== candidate.packOp.emittedTarget), ...item.rewritten.usedTargets])];
+                item.op.emittedText = item.emittedText;
+            }
         }
         for (const state of betaResult.graph.states || []) {
             const replacements = replacementsByState.get(state.id);
