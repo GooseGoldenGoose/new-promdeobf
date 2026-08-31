@@ -210,6 +210,20 @@ function schedule(source, returnName = null) {
 }
 
 
+
+{
+    const source = [
+        'state = 1',
+        'A = "print"',
+        'B = _env[A]',
+        'X = state',
+        'state = 3',
+    ].join("\n");
+    const out = schedule(source);
+    assert.ok(out.indexOf('state = 1') + 1 === out.indexOf('X = state'), 'borrowed POS temp was not compacted next to its read');
+    assert.strictEqual(out[out.length - 1], 'state = 3', 'final state transition lost its anchor');
+}
+
 function scheduleOverflow(source, overflowName = "Overflow") {
     const statements = parseStatements(source);
     const result = scheduleStatementList(statements, "state", overflowName);

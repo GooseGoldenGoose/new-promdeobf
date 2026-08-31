@@ -32,6 +32,8 @@ function registerIdentity(node, overflowName) {
     return overflowSlotIdentity(node, overflowName);
 }
 
+const BORROWED_STATE_TEMP_WRITES = new WeakSet();
+
 function isDelayableAssignment(statement, stateName, overflowName = null) {
     if (statement?.type !== "AssignmentStatement") return false;
     const variables = statement.variables || [];
@@ -40,7 +42,10 @@ function isDelayableAssignment(statement, stateName, overflowName = null) {
 
     const destination = registerIdentity(variables[0], overflowName);
     if (!destination) return false;
-    if (isIdentifier(variables[0]) && [stateName, "args", "upvalues", "gcProxy"].includes(destination)) return false;
+    if (isIdentifier(variables[0])) {
+        if (["args", "upvalues", "gcProxy"].includes(destination)) return false;
+        if (destination === stateName && !BORROWED_STATE_TEMP_WRITES.has(statement)) return false;
+    }
 
     const rhs = init[0];
     return isPrimitiveLiteral(rhs) || registerIdentity(rhs, overflowName) !== null;
@@ -530,7 +535,32 @@ function validateScheduledOrder(original, scheduled, stateName, overflowName = n
     return true;
 }
 
+function markBorrowedStateTempWrites(statements, stateName) {
+    let finalStateWriteIndex = -1;
+    for (let index = statements.length - 1; index >= 0; index--) {
+        if (statementWrites(statements[index]).has(stateName)) {
+            finalStateWriteIndex = index;
+            break;
+        }
+    }
+    if (finalStateWriteIndex <= 0) return 0;
+
+    let marked = 0;
+    for (let index = 0; index < finalStateWriteIndex; index++) {
+        const statement = statements[index];
+        if (statement?.type !== "AssignmentStatement") continue;
+        const variables = statement.variables || [];
+        const init = statement.init || [];
+        if (variables.length !== 1 || init.length !== 1 || !isIdentifier(variables[0], stateName)) continue;
+        if (!isPrimitiveLiteral(init[0]) && !isIdentifier(init[0])) continue;
+        BORROWED_STATE_TEMP_WRITES.add(statement);
+        marked++;
+    }
+    return marked;
+}
+
 function scheduleStatementList(statements, stateName, overflowName = null, returnName = null) {
+    const borrowedStateTemps = markBorrowedStateTempWrites(statements, stateName);
     const scheduled = [...statements];
     const schedulingBaseline = [...scheduled];
     const originalOrder = [...scheduled];
@@ -573,6 +603,7 @@ function scheduleStatementList(statements, stateName, overflowName = null, retur
             producerPulls: 0,
             unreadSinks: 0,
             safetyRejected: true,
+            borrowedStateTemps,
         };
     }
 
@@ -598,6 +629,7 @@ function scheduleStatementList(statements, stateName, overflowName = null, retur
         unreadSinks: unread.moved,
         directStateTransitionMoves: directStateTransition.moved,
         safetyRejected: false,
+        borrowedStateTemps,
     };
 }
 
