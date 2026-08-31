@@ -923,3 +923,11 @@ PRE-CF indexed-write batching: `finalizePreCfIndexedWriteTemps` now batches inde
 - Focused condition-temp PASS; combined gate PASS: 43 focused suites + 66/66 canonical samples.
 - `spacial6` profiler: normal 3.287 s, beta+CF 39.014 s, total 42.300 s; output SHA-256 `14d488e79025f385dc79038cf557a5f74a5390e9924647772d9086bf4a5d4145`, exactly matching the Step-1 profiled final output. Step-1 profiled total was 46.689 s. `recoverCfLogicalValueProgram()` remains the main non-GC CF hotspot, so the next performance step should optimize its repeated suffix/recursive work rather than broaden transforms.
 
+
+## Performance plan Step 2 - closure-region state index (2026-08-31)
+- `partitionClosureRegions()` now builds `statesByOwner` once, preserving original `graph.states` order, alongside the existing `stateById` / `ownerByState` indexes.
+- `regionGraph()` reads only the indexed states for the requested closure instead of scanning all graph states for every closure. Existing predecessor/successor ownership checks are unchanged.
+- Performance-only: no proof or recovery semantics changed.
+- Verification: syntax PASS; beta control-flow focused PASS; combined gate PASS: 43 focused suites + 66/66 canonical samples.
+- `spacial6` warm runs: 40.942 s / 40.311 s / 41.154 s; median 40.942 s. Every run recovered 3799 states / 554 closures, reparsed successfully, contained zero `RegisterOverflow[`, `createClosure`, `upvalueValues[`, or `ReturnVal =` scaffold, and was byte-for-byte identical to the frozen Step-1/Step-2 baseline (SHA-256 `14d488e79025f385dc79038cf557a5f74a5390e9924647772d9086bf4a5d4145`).
+- Next roadmap step: cache repeated closure-factory parsing/signature recovery; do not combine with this step.

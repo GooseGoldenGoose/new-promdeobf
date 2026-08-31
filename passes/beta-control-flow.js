@@ -6191,6 +6191,7 @@ function partitionClosureRegions(graph) {
     const entrySet = new Set(entries);
     const stateById = new Map(graph.states.map(state => [state.id, state]));
     const ownerByState = new Map();
+    const statesByOwner = new Map(entries.map(entry => [entry, []]));
 
     for (const entry of entries) {
         const stack = [entry];
@@ -6220,7 +6221,9 @@ function partitionClosureRegions(graph) {
         return { error: `Closure-region recovery owns ${ownerByState.size}/${graph.states.length} states` };
     }
 
-    return { ownerByState, stateById };
+    for (const state of graph.states) statesByOwner.get(ownerByState.get(state.id)).push(state);
+
+    return { ownerByState, stateById, statesByOwner };
 }
 
 function collectClosureFactorySites(graph, ownerByState) {
@@ -6639,10 +6642,11 @@ function replaceClosureFactoryOperation(operation, functionExpression, closureIn
     };
 }
 
-function regionGraph(graph, entry, ownerByState, solvedBodies) {
+function regionGraph(graph, entry, ownerByState, statesByOwner, solvedBodies) {
     const rawStates = [];
-    for (const state of graph.states) {
-        if (ownerByState.get(state.id) !== entry) continue;
+    const ownedStates = statesByOwner.get(entry);
+    if (!ownedStates) return { error: `Closure entry ${entry} has no indexed state region` };
+    for (const state of ownedStates) {
         const predecessors = (state.predecessors || []).filter(id => ownerByState.get(id) === entry);
         const successors = [...(state.successors || [])];
         if (successors.some(id => ownerByState.get(id) !== entry)) {
@@ -6785,7 +6789,7 @@ function solveClosureRegions(originalAst, graph) {
     const solvedResults = new Map();
 
     for (const entry of ordered.order) {
-        const region = regionGraph(graph, entry, partition.ownerByState, solvedBodies);
+        const region = regionGraph(graph, entry, partition.ownerByState, partition.statesByOwner, solvedBodies);
         if (region.error) return { applied: false, reason: region.error };
         const solved = solveSingleEntryControlFlow(originalAst, region.graph);
         if (!solved.applied) {
