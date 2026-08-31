@@ -977,3 +977,10 @@ PRE-CF indexed-write batching: `finalizePreCfIndexedWriteTemps` now batches inde
 - Because each semantic transform mutates the structured tree, cross-transform fact reuse would also require explicit invalidation/versioning. The measured cost is far too small to justify that complexity or risk.
 - No post-CF solver code was changed. Combined regression gate remains PASS: 43 focused suites + 66/66 canonical samples.
 - Next roadmap step is Step 10: reduce closure string serialization/reparse, with structured child representation only if profiling/byte-identity gates justify it.
+
+
+## Performance plan Step 10 - structured closure serialization/reparse rejected (2026-08-31)
+- Profiled closure presentation/reparse before changing representation. `recoverNestedFunctionSignature` sampled about 4.493 ms self-time, `formatStructuredNodes` about 12.355 ms, and `buildPresentedSource` about 1.123 ms. `regionGraph` sampled about 80.869 ms, but that includes region construction/embedding rather than only serialization/reparse.
+- The measured stringify/reparse cost is far too small to justify replacing the closure pipeline with a structured child-node representation, which is the highest-risk roadmap change because it would alter ownership/presentation boundaries across 554 closures.
+- No solver code was changed. Syntax PASS; combined regression gate PASS: 43 focused suites + 66/66 canonical samples.
+- Next roadmap step is Step 11 final benchmark/profile comparison.
