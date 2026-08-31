@@ -970,3 +970,10 @@ PRE-CF indexed-write batching: `finalizePreCfIndexedWriteTemps` now batches inde
 - Verification: syntax PASS; scalar/call-setup/RETURN_ALL focused suites PASS; combined gate PASS: 43 focused suites + 66/66 canonical samples.
 - `spacial6` warm runs: 40.101 s / 39.891 s / 40.487 s; median 40.101 s versus Step-3 baseline 40.279 s. Every run recovered 3799 states / 554 closures, reparsed, had zero unwanted scaffold, and matched the frozen final byte-for-byte (SHA-256 `14d488e79025f385dc79038cf557a5f74a5390e9924647772d9086bf4a5d4145`).
 - Next roadmap step: Step 9 shared post-CF facts; keep transforms separate and share immutable analysis only.
+
+
+## Performance plan Step 9 - shared post-CF facts rejected (2026-08-31)
+- Profiled duplicated post-CF `collectFacts` traversals before changing solver code. Their sampled self-time totaled about 3.535 ms in the production profile, versus about 40 s end-to-end.
+- Because each semantic transform mutates the structured tree, cross-transform fact reuse would also require explicit invalidation/versioning. The measured cost is far too small to justify that complexity or risk.
+- No post-CF solver code was changed. Combined regression gate remains PASS: 43 focused suites + 66/66 canonical samples.
+- Next roadmap step is Step 10: reduce closure string serialization/reparse, with structured child representation only if profiling/byte-identity gates justify it.
