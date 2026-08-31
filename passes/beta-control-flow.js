@@ -4412,7 +4412,14 @@ function matchCompilerGenericFor(graph, checkStateId) {
             if (operation === firstCopy || operation === secondBinding || cleanupOperations.has(operation)) continue;
             const originalTarget = originalOperationTarget(operation);
             if (protectedOriginalNames.has(originalTarget)) return null;
-            if (originalTarget === firstVariableOriginal || originalTarget === secondVariableOriginal) return null;
+            if (originalTarget === firstVariableOriginal) return null;
+            if (originalTarget === secondVariableOriginal) {
+                // Lua permits assigning to a generic-for value variable inside the loop body.
+                // Accept only a proven write to the exact surviving second-variable beta binding;
+                // compiler cleanup/setup writes and physical-register reuse remain refused.
+                const expression = parseOperationExpression(operation);
+                if (operation.emittedTarget !== secondVariable || expression?.type === "NilLiteral") return null;
+            }
         }
     }
 

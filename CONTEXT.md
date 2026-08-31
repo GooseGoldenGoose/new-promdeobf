@@ -904,3 +904,10 @@ PRE-CF indexed-write batching: `finalizePreCfIndexedWriteTemps` now batches inde
 - Full measured PRE-CF stage profile totals about 15.6 s. Major remaining stage times: call-result 2.248 s, call-argument 1.627 s, post-RETURN_ALL convergence 0.988 s; all others are below 1 s in this run.
 - Full production deobfuscation reached CF in 27.307 s, then failed closed at closure entry 257 because the beta CF acyclic stage detected a loop/backedge and loop structuring is not implemented there. This is a CF capability blocker, not a PRE-CF performance regression.
 - Compared with the earlier >678 s canceled regression, PRE-CF performance is restored to the historical ~20 s class.
+
+
+## Generic-for value-variable mutation recovery (2026-08-31)
+- Fixed spacial6 closure entry 257: the existing generic-for matcher previously refused any body write to the second iterator value variable, leaving a valid compiler generic-for backedge unstructured.
+- The matcher now permits only non-nil writes whose emitted target is exactly the surviving second loop-variable beta binding. First/control-variable mutation remains refused; compiler cleanup/setup writes and physical-register reuse remain fail-closed.
+- Added focused regression coverage: second value-variable mutation recovers and is emitted inside the generic-for body; control-variable mutation remains refused.
+- Tests PASS: generic-for focused suite; combined 43 focused suites + 66/66 canonical samples. Full sample/spacial6.txt deobfuscation now completes end-to-end: 3799 states, 554 closures, 76.616 s. Previously it failed at closure entry 257 with an unstructured loop/backedge.

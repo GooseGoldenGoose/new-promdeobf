@@ -60,9 +60,10 @@ parseLua(refused.source, '<step16-refused>');
 
 
 
-function directIteratorGraph({ mutateControl = false } = {}) {
+function directIteratorGraph({ mutateControl = false, mutateValue = false } = {}) {
     const bodyOperations = [
         ...(mutateControl ? [{ kind: 'epoch-mutate', originalTarget: 'r2', emittedTarget: 'control', rhs: '99', emittedText: 'control = 99', reads: [] }] : []),
+        ...(mutateValue ? [{ kind: 'epoch-mutate', originalTarget: 'r7', emittedTarget: 'value', rhs: 'transform(value)', emittedText: 'value = transform(value)', reads: ['transform', 'value'] }] : []),
         { kind: 'effect-call', emittedText: 'print(control, value)', rhs: 'print(control, value)', reads: ['control', 'value'] },
         { kind: 'state-transition', originalTarget: 'state', emittedTarget: 'state', rhs: '2', emittedText: 'state = 2', reads: [] },
     ];
@@ -113,6 +114,13 @@ parseLua(directRecovered.source, '<generic-for-direct-iterator-recovered>');
 const directMutationRefused = solveBetaControlFlow(ast, directIteratorGraph({ mutateControl: true }));
 assert.equal(directMutationRefused.applied, false);
 assert(directMutationRefused.reason.includes('loop/backedge'));
+
+const directValueMutationRecovered = solveBetaControlFlow(ast, directIteratorGraph({ mutateValue: true }));
+assert.equal(directValueMutationRecovered.applied, true);
+assert.equal(directValueMutationRecovered.genericForLoopCount, 1);
+assert(directValueMutationRecovered.source.includes('for control, value in pairs(game:GetChildren()) do'));
+assert(directValueMutationRecovered.source.includes('value = transform(value)'));
+parseLua(directValueMutationRecovered.source, '<generic-for-value-mutation-recovered>');
 
 
 
