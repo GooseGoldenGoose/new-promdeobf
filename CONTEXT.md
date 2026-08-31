@@ -994,3 +994,7 @@ PRE-CF indexed-write batching: `finalizePreCfIndexedWriteTemps` now batches inde
 - Full predecessor rebuild count for the final `spacial6` solve is 209, derived from the exact rebuild sites and emitted counts: 11 numeric-for + 115 generic-for + 49 while + 29 repeat + 5 duplicate-repeat-region removals + 0 forwarded-control joins.
 - Final CPU profile: normal 3.626 s, beta+CF 38.554 s, total 42.180 s. Top remaining self-time is GC ~9.735 s; `recoverCfLogicalValueProgram` appears in several compiled entries (~1.138 s, ~0.849 s, ~0.293 s, ~0.167 s); `analyzeBetaRegisterLifetimes` ~0.619 s; `buildPreCfTempProofIndex` appears across several entries (~0.436 s, ~0.209 s, ~0.197 s, ~0.158 s); `versionVmBlockRegisters` ~0.303 s; scheduler validation ~0.160 s.
 - Roadmap outcome: Steps 2, 3, and 8 were kept; Steps 4, 5, 6, 7, 9, and 10 were rejected/reverted or skipped after profiling. Further performance work should start a new profile-driven roadmap focused on GC/allocation pressure, repeated logical-value recovery, PRE-CF proof-index rebuild frequency, and lifetime/version allocation rather than revisiting the rejected micro-optimizations.
+## Rust optimizer removed (2026-08-31)
+- User requested removal of the experimental `rust-optimizer/` tree.
+- Deleted the entire `rust-optimizer/` directory. The production JS normal -> PRE-CF -> CF pipeline remains unchanged.
+- Rust optimizer/string decoder experiments are no longer part of the repository.
