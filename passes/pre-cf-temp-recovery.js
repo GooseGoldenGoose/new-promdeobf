@@ -89,7 +89,7 @@ function buildPreCfTempProofIndex(betaResult) {
         byBinding.set(name, facts);
     }
 
-    return { safe: true, byBinding, stateById, locations };
+    return { safe: true, byBinding, stateById, locations, reads, writes };
 }
 
 function provePreCfTempUse(betaResult, bindingName) {
@@ -2538,15 +2538,18 @@ function finalizePreCfMultiReturnTemps(betaResult) {
         return betaResult;
     }
     let folds = 0;
+    let parseRounds = 0;
+    let batchRounds = 0;
     const maxRounds = (betaResult.graph.states || []).reduce((n, state) => n + (state.operations || []).length, 0) + 1;
     for (let round = 0; round < maxRounds; round++) {
         const proof = buildPreCfTempProofIndex(betaResult);
-        let candidate = null;
+        const candidates = [];
+        const claimedOperations = new Set();
         for (const state of betaResult.graph.states || []) {
             const ops = state.operations || [];
             for (let offset = 0; offset < ops.length; offset++) {
                 const packOp = ops[offset];
-                if (!isCopyOperation(packOp) || !packOp.emittedTarget) continue;
+                if (claimedOperations.has(packOp) || !isCopyOperation(packOp) || !packOp.emittedTarget) continue;
                 if (betaResult.graph.recoveredUpvalueBindings?.includes(packOp.emittedTarget)) continue;
                 const call = parsePackedSingleCall(packOp.rhs);
                 if (!call) continue;
@@ -2554,27 +2557,21 @@ function finalizePreCfMultiReturnTemps(betaResult) {
                 const packFacts = proof.byBinding.get(packName);
                 if (!packFacts?.singleDefinition || packFacts.captured || packFacts.producer?.operation !== packOp || packFacts.readCount === 0) continue;
 
+                const readLocations = proof.reads?.get(packName) || [];
+                if (readLocations.length !== packFacts.readCount) continue;
                 const extracts = [];
                 let invalidPackRead = false;
-                for (const state2 of betaResult.graph.states || []) {
-                    const ops2 = state2.operations || [];
-                    for (let offset2 = 0; offset2 < ops2.length; offset2++) {
-                        const op2 = ops2[offset2];
-                        if (!(op2.reads || []).includes(packName)) continue;
-                        if (state2 !== state || offset2 <= offset || !isCopyOperation(op2) || !op2.emittedTarget || !String(op2.emittedText || "").trim().startsWith("local ")) {
-                            invalidPackRead = true;
-                            break;
-                        }
-                        const slot = parseStaticPackSlot(op2.rhs, packName);
-                        if (slot === null) {
-                            invalidPackRead = true;
-                            break;
-                        }
-                        extracts.push({ op: op2, slot, offset: offset2 });
+                for (const location of readLocations) {
+                    const op2 = location.operation;
+                    if (location.stateId !== state.id || location.offset <= offset || !isCopyOperation(op2) || !op2.emittedTarget || !String(op2.emittedText || "").trim().startsWith("local ")) {
+                        invalidPackRead = true;
+                        break;
                     }
-                    if (invalidPackRead) break;
+                    const slot = parseStaticPackSlot(op2.rhs, packName);
+                    if (slot === null) { invalidPackRead = true; break; }
+                    extracts.push({ op: op2, slot, offset: location.offset });
                 }
-                if (invalidPackRead || extracts.length !== packFacts.readCount || extracts.length === 0) continue;
+                if (invalidPackRead || extracts.length === 0) continue;
 
                 const slots = extracts.map(item => item.slot);
                 const uniqueSlots = new Set(slots);
@@ -2599,57 +2596,77 @@ function finalizePreCfMultiReturnTemps(betaResult) {
                     }
                 }
                 if (targetVisibleTooEarly) continue;
+                if (extracts.some(item => claimedOperations.has(item.op))) continue;
 
-                candidate = { state, offset, packOp, call, extracts };
-                break;
+                const orderedExtracts = [...extracts].sort((a, b) => a.slot - b.slot);
+                const targets = orderedExtracts.map(item => item.op.emittedTarget);
+                const emittedText = `local ${targets.join(", ")} = ${call}`;
+                candidates.push({ state, offset, packOp, call, extracts, orderedExtracts, targets, emittedText });
+                claimedOperations.add(packOp);
+                for (const item of extracts) claimedOperations.add(item.op);
             }
-            if (candidate) break;
         }
-        if (!candidate) break;
-        const ownership = mapPreCfOperationRanges(betaResult);
+        if (!candidates.length) break;
+
+        const ownership = mapPreCfOperationRanges(betaResult); parseRounds++;
         if (!ownership.safe) {
-            betaResult.preCfMultiReturnTemps = { applied: folds > 0, safe: false, reason: ownership.reason, folds };
+            betaResult.preCfMultiReturnTemps = { applied: folds > 0, safe: false, reason: ownership.reason, folds, parseRounds, batchRounds };
             return betaResult;
         }
-        const packRange = ownership.ranges.get(candidate.packOp);
-        const extractRanges = candidate.extracts.map(item => ownership.ranges.get(item.op));
-        if (!packRange || extractRanges.some(range => !range)) {
-            betaResult.preCfMultiReturnTemps = { applied: folds > 0, safe: false, reason: "PRE-CF multi-return recovery lost exact source ownership", folds };
-            return betaResult;
+        const edits = [];
+        for (const candidate of candidates) {
+            const packRange = ownership.ranges.get(candidate.packOp);
+            const extractRanges = candidate.extracts.map(item => ownership.ranges.get(item.op));
+            if (!packRange || extractRanges.some(range => !range)) {
+                betaResult.preCfMultiReturnTemps = { applied: folds > 0, safe: false, reason: "PRE-CF multi-return recovery lost exact source ownership", folds, parseRounds, batchRounds };
+                return betaResult;
+            }
+            edits.push(
+                { start: packRange[0], end: packRange[1], replacement: candidate.emittedText },
+                ...extractRanges.map(range => ({ start: range[0], end: range[1], replacement: "" })),
+            );
         }
-        const orderedExtracts = [...candidate.extracts].sort((a, b) => a.slot - b.slot);
-        const targets = orderedExtracts.map(item => item.op.emittedTarget);
-        const emittedText = `local ${targets.join(", ")} = ${candidate.call}`;
-        const edits = [
-            { start: packRange[0], end: packRange[1], replacement: emittedText },
-            ...extractRanges.map(range => ({ start: range[0], end: range[1], replacement: "" })),
-        ];
-        const output = applySourceEdits(betaResult.source, edits);
-        try { parsePreCfSource(output); }
+        let output;
+        try { output = applySourceEdits(betaResult.source, edits); parsePreCfSource(output); parseRounds++; }
         catch (error) {
-            betaResult.preCfMultiReturnTemps = { applied: folds > 0, safe: false, reason: `PRE-CF multi-return recovery reparse failed: ${error.message}`, folds };
+            betaResult.preCfMultiReturnTemps = { applied: folds > 0, safe: false, reason: `PRE-CF multi-return recovery reparse failed: ${error.message}`, folds, parseRounds, batchRounds };
             return betaResult;
         }
         betaResult.source = output;
-        const reads = [...new Set(candidate.packOp.reads || [])];
-        const multiOp = {
-            index: candidate.offset + 1,
-            kind: "multi-call-write",
-            emittedTargets: targets,
-            targetDeclarations: targets.map(() => true),
-            targetRegisterEpochs: orderedExtracts.map(item => item.op.registerEpoch || null),
-            rhs: candidate.call,
-            reads,
-            emittedText,
-            returnSinkSafe: false,
-        };
-        candidate.state.operations[candidate.offset] = multiOp;
-        const extractOps = new Set(candidate.extracts.map(item => item.op));
-        candidate.state.operations = candidate.state.operations.filter(operation => !extractOps.has(operation));
-        for (let i = 0; i < candidate.state.operations.length; i++) candidate.state.operations[i].index = i + 1;
-        folds++;
+
+        const replacementsByState = new Map();
+        const removalsByState = new Map();
+        for (const candidate of candidates) {
+            const reads = [...new Set(candidate.packOp.reads || [])];
+            const multiOp = {
+                index: candidate.offset + 1,
+                kind: "multi-call-write",
+                emittedTargets: candidate.targets,
+                targetDeclarations: candidate.targets.map(() => true),
+                targetRegisterEpochs: candidate.orderedExtracts.map(item => item.op.registerEpoch || null),
+                rhs: candidate.call,
+                reads,
+                emittedText: candidate.emittedText,
+                returnSinkSafe: false,
+            };
+            if (!replacementsByState.has(candidate.state.id)) replacementsByState.set(candidate.state.id, new Map());
+            replacementsByState.get(candidate.state.id).set(candidate.packOp, multiOp);
+            if (!removalsByState.has(candidate.state.id)) removalsByState.set(candidate.state.id, new Set());
+            for (const item of candidate.extracts) removalsByState.get(candidate.state.id).add(item.op);
+        }
+        for (const state of betaResult.graph.states || []) {
+            const replacements = replacementsByState.get(state.id);
+            const removals = removalsByState.get(state.id);
+            if (!replacements && !removals) continue;
+            state.operations = state.operations
+                .filter(operation => !removals?.has(operation))
+                .map(operation => replacements?.get(operation) || operation);
+            for (let i = 0; i < state.operations.length; i++) state.operations[i].index = i + 1;
+        }
+        folds += candidates.length;
+        batchRounds++;
     }
-    betaResult.preCfMultiReturnTemps = { applied: folds > 0, safe: true, folds };
+    betaResult.preCfMultiReturnTemps = { applied: folds > 0, safe: true, folds, parseRounds, batchRounds };
     return betaResult;
 }
 

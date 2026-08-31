@@ -894,3 +894,8 @@ PRE-CF indexed-write batching: `finalizePreCfIndexedWriteTemps` now batches inde
 ## PRE-CF RETURN_ALL batching (2026-08-31)
 - `finalizePreCfReturnAllTemps` now batches independent proven RETURN_ALL pack-to-consumer transports by exact producer/consumer operation ownership. One proof snapshot, one ownership map, one edit application, one reparse, and grouped graph removals are used per batch; existing same-state, single-use, gap, capture, final-unpack, and consumer-kind gates are unchanged.
 - spacial6 profile: 97 folds in 0.553 s, 1 batch round / 2 parse rounds. Focused RETURN_ALL PASS; combined gate PASS: 43 focused suites + 66/66 canonical samples.
+
+## PRE-CF multi-return batching (2026-08-31)
+- finalizePreCfMultiReturnTemps now uses the existing proof read index instead of rescanning every graph state for each pack, batches independent pack/extract groups, maps ownership once, applies one edit set, reparses once, and rebuilds affected state operations by identity. Proof/refusal rules are unchanged.
+- spacial6 profile: 9.782 s -> 0.624 s for 16 folds, 1 batch round / 2 parse rounds. Focused multi-return PASS; combined gate PASS: 43 focused suites + 66/66 canonical samples.
+- Post-RETURN_ALL convergence was evaluated for conditional stage skipping, but spacial6 exposes both call and effect-call consumers, so all four convergence passes remain required; no ineffective convergence change was kept.
