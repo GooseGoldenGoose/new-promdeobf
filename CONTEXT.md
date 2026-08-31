@@ -917,3 +917,9 @@ PRE-CF indexed-write batching: `finalizePreCfIndexedWriteTemps` now batches inde
 - `sample/spacial6.txt` profile: normal 3.884 s, beta+CF 42.805 s, total 46.689 s under profiler, 3799 states / 554 closures. CPU self-time leader was GC at ~10.49 s; next major CF hotspot was `recoverCfLogicalValueProgram()` (~1.11 s + additional compiled-code entries for the same function).
 - Profile output paths: `tmp/performance-profile/spacial6.final.lua`, `tmp/performance-profile/spacial6.cpuprofile`, `tmp/performance-profile/spacial6.summary.json`. Generated final SHA-256 exactly matched `tmp/spacial6-final-loopfix.lua`.
 - Verification: profiler syntax PASS; combined gate PASS 43 focused suites + 66/66 canonical samples. Production solver files were not modified for this step.
+## Performance plan Step 2 - deduplicate loop logical recovery (2026-08-31)
+- `matchCompilerWhileConditionRegion` now builds the structured condition node list once and calls `recoverCfLogicalValueProgram()` once, reusing that single proof for condition text, read set, and retained condition nodes. The previous code performed the same pure recovery three times for every matched repeat candidate.
+- Proof/semantic rules are unchanged; this is duplicate-work removal only.
+- Focused condition-temp PASS; combined gate PASS: 43 focused suites + 66/66 canonical samples.
+- `spacial6` profiler: normal 3.287 s, beta+CF 39.014 s, total 42.300 s; output SHA-256 `14d488e79025f385dc79038cf557a5f74a5390e9924647772d9086bf4a5d4145`, exactly matching the Step-1 profiled final output. Step-1 profiled total was 46.689 s. `recoverCfLogicalValueProgram()` remains the main non-GC CF hotspot, so the next performance step should optimize its repeated suffix/recursive work rather than broaden transforms.
+

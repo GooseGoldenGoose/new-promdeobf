@@ -4578,6 +4578,9 @@ function matchCompilerWhileConditionRegion(graph, decisionStateId) {
             true
         );
         if (!bodyStructured) continue;
+        const conditionNodes = [...conditionStructured.nodes, ...decisionOperations.map(operation => operationNode(operation, decision.id))];
+        const logicalCondition = recoverCfLogicalValueProgram(conditionNodes, decisionInfo.conditionName, graph.recoveredUpvalueBindings);
+        const useLogicalCondition = !!logicalCondition && decisionInfo.condition === decisionInfo.conditionName;
         matches.push({
             preheaderId,
             checkId: decision.id,
@@ -4586,21 +4589,9 @@ function matchCompilerWhileConditionRegion(graph, decisionStateId) {
             bodyId,
             bodyStateIds: [...bodyRegion.ids],
             exitId,
-            condition: (() => {
-                const nodes = [...conditionStructured.nodes, ...decisionOperations.map(operation => operationNode(operation, decision.id))];
-                const logical = recoverCfLogicalValueProgram(nodes, decisionInfo.conditionName, graph.recoveredUpvalueBindings);
-                return logical && decisionInfo.condition === decisionInfo.conditionName ? logical.expression : decisionInfo.condition;
-            })(),
-            conditionReads: (() => {
-                const nodes = [...conditionStructured.nodes, ...decisionOperations.map(operation => operationNode(operation, decision.id))];
-                const logical = recoverCfLogicalValueProgram(nodes, decisionInfo.conditionName, graph.recoveredUpvalueBindings);
-                return logical && decisionInfo.condition === decisionInfo.conditionName ? logical.reads : decisionInfo.conditionReads;
-            })(),
-            conditionNodes: (() => {
-                const nodes = [...conditionStructured.nodes, ...decisionOperations.map(operation => operationNode(operation, decision.id))];
-                const logical = recoverCfLogicalValueProgram(nodes, decisionInfo.conditionName, graph.recoveredUpvalueBindings);
-                return logical && decisionInfo.condition === decisionInfo.conditionName ? [] : nodes;
-            })(),
+            condition: useLogicalCondition ? logicalCondition.expression : decisionInfo.condition,
+            conditionReads: useLogicalCondition ? logicalCondition.reads : decisionInfo.conditionReads,
+            conditionNodes: useLogicalCondition ? [] : conditionNodes,
             bodyNodes: bodyStructured.nodes,
             bodyBranchCount: (bodyStructured.branchCount || 0) + (conditionStructured.branchCount || 0),
             bodyJoinCount: (bodyStructured.joinCount || 0) + (conditionStructured.joinCount || 0),
