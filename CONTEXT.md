@@ -945,3 +945,9 @@ PRE-CF indexed-write batching: `finalizePreCfIndexedWriteTemps` now batches inde
 - Correctness passed: syntax, numeric/generic/while/repeat focused suites, main beta-CF, combined 43 focused suites + 66/66 canonical samples; `spacial6` remained 3799 states / 554 closures, reparsed, had zero unwanted scaffold, and was byte-identical 3/3 with SHA-256 `14d488e79025f385dc79038cf557a5f74a5390e9924647772d9086bf4a5d4145`.
 - Warm runs were 40.850 s / 40.672 s / 40.170 s; median 40.672 s versus Step-3 median 40.279 s. Because the performance-only change showed no measured gain, it was fully reverted.
 - No solver code from this attempt was kept. Next roadmap experiment is Step 5, batching independent loop collapses.
+
+## Performance plan Step 5 - batch independent loop collapses rejected (2026-08-31)
+- Tried batching independent numeric/generic/while/repeat loop collapses from one graph snapshot. A candidate batch claimed its preheader, removed region, and exit dependency, so nested/shared/adjacent-dependent loops were deferred to later rounds; only disjoint loops were applied before one predecessor rebuild.
+- Correctness passed: syntax; numeric/generic/while/repeat focused suites; main beta-CF; combined 43 focused suites + 66/66 canonical samples. `spacial6` remained 3799 states / 554 closures, reparsed, had zero unwanted scaffold, and matched the frozen final byte-for-byte on all 3 runs (SHA-256 `14d488e79025f385dc79038cf557a5f74a5390e9924647772d9086bf4a5d4145`).
+- Warm runs were 41.013 s / 39.784 s / 40.356 s; median 40.356 s versus Step-3 median 40.279 s. Because the performance-only change showed no measurable improvement, it was fully reverted.
+- No solver code from this attempt was kept. Next roadmap step is Step 6: profile/optimize acyclic postdominator/reachability work only if measurements justify it.
