@@ -231,3 +231,12 @@ Latest scheduler canonicalization improvement:
 - This restores tighter compiler-handler grouping without allowing TEMP scheduling to leak across source lifetime end.
 - Real `sample/1.txt` scheduling improved from 13 to 27 dependency-safe swaps; call-local producers now group as `r2 = 3 -> r3 = r5(r2)`, `r4 = 1 -> r5(r4)`, and `r1 = "baseline" -> final print call`.
 - Scheduler, VM state reachability, and VM register naming regressions pass, including a new source-lifetime boundary test.
+## Scheduler Performance Optimization
+
+- `passes/vm-register-scheduler.js` now detects final `rN = nil` lifetime boundaries with one reverse dataflow pass instead of rescanning the remainder of the leaf for each cleanup.
+- Statement read/write caches now store one flat most-recent overflow context per AST statement instead of allocating a nested `Map` per statement; alternate diagnostic contexts recompute safely.
+- On `output/spacial6.lua` (~8.87 MB), scheduler cold-process runtime improved from about 720 ms baseline to 607 / 583 / 565 ms across three fresh-process runs.
+- Scheduling result stayed identical: 2,337 changed blocks, 28,972 swaps, zero safety-rejected segments.
+- `sample/1.txt` scheduled output is byte-identical to the pre-performance-optimization result.
+- Scheduler, VM state reachability, and VM register naming regressions pass.
+

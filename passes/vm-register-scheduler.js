@@ -60,14 +60,14 @@ const WRITES_CACHE = new WeakMap();
 function cachedSet(cache, statement, overflowName, compute) {
     if (!statement || typeof statement !== "object") return new Set();
     const key = overflowName || "";
-    let byContext = cache.get(statement);
-    if (!byContext) {
-        byContext = new Map();
-        cache.set(statement, byContext);
-    }
-    if (byContext.has(key)) return byContext.get(key);
+    const cached = cache.get(statement);
+    if (cached?.key === key) return cached.value;
     const value = compute();
-    byContext.set(key, value);
+    // A statement belongs to one VM scheduling context at a time. Keep only
+    // the most recent overflow-register context instead of allocating a nested
+    // Map per AST statement. If a diagnostic reuses the AST under another
+    // context, the entry is simply recomputed.
+    cache.set(statement, { key, value });
     return value;
 }
 
@@ -541,41 +541,41 @@ function validateScheduledOrder(original, scheduled, stateName, overflowName = n
 
 function markAnchoredLifetimeWrites(statements, stateName, overflowName = null, returnName = null) {
     const protectedRegisters = new Set();
+    const touchedLater = new Set();
 
-    // In straight-line compiler output, a source-variable lifetime normally
-    // ends with a direct register = nil cleanup. Source `a = nil` itself is
-    // emitted through a temporary and copied into the VAR register, so protect
-    // the complete physical-register chain when its final touch is such a
-    // cleanup. This intentionally errs conservative: a temp that happens to
-    // match the shape is merely left unscheduled.
-    for (let index = 0; index < statements.length; index++) {
+    // One reverse dataflow pass proves whether a direct register = nil is the
+    // final touch of that physical register in this straight-line leaf. This
+    // preserves the old rule without rescanning the remainder of the block for
+    // every nil cleanup.
+    for (let index = statements.length - 1; index >= 0; index--) {
         const statement = statements[index];
-        if (statement?.type !== "AssignmentStatement") continue;
-        const variables = statement.variables || [];
-        const init = statement.init || [];
-        if (variables.length !== 1 || init.length !== 1 || init[0]?.type !== "NilLiteral") continue;
-        const target = registerIdentity(variables[0], overflowName);
-        if (!target || target === stateName || target === returnName) continue;
-
-        let touchedLater = false;
-        for (let i = index + 1; i < statements.length; i++) {
-            if (statementReads(statements[i], overflowName).has(target) ||
-                statementWrites(statements[i], overflowName).has(target)) {
-                touchedLater = true;
-                break;
+        if (statement?.type === "AssignmentStatement") {
+            const variables = statement.variables || [];
+            const init = statement.init || [];
+            if (variables.length === 1 && init.length === 1 && init[0]?.type === "NilLiteral") {
+                const target = registerIdentity(variables[0], overflowName);
+                if (target && target !== stateName && target !== returnName && !touchedLater.has(target)) {
+                    protectedRegisters.add(target);
+                    LIFETIME_BOUNDARY_WRITES.add(statement);
+                }
             }
         }
-        if (!touchedLater) {
-            protectedRegisters.add(target);
-            LIFETIME_BOUNDARY_WRITES.add(statement);
-        }
+
+        for (const name of statementReads(statement, overflowName)) touchedLater.add(name);
+        for (const name of statementWrites(statement, overflowName)) touchedLater.add(name);
     }
 
     if (protectedRegisters.size === 0) return 0;
     let marked = 0;
     for (const statement of statements) {
-        const writes = statementWrites(statement, overflowName);
-        if (![...protectedRegisters].some(name => writes.has(name))) continue;
+        let protectsLifetime = false;
+        for (const name of statementWrites(statement, overflowName)) {
+            if (protectedRegisters.has(name)) {
+                protectsLifetime = true;
+                break;
+            }
+        }
+        if (!protectsLifetime) continue;
         ANCHORED_LIFETIME_WRITES.add(statement);
         marked++;
     }
