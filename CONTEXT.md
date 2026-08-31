@@ -855,3 +855,9 @@ Latest post-Step-47 work - compiler IIFE / anonymous closure expression recovery
 - spacial6 profile for this stage: call-result destination recovery improved from 56.925 s to 2.395 s for 134 folds, using 5 batch rounds / 10 parse rounds.
 - Focused call-result tests PASS and the full combined gate remains 43 focused suites + 66/66 canonical samples.
 - Continue performance work one PRE-CF stage at a time. Next measured hotspot after this step is table destination recovery.
+
+## PRE-CF table destination batching (2026-08-31)
+- `finalizePreCfTableDestinations` now batches independent proven table-result retargets per graph snapshot instead of reparsing after every fold.
+- Existing proof rules and `canDeclareRetargetedTableDestination` semantics are unchanged; only execution scheduling changed. Consumer removals are grouped by state and each affected state is reindexed once per batch.
+- `spacial6` stage benchmark: 38 folds improved from 16.073 s to 0.634 s, with 1 batch round / 2 ownership+validation parse rounds on the measured run.
+- Focused table-destination test PASS; full combined gate PASS: 43 focused suites + 66/66 canonical samples.

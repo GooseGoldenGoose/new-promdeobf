@@ -447,17 +447,19 @@ function finalizePreCfTableDestinations(betaResult) {
         return betaResult;
     }
     let folds = 0;
+    let parseRounds = 0;
+    let batchRounds = 0;
     const maxRounds = (betaResult.graph.states || []).reduce((n, state) => n + (state.operations || []).length, 0) + 1;
     for (let round = 0; round < maxRounds; round++) {
         const proof = buildPreCfTempProofIndex(betaResult);
-        let candidate = null;
+        const candidates = [];
         for (const facts of proof.byBinding.values()) {
             if (!facts.singleDefinition || !facts.singleUse || facts.captured || !facts.sameState) continue;
             const producer = facts.producer?.operation, consumer = facts.consumer?.operation;
             if (!isCompilerTableResultOperation(producer, betaResult.graph)) continue;
             if (!["version-define", "epoch-start", "epoch-mutate"].includes(consumer?.kind) || consumer.rhs !== facts.name) continue;
             if (!consumer.registerEpoch || !/^(?:r\d+|__overflow_phys_\d+)$/.test(String(consumer.originalTarget || ""))) continue;
-            const state = betaResult.graph.states.find(item => item.id === facts.producer.stateId);
+            const state = proof.stateById.get(facts.producer.stateId);
             if (!state) continue;
             const producerOffset = facts.producer.offset, consumerOffset = facts.consumer.offset;
             if (!(consumerOffset > producerOffset)) continue;
@@ -469,33 +471,58 @@ function finalizePreCfTableDestinations(betaResult) {
                 if ((op.reads || []).includes(actualTarget) || operationWrites(op).includes(actualTarget) || (op.reads || []).includes(facts.name) || operationWrites(op).includes(facts.name)) { unsafeGap = true; break; }
             }
             if (unsafeGap) continue;
-            candidate = { facts, state, producer, consumer, consumerOffset, actualTarget };
-            break;
+            candidates.push({ facts, state, producer, consumer, consumerOffset, actualTarget });
         }
-        if (!candidate) break;
-        const ownership = mapPreCfOperationRanges(betaResult);
-        if (!ownership.safe) { betaResult.preCfTableDestinations = { applied: folds > 0, safe: false, reason: ownership.reason, folds }; return betaResult; }
-        const pr = ownership.ranges.get(candidate.producer), cr = ownership.ranges.get(candidate.consumer);
-        if (!pr || !cr) { betaResult.preCfTableDestinations = { applied: folds > 0, safe: false, reason: "PRE-CF table destination recovery lost exact source ownership", folds }; return betaResult; }
-        const declareDestination = canDeclareRetargetedTableDestination(candidate);
-        const prefix = declareDestination ? "local " : "";
-        const emittedText = `${prefix}${candidate.actualTarget} = ${candidate.producer.rhs}`;
-        const output = applySourceEdits(betaResult.source, [{ start: pr[0], end: pr[1], replacement: emittedText }, { start: cr[0], end: cr[1], replacement: "" }]);
-        try { parsePreCfSource(output); } catch (error) { betaResult.preCfTableDestinations = { applied: folds > 0, safe: false, reason: `PRE-CF table destination recovery reparse failed: ${error.message}`, folds }; return betaResult; }
+        if (!candidates.length) break;
+
+        const accepted = [];
+        const claimed = new Set();
+        for (const candidate of candidates) {
+            if (claimed.has(candidate.producer) || claimed.has(candidate.consumer)) continue;
+            accepted.push(candidate);
+            claimed.add(candidate.producer);
+            claimed.add(candidate.consumer);
+        }
+        if (!accepted.length) break;
+
+        const ownership = mapPreCfOperationRanges(betaResult); parseRounds++;
+        if (!ownership.safe) { betaResult.preCfTableDestinations = { applied: folds > 0, safe: false, reason: ownership.reason, folds, parseRounds, batchRounds }; return betaResult; }
+        const edits = [];
+        for (const candidate of accepted) {
+            const pr = ownership.ranges.get(candidate.producer), cr = ownership.ranges.get(candidate.consumer);
+            if (!pr || !cr) { betaResult.preCfTableDestinations = { applied: folds > 0, safe: false, reason: "PRE-CF table destination recovery lost exact source ownership", folds, parseRounds, batchRounds }; return betaResult; }
+            const declareDestination = canDeclareRetargetedTableDestination(candidate);
+            const prefix = declareDestination ? "local " : "";
+            candidate.declareDestination = declareDestination;
+            candidate.emittedText = `${prefix}${candidate.actualTarget} = ${candidate.producer.rhs}`;
+            edits.push({ start: pr[0], end: pr[1], replacement: candidate.emittedText }, { start: cr[0], end: cr[1], replacement: "" });
+        }
+        let output;
+        try { output = applySourceEdits(betaResult.source, edits); parsePreCfSource(output); parseRounds++; }
+        catch (error) { betaResult.preCfTableDestinations = { applied: folds > 0, safe: false, reason: `PRE-CF table destination recovery reparse failed: ${error.message}`, folds, parseRounds, batchRounds }; return betaResult; }
         betaResult.source = output;
-        candidate.producer.emittedTarget = candidate.actualTarget;
-        candidate.producer.originalTarget = candidate.consumer.originalTarget;
-        candidate.producer.registerEpoch = candidate.consumer.registerEpoch;
-        candidate.producer.kind = declareDestination ? "epoch-start" : candidate.consumer.kind;
-        candidate.producer.emittedText = emittedText;
-        candidate.state.operations.splice(candidate.consumerOffset, 1);
-        for (let i = 0; i < candidate.state.operations.length; i++) candidate.state.operations[i].index = i + 1;
-        folds++;
+
+        const removalsByState = new Map();
+        for (const candidate of accepted) {
+            candidate.producer.emittedTarget = candidate.actualTarget;
+            candidate.producer.originalTarget = candidate.consumer.originalTarget;
+            candidate.producer.registerEpoch = candidate.consumer.registerEpoch;
+            candidate.producer.kind = candidate.declareDestination ? "epoch-start" : candidate.consumer.kind;
+            candidate.producer.emittedText = candidate.emittedText;
+            if (!removalsByState.has(candidate.state.id)) removalsByState.set(candidate.state.id, new Set());
+            removalsByState.get(candidate.state.id).add(candidate.consumer);
+        }
+        for (const [stateId, removals] of removalsByState) {
+            const state = proof.stateById.get(stateId);
+            state.operations = state.operations.filter(operation => !removals.has(operation));
+            for (let i = 0; i < state.operations.length; i++) state.operations[i].index = i + 1;
+        }
+        folds += accepted.length;
+        batchRounds++;
     }
-    betaResult.preCfTableDestinations = { applied: folds > 0, safe: true, folds };
+    betaResult.preCfTableDestinations = { applied: folds > 0, safe: true, folds, parseRounds, batchRounds };
     return betaResult;
 }
-
 function isLiteralOnlyPreCfScalarExpression(node) {
     if (!node) return false;
     if (["NumericLiteral", "StringLiteral", "BooleanLiteral", "NilLiteral"].includes(node.type)) return true;
