@@ -1831,11 +1831,19 @@ function recoverStructuredCompilerValueTemps(nodes, graph) {
             if (!safe) continue;
             const rewritten = substituteExact(expression, target, recovered.expression);
             if (!rewritten) continue;
+            const consumedNodes = new Set();
+            for (let offset = start; offset < owner.length; offset++) {
+                const candidateNode = owner[offset];
+                const candidateTarget = candidateNode?.type === "raw" ? candidateNode.operation?.emittedTarget : null;
+                if (candidateTarget && consumed.has(candidateTarget)) consumedNodes.add(candidateNode);
+            }
+            if (!consumedNodes.size) continue;
             return {
                 start,
                 rewritten,
                 reads: replacedReads(reads, target, recovered.reads),
-                removedCount: owner.length - start,
+                consumedNodes,
+                removedCount: consumedNodes.size,
             };
         }
         return null;
@@ -1850,7 +1858,9 @@ function recoverStructuredCompilerValueTemps(nodes, graph) {
                 if (recovered) {
                     node.expressions[0] = recovered.rewritten;
                     node.reads = recovered.reads;
-                    body.splice(recovered.start, index - recovered.start);
+                    for (let removeIndex = index - 1; removeIndex >= recovered.start; removeIndex--) {
+                        if (recovered.consumedNodes.has(body[removeIndex])) body.splice(removeIndex, 1);
+                    }
                     folds += recovered.removedCount;
                     return true;
                 }
@@ -1860,7 +1870,9 @@ function recoverStructuredCompilerValueTemps(nodes, graph) {
                 if (recovered) {
                     node.condition = recovered.rewritten;
                     node.reads = recovered.reads;
-                    node.conditionBody.splice(recovered.start, node.conditionBody.length - recovered.start);
+                    for (let removeIndex = node.conditionBody.length - 1; removeIndex >= recovered.start; removeIndex--) {
+                        if (recovered.consumedNodes.has(node.conditionBody[removeIndex])) node.conditionBody.splice(removeIndex, 1);
+                    }
                     folds += recovered.removedCount;
                     return true;
                 }
@@ -1871,7 +1883,9 @@ function recoverStructuredCompilerValueTemps(nodes, graph) {
                     if (!recovered) continue;
                     node.condition = recovered.rewritten;
                     node.reads = recovered.reads;
-                    owner.splice(recovered.start, owner.length - recovered.start);
+                    for (let removeIndex = owner.length - 1; removeIndex >= recovered.start; removeIndex--) {
+                        if (recovered.consumedNodes.has(owner[removeIndex])) owner.splice(removeIndex, 1);
+                    }
                     folds += recovered.removedCount;
                     return true;
                 }

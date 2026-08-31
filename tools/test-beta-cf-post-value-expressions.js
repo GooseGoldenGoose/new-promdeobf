@@ -132,4 +132,24 @@ function raw(target, rhs, reads = [], extra = {}) {
     assert.equal(recoverStructuredCompilerValueTemps(nodes, { recoveredUpvalueBindings: [] }), 0);
 }
 
+{
+    const keep = raw("keepLocal", "sourceValue", ["sourceValue"], { returnSinkSafe: true });
+    const nodes = [
+        raw("root", "game", [], { compilerGlobalLookupRecovered: "game" }),
+        keep,
+        raw("storage", "root.ReplicatedStorage", ["root"]),
+        {
+            type: "generic-for",
+            variables: ["i", "v"],
+            expressions: ["pairs(storage:GetChildren())"],
+            reads: ["pairs", "storage"],
+            body: [],
+            compilerIteratorRecovered: true,
+        },
+    ];
+    assert.equal(recoverStructuredCompilerValueTemps(nodes, { recoveredUpvalueBindings: [] }), 2);
+    assert.equal(nodes.length, 2);
+    assert.strictEqual(nodes[0], keep);
+    assert.equal(nodes[1].expressions[0], "pairs(game.ReplicatedStorage:GetChildren())");
+}
 console.log("beta CF post-CF compiler value temps: PASS");
