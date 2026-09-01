@@ -407,3 +407,13 @@ Latest scheduler canonicalization improvement:
 - Current scope is deliberately read-only, one captured cell, one child closure. Shared cells, captured writes, multiple captures, and captured nested closures remain unsupported/fail-closed.
 - Original obfuscated fixture, normal deobfuscated VM, and recovered fresh-CF output all execute and print `123`.
 - Fresh CF, scheduler, VM state reachability, and VM register naming regressions pass with a permanent captured-local case.
+
+## Fresh CF: Captured Parameters in Nested Closures
+
+- Recursive closure rendering now tracks local upvalue-cell identities created inside a child function, even when `createClosureN(child, { cell })` is emitted before the later `upvalueValues[cell] = args[index]` write.
+- A pending captured closure records capture cell registers first; when the closure is later returned/used, each cell is resolved back to its proven source expression/parameter.
+- Child `upvalueValues[upvalues[n]]` reads then render through the capture-slot map to the parent parameter name.
+- Real compiler/main fixture `local a=function(b) return function() return b end end; print(a(1)())` now recovers as `local v1=function(v1) return function() return v1 end end; print(v1(1)())`.
+- The generalized recursive renderer preserves existing empty-capture recursion and the earlier top-level read-only captured-local matcher.
+- Shared cells, captured writes, and arbitrary mutation through upvalue cells remain unsupported/fail-closed.
+- Fresh CF, scheduler, VM state reachability, and VM register naming regressions pass with a permanent captured-parameter case.

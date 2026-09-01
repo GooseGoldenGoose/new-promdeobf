@@ -587,4 +587,39 @@ function vmStatesSource(states) {
     assert.strictEqual(result.source, 'local v1 = 123\nlocal v2 = function()\n    print(v1)\nend\nv2()\n');
 }
 
+{
+    const source = vmStatesSource({
+        1: [
+            'state = createClosure4(2, {})',
+            'r3 = state',
+            'ReturnVal = "print"',
+            'state = _env[ReturnVal]',
+            'r4 = 1',
+            'r2 = r3(r4)',
+            'r4 = { r2() }',
+            'ReturnVal = state(unpack(r4))',
+            'r1 = args',
+            'r3 = nil',
+            'ReturnVal = {}',
+            'state = nil',
+        ],
+        2: [
+            'r1 = allocUpvalue()',
+            'state = createClosure1(3, { r1 })',
+            'upvalueValues[r1] = args[1]',
+            'ReturnVal = { state }',
+            'state = nil',
+        ],
+        3: [
+            'state = upvalueValues[upvalues[1]]',
+            'ReturnVal = { state }',
+            'state = nil',
+        ],
+    });
+    const result = solveBetaControlFlow(source, parse(source));
+    assert.strictEqual(result.applied, true, "captured parameter nested closure was not recovered");
+    assert.strictEqual(result.mode, "fresh-closure-entry");
+    assert.strictEqual(result.source, 'local v1 = function(v1)\n    return function()\n        return v1\n    end\nend\nprint(v1(1)())\n');
+}
+
 console.log("fresh beta direct-global-call regression: ok");

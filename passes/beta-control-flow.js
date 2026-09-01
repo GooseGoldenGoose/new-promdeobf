@@ -450,6 +450,7 @@ function renderSimpleClosureLeaf(source, leaf, stateName, returnName, options = 
     const env = new Map();
     const paramNames = [];
     const body = [];
+    const localCells = new Map();
     let sawReturn = false;
 
     function nodeUsesIdentifier(node, name) {
@@ -478,7 +479,20 @@ function renderSimpleClosureLeaf(source, leaf, stateName, returnName, options = 
 
     function resolveNode(node) {
         if (isPrimitiveLiteral(node) || isEmptyTable(node)) return sourceOf(source, node);
-        if (isIdentifier(node)) return env.get(node.name) ?? null;
+        if (isIdentifier(node)) {
+            const value = env.get(node.name);
+            if (value?.kind === "captured-closure") {
+                if (typeof options.renderCapturedCall !== "function") return null;
+                const captureNames = new Map();
+                for (let i = 0; i < value.captureRegs.length; i++) {
+                    const captureName = localCells.get(value.captureRegs[i]);
+                    if (typeof captureName !== "string") return null;
+                    captureNames.set(i + 1, captureName);
+                }
+                return options.renderCapturedCall(value.call, captureNames);
+            }
+            return typeof value === "string" ? value : null;
+        }
         if (node?.type === "IndexExpression") {
             if (isIdentifier(node.base, "upvalueValues") && node.index?.type === "IndexExpression" &&
                 isIdentifier(node.index.base, "upvalues") && node.index.index?.type === "NumericLiteral" &&
@@ -534,6 +548,16 @@ function renderSimpleClosureLeaf(source, leaf, stateName, returnName, options = 
         if (!isSingleAssignment(statement)) return null;
         const dest = statement.variables[0];
         const rhs = statement.init[0];
+
+        if (dest?.type === "IndexExpression" && isIdentifier(dest.base, "upvalueValues") && isIdentifier(dest.index)) {
+            const cell = env.get(dest.index.name);
+            if (cell?.kind !== "upvalue-cell") return null;
+            const value = resolveNode(rhs);
+            if (typeof value !== "string" || localCells.has(dest.index.name)) return null;
+            localCells.set(dest.index.name, value);
+            continue;
+        }
+
         if (!isIdentifier(dest)) return null;
         const name = dest.name;
 
@@ -556,6 +580,27 @@ function renderSimpleClosureLeaf(source, leaf, stateName, returnName, options = 
         if (rhs?.type === "NilLiteral" && name !== stateName && name !== returnName) {
             env.delete(name);
             continue;
+        }
+
+        if (rhs?.type === "CallExpression" && isIdentifier(rhs.base, "allocUpvalue") && (rhs.arguments || []).length === 0) {
+            env.set(name, { kind: "upvalue-cell" });
+            continue;
+        }
+
+        if (rhs?.type === "CallExpression" && isIdentifier(rhs.base) && /^createClosure\d*$/.test(rhs.base.name)) {
+            const args = rhs.arguments || [];
+            const fields = args[1]?.type === "TableConstructorExpression" ? args[1].fields || [] : [];
+            if (fields.length > 0) {
+                const captureRegs = [];
+                for (const field of fields) {
+                    if (field?.type !== "TableValue" || !isIdentifier(field.value)) return null;
+                    const cell = env.get(field.value.name);
+                    if (cell?.kind !== "upvalue-cell") return null;
+                    captureRegs.push(field.value.name);
+                }
+                env.set(name, { kind: "captured-closure", call: rhs, captureRegs });
+                continue;
+            }
         }
 
         if (rhs?.type === "IndexExpression" && isIdentifier(rhs.base, "_env") && isIdentifier(rhs.index) && !env.has(rhs.index.name)) {
@@ -724,16 +769,23 @@ function matchClosureEntryProgram(source, stateWhile, stateName, returnName) {
     if (!leaves || leaves.size < 2 || !leaves.has(1)) return null;
     const consumedEntries = new Set([1]);
 
-    function renderClosureCall(call) {
+    function renderClosureCall(call, captureNames = null) {
         if (call?.type !== "CallExpression" || !isIdentifier(call.base) || !/^createClosure\d*$/.test(call.base.name)) return null;
         const args = call.arguments || [];
-        if (args.length !== 2 || args[0]?.type !== "NumericLiteral" || !isEmptyTable(args[1])) return null;
+        if (args.length !== 2 || args[0]?.type !== "NumericLiteral" || args[1]?.type !== "TableConstructorExpression") return null;
+        const fields = args[1].fields || [];
+        if (captureNames === null && fields.length !== 0) return null;
+        if (captureNames instanceof Map && fields.length !== captureNames.size) return null;
         const entryId = Number(args[0].value);
         if (!Number.isInteger(entryId) || entryId === 1 || consumedEntries.has(entryId)) return null;
         const childLeaf = leaves.get(entryId);
         if (!childLeaf) return null;
         consumedEntries.add(entryId);
-        const rendered = renderSimpleClosureLeaf(source, childLeaf, stateName, returnName, { renderSpecialCall: renderClosureCall });
+        const rendered = renderSimpleClosureLeaf(source, childLeaf, stateName, returnName, {
+            renderSpecialCall: renderClosureCall,
+            renderCapturedCall: renderClosureCall,
+            captureNames: captureNames instanceof Map ? captureNames : undefined,
+        });
         if (!rendered) {
             consumedEntries.delete(entryId);
             return null;
