@@ -202,6 +202,8 @@ Fresh output preserves `{ 1, v1() }`; original and recovered both print `1 2 3 4
 - `{ f(...) }` + `unpack(pack)` final-argument form -> direct call
 - contiguous uniquely owned slots only
 - separated closure local into `pcall` multi-return supported
+- VARARG/TCO forwarding supported for compiler shape `{ select(1, unpack(args)) } -> call(unpack(pack)) -> { unpack(ReturnVal) }`; recovered closure emits `function(...) return target(...) end`
+- supports both direct/global forwarded calls and captured-function forwarding; preserves RETURN_ALL semantics
 
 ### Multi-state logical
 - structural Prometheus `and/or` state-DAG recovery

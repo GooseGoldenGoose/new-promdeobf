@@ -665,6 +665,7 @@ function renderSimpleClosureLeaf(source, leaf, stateName, returnName, options = 
     }
     let nextParamSuffix = 1;
     let sawReturn = false;
+    let sawVarargs = false;
 
     function nodeUsesIdentifier(node, name) {
         if (!node || typeof node !== "object") return false;
@@ -750,9 +751,17 @@ function renderSimpleClosureLeaf(source, leaf, stateName, returnName, options = 
             return `(${left} ${node.operator} ${right})`;
         }
         if (node?.type === "CallExpression" && isIdentifier(node.base)) {
+            if (node.base.name === "select" && (node.arguments || []).length === 2 &&
+                node.arguments[0]?.type === "NumericLiteral" && Number(node.arguments[0].value) === 1 &&
+                node.arguments[1]?.type === "CallExpression" && isIdentifier(node.arguments[1].base, "unpack") &&
+                (node.arguments[1].arguments || []).length === 1 && isIdentifier(node.arguments[1].arguments[0], "args")) {
+                sawVarargs = true;
+                return "...";
+            }
             if (node.base.name === "unpack" && (node.arguments || []).length === 1 && isIdentifier(node.arguments[0])) {
                 const packed = envMeta.get(node.arguments[0].name);
                 if (packed?.kind === "return-pack") return packed.call;
+                if (packed?.kind === "vararg-pack") { sawVarargs = true; return "..."; }
             }
             if (typeof options.renderSpecialCall === "function") {
                 const special = options.renderSpecialCall(node);
@@ -836,6 +845,13 @@ function renderSimpleClosureLeaf(source, leaf, stateName, returnName, options = 
                 if (value == null) return null;
                 values.push(value);
             }
+            const fields = rhs.fields || [];
+            const isSingleCallPack = fields.length === 1 && fields[0]?.type === "TableValue" && fields[0].value?.type === "CallExpression";
+            if (isSingleCallPack && valueUsedBeforeOverwrite(index, returnName)) {
+                env.set(returnName, values[0]);
+                envMeta.set(returnName, { kind: "return-pack", call: values[0] });
+                continue;
+            }
             if (values.length > 0) body.push(`return ${values.join(", ")}`);
             sawReturn = true;
             continue;
@@ -905,7 +921,7 @@ function renderSimpleClosureLeaf(source, leaf, stateName, returnName, options = 
         if (fields.length === 1 && fields[0]?.type === "TableValue" && fields[0].value?.type === "CallExpression") {
             const call = resolveNode(fields[0].value);
             if (typeof call !== "string") return null;
-            envMeta.set(name, { kind: "return-pack", call });
+            envMeta.set(name, call === "..." ? { kind: "vararg-pack" } : { kind: "return-pack", call });
         } else if (member) {
             envMeta.set(name, member);
         } else if (rhs?.type === "TableConstructorExpression") {
@@ -924,7 +940,9 @@ function renderSimpleClosureLeaf(source, leaf, stateName, returnName, options = 
 
     if (!sawReturn || !sawStop) return null;
     const lines = body.length ? body.map(line => line.split("\n").map(part => `    ${part}`).join("\n")).join("\n") : "";
-    return `function(${paramNames.join(", ")})${lines ? `\n${lines}\n` : ""}end`;
+    const params = [...paramNames];
+    if (sawVarargs) params.push("...");
+    return `function(${params.join(", ")})${lines ? `\n${lines}\n` : ""}end`;
 }
 
 function flattenLogicalRootLeaf(leaves, entryId, stateName, returnName) {

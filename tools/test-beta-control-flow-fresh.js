@@ -994,4 +994,25 @@ function vmStatesSource(states) {
     assert.ok(fIndex >= 0 && gIndex > fIndex, "multi-return call creation order was not preserved");
 }
 
+{
+    const source = vmStatesSource({
+        1: [
+            'r1 = allocUpvalue()', 'state = createClosure0(2, {})', 'upvalueValues[r1] = state',
+            'state = createClosure(3, { r1 })', 'r2 = state', 'r1 = releaseUpvalue(r1)',
+            'r2 = nil', 'ReturnVal = {}', 'state = nil',
+        ],
+        2: [
+            'ReturnVal = { 1, 2 }', 'state = nil',
+        ],
+        3: [
+            'r3 = { select(1, unpack(args)) }', 'state = upvalueValues[upvalues[1]]',
+            'ReturnVal = { state(unpack(r3)) }', 'ReturnVal = { unpack(ReturnVal) }', 'state = nil',
+        ],
+    });
+    const result = solveBetaControlFlow(source, parse(source));
+    assert.strictEqual(result.applied, true, "captured vararg TCO/RETURN_ALL was not recovered");
+    assert.strictEqual(result.mode, "fresh-closure-entry");
+    assert.ok(result.source.includes('function(...)\n    return v1(...)\nend'), result.source);
+}
+
 console.log("fresh beta direct-global-call regression: ok");
