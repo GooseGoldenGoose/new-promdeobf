@@ -283,3 +283,15 @@ Latest scheduler canonicalization improvement:
 - Matching remains linear in the leaf with no depth limit, search, backtracking, or legacy fallback.
 - Parsed-fixture benchmark across `math.random(1, 2)` and a four-member chain: about 14.3 microseconds/solve over 100,000 solves; parsing excluded.
 - Fresh CF, scheduler, VM state reachability, and VM register naming regressions pass.
+
+## Fresh CF: Register Maker / Local Lifetimes
+
+- Fresh one-state CF now has a register-maker path for explicit source-local ownership handoffs backed by a proven final direct `rN = nil` cleanup.
+- First supported local-lifetime shape requires a visible register copy from a computed expression into the cleanup-backed physical register; this covers POS/RETURN result handoffs and fails closed on promotion-only local starts for now.
+- Pre-lifetime TEMP reuse of the same physical register is ignored until the proven ownership handoff, so key temporaries such as `r1 = "game"` do not become fake locals.
+- The first ownership handoff emits `local rN = <expr>`; later writes in the same cleanup-backed lifetime emit `rN = <expr>`.
+- Real compiler/main/fresh-CF fixtures recover `local r4 = math; r4.random(1, 2)`, `local r2 = math.random; r2(1, 2)`, and `local r1 = game.Players; local r3 = r1.LocalPlayer; r3 = r3.Character`.
+- Member/global expression reconstruction is symbolic and dynamic; no hardcoded `math`, `game`, `Players`, `LocalPlayer`, or `Character` names.
+- Physical-register names are used as generated source-local names because original source identifiers are not recoverable from the VM.
+- Register-maker matcher benchmark across the three parsed real fixtures: about 13.8 microseconds/solve over 90,000 solves; parsing excluded.
+- Fresh CF, scheduler, VM state reachability, and VM register naming regressions pass.

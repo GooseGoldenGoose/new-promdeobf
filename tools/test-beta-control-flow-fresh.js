@@ -173,7 +173,9 @@ function vmSource(leaf) {
         'state = nil',
     ]);
     const result = solveBetaControlFlow(source, parse(source));
-    assert.strictEqual(result.applied, false, "direct member solver erased a table-local lifetime");
+    assert.strictEqual(result.applied, true);
+    assert.strictEqual(result.mode, "fresh-register-locals");
+    assert.strictEqual(result.source, "local r1 = math\nr1.random(1, 2)\n");
 }
 
 {
@@ -192,7 +194,9 @@ function vmSource(leaf) {
         'state = nil',
     ]);
     const result = solveBetaControlFlow(source, parse(source));
-    assert.strictEqual(result.applied, false, "direct member solver erased a function-local lifetime");
+    assert.strictEqual(result.applied, true);
+    assert.strictEqual(result.mode, "fresh-register-locals");
+    assert.strictEqual(result.source, "local r3 = math.random\nr3(1, 2)\n");
 }
 
 
@@ -217,6 +221,33 @@ function vmSource(leaf) {
     assert.strictEqual(result.applied, true);
     assert.strictEqual(result.source, "game.foo.bar.baz.qux()\n");
     assert.strictEqual(result.globalName, "game.foo.bar.baz.qux");
+}
+
+
+{
+    const source = vmSource([
+        'r2 = args',
+        'r1 = "game"',
+        'ReturnVal = _env[r1]',
+        'r1 = "Players"',
+        'state = ReturnVal[r1]',
+        'r1 = state',
+        'ReturnVal = "LocalPlayer"',
+        'state = r1[ReturnVal]',
+        'r3 = state',
+        'ReturnVal = "Character"',
+        'r1 = nil',
+        'state = r3[ReturnVal]',
+        'r3 = state',
+        'r3 = nil',
+        'ReturnVal = {}',
+        'state = nil',
+    ]);
+    const result = solveBetaControlFlow(source, parse(source));
+    assert.strictEqual(result.applied, true);
+    assert.strictEqual(result.mode, "fresh-register-locals");
+    assert.strictEqual(result.localCount, 2);
+    assert.strictEqual(result.source, "local r1 = game.Players\nlocal r3 = r1.LocalPlayer\nr3 = r3.Character\n");
 }
 
 console.log("fresh beta direct-global-call regression: ok");

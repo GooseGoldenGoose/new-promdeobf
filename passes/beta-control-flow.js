@@ -230,6 +230,119 @@ function matchOneDirectGlobalCall(source, leaf, index, stateName, returnName) {
     };
 }
 
+function matchLocalRegisterProgram(source, leaf, stateName, returnName) {
+    const cleanupRegs = new Set();
+    for (const statement of leaf) {
+        if (!isSingleAssignment(statement)) continue;
+        const dest = statement.variables[0];
+        const rhs = statement.init[0];
+        if (isIdentifier(dest) && dest.name !== stateName && dest.name !== returnName && rhs?.type === "NilLiteral") {
+            cleanupRegs.add(dest.name);
+        }
+    }
+    if (cleanupRegs.size === 0) return null;
+
+    const expr = new Map();
+    const locals = new Set();
+    const out = [];
+    let declaredCount = 0;
+
+    function renderRhs(rhs) {
+        if (isPrimitiveLiteral(rhs) || isEmptyTable(rhs)) return sourceOf(source, rhs);
+        if (isIdentifier(rhs)) return expr.get(rhs.name) ?? (locals.has(rhs.name) ? rhs.name : null);
+        if (rhs?.type === "IndexExpression" && isIdentifier(rhs.base) && isIdentifier(rhs.index)) {
+            const key = expr.get(rhs.index.name);
+            if (key === null || key === undefined) return null;
+            if (rhs.base.name === "_env") {
+                const globalName = /^"[A-Za-z_][A-Za-z0-9_]*"$/.test(key) ? key.slice(1, -1) : null;
+                return globalName && isLuaIdentifier(globalName) ? globalName : `_env[${key}]`;
+            }
+            const base = expr.get(rhs.base.name) ?? (locals.has(rhs.base.name) ? rhs.base.name : null);
+            if (base === null || base === undefined) return null;
+            const member = /^"[A-Za-z_][A-Za-z0-9_]*"$/.test(key) ? key.slice(1, -1) : null;
+            return member && isLuaIdentifier(member) ? `${base}.${member}` : `${base}[${key}]`;
+        }
+        if (rhs?.type === "CallExpression" && isIdentifier(rhs.base)) {
+            const base = expr.get(rhs.base.name) ?? (locals.has(rhs.base.name) ? rhs.base.name : null);
+            if (!base) return null;
+            const args = [];
+            for (const arg of rhs.arguments || []) {
+                if (!isIdentifier(arg)) return null;
+                const value = expr.get(arg.name) ?? (locals.has(arg.name) ? arg.name : null);
+                if (value === null || value === undefined) return null;
+                args.push(value);
+            }
+            return `${base}(${args.join(", ")})`;
+        }
+        return null;
+    }
+
+    for (let index = 0; index < leaf.length; index++) {
+        const statement = leaf[index];
+        if (!isSingleAssignment(statement)) return null;
+        const dest = statement.variables[0];
+        const rhs = statement.init[0];
+        if (!isIdentifier(dest)) return null;
+        const name = dest.name;
+
+        if (isIdentifier(rhs, "args") && name !== stateName && name !== returnName && !locals.has(name)) {
+            expr.set(name, "args");
+            continue;
+        }
+
+        if (name === returnName && isEmptyTable(rhs)) continue;
+        if (name === stateName && rhs?.type === "NilLiteral") continue;
+
+        if (cleanupRegs.has(name) && rhs?.type === "NilLiteral") {
+            if (!locals.has(name)) return null;
+            locals.delete(name);
+            expr.delete(name);
+            continue;
+        }
+
+        // Definite source-local ownership handoff: a cleanup-backed physical
+        // register receives a previously computed expression register. POS and
+        // RETURN temps cannot themselves be promoted, so these copies are strong
+        // declaration evidence in the proven compiler shape.
+        if (cleanupRegs.has(name) && !locals.has(name) && isIdentifier(rhs) && rhs.name !== name) {
+            const value = expr.get(rhs.name) ?? (locals.has(rhs.name) ? rhs.name : null);
+            if (value === null || value === undefined) return null;
+            out.push(`local ${name} = ${value}`);
+            locals.add(name);
+            expr.set(name, name);
+            declaredCount++;
+            continue;
+        }
+
+        if (locals.has(name)) {
+            const value = renderRhs(rhs);
+            if (value === null) return null;
+            out.push(`${name} = ${value}`);
+            expr.set(name, name);
+            continue;
+        }
+
+        if (rhs?.type === "CallExpression") {
+            const value = renderRhs(rhs);
+            if (value === null) return null;
+            out.push(value);
+            expr.set(name, value);
+            continue;
+        }
+
+        const value = renderRhs(rhs);
+        if (value === null) return null;
+        expr.set(name, value);
+    }
+
+    if (declaredCount === 0 || locals.size !== 0 || out.length === 0) return null;
+    return {
+        source: out.join("\n") + "\n",
+        statementCount: out.length,
+        localCount: declaredCount,
+    };
+}
+
 function matchTerminalBookkeeping(leaf, index, stateName, returnName) {
     let sawReturnReset = false;
     let sawStop = false;
@@ -305,8 +418,21 @@ function solveFreshSource(source, ast) {
     const leaf = unwrapSingleStateLeaf(stateWhile, stateName);
     if (!leaf) return { applied: false, reason: "Fresh beta CF: direct-call solver requires exactly one VM state", mode: "fresh" };
 
+    const localProgram = matchLocalRegisterProgram(source, leaf, stateName, returnName);
+    if (localProgram) {
+        return {
+            applied: true,
+            mode: "fresh-register-locals",
+            source: localProgram.source,
+            stateCount: 1,
+            statementCount: localProgram.statementCount,
+            branchCount: 0,
+            localCount: localProgram.localCount,
+        };
+    }
+
     const directCalls = matchDirectGlobalCallLeaf(source, leaf, stateName, returnName);
-    if (!directCalls) return { applied: false, reason: "Fresh beta CF: one-state leaf is not a proven direct global-call sequence", mode: "fresh" };
+    if (!directCalls) return { applied: false, reason: "Fresh beta CF: one-state leaf is not a proven direct global-call/register-local program", mode: "fresh" };
 
     return {
         applied: true,
@@ -333,6 +459,7 @@ function solveBetaControlFlow(sourceOrAst, astOrBeta) {
 module.exports = {
     solveBetaControlFlow,
     matchDirectGlobalCallLeaf,
+    matchLocalRegisterProgram,
     displayEnvironmentProvider: unsupported("displayEnvironmentProvider"),
     sinkTerminalReturnPayload: unsupported("sinkTerminalReturnPayload"),
     lowerTerminalReturn: unsupported("lowerTerminalReturn"),
