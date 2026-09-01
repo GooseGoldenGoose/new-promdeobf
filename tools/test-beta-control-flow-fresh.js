@@ -506,4 +506,53 @@ function vmStatesSource(states) {
     assert.strictEqual(result.applied, true, "separated closure local + pcall multi-return was not recovered");
     assert.strictEqual(result.source, 'local v1 = function()\n    error("231sadsa")\nend\nlocal v2, v3 = pcall(v1)\nprint(v2, v3)\n');
 }
+
+{
+    const source = vmStatesSource({
+        1: [
+            'r4 = 123',
+            'state = 123',
+            'r1 = state',
+            'ReturnVal = "print"',
+            'state = _env[ReturnVal]',
+            'ReturnVal = state(r1, r4)',
+            'r2 = args',
+            'ReturnVal = "print"',
+            'r6 = "print"',
+            'r1 = nil',
+            'state = _env[ReturnVal]',
+            'r5 = "pcall"',
+            'r4 = _env[r5]',
+            'r3 = _env[r6]',
+            'r6 = 1',
+            'r5 = { r4(r3, r6) }',
+            'ReturnVal = state(unpack(r5))',
+            'state = createClosure3(2, {})',
+            'r4 = state',
+            'state = r4()',
+            'r4 = nil',
+            'ReturnVal = state()',
+            'ReturnVal = {}',
+            'state = nil',
+        ],
+        2: [
+            'state = createClosure0(3, {})',
+            'ReturnVal = { state }',
+            'state = nil',
+        ],
+        3: [
+            'ReturnVal = "print"',
+            'state = _env[ReturnVal]',
+            'r2 = 321',
+            'ReturnVal = state(r2)',
+            'ReturnVal = {}',
+            'state = nil',
+        ],
+    });
+    const result = solveBetaControlFlow(source, parse(source));
+    assert.strictEqual(result.applied, true, "recursive nested closure recovery did not apply");
+    assert.strictEqual(result.mode, "fresh-closure-entry");
+    assert.strictEqual(result.source, 'local v1 = 123\nprint(v1, 123)\nprint(pcall(print, 1))\nlocal v2 = function()\n    return function()\n        print(321)\n    end\nend\nv2()()\n');
+}
+
 console.log("fresh beta direct-global-call regression: ok");

@@ -446,7 +446,7 @@ function matchLocalRegisterProgram(source, leaf, stateName, returnName, options 
     return { source: out.join("\n") + "\n", statementCount: out.length, localCount: declaredCount };
 }
 
-function renderSimpleClosureLeaf(source, leaf, stateName, returnName) {
+function renderSimpleClosureLeaf(source, leaf, stateName, returnName, options = {}) {
     const env = new Map();
     const paramNames = [];
     const body = [];
@@ -505,6 +505,10 @@ function renderSimpleClosureLeaf(source, leaf, stateName, returnName) {
             return `(${left} ${node.operator} ${right})`;
         }
         if (node?.type === "CallExpression" && isIdentifier(node.base)) {
+            if (typeof options.renderSpecialCall === "function") {
+                const special = options.renderSpecialCall(node);
+                if (special != null) return special;
+            }
             const base = env.get(node.base.name);
             if (base == null) return null;
             const args = [];
@@ -554,7 +558,7 @@ function renderSimpleClosureLeaf(source, leaf, stateName, returnName) {
     }
 
     if (!sawReturn || !sawStop) return null;
-    const lines = body.length ? body.map(line => `    ${line}`).join("\n") : "";
+    const lines = body.length ? body.map(line => line.split("\n").map(part => `    ${part}`).join("\n")).join("\n") : "";
     return `function(${paramNames.join(", ")})${lines ? `\n${lines}\n` : ""}end`;
 }
 
@@ -571,9 +575,12 @@ function matchClosureEntryProgram(source, stateWhile, stateName, returnName) {
         if (!Number.isInteger(entryId) || entryId === 1 || consumedEntries.has(entryId)) return null;
         const childLeaf = leaves.get(entryId);
         if (!childLeaf) return null;
-        const rendered = renderSimpleClosureLeaf(source, childLeaf, stateName, returnName);
-        if (!rendered) return null;
         consumedEntries.add(entryId);
+        const rendered = renderSimpleClosureLeaf(source, childLeaf, stateName, returnName, { renderSpecialCall: renderClosureCall });
+        if (!rendered) {
+            consumedEntries.delete(entryId);
+            return null;
+        }
         return rendered;
     }
 

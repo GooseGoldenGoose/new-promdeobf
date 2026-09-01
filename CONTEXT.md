@@ -383,3 +383,14 @@ Latest scheduler canonicalization improvement:
 - Real compiler/main fixture `local c = function() error("231sadsa") end; local a,b = pcall(c); print(a,b)` now recovers as `local v1 = function() error("231sadsa") end; local v2, v3 = pcall(v1); print(v2, v3)`.
 - Neutral statements allowed while a packed call is pending are restricted to the proven `args` bookkeeping copy and direct cleanup-backed `rN = nil`; unrelated statements still force a successful flush or fail closed.
 - Fresh CF, scheduler, VM state reachability, and VM register naming regressions pass with a permanent separated-closure `pcall` case.
+
+
+## Fresh CF: Recursive Empty-Capture Closures
+
+- Closure child rendering now reuses the same structural `createClosureN(entry, captures)` special-call hook recursively, so an empty-capture child may itself create and return another empty-capture closure.
+- Recursive entry consumption is guarded by normalized entry ID; already-consumed entries are rejected, so malformed/cyclic closure references fail closed instead of recursing indefinitely.
+- Child entries are only marked consumed while their structural render is active/successful; a failed child render removes its provisional consumption mark.
+- Multiline nested closure expressions are indented line-by-line in emitted function bodies.
+- Real compiler/main fixture `local a=123; print(a,123); print(pcall(print,1)); local b=function() return function() print(321) end end; b()()` now recovers as `local v1 = 123; print(v1, 123); print(pcall(print, 1)); local v2 = function() return function() print(321) end end; v2()()` with proper nesting/indentation.
+- Current recursive support remains empty-capture only; captured nested closures still belong to upvalue recovery.
+- Fresh CF, scheduler, VM state reachability, and VM register naming regressions pass with the full mixed nested-closure case.
