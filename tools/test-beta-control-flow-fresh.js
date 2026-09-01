@@ -250,4 +250,27 @@ function vmSource(leaf) {
     assert.strictEqual(result.source, "local r1 = game.Players\nlocal r3 = r1.LocalPlayer\nr3 = r3.Character\n");
 }
 
+
+{
+    const source = vmSource([
+        'r3 = 2',
+        'ReturnVal = "b"',
+        'state = { [ReturnVal] = r3 }',
+        'r3 = state',
+        'ReturnVal = "print"',
+        'state = _env[ReturnVal]',
+        'r1 = "b"',
+        'r2 = r3[r1]',
+        'r4 = args',
+        'r3 = nil',
+        'ReturnVal = state(r2)',
+        'ReturnVal = {}',
+        'state = nil',
+    ]);
+    const result = solveBetaControlFlow(source, parse(source));
+    assert.strictEqual(result.applied, true);
+    assert.strictEqual(result.mode, "fresh-register-locals");
+    assert.strictEqual(result.source, "local r3 = { b = 2 }\nprint(r3.b)\n");
+}
+
 console.log("fresh beta direct-global-call regression: ok");

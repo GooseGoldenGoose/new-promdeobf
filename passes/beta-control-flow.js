@@ -249,6 +249,18 @@ function matchLocalRegisterProgram(source, leaf, stateName, returnName) {
 
     function renderRhs(rhs) {
         if (isPrimitiveLiteral(rhs) || isEmptyTable(rhs)) return sourceOf(source, rhs);
+        if (rhs?.type === "TableConstructorExpression") {
+            const fields = [];
+            for (const field of rhs.fields || []) {
+                if (field?.type !== "TableKey" || !isIdentifier(field.key) || !isIdentifier(field.value)) return null;
+                const key = expr.get(field.key.name) ?? (locals.has(field.key.name) ? field.key.name : null);
+                const value = expr.get(field.value.name) ?? (locals.has(field.value.name) ? field.value.name : null);
+                if (key === null || key === undefined || value === null || value === undefined) return null;
+                const name = /^"[A-Za-z_][A-Za-z0-9_]*"$/.test(key) ? key.slice(1, -1) : null;
+                fields.push(name && isLuaIdentifier(name) ? `${name} = ${value}` : `[${key}] = ${value}`);
+            }
+            return `{ ${fields.join(", ")} }`;
+        }
         if (isIdentifier(rhs)) return expr.get(rhs.name) ?? (locals.has(rhs.name) ? rhs.name : null);
         if (rhs?.type === "IndexExpression" && isIdentifier(rhs.base) && isIdentifier(rhs.index)) {
             const key = expr.get(rhs.index.name);

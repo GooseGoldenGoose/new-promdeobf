@@ -295,3 +295,11 @@ Latest scheduler canonicalization improvement:
 - Physical-register names are used as generated source-local names because original source identifiers are not recoverable from the VM.
 - Register-maker matcher benchmark across the three parsed real fixtures: about 13.8 microseconds/solve over 90,000 solves; parsing excluded.
 - Fresh CF, scheduler, VM state reachability, and VM register naming regressions pass.
+
+## Fresh CF: Keyed Table Constructors
+
+- Register-maker symbolic rendering now supports proven keyed table constructors emitted as `TableKey` fields backed by already-known register expressions.
+- Identifier string keys render as Lua record fields (`{ b = 2 }`); other proven keys render as `[expr] = value`.
+- Real compiler/main/fresh-CF fixture `local a = { b = 2 }; print(a.b)` recovers exactly `local r3 = { b = 2 }; print(r3.b)`.
+- Table field names/values are recovered dynamically from compiler expressions; no hardcoded `b`.
+- Fresh CF and existing VM regressions pass.
