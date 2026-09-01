@@ -582,8 +582,8 @@ function vmStatesSource(states) {
     });
     const result = solveBetaControlFlow(source, parse(source));
     assert.strictEqual(result.applied, true, "read-only captured local was not recovered");
-    assert.strictEqual(result.mode, "fresh-captured-closure");
-    assert.strictEqual(result.captureCount, 1);
+    assert.strictEqual(result.mode, "fresh-closure-entry");
+    assert.strictEqual(result.closureCount, 1);
     assert.strictEqual(result.source, 'local v1 = 123\nlocal v2 = function()\n    print(v1)\nend\nv2()\n');
 }
 

@@ -430,3 +430,13 @@ Latest scheduler canonicalization improvement:
 - Current emitted form safely inlines immutable captured local c = 30 as 30 in the deepest closure; source-local re-materialization for that presentation case remains optional future cleanup.
 - Runtime parity for the complex fixture: prints 10 20 30 40 50 then 150.
 - Captured mutation/shared writable cells remain separate future work.
+
+
+## Fresh CF: Capture Dynamic/Performance Audit
+
+- Removed the obsolete matchReadOnlyCapturedClosureProgram special case. It hardcoded the first captured-local presentation as v1/v2 and assumed exactly two states / one capture; the generic closure/cell matcher now handles that fixture identically.
+- All captured-closure recovery now uses the unified structural path: normalized closure entry IDs, capture-table order, local upvalue cell identity, and forwarded upvalues[n] slot identity. No fixture state/register/global names were added.
+- Parameter-name allocation now builds inherited-capture reserved names once per closure and advances one monotonic suffix counter instead of rebuilding/scanning a Set from v1 for every parameter.
+- The former fresh-captured-closure mode is retired; the same simple captured-local fixture now reports fresh-closure-entry through the generic path.
+- Parsed complex shared-capture fixture benchmark after cleanup: about 35.2 microseconds per solve over 30,000 solves; parsing excluded.
+- Fresh CF, scheduler, VM state reachability, VM register naming, simple captured local, captured parameter, recursive empty-capture, and complex shared/forwarded capture runtime tests pass.
