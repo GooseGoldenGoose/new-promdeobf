@@ -440,3 +440,14 @@ Latest scheduler canonicalization improvement:
 - The former fresh-captured-closure mode is retired; the same simple captured-local fixture now reports fresh-closure-entry through the generic path.
 - Parsed complex shared-capture fixture benchmark after cleanup: about 35.2 microseconds per solve over 30,000 solves; parsing excluded.
 - Fresh CF, scheduler, VM state reachability, VM register naming, simple captured local, captured parameter, recursive empty-capture, and complex shared/forwarded capture runtime tests pass.
+
+
+## Fresh CF: Writable Captured Variables
+
+- Closure child rendering now recognizes writes through inherited captured cells: upvalueValues[upvalues[n]] = expr becomes an assignment to the resolved captured source binding name.
+- The rule is structural: slot n is resolved through the current closure capture map; no state IDs, register IDs, variable names, or fixture values are hardcoded.
+- Root/local-cell reads through upvalueValues[cellReg] now resolve back to the same captured source binding, which allows reading a shared mutable capture after child closures mutate it.
+- Exact fixture local a=1; local f=function() a=a+1 end now recovers as local v1=1; local v2=function() v1=(v1+1) end.
+- Shared writable-cell fixture with two closures mutating the same a by +1 and +10 recovers both closures against the same v1 and prints 12 at runtime.
+- Normal binding analysis for the shared fixture reports 2 capture slots, 1 local cell, 1 shared cell, 6/6 upvalue accesses resolved, complete cell graph.
+- Fresh CF, scheduler, VM state reachability, and VM register naming regressions pass with permanent writable and shared-writable capture cases.

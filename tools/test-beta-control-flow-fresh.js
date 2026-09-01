@@ -652,4 +652,46 @@ function vmStatesSource(states) {
     assert.strictEqual(result.source, 'local v1 = 10\nlocal v2 = 20\nlocal v3 = function(v3)\n    return function(v4)\n        return function()\n            print(v1, v2, 30, v3, v4)\n            return ((((v1 + v2) + 30) + v3) + v4)\n        end\n    end\nend\nlocal v4 = v3(40)\nlocal v5 = v4(50)\nprint(v5())\n');
 }
 
+{
+    const source = vmStatesSource({
+        1: [
+            'r1 = allocUpvalue()', 'state = 1', 'upvalueValues[r1] = state',
+            'state = createClosure5(2, { r1 })', 'r2 = state', 'r1 = releaseUpvalue(r1)', 'r2 = nil', 'ReturnVal = {}', 'state = nil',
+        ],
+        2: [
+            'ReturnVal = upvalueValues[upvalues[1]]', 'r3 = 1', 'state = ReturnVal + r3',
+            'upvalueValues[upvalues[1]] = state', 'ReturnVal = {}', 'state = nil',
+        ],
+    });
+    const result = solveBetaControlFlow(source, parse(source));
+    assert.strictEqual(result.applied, true, "writable captured local was not recovered");
+    assert.strictEqual(result.mode, "fresh-closure-entry");
+    assert.strictEqual(result.source, 'local v1 = 1\nlocal v2 = function()\n    v1 = (v1 + 1)\nend\n');
+}
+
+{
+    const source = vmStatesSource({
+        1: [
+            'r2 = allocUpvalue()', 'state = 1', 'upvalueValues[r2] = state',
+            'state = createClosure0(2, { r2 })', 'r3 = state',
+            'state = createClosure3(3, { r2 })', 'r4 = state',
+            'state = r3()', 'state = r4()', 'ReturnVal = "print"', 'state = _env[ReturnVal]',
+            'r1 = upvalueValues[r2]', 'ReturnVal = state(r1)',
+            'r3 = nil', 'r4 = nil', 'r2 = releaseUpvalue(r2)', 'ReturnVal = {}', 'state = nil',
+        ],
+        2: [
+            'ReturnVal = upvalueValues[upvalues[1]]', 'r5 = 1', 'state = ReturnVal + r5',
+            'upvalueValues[upvalues[1]] = state', 'ReturnVal = {}', 'state = nil',
+        ],
+        3: [
+            'ReturnVal = upvalueValues[upvalues[1]]', 'r5 = 10', 'state = ReturnVal + r5',
+            'upvalueValues[upvalues[1]] = state', 'ReturnVal = {}', 'state = nil',
+        ],
+    });
+    const result = solveBetaControlFlow(source, parse(source));
+    assert.strictEqual(result.applied, true, "shared writable captured local was not recovered");
+    assert.strictEqual(result.mode, "fresh-closure-entry");
+    assert.strictEqual(result.source, 'local v1 = 1\nlocal v2 = function()\n    v1 = (v1 + 1)\nend\nlocal v3 = function()\n    v1 = (v1 + 10)\nend\nv2()\nv3()\nprint(v1)\n');
+}
+
 console.log("fresh beta direct-global-call regression: ok");

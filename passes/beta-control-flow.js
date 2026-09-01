@@ -323,6 +323,10 @@ function matchLocalRegisterProgram(source, leaf, stateName, returnName, options 
             return `(${left} ${rhs.operator} ${right})`;
         }
         if (rhs?.type === "IndexExpression" && isIdentifier(rhs.base)) {
+            if (rhs.base.name === "upvalueValues" && isIdentifier(rhs.index)) {
+                const captureName = upvalueCells.get(rhs.index.name);
+                return typeof captureName === "string" ? captureName : null;
+            }
             if (exprKinds.get(rhs.base.name) === "return-pack" && rhs.index?.type === "NumericLiteral") {
                 const slot = Number(rhs.index.value);
                 if (!Number.isInteger(slot) || slot < 1) return null;
@@ -600,13 +604,26 @@ function renderSimpleClosureLeaf(source, leaf, stateName, returnName, options = 
         const dest = statement.variables[0];
         const rhs = statement.init[0];
 
-        if (dest?.type === "IndexExpression" && isIdentifier(dest.base, "upvalueValues") && isIdentifier(dest.index)) {
-            const cell = env.get(dest.index.name);
-            if (cell?.kind !== "upvalue-cell") return null;
-            const value = resolveNode(rhs);
-            if (typeof value !== "string" || localCells.has(dest.index.name)) return null;
-            localCells.set(dest.index.name, value);
-            continue;
+        if (dest?.type === "IndexExpression" && isIdentifier(dest.base, "upvalueValues")) {
+            if (isIdentifier(dest.index)) {
+                const cell = env.get(dest.index.name);
+                if (cell?.kind !== "upvalue-cell") return null;
+                const value = resolveNode(rhs);
+                if (typeof value !== "string" || localCells.has(dest.index.name)) return null;
+                localCells.set(dest.index.name, value);
+                continue;
+            }
+            if (dest.index?.type === "IndexExpression" && isIdentifier(dest.index.base, "upvalues") &&
+                dest.index.index?.type === "NumericLiteral" && options.captureNames instanceof Map) {
+                const slot = Number(dest.index.index.value);
+                if (!Number.isInteger(slot) || slot < 1) return null;
+                const captureName = options.captureNames.get(slot);
+                const value = resolveNode(rhs);
+                if (typeof captureName !== "string" || typeof value !== "string") return null;
+                body.push(captureName + " = " + value);
+                continue;
+            }
+            return null;
         }
 
         if (!isIdentifier(dest)) return null;
