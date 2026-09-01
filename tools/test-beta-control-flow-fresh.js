@@ -771,4 +771,52 @@ function vmStatesSource(states) {
     assert.strictEqual(result.source, 'local v1 = 10\nlocal t1 = { 1, 2, name = "hello", [v1] = 123, nested = { x = 5, 6, 7 } }\nprint(t1[1], t1[2], t1.name, t1[10], t1.nested.x, t1.nested[1])\n');
 }
 
+
+{
+    const source = vmStatesSource({
+        1: [
+            'r2 = args', 'state = "abc"', 'r4 = state', 'r1 = "sub"', 'r1 = r4[r1]',
+            'ReturnVal = "print"', 'state = _env[ReturnVal]', 'r3 = 2', 'r5 = { r1(r4, r3) }',
+            'r4 = nil', 'ReturnVal = state(unpack(r5))', 'ReturnVal = {}', 'state = nil',
+        ],
+    });
+    const result = solveBetaControlFlow(source, parse(source));
+    assert.strictEqual(result.applied, true, "local namecall was not recovered");
+    assert.strictEqual(result.mode, "fresh-register-locals");
+    assert.strictEqual(result.source, 'local v1 = "abc"\nprint(v1:sub(2))\n');
+}
+
+{
+    const source = vmStatesSource({
+        1: [
+            'r1 = args', 'state = "abc"', 'r4 = state', 'ReturnVal = "print"', 'state = _env[ReturnVal]',
+            'r2 = "sub"', 'r2 = r4[r2]', 'r5 = 2', 'r2 = r2(r4, r5)', 'r3 = "upper"',
+            'r3 = r2[r3]', 'r4 = nil', 'r5 = { r3(r2) }', 'ReturnVal = state(unpack(r5))',
+            'ReturnVal = {}', 'state = nil',
+        ],
+    });
+    const result = solveBetaControlFlow(source, parse(source));
+    assert.strictEqual(result.applied, true, "chained namecall was not recovered");
+    assert.strictEqual(result.mode, "fresh-register-locals");
+    assert.strictEqual(result.source, 'local v1 = "abc"\nprint(v1:sub(2):upper())\n');
+}
+
+{
+    const source = vmStatesSource({
+        1: [
+            'r3 = args', 'state = createClosure5(2, {})', 'r2 = state', 'ReturnVal = "print"',
+            'state = _env[ReturnVal]', 'r1 = "abc"', 'r4 = { r2(r1) }',
+            'ReturnVal = state(unpack(r4))', 'r2 = nil', 'ReturnVal = {}', 'state = nil',
+        ],
+        2: [
+            'r3 = args[1]', 'r2 = "sub"', 'r2 = r3[r2]', 'ReturnVal = 2',
+            'state = { r2(r3, ReturnVal) }', 'ReturnVal = { unpack(state) }', 'state = nil',
+        ],
+    });
+    const result = solveBetaControlFlow(source, parse(source));
+    assert.strictEqual(result.applied, true, "closure namecall was not recovered");
+    assert.strictEqual(result.mode, "fresh-closure-entry");
+    assert.strictEqual(result.source, 'local v1 = function(v1)\n    return v1:sub(2)\nend\nprint(v1("abc"))\n');
+}
+
 console.log("fresh beta direct-global-call regression: ok");

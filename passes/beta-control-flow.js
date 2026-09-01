@@ -322,6 +322,14 @@ function matchLocalRegisterProgram(source, leaf, stateName, returnName, options 
         out.push(`local ${names.join(", ")} = ${pendingPack.call}`);
         consumedPackRegs.add(pendingPack.packReg); pendingPack = null; return true;
     }
+    function memberMeta(rhs) {
+        if (rhs?.type !== "IndexExpression" || !isIdentifier(rhs.base) || !isIdentifier(rhs.index) || rhs.base.name === "_env") return null;
+        const key = expr.get(rhs.index.name) ?? (locals.has(rhs.index.name) ? localName(rhs.index.name) : null);
+        const base = expr.get(rhs.base.name) ?? (locals.has(rhs.base.name) ? localName(rhs.base.name) : null);
+        if (typeof key !== "string" || typeof base !== "string") return null;
+        const member = /^"[A-Za-z_][A-Za-z0-9_]*"$/.test(key) ? key.slice(1, -1) : null;
+        return member && isLuaIdentifier(member) ? { kind: "member", base, member } : null;
+    }
     function renderCallArg(arg) {
         if (isPrimitiveLiteral(arg) || isEmptyTable(arg)) return sourceOf(source, arg);
         if (isIdentifier(arg)) return expr.get(arg.name) ?? (locals.has(arg.name) ? localName(arg.name) : null);
@@ -403,6 +411,10 @@ function matchLocalRegisterProgram(source, leaf, stateName, returnName, options 
                 const value = renderCallArg(arg);
                 if (typeof value !== "string") return null;
                 args.push(value);
+            }
+            const member = exprMeta.get(rhs.base.name);
+            if (member?.kind === "member" && args.length > 0 && args[0] === member.base) {
+                return `${member.base}:${member.member}(${args.slice(1).join(", ")})`;
             }
             return `${base}(${args.join(", ")})`;
         }
@@ -513,7 +525,9 @@ function matchLocalRegisterProgram(source, leaf, stateName, returnName, options 
             return null;
         }
         if (typeof value !== "string") return null;
+        const member = memberMeta(rhs);
         expr.set(name, value);
+        if (member) exprMeta.set(name, member); else exprMeta.delete(name);
         const fields = rhs?.type === "TableConstructorExpression" ? (rhs.fields || []) : [];
         const isReturnPack = fields.length === 1 && fields[0]?.type === "TableValue" && fields[0].value?.type === "CallExpression";
         exprKinds.set(name, isReturnPack ? "return-pack" : (rhs?.type === "TableConstructorExpression" ? "table" : "value"));
@@ -526,6 +540,7 @@ function matchLocalRegisterProgram(source, leaf, stateName, returnName, options 
 
 function renderSimpleClosureLeaf(source, leaf, stateName, returnName, options = {}) {
     const env = new Map();
+    const envMeta = new Map();
     const paramNames = [];
     const body = [];
     const localCells = new Map();
@@ -622,6 +637,10 @@ function renderSimpleClosureLeaf(source, leaf, stateName, returnName, options = 
             return `(${left} ${node.operator} ${right})`;
         }
         if (node?.type === "CallExpression" && isIdentifier(node.base)) {
+            if (node.base.name === "unpack" && (node.arguments || []).length === 1 && isIdentifier(node.arguments[0])) {
+                const packed = envMeta.get(node.arguments[0].name);
+                if (packed?.kind === "return-pack") return packed.call;
+            }
             if (typeof options.renderSpecialCall === "function") {
                 const special = options.renderSpecialCall(node);
                 if (special != null) return special;
@@ -633,6 +652,10 @@ function renderSimpleClosureLeaf(source, leaf, stateName, returnName, options = 
                 const value = resolveNode(arg);
                 if (value == null) return null;
                 args.push(value);
+            }
+            const member = envMeta.get(node.base.name);
+            if (member?.kind === "member" && args.length > 0 && args[0] === member.base) {
+                return `${member.base}:${member.member}(${args.slice(1).join(", ")})`;
             }
             return `${base}(${args.join(", ")})`;
         }
@@ -688,6 +711,7 @@ function renderSimpleClosureLeaf(source, leaf, stateName, returnName, options = 
         }
         if (rhs?.type === "NilLiteral" && name !== stateName && name !== returnName) {
             env.delete(name);
+            envMeta.delete(name);
             continue;
         }
 
@@ -735,10 +759,27 @@ function renderSimpleClosureLeaf(source, leaf, stateName, returnName, options = 
             }
         }
 
+        let member = null;
+        if (rhs?.type === "IndexExpression" && isIdentifier(rhs.base) && isIdentifier(rhs.index) && rhs.base.name !== "_env") {
+            const key = env.get(rhs.index.name);
+            const baseValue = env.get(rhs.base.name);
+            const memberName = typeof key === "string" && /^"[A-Za-z_][A-Za-z0-9_]*"$/.test(key) ? key.slice(1, -1) : null;
+            if (typeof baseValue === "string" && memberName && isLuaIdentifier(memberName)) member = { kind: "member", base: baseValue, member: memberName };
+        }
         const value = resolveNode(rhs);
         if (value == null) return null;
         if (rhs?.type === "CallExpression" && !valueUsedBeforeOverwrite(index, name)) body.push(value);
         env.set(name, value);
+        const fields = rhs?.type === "TableConstructorExpression" ? (rhs.fields || []) : [];
+        if (fields.length === 1 && fields[0]?.type === "TableValue" && fields[0].value?.type === "CallExpression") {
+            const call = resolveNode(fields[0].value);
+            if (typeof call !== "string") return null;
+            envMeta.set(name, { kind: "return-pack", call });
+        } else if (member) {
+            envMeta.set(name, member);
+        } else {
+            envMeta.delete(name);
+        }
     }
 
     if (!sawReturn || !sawStop) return null;
