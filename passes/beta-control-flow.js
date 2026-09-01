@@ -88,6 +88,28 @@ function renderUnary(operator, argument) {
     return null;
 }
 
+function renderTableFields(fields, resolve) {
+    const rendered = [];
+    for (const field of fields || []) {
+        if (field?.type === "TableValue") {
+            const value = resolve(field.value);
+            if (typeof value !== "string") return null;
+            rendered.push(value);
+            continue;
+        }
+        if (field?.type === "TableKey") {
+            const key = resolve(field.key);
+            const value = resolve(field.value);
+            if (typeof key !== "string" || typeof value !== "string") return null;
+            const fieldName = /^"[A-Za-z_][A-Za-z0-9_]*"$/.test(key) ? key.slice(1, -1) : null;
+            rendered.push(fieldName && isLuaIdentifier(fieldName) ? `${fieldName} = ${value}` : `[${key}] = ${value}`);
+            continue;
+        }
+        return null;
+    }
+    return `{ ${rendered.join(", ")} }`;
+}
+
 function matchEnvLoad(statement, destinationName, keyName) {
     if (!isSingleAssignment(statement, destinationName)) return false;
     const rhs = statement.init[0];
@@ -314,16 +336,7 @@ function matchLocalRegisterProgram(source, leaf, stateName, returnName, options 
         if (rhs?.type === "TableConstructorExpression") {
             const fields = rhs.fields || [];
             if (fields.length === 1 && fields[0]?.type === "TableValue" && fields[0].value?.type === "CallExpression") return renderRhs(fields[0].value);
-            const renderedFields = [];
-            for (const field of fields) {
-                if (field?.type !== "TableKey" || !isIdentifier(field.key) || !isIdentifier(field.value)) return null;
-                const key = expr.get(field.key.name) ?? (locals.has(field.key.name) ? localName(field.key.name) : null);
-                const value = expr.get(field.value.name) ?? (locals.has(field.value.name) ? localName(field.value.name) : null);
-                if (key == null || value == null) return null;
-                const fieldName = /^"[A-Za-z_][A-Za-z0-9_]*"$/.test(key) ? key.slice(1, -1) : null;
-                renderedFields.push(fieldName && isLuaIdentifier(fieldName) ? `${fieldName} = ${value}` : `[${key}] = ${value}`);
-            }
-            return `{ ${renderedFields.join(", ")} }`;
+            return renderTableFields(fields, renderRhs);
         }
         if (isIdentifier(rhs)) return expr.get(rhs.name) ?? (locals.has(rhs.name) ? localName(rhs.name) : null);
         if (rhs?.type === "UnaryExpression") {
@@ -551,6 +564,7 @@ function renderSimpleClosureLeaf(source, leaf, stateName, returnName, options = 
 
     function resolveNode(node) {
         if (isPrimitiveLiteral(node) || isEmptyTable(node)) return sourceOf(source, node);
+        if (node?.type === "TableConstructorExpression") return renderTableFields(node.fields || [], resolveNode);
         if (isIdentifier(node)) {
             const value = env.get(node.name);
             if (value?.kind === "captured-closure") {
@@ -908,6 +922,7 @@ function matchMultiStateLogicalLocals(source, stateWhile, stateName, returnName)
     }
     function render(rhs, env) {
         if (isPrimitiveLiteral(rhs) || isEmptyTable(rhs)) return sourceOf(source, rhs);
+        if (rhs?.type === "TableConstructorExpression") return renderTableFields(rhs.fields || [], node => render(node, env));
         if (isIdentifier(rhs)) return resolveId(rhs.name, env);
         if (rhs?.type === "IndexExpression" && isIdentifier(rhs.base) && isIdentifier(rhs.index)) {
             const key = resolveId(rhs.index.name, env);

@@ -751,4 +751,24 @@ function vmStatesSource(states) {
     assert.strictEqual(result.source, 'local v1 = function(v1)\n    return (not v1), (-v1), (#"abc")\nend\n');
 }
 
+{
+    const source = vmStatesSource({
+        1: [
+            'r1 = args', 'r6 = 2', 'r11 = 5', 'r7 = 7', 'r12 = 6', 'r8 = "x"',
+            'r2 = { [r8] = r11, r12, r7 }', 'state = 10', 'r9 = state', 'r3 = "nested"',
+            'ReturnVal = 1', 'r5 = 123', 'r4 = "name"', 'r10 = "hello"',
+            'state = { ReturnVal, r6, [r4] = r10, [r9] = r5, [r3] = r2 }', 'r6 = state',
+            'r2 = 10', 'r3 = "name"', 'r11 = "nested"', 'ReturnVal = "print"', 'r9 = nil', 'state = _env[ReturnVal]',
+            'r10 = 1', 'r4 = r6[r10]', 'r5 = 2', 'r10 = r6[r5]', 'r5 = r6[r3]', 'r3 = r6[r2]',
+            'r8 = r6[r11]', 'r11 = "x"', 'r2 = r8[r11]', 'r12 = "nested"', 'r11 = r6[r12]',
+            'r6 = nil', 'r12 = 1', 'r8 = r11[r12]', 'ReturnVal = state(r4, r10, r5, r3, r2, r8)',
+            'ReturnVal = {}', 'state = nil',
+        ],
+    });
+    const result = solveBetaControlFlow(source, parse(source));
+    assert.strictEqual(result.applied, true, "mixed/nested table constructor was not recovered");
+    assert.strictEqual(result.mode, "fresh-register-locals");
+    assert.strictEqual(result.source, 'local v1 = 10\nlocal t1 = { 1, 2, name = "hello", [v1] = 123, nested = { x = 5, 6, 7 } }\nprint(t1[1], t1[2], t1.name, t1[10], t1.nested.x, t1.nested[1])\n');
+}
+
 console.log("fresh beta direct-global-call regression: ok");

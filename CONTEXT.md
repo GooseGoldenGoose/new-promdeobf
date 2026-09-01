@@ -473,3 +473,16 @@ Latest scheduler canonicalization improvement:
 - Recovered fixture runtime prints false, a negative random value, and 3 as expected for the sampled run.
 - Permanent regressions cover root/local unary rendering and unary expressions inside recovered closures.
 - Fresh CF, VM register scheduler, VM state reachability, and VM register naming regressions pass.
+
+
+## Fresh CF: Broader Table Constructors
+
+- Fresh table rendering now supports ordered TableValue array fields and TableKey keyed fields in the same constructor.
+- Table keys and values resolve structurally through the existing symbolic environment; string identifier keys render as name = value, otherwise as [key] = value.
+- Constructors recurse dynamically, so nested table depth is not hardcoded.
+- Support is shared by one-state register/local rendering, closure expression rendering, and multi-state symbolic rendering.
+- Exact compiler fixture with array entries, name = value, dynamic [a] key, and nested mixed table now recovers as local t1 = { 1, 2, name = "hello", [v1] = 123, nested = { x = 5, 6, 7 } }.
+- Original and recovered fixture both print 1, 2, hello, 123, 5, 6.
+- Permanent regression covers mixed ordered/keyed/dynamic/nested constructor recovery.
+- Last-field multi-return table semantics remain a separate unproven edge case and should fail closed if the existing RETURN_ALL proof is insufficient.
+- Fresh CF, VM register scheduler, VM state reachability, and VM register naming regressions pass.
