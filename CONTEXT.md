@@ -108,8 +108,9 @@ format input with formater/luau-format.exe --luraph
 -> safe parallel-assignment splitting
 -> VM state/CFG recovery
 -> VM binding/capture/provenance analysis
+-> VM register presentation naming (`rN` / `ReturnVal`)
+-> RegisterOverflow scalarization (`RegisterOverflow[N]` -> `oN`)
 -> VM register scheduler
--> VM register presentation naming
 -> normal output
 ```
 
@@ -199,15 +200,15 @@ Fresh output preserves `{ 1, v1() }`; original and recovered both print `1 2 3 4
 
 ### RegisterOverflow virtual registers
 
-Implemented 2026-09-02 in fresh CF.
+Updated 2026-09-02: scalarization now runs in the normal canonical pipeline **before register scheduling**.
 
-- constant `RegisterOverflow[N]` accesses are scalarized structurally to internal virtual registers before fresh register recovery
-- overflow virtual registers use the same propagation, lifetime, cleanup `= nil`, local promotion, table construction, and fail-closed rules as ordinary `rN` registers
+- physical VM locals are first presentation-named to collision-free `rN` / `ReturnVal`
+- then every proven static `RegisterOverflow[N]` becomes scalar `oN`
+- the dead `local RegisterOverflow = {}` bank declaration is removed
+- scheduler therefore sees ordinary scalar identifiers `rN` and `oN` and applies the same dependency rules to both
 - dynamic/nonconstant overflow indexes remain fail closed
-- no runtime `reg` table is emitted; overflow storage is only an internal recovery model
-- synthetic proof: overflow global chain + lifetime cleanup recovers as `local v1 = math`
-- synthetic overflow-fed table recovers as `local t1 = { 1, 2 }`
-- real Prometheus proof with a 140-element table generated 41 overflow slots; full canonical pipeline recovered the complete table and `print((#t1), t1[1], t1[140])` as `fresh-register-locals`
+- fresh CF still accepts old normal files containing `RegisterOverflow[N]` through its fallback scalarizer, but canonical new normal output already contains `oN`
+- big opcode fixture proof: 128 overflow slots / 587 references scalarized before scheduling; scheduler still performs 678 dependency-safe swaps
 
 ### Multi-return / RETURN_ALL
 - fixed multi-return -> grouped local declaration

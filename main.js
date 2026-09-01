@@ -8,6 +8,7 @@ const { renameVmHelperBindings } = require("./passes/vm-helpers");
 const { splitSafeParallelAssignmentsFully } = require("./passes/split-safe-assignments");
 const { recoverVmStateGraph } = require("./passes/vm-state");
 const { recoverVmBindings } = require("./passes/vm-bindings");
+const { normalizeVmRegisterOverflow } = require("./passes/vm-register-overflow");
 const { scheduleVmRegisterUses } = require("./passes/vm-register-scheduler");
 const { renameVmRegisterBindings } = require("./passes/vm-register-names");
 const { renameSemanticBindings } = require("./passes/semantic-names");
@@ -151,16 +152,21 @@ function runDeobfuscator(inputPath = DEFAULT_INPUT, outputPath = DEFAULT_OUTPUT,
         : { found: false, skipped: true, reason: "VM binding diagnostics disabled for fast pipeline handoff" };
     const vmStateApplied = vmState.found && vmState.normalized;
     const normalizedSource = vmStateApplied ? vmState.source : splitAssignments.source;
-    const normalizedAst = parseLua(normalizedSource, `${inputPath} <before VM register scheduling>`);
-    const registerSchedule = vmStateApplied
-        ? scheduleVmRegisterUses(normalizedSource, normalizedAst)
-        : { source: normalizedSource, found: false, applied: false, blocksChanged: 0, swaps: 0 };
-    const scheduledSource = registerSchedule.applied ? registerSchedule.source : normalizedSource;
-    const scheduledAst = parseLua(scheduledSource, `${inputPath} <before VM register naming>`);
+    const normalizedAst = parseLua(normalizedSource, `${inputPath} <before VM register naming>`);
     const registerNames = vmStateApplied
-        ? renameVmRegisterBindings(scheduledSource, scheduledAst)
-        : { source: scheduledSource, found: false, applied: false, mapping: [] };
-    const finalSource = registerNames.applied ? registerNames.source : scheduledSource;
+        ? renameVmRegisterBindings(normalizedSource, normalizedAst)
+        : { source: normalizedSource, found: false, applied: false, mapping: [] };
+    const registerNamedSource = registerNames.applied ? registerNames.source : normalizedSource;
+    const registerNamedAst = parseLua(registerNamedSource, `${inputPath} <before VM overflow scalarization>`);
+    const registerOverflow = vmStateApplied
+        ? normalizeVmRegisterOverflow(registerNamedSource, registerNamedAst)
+        : { source: registerNamedSource, found: false, applied: false, slots: 0, references: 0 };
+    const overflowSource = registerOverflow.applied ? registerOverflow.source : registerNamedSource;
+    const overflowAst = parseLua(overflowSource, `${inputPath} <before VM register scheduling>`);
+    const registerSchedule = vmStateApplied
+        ? scheduleVmRegisterUses(overflowSource, overflowAst)
+        : { source: overflowSource, found: false, applied: false, blocksChanged: 0, swaps: 0 };
+    const finalSource = registerSchedule.applied ? registerSchedule.source : overflowSource;
 
     const outputAst = parseLua(finalSource, outputPath);
     const resolvedOutput = writeSource(finalSource, outputPath);
@@ -177,6 +183,7 @@ function runDeobfuscator(inputPath = DEFAULT_INPUT, outputPath = DEFAULT_OUTPUT,
         splitAssignments,
         vmState,
         vmBindings,
+        registerOverflow,
         registerSchedule,
         registerNames,
         semanticNames,
@@ -195,6 +202,7 @@ function main() {
     const splitAssignments = result.splitAssignments;
     const vmState = result.vmState;
     const vmBindings = result.vmBindings;
+    const registerOverflow = result.registerOverflow;
     const registerSchedule = result.registerSchedule;
     const registerNames = result.registerNames;
     const semanticNames = result.semanticNames;
@@ -263,6 +271,17 @@ function main() {
             }
         }
     }
+    console.log(`VM register naming applied: ${registerNames.applied}`);
+    if (registerNames.applied) {
+        console.log(`VM return register: ${registerNames.returnRegisterOldName} -> ${registerNames.returnRegisterName}`);
+        console.log(`VM temporary registers renamed: ${registerNames.temporaryRegisterCount}`);
+    } else if (registerNames.found && registerNames.reason) {
+        console.log(`VM register naming skipped: ${registerNames.reason}`);
+    }
+    console.log(`VM overflow scalarization applied: ${registerOverflow.applied}`);
+    if (registerOverflow.applied) {
+        console.log(`VM overflow scalar registers: ${registerOverflow.slots} slots, ${registerOverflow.references} refs`);
+    }
     console.log(`VM register scheduling applied: ${registerSchedule.applied}`);
     if (registerSchedule.applied) {
         console.log(`VM register scheduling: ${registerSchedule.blocksChanged} blocks, ${registerSchedule.swaps} dependency-safe swaps`);
@@ -278,13 +297,6 @@ function main() {
         if (registerSchedule.safetyRejectedSegments > 0) {
             console.log(`VM register scheduling safety rejections: ${registerSchedule.safetyRejectedSegments}`);
         }
-    }
-    console.log(`VM register naming applied: ${registerNames.applied}`);
-    if (registerNames.applied) {
-        console.log(`VM return register: ${registerNames.returnRegisterOldName} -> ${registerNames.returnRegisterName}`);
-        console.log(`VM temporary registers renamed: ${registerNames.temporaryRegisterCount}`);
-    } else if (registerNames.found && registerNames.reason) {
-        console.log(`VM register naming skipped: ${registerNames.reason}`);
     }
     console.log(`VM binding analysis found: ${vmBindings.found}`);
     if (vmBindings.found) {
