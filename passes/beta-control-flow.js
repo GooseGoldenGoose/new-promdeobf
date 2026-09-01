@@ -236,25 +236,17 @@ function matchLocalRegisterProgram(source, leaf, stateName, returnName, options 
         if (!isSingleAssignment(statement)) continue;
         const dest = statement.variables[0];
         const rhs = statement.init[0];
-        if (isIdentifier(dest) && dest.name !== stateName && dest.name !== returnName && rhs?.type === "NilLiteral") {
-            cleanupRegs.add(dest.name);
-        }
+        if (isIdentifier(dest) && dest.name !== stateName && dest.name !== returnName && rhs?.type === "NilLiteral") cleanupRegs.add(dest.name);
     }
-    if (cleanupRegs.size === 0) return null;
+    if (cleanupRegs.size === 0 && options.allowNoLocals !== true) return null;
 
-    const expr = new Map();
-    const exprKinds = new Map();
-    const locals = new Set();
-    const localNames = new Map();
-    const out = [];
-    let declaredCount = 0;
-    let valueLocalCount = 0;
-    let tableLocalCount = 0;
+    const expr = new Map(), exprKinds = new Map(), exprMeta = new Map();
+    const locals = new Set(), localNames = new Map(), out = [];
+    let declaredCount = 0, valueLocalCount = 0, tableLocalCount = 0, pendingPack = null;
+    let sawReturnReset = false, sawStop = false;
+    const consumedPackRegs = new Set();
 
-    function localName(name) {
-        return localNames.get(name) || name;
-    }
-
+    function localName(name) { return localNames.get(name) || name; }
     function nodeUsesIdentifier(node, name) {
         if (!node || typeof node !== "object") return false;
         if (isIdentifier(node, name)) return true;
@@ -262,13 +254,10 @@ function matchLocalRegisterProgram(source, leaf, stateName, returnName, options 
             if (key === "range" || key === "loc" || key === "variables") continue;
             if (Array.isArray(value)) {
                 if (value.some(item => nodeUsesIdentifier(item, name))) return true;
-            } else if (value && typeof value === "object" && nodeUsesIdentifier(value, name)) {
-                return true;
-            }
+            } else if (value && typeof value === "object" && nodeUsesIdentifier(value, name)) return true;
         }
         return false;
     }
-
     function valueUsedBeforeOverwrite(startIndex, name) {
         for (let cursor = startIndex + 1; cursor < leaf.length; cursor++) {
             const statement = leaf[cursor];
@@ -277,52 +266,94 @@ function matchLocalRegisterProgram(source, leaf, stateName, returnName, options 
         }
         return false;
     }
-
+    function allocateLocal(reg, kind = "value") {
+        if (localNames.has(reg)) return localName(reg);
+        const displayName = kind === "table" ? `t${++tableLocalCount}` : `v${++valueLocalCount}`;
+        localNames.set(reg, displayName); locals.add(reg); expr.set(reg, displayName); exprKinds.set(reg, kind); declaredCount++;
+        return displayName;
+    }
+    function reserveLocal(reg) {
+        locals.add(reg);
+        exprKinds.set(reg, "value");
+    }
+    function flushPendingPack() {
+        if (!pendingPack) return true;
+        const slots = [...pendingPack.slots.keys()].sort((a, b) => a - b);
+        if (!slots.length || slots[0] !== 1) return false;
+        for (let i = 0; i < slots.length; i++) {
+            if (slots[i] !== i + 1) return false;
+            const slot = pendingPack.slots.get(slots[i]);
+            if (!slot?.localReg || !locals.has(slot.localReg)) return false;
+        }
+        const names = slots.map(i => allocateLocal(pendingPack.slots.get(i).localReg, "value"));
+        out.push(`local ${names.join(", ")} = ${pendingPack.call}`);
+        consumedPackRegs.add(pendingPack.packReg); pendingPack = null; return true;
+    }
+    function renderCallArg(arg) {
+        if (isPrimitiveLiteral(arg) || isEmptyTable(arg)) return sourceOf(source, arg);
+        if (isIdentifier(arg)) return expr.get(arg.name) ?? (locals.has(arg.name) ? localName(arg.name) : null);
+        if (arg?.type === "CallExpression" && isIdentifier(arg.base, "unpack") && (arg.arguments || []).length === 1 && isIdentifier(arg.arguments[0])) {
+            const packReg = arg.arguments[0].name;
+            if (exprKinds.get(packReg) === "return-pack") return expr.get(packReg) ?? null;
+        }
+        return renderRhs(arg);
+    }
     function renderRhs(rhs) {
         if (isPrimitiveLiteral(rhs) || isEmptyTable(rhs)) return sourceOf(source, rhs);
         if (rhs?.type === "TableConstructorExpression") {
-            const fields = [];
-            for (const field of rhs.fields || []) {
+            const fields = rhs.fields || [];
+            if (fields.length === 1 && fields[0]?.type === "TableValue" && fields[0].value?.type === "CallExpression") return renderRhs(fields[0].value);
+            const renderedFields = [];
+            for (const field of fields) {
                 if (field?.type !== "TableKey" || !isIdentifier(field.key) || !isIdentifier(field.value)) return null;
                 const key = expr.get(field.key.name) ?? (locals.has(field.key.name) ? localName(field.key.name) : null);
                 const value = expr.get(field.value.name) ?? (locals.has(field.value.name) ? localName(field.value.name) : null);
-                if (key === null || key === undefined || value === null || value === undefined) return null;
-                const name = /^"[A-Za-z_][A-Za-z0-9_]*"$/.test(key) ? key.slice(1, -1) : null;
-                fields.push(name && isLuaIdentifier(name) ? `${name} = ${value}` : `[${key}] = ${value}`);
+                if (key == null || value == null) return null;
+                const fieldName = /^"[A-Za-z_][A-Za-z0-9_]*"$/.test(key) ? key.slice(1, -1) : null;
+                renderedFields.push(fieldName && isLuaIdentifier(fieldName) ? `${fieldName} = ${value}` : `[${key}] = ${value}`);
             }
-            return `{ ${fields.join(", ")} }`;
+            return `{ ${renderedFields.join(", ")} }`;
         }
         if (isIdentifier(rhs)) return expr.get(rhs.name) ?? (locals.has(rhs.name) ? localName(rhs.name) : null);
         if ((rhs?.type === "BinaryExpression" || rhs?.type === "LogicalExpression") && isIdentifier(rhs.left) && isIdentifier(rhs.right)) {
             const left = expr.get(rhs.left.name) ?? (locals.has(rhs.left.name) ? localName(rhs.left.name) : null);
             const right = expr.get(rhs.right.name) ?? (locals.has(rhs.right.name) ? localName(rhs.right.name) : null);
-            if (left === null || left === undefined || right === null || right === undefined || typeof rhs.operator !== "string") return null;
+            if (left == null || right == null || typeof rhs.operator !== "string") return null;
             return `(${left} ${rhs.operator} ${right})`;
         }
-        if (rhs?.type === "IndexExpression" && isIdentifier(rhs.base) && isIdentifier(rhs.index)) {
+        if (rhs?.type === "IndexExpression" && isIdentifier(rhs.base)) {
+            if (exprKinds.get(rhs.base.name) === "return-pack" && rhs.index?.type === "NumericLiteral") {
+                const slot = Number(rhs.index.value);
+                if (!Number.isInteger(slot) || slot < 1) return null;
+                return { packSlot: true, packReg: rhs.base.name, slot, call: expr.get(rhs.base.name) };
+            }
+            if (!isIdentifier(rhs.index)) return null;
             const key = expr.get(rhs.index.name);
-            if (key === null || key === undefined) return null;
+            if (key == null) return null;
             if (rhs.base.name === "_env") {
                 const globalName = /^"[A-Za-z_][A-Za-z0-9_]*"$/.test(key) ? key.slice(1, -1) : null;
                 return globalName && isLuaIdentifier(globalName) ? globalName : `_env[${key}]`;
             }
             const base = expr.get(rhs.base.name) ?? (locals.has(rhs.base.name) ? localName(rhs.base.name) : null);
-            if (base === null || base === undefined) return null;
+            if (base == null) return null;
             const member = /^"[A-Za-z_][A-Za-z0-9_]*"$/.test(key) ? key.slice(1, -1) : null;
             return member && isLuaIdentifier(member) ? `${base}.${member}` : `${base}[${key}]`;
         }
         if (rhs?.type === "CallExpression" && isIdentifier(rhs.base)) {
             if (typeof options.renderSpecialCall === "function") {
                 const special = options.renderSpecialCall(rhs);
-                if (special !== null && special !== undefined) return special;
+                if (special != null) return special;
+            }
+            if (rhs.base.name === "unpack" && (rhs.arguments || []).length === 1 && isIdentifier(rhs.arguments[0])) {
+                const packReg = rhs.arguments[0].name;
+                if (exprKinds.get(packReg) === "return-pack") return expr.get(packReg) ?? null;
             }
             const base = expr.get(rhs.base.name) ?? (locals.has(rhs.base.name) ? localName(rhs.base.name) : null);
             if (!base) return null;
             const args = [];
             for (const arg of rhs.arguments || []) {
-                if (!isIdentifier(arg)) return null;
-                const value = expr.get(arg.name) ?? (locals.has(arg.name) ? localName(arg.name) : null);
-                if (value === null || value === undefined) return null;
+                const value = renderCallArg(arg);
+                if (typeof value !== "string") return null;
                 args.push(value);
             }
             return `${base}(${args.join(", ")})`;
@@ -333,92 +364,84 @@ function matchLocalRegisterProgram(source, leaf, stateName, returnName, options 
     for (let index = 0; index < leaf.length; index++) {
         const statement = leaf[index];
         if (!isSingleAssignment(statement)) return null;
-        const dest = statement.variables[0];
-        const rhs = statement.init[0];
+        const dest = statement.variables[0], rhs = statement.init[0];
         if (!isIdentifier(dest)) return null;
         const name = dest.name;
+        const isPackIndex = rhs?.type === "IndexExpression" && isIdentifier(rhs.base) && exprKinds.get(rhs.base.name) === "return-pack" && rhs.index?.type === "NumericLiteral";
+        const isPackSlotCopy = isIdentifier(rhs) && exprKinds.get(rhs.name) === "pack-slot";
+        if (pendingPack && !isPackIndex && !isPackSlotCopy && !flushPendingPack()) return null;
 
         if (isIdentifier(rhs, "args") && name !== stateName && name !== returnName && !locals.has(name)) {
-            expr.set(name, "args");
-            exprKinds.set(name, "value");
-            continue;
+            expr.set(name, "args"); exprKinds.set(name, "value"); continue;
         }
-
-        if (name === returnName && isEmptyTable(rhs)) continue;
-        if (name === stateName && rhs?.type === "NilLiteral") continue;
-
+        if (name === returnName && isEmptyTable(rhs)) { sawReturnReset = true; continue; }
+        if (name === stateName && rhs?.type === "NilLiteral") { sawStop = true; continue; }
         if (cleanupRegs.has(name) && rhs?.type === "NilLiteral") {
             if (!locals.has(name)) return null;
-            locals.delete(name);
-            expr.delete(name);
-            exprKinds.delete(name);
-            localNames.delete(name);
+            locals.delete(name); expr.delete(name); exprKinds.delete(name); exprMeta.delete(name); localNames.delete(name); continue;
+        }
+
+        if (isPackIndex) {
+            const rendered = renderRhs(rhs);
+            if (!rendered?.packSlot || consumedPackRegs.has(rendered.packReg)) return null;
+            if (!pendingPack) pendingPack = { packReg: rendered.packReg, call: rendered.call, slots: new Map() };
+            if (pendingPack.packReg !== rendered.packReg || pendingPack.call !== rendered.call || pendingPack.slots.has(rendered.slot)) return null;
+            const slotInfo = { tempReg: name, localReg: null };
+            pendingPack.slots.set(rendered.slot, slotInfo);
+            expr.set(name, rendered.call); exprKinds.set(name, "pack-slot"); exprMeta.set(name, { packReg: rendered.packReg, slot: rendered.slot });
+            if (cleanupRegs.has(name)) { reserveLocal(name); slotInfo.localReg = name; }
             continue;
         }
 
-        // Definite source-local ownership handoff: a cleanup-backed physical
-        // register receives a previously computed expression register. POS and
-        // RETURN temps cannot themselves be promoted, so these copies are strong
-        // declaration evidence in the proven compiler shape.
+        if (cleanupRegs.has(name) && !locals.has(name) && isPackSlotCopy) {
+            const meta = exprMeta.get(rhs.name);
+            if (!meta || !pendingPack || meta.packReg !== pendingPack.packReg) return null;
+            const slotInfo = pendingPack.slots.get(meta.slot);
+            if (!slotInfo || slotInfo.localReg) return null;
+            reserveLocal(name); slotInfo.localReg = name; continue;
+        }
+
         if (cleanupRegs.has(name) && !locals.has(name) && isIdentifier(rhs) && rhs.name !== name) {
             const value = expr.get(rhs.name) ?? (locals.has(rhs.name) ? localName(rhs.name) : null);
-            if (value === null || value === undefined) return null;
+            if (typeof value !== "string") return null;
             const kind = exprKinds.get(rhs.name) || "value";
-            const displayName = kind === "table" ? `t${++tableLocalCount}` : `v${++valueLocalCount}`;
-            localNames.set(name, displayName);
-            out.push(`local ${displayName} = ${value}`);
-            locals.add(name);
-            expr.set(name, displayName);
-            exprKinds.set(name, kind);
-            declaredCount++;
-            continue;
+            const displayName = allocateLocal(name, kind);
+            out.push(`local ${displayName} = ${value}`); continue;
         }
 
         if (locals.has(name)) {
             const value = renderRhs(rhs);
-            if (value === null) return null;
-            out.push(`${localName(name)} = ${value}`);
-            expr.set(name, localName(name));
-            exprKinds.set(name, rhs?.type === "TableConstructorExpression" ? "table" : "value");
-            continue;
+            if (typeof value !== "string") return null;
+            out.push(`${localName(name)} = ${value}`); expr.set(name, localName(name));
+            exprKinds.set(name, rhs?.type === "TableConstructorExpression" ? "table" : "value"); continue;
         }
 
         if (rhs?.type === "CallExpression") {
             const value = renderRhs(rhs);
-            if (value === null) return null;
+            if (typeof value !== "string") return null;
             if (!valueUsedBeforeOverwrite(index, name)) out.push(value);
-            expr.set(name, value);
-            exprKinds.set(name, "value");
-            continue;
+            expr.set(name, value); exprKinds.set(name, "value"); continue;
         }
 
         const value = renderRhs(rhs);
         if (value === null) {
-            // Proven dead TEMP write: the very next statement overwrites the
-            // same non-local register before this value can be observed. This
-            // occurs when the compiler briefly borrows the POS register and the
-            // scheduler preserves the dead copy beside its overwrite.
             const next = leaf[index + 1];
             if (!locals.has(name) && !cleanupRegs.has(name) && isSingleAssignment(next, name)) {
-                expr.delete(name);
-                exprKinds.delete(name);
-                continue;
+                expr.delete(name); exprKinds.delete(name); exprMeta.delete(name); continue;
             }
             return null;
         }
+        if (typeof value !== "string") return null;
         expr.set(name, value);
-        exprKinds.set(name, rhs?.type === "TableConstructorExpression" ? "table" : "value");
+        const fields = rhs?.type === "TableConstructorExpression" ? (rhs.fields || []) : [];
+        const isReturnPack = fields.length === 1 && fields[0]?.type === "TableValue" && fields[0].value?.type === "CallExpression";
+        exprKinds.set(name, isReturnPack ? "return-pack" : (rhs?.type === "TableConstructorExpression" ? "table" : "value"));
     }
 
-    if (declaredCount === 0 || locals.size !== 0 || out.length === 0) return null;
-    return {
-        source: out.join("\n") + "\n",
-        statementCount: out.length,
-        localCount: declaredCount,
-    };
+    if (!flushPendingPack()) return null;
+    if ((options.allowNoLocals !== true && declaredCount === 0) || (options.allowNoLocals === true && (!sawReturnReset || !sawStop)) || locals.size !== 0 || out.length === 0) return null;
+    return { source: out.join("\n") + "\n", statementCount: out.length, localCount: declaredCount };
 }
-
-
 
 function renderSimpleClosureLeaf(source, leaf, stateName, returnName) {
     const env = new Map();
@@ -793,7 +816,7 @@ function matchMultiStateLogicalLocals(source, stateWhile, stateName, returnName)
                 env.set(name, "args");
                 continue;
             }
-            if (name === returnName && isEmptyTable(rhs)) continue;
+            if (name === returnName && isEmptyTable(rhs)) { sawReturnReset = true; continue; }
             if (cleanupRegs.has(name) && rhs?.type === "NilLiteral") {
                 if (accumulatorRegs.has(name)) {
                     const value = env.get(name);
@@ -972,7 +995,21 @@ function solveFreshSource(source, ast) {
     }
 
     const directCalls = matchDirectGlobalCallLeaf(source, leaf, stateName, returnName);
-    if (!directCalls) return { applied: false, reason: "Fresh beta CF: one-state leaf is not a proven direct global-call/register-local program", mode: "fresh" };
+    if (!directCalls) {
+        const callResultProgram = matchLocalRegisterProgram(source, leaf, stateName, returnName, { allowNoLocals: true });
+        if (callResultProgram) {
+            return {
+                applied: true,
+                mode: "fresh-call-results",
+                source: callResultProgram.source,
+                stateCount: 1,
+                statementCount: callResultProgram.statementCount,
+                branchCount: 0,
+                localCount: callResultProgram.localCount,
+            };
+        }
+        return { applied: false, reason: "Fresh beta CF: one-state leaf is not a proven direct global-call/register-local program", mode: "fresh" };
+    }
 
     return {
         applied: true,

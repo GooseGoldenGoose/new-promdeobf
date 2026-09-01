@@ -425,4 +425,50 @@ function vmStatesSource(states) {
     assert.strictEqual(result.source, "local v1 = function()\n    print(1)\nend\n");
 }
 
+{
+    const source = vmSource([
+        'r1 = args',
+        'r4 = 1.5',
+        'r2 = "math"',
+        'ReturnVal = _env[r2]',
+        'r2 = "modf"',
+        'state = ReturnVal[r2]',
+        'r3 = { state(r4) }',
+        'ReturnVal = r3[1]',
+        'r2 = r3[2]',
+        'r4 = ReturnVal',
+        'ReturnVal = "print"',
+        'state = _env[ReturnVal]',
+        'ReturnVal = state(r4, r2)',
+        'r2 = nil',
+        'r4 = nil',
+        'ReturnVal = {}',
+        'state = nil',
+    ]);
+    const result = solveBetaControlFlow(source, parse(source));
+    assert.strictEqual(result.applied, true);
+    assert.strictEqual(result.source, "local v1, v2 = math.modf(1.5)\nprint(v1, v2)\n");
+}
+
+{
+    const source = vmSource([
+        'ReturnVal = "print"',
+        'state = _env[ReturnVal]',
+        'r4 = "math"',
+        'r2 = _env[r4]',
+        'r4 = "modf"',
+        'r1 = r2[r4]',
+        'r4 = 1.5',
+        'r2 = { r1(r4) }',
+        'r5 = 1',
+        'ReturnVal = state(r5, unpack(r2))',
+        'r3 = args',
+        'ReturnVal = {}',
+        'state = nil',
+    ]);
+    const result = solveBetaControlFlow(source, parse(source));
+    assert.strictEqual(result.applied, true);
+    assert.strictEqual(result.mode, "fresh-call-results");
+    assert.strictEqual(result.source, "print(1, math.modf(1.5))\n");
+}
 console.log("fresh beta direct-global-call regression: ok");

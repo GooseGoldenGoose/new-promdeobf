@@ -30,7 +30,7 @@ Treat later PRE-CF/post-CF optimizer work as abandoned unless the user explicitl
 - Stage only files belonging to the current task.
 - Commit focused changes and push `origin/main`.
 - Fail closed on incomplete structural proof.
-- End project turns exactly: `Done for this turn โ€” you can prompt now.`
+- End project turns exactly: `Done for this turn — you can prompt now.`
 
 Known tracked user dirt to preserve:
 
@@ -359,3 +359,17 @@ Latest scheduler canonicalization improvement:
 
 - Closure child bodies now emit proven standalone call statements when the call result is unused before overwrite; this prevents side effects such as `print(1)` from disappearing.
 - Real fixture `local a = function() print(1) end` now recovers `local v1 = function() print(1) end`.
+
+## Fresh CF: Multi-Return Calls / RETURN_ALL
+
+- Fresh CF now recovers the compiler-defined packed call-result forms used by `compileExpression(FunctionCallExpression, ...)`.
+- `RETURN_ALL` compiler shape is recognized structurally as `pack = { f(...) }` followed by `unpack(pack)` in the consuming final argument; fresh CF collapses this back to the original direct call while preserving Lua multi-return expansion.
+- Real compiler/main fixture `print(1, math.modf(1.5))` recovers exactly `print(1, math.modf(1.5))` through mode `fresh-call-results`.
+- Closure call `print(a, a(1,2))` now recovers through the same generic packed/unpack rule; this is not closure-specific.
+- Fixed multi-return compiler shape is recognized as `pack = { f(...) }` followed by numeric slot reads (`pack[1]`, `pack[2]`, ...).
+- Source-local ownership for fixed returns supports both compiler forms: direct TEMP-to-VAR promotion of a slot register and explicit slot-temp -> cleanup-backed local-register copy.
+- Fixed return slots are emitted as one grouped declaration so the function call executes exactly once, e.g. real `local a,b = math.modf(1.5)` recovers `local v1, v2 = math.modf(1.5)`.
+- Presentation names for grouped multi-return locals follow return-slot order, independent of physical register allocation/promotion order.
+- Packed return slots must be contiguous from 1 and uniquely owned; ambiguous/missing slots fail closed.
+- The no-local packed-call fallback requires proven terminal root bookkeeping (`ReturnVal = {}` then `state = nil`) and does not accept non-terminal state transitions.
+- Fresh CF, scheduler, VM state reachability, and VM register naming regressions pass, including fixed multi-return and generic `RETURN_ALL` tests.
