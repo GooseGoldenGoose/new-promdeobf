@@ -240,3 +240,14 @@ Latest scheduler canonicalization improvement:
 - `sample/1.txt` scheduled output is byte-identical to the pre-performance-optimization result.
 - Scheduler, VM state reachability, and VM register naming regressions pass.
 
+
+## Fresh CF: Direct Global Call
+
+- The active fresh solver now consumes normal output source + AST directly; it does not consume retired beta register-version analysis.
+- First implemented fail-closed case: exactly one normalized VM state containing the proven direct GETGLOBAL + primitive-argument call pattern and terminal root bookkeeping.
+- Proven `print(1)` pipeline now recovers exactly `print(1)`.
+- Matching is linear over the single dispatcher leaf: no CFG search, no backtracking, no legacy fallback.
+- Unknown/effectful statements, non-terminal state transitions, unsupported global-name encodings, duplicate/missing argument producers, or extra VM states fail closed.
+- `tools/beta-control-flow.js` is active again for normal-output Lua and validates the recovered source structurally.
+- Fresh matcher benchmark on the parsed real `print(1)` normal output: about 7.5 microseconds per solve over 100,000 iterations; parsing is outside this measurement.
+- Fresh CF regression, scheduler regression, VM state reachability regression, and VM register naming regression pass.
