@@ -340,6 +340,16 @@ Updated 2026-09-01:
 - verified on 3 independent Prometheus obfuscations of `local a,b,c`: dead args snapshot sinks immediately before terminal return bookkeeping
 - scheduler/fresh-CF/state-reachability/register-naming regressions pass
 
+## LOADNIL / nil-only locals
+
+Implemented 2026-09-01 in fresh CF for proven nil-only source lifetimes.
+
+- `local a,b,c` now recovers as three separate locals with no initializer.
+- Handles Prometheus nil production through direct `rN = nil`, borrowed `state = nil; rN = state`, and `ReturnVal = nil; rN = ReturnVal`.
+- Later `rN = nil` lifetime cleanup is still omitted.
+- A first nil write is treated as a source local only when the same physical register has a later nil lifetime-end write; otherwise ambiguous nil writes still fail closed.
+- Verified across 3 independent Prometheus obfuscations of `local a,b,c`; all produce `local v1`, `local v2`, `local v3`.
+
 ## Remaining Feature Order
 
 After assignments + field/index writes:

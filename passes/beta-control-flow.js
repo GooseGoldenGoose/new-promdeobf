@@ -299,6 +299,13 @@ function matchLocalRegisterProgram(source, leaf, stateName, returnName, options 
         }
         return false;
     }
+    function hasLaterNilAssignment(startIndex, name) {
+        for (let cursor = startIndex + 1; cursor < leaf.length; cursor++) {
+            const statement = leaf[cursor];
+            if (isSingleAssignment(statement, name) && statement.init[0]?.type === "NilLiteral") return true;
+        }
+        return false;
+    }
     function allocateLocal(reg, kind = "value") {
         if (localNames.has(reg)) return localName(reg);
         const displayName = kind === "table" ? `t${++tableLocalCount}` : `v${++valueLocalCount}`;
@@ -477,9 +484,19 @@ function matchLocalRegisterProgram(source, leaf, stateName, returnName, options 
             expr.set(name, "args"); exprKinds.set(name, "value"); continue;
         }
         if (name === returnName && isEmptyTable(rhs) && !valueUsedBeforeOverwrite(index, returnName)) { sawReturnReset = true; continue; }
-        if (name === stateName && rhs?.type === "NilLiteral") { sawStop = true; continue; }
+        if (name === stateName && rhs?.type === "NilLiteral") {
+            if (valueUsedBeforeOverwrite(index, stateName)) {
+                expr.set(stateName, "nil"); exprKinds.set(stateName, "value"); continue;
+            }
+            sawStop = true; continue;
+        }
         if (cleanupRegs.has(name) && rhs?.type === "NilLiteral") {
-            if (!locals.has(name)) return null;
+            if (!locals.has(name)) {
+                if (!hasLaterNilAssignment(index, name)) return null;
+                const displayName = allocateLocal(name, "value");
+                out.push(`local ${displayName}`);
+                continue;
+            }
             locals.delete(name); expr.delete(name); exprKinds.delete(name); exprMeta.delete(name); localNames.delete(name); continue;
         }
 
@@ -508,7 +525,7 @@ function matchLocalRegisterProgram(source, leaf, stateName, returnName, options 
             if (typeof value !== "string") return null;
             const kind = exprKinds.get(rhs.name) || "value";
             const displayName = allocateLocal(name, kind);
-            out.push(`local ${displayName} = ${value}`); continue;
+            out.push(value === "nil" ? `local ${displayName}` : `local ${displayName} = ${value}`); continue;
         }
 
         if (cleanupRegs.has(name) && !locals.has(name) && nonNilDefinitionCount.get(name) === 1) {

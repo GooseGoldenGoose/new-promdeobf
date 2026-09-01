@@ -881,4 +881,21 @@ function vmStatesSource(states) {
     const result = solveBetaControlFlow(source, parse(source));
     assert.strictEqual(result.applied, false, "call-derived field-write base must fail closed");
 }
+{
+    const source = vmStatesSource({
+        1: [
+            'r1 = args',
+            'state = nil', 'r2 = state',
+            'r4 = nil',
+            'ReturnVal = nil', 'r3 = ReturnVal',
+            'r3 = nil', 'r2 = nil', 'r4 = nil',
+            'ReturnVal = {}', 'state = nil',
+        ],
+    });
+    const result = solveBetaControlFlow(source, parse(source));
+    assert.strictEqual(result.applied, true, "nil-only source locals were not recovered");
+    assert.strictEqual(result.mode, "fresh-register-locals");
+    assert.strictEqual(result.source, 'local v1\nlocal v2\nlocal v3\n');
+}
+
 console.log("fresh beta direct-global-call regression: ok");
