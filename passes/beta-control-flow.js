@@ -407,7 +407,13 @@ function matchLocalRegisterProgram(source, leaf, stateName, returnName, options 
             const argument = renderRhs(rhs.argument);
             return renderUnary(rhs.operator, argument);
         }
-        if ((rhs?.type === "BinaryExpression" || rhs?.type === "LogicalExpression") && isIdentifier(rhs.left) && isIdentifier(rhs.right)) {
+        if (rhs?.type === "BinaryExpression" && typeof rhs.operator === "string") {
+            const left = renderRhs(rhs.left);
+            const right = renderRhs(rhs.right);
+            if (typeof left !== "string" || typeof right !== "string") return null;
+            return `(${left} ${rhs.operator} ${right})`;
+        }
+        if (rhs?.type === "LogicalExpression" && isIdentifier(rhs.left) && isIdentifier(rhs.right)) {
             const left = expr.get(rhs.left.name) ?? (locals.has(rhs.left.name) ? localName(rhs.left.name) : null);
             const right = expr.get(rhs.right.name) ?? (locals.has(rhs.right.name) ? localName(rhs.right.name) : null);
             if (left == null || right == null || typeof rhs.operator !== "string") return null;

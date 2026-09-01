@@ -915,4 +915,19 @@ function vmStatesSource(states) {
     assert.strictEqual(result.source, 'local v2 = math\nlocal v4 = newproxy\nlocal v5 = v2.floor\nlocal v1 = true\nlocal v3\n');
 }
 
+
+{
+    const source = vmSource([
+        'r1 = nil',
+        'r2 = -989881 + (194066 - (-677277 - 118539))',
+        'r1 = r2',
+        'r1 = nil',
+        'ReturnVal = {}',
+        'state = nil',
+    ]);
+    const result = solveBetaControlFlow(source, parse(source));
+    assert.strictEqual(result.applied, true, "nested constant arithmetic made one-state recovery order-sensitive");
+    assert.strictEqual(result.mode, "fresh-register-locals");
+}
+
 console.log("fresh beta direct-global-call regression: ok");

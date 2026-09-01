@@ -360,6 +360,15 @@ Updated 2026-09-01:
 - Full no-generic-for opcode fixture now reaches VM state recovery: 15/15 reachable states normalized, 10 reachable closure entries, scheduler and register naming apply.
 - Fresh CF then stops later at genuine unsupported multi-state control flow; state recovery is no longer the blocker.
 
+## Fresh-CF nested constant arithmetic
+
+Updated 2026-09-01:
+- Prometheus Numbers To Expressions can randomize LOADK-like scalar constants into nested arithmetic expressions inside otherwise one-state VM leaves.
+- Fresh CF previously rendered binary expressions only when both operands were identifiers/registers, making the same source randomly pass with `rN = 1` and fail with `rN = -989881 + (194066 - ...)`.
+- `matchLocalRegisterProgram()` now recursively renders BinaryExpression operands while keeping LogicalExpression handling restricted to the existing proven identifier shape.
+- Exact one-state opcode fixture now recovers again as `fresh-register-locals`, 1 state, 48 statements.
+- Added a regression covering nested compiler arithmetic constants so randomized Prometheus output cannot regress this again.
+
 ## Canonical initial local ordering
 
 Implemented 2026-09-01 in fresh CF as presentation-only cleanup for prefixes containing nil-only locals.
