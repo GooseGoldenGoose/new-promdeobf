@@ -87,13 +87,29 @@ function matchEnvLoad(statement, destinationName, keyName) {
     return rhs?.type === "IndexExpression" && isIdentifier(rhs.base, "_env") && isIdentifier(rhs.index, keyName);
 }
 
-function matchGlobalCallable(source, leaf, index, stateName, returnName) {
-    const keyLoad = leaf[index];
-    if (!isSingleAssignment(keyLoad, returnName)) return null;
-    const globalName = decodeJsonStringLiteral(keyLoad.init[0]);
-    if (!isLuaIdentifier(globalName)) return null;
-    if (!matchEnvLoad(leaf[index + 1], stateName, returnName)) return null;
-    return { next: index + 2, globalName };
+function matchDirectMemberCallable(leaf, index, stateName, returnName) {
+    const baseKeyLoad = leaf[index];
+    if (!isSingleAssignment(baseKeyLoad)) return null;
+    const baseKeyReg = baseKeyLoad.variables[0];
+    if (!isIdentifier(baseKeyReg) || baseKeyReg.name === stateName || baseKeyReg.name === returnName) return null;
+    const baseName = decodeJsonStringLiteral(baseKeyLoad.init[0]);
+    if (!isLuaIdentifier(baseName)) return null;
+
+    if (!matchEnvLoad(leaf[index + 1], returnName, baseKeyReg.name)) return null;
+
+    const memberKeyLoad = leaf[index + 2];
+    if (!isSingleAssignment(memberKeyLoad)) return null;
+    const memberKeyReg = memberKeyLoad.variables[0];
+    if (!isIdentifier(memberKeyReg) || memberKeyReg.name === stateName || memberKeyReg.name === returnName) return null;
+    const memberName = decodeJsonStringLiteral(memberKeyLoad.init[0]);
+    if (!isLuaIdentifier(memberName)) return null;
+
+    const memberLoad = leaf[index + 3];
+    if (!isSingleAssignment(memberLoad, stateName)) return null;
+    const memberIndex = memberLoad.init[0];
+    if (memberIndex?.type !== "IndexExpression" || !isIdentifier(memberIndex.base, returnName) || !isIdentifier(memberIndex.index, memberKeyReg.name)) return null;
+
+    return { next: index + 4, globalName: `${baseName}.${memberName}` };
 }
 
 function readTempProducer(source, leaf, index, stateName, returnName, temps) {
@@ -135,6 +151,15 @@ function matchOneDirectGlobalCall(source, leaf, index, stateName, returnName) {
 
     while (index < leaf.length) {
         const statement = leaf[index];
+
+        if (!callable) {
+            const memberCallable = matchDirectMemberCallable(leaf, index, stateName, returnName);
+            if (memberCallable) {
+                callable = { globalName: memberCallable.globalName };
+                index = memberCallable.next;
+                continue;
+            }
+        }
 
         if (isSingleAssignment(statement, returnName)) {
             const rhs = statement.init[0];

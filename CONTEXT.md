@@ -262,3 +262,13 @@ Latest scheduler canonicalization improvement:
 - Matcher remains linear, consume-once, with no CFG search/backtracking or legacy fallback.
 - Benchmark across parsed real sequential + multi-argument fixtures: about 8.87 microseconds/solve over 100,000 solves; parsing excluded.
 - Fresh CF, scheduler, VM state reachability, and VM register naming regressions pass.
+
+## Fresh CF: Direct Global Member Calls
+
+- Fresh one-state CF now supports the proven direct member-call chain `GLOBAL -> INDEX -> immediate CALL`, e.g. `math.random(1, 2)`.
+- Matching is structural/dynamic: global and member identifiers are recovered from the normalized VM key loads; no `math`/`random` hardcode.
+- The matcher requires the member result to feed the call directly through `state`; any intervening source-local copy/promotion/lifetime evidence fails closed.
+- Real compiler -> main -> fresh-CF fixture recovers exactly `math.random(1, 2)`.
+- Real `local a = math; a.random(1,2)` and `local a = math.random; a(1,2)` shapes are explicitly rejected by this direct-member case.
+- Parsed real `math.random(1,2)` matcher benchmark: about 14.43 microseconds/solve over 100,000 solves; parsing excluded.
+- Fresh CF, scheduler, VM state reachability, and VM register naming regressions pass.

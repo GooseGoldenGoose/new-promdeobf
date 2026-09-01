@@ -138,4 +138,61 @@ function vmSource(leaf) {
     assert.strictEqual(result.applied, false, "function literal support was enabled prematurely");
 }
 
+
+{
+    const source = vmSource([
+        'r1 = "math"',
+        'ReturnVal = _env[r1]',
+        'r1 = "random"',
+        'state = ReturnVal[r1]',
+        'r2 = 2',
+        'r1 = 1',
+        'ReturnVal = state(r1, r2)',
+        'r3 = args',
+        'ReturnVal = {}',
+        'state = nil',
+    ]);
+    const result = solveBetaControlFlow(source, parse(source));
+    assert.strictEqual(result.applied, true);
+    assert.strictEqual(result.source, "math.random(1, 2)\n");
+    assert.strictEqual(result.globalName, "math.random");
+}
+
+{
+    const source = vmSource([
+        'ReturnVal = "math"',
+        'state = _env[ReturnVal]',
+        'r1 = state',
+        'ReturnVal = "random"',
+        'state = r1[ReturnVal]',
+        'r2 = 2',
+        'r3 = 1',
+        'ReturnVal = state(r3, r2)',
+        'r1 = nil',
+        'ReturnVal = {}',
+        'state = nil',
+    ]);
+    const result = solveBetaControlFlow(source, parse(source));
+    assert.strictEqual(result.applied, false, "direct member solver erased a table-local lifetime");
+}
+
+{
+    const source = vmSource([
+        'r3 = "math"',
+        'ReturnVal = _env[r3]',
+        'r3 = "random"',
+        'state = ReturnVal[r3]',
+        'r3 = state',
+        'r2 = 2',
+        'ReturnVal = 1',
+        'state = r3(ReturnVal, r2)',
+        'r1 = args',
+        'r3 = nil',
+        'ReturnVal = {}',
+        'state = nil',
+    ]);
+    const result = solveBetaControlFlow(source, parse(source));
+    assert.strictEqual(result.applied, false, "direct member solver erased a function-local lifetime");
+}
+
 console.log("fresh beta direct-global-call regression: ok");
