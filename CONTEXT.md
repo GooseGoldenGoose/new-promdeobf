@@ -350,6 +350,16 @@ Implemented 2026-09-01 in fresh CF for proven nil-only source lifetimes.
 - A first nil write is treated as a source local only when the same physical register has a later nil lifetime-end write; otherwise ambiguous nil writes still fail closed.
 - Verified across 3 independent Prometheus obfuscations of `local a,b,c`; all produce `local v1`, `local v2`, `local v3`.
 
+## VM state root constant expressions
+
+Updated 2026-09-01:
+- Prometheus Numbers To Expressions can leave root/closure entry state IDs as constant arithmetic ASTs such as `8728071 - 436750`, not only NumericLiteral nodes.
+- `numericValue()` now evaluates only proven safe-integer constant arithmetic (unary minus; +, -, *, exact /, Lua-style %, nonnegative ^) and fails closed otherwise.
+- root-entry discovery accepts all structurally recognized `createClosureN` factory names, matching nested closure-entry discovery.
+- normalized direct-and/or branch target rewrites preserve parentheses so `cond and(<expr>) or (<expr>)` cannot become invalid `and2` tokenization.
+- Full no-generic-for opcode fixture now reaches VM state recovery: 15/15 reachable states normalized, 10 reachable closure entries, scheduler and register naming apply.
+- Fresh CF then stops later at genuine unsupported multi-state control flow; state recovery is no longer the blocker.
+
 ## Canonical initial local ordering
 
 Implemented 2026-09-01 in fresh CF as presentation-only cleanup for prefixes containing nil-only locals.

@@ -8,10 +8,36 @@ function isIdentifier(node, name = null) {
 }
 
 function numericValue(node) {
-    if (!node || node.type !== "NumericLiteral") return null;
-    if (typeof node.value === "number") return node.value;
-    const value = Number(node.raw);
-    return Number.isFinite(value) ? value : null;
+    if (!node) return null;
+    if (node.type === "NumericLiteral") {
+        const value = typeof node.value === "number" ? node.value : Number(node.raw);
+        return Number.isSafeInteger(value) ? value : null;
+    }
+    if (node.type === "UnaryExpression" && node.operator === "-") {
+        const value = numericValue(node.argument);
+        return value === null || !Number.isSafeInteger(-value) ? null : -value;
+    }
+    if (node.type !== "BinaryExpression") return null;
+    const left = numericValue(node.left);
+    const right = numericValue(node.right);
+    if (left === null || right === null) return null;
+    let value;
+    switch (node.operator) {
+        case "+": value = left + right; break;
+        case "-": value = left - right; break;
+        case "*": value = left * right; break;
+        case "/":
+            if (right === 0 || left % right !== 0) return null;
+            value = left / right; break;
+        case "%":
+            if (right === 0) return null;
+            value = left - Math.floor(left / right) * right; break;
+        case "^":
+            if (right < 0) return null;
+            value = left ** right; break;
+        default: return null;
+    }
+    return Number.isSafeInteger(value) ? value : null;
 }
 
 function sourceOf(source, node) {
@@ -116,7 +142,7 @@ function findRootEntry(ast) {
         if (
             node.type === "CallExpression" &&
             node.base?.type === "CallExpression" &&
-            isIdentifier(node.base.base, "createClosure")) {
+            isIdentifier(node.base.base) && isClosureFactoryName(node.base.base.name)) {
             const factoryCall = node.base;
             const args = factoryCall.arguments || [];
             const entryId = numericValue(args[0]);
@@ -606,10 +632,10 @@ function collectTerminatorEdits(block, stateName, stateMap) {
         const newTrue = stateMap.get(term.onTrue);
         const newFalse = stateMap.get(term.onFalse);
         if (newTrue !== undefined && Array.isArray(trueNode?.range)) {
-            edits.push({ start: trueNode.range[0], end: trueNode.range[1], text: String(newTrue) });
+            edits.push({ start: trueNode.range[0], end: trueNode.range[1], text: `(${newTrue})` });
         }
         if (newFalse !== undefined && Array.isArray(falseNode?.range)) {
-            edits.push({ start: falseNode.range[0], end: falseNode.range[1], text: String(newFalse) });
+            edits.push({ start: falseNode.range[0], end: falseNode.range[1], text: `(${newFalse})` });
         }
     }
     return edits;
