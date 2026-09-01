@@ -243,9 +243,17 @@ function matchLocalRegisterProgram(source, leaf, stateName, returnName) {
     if (cleanupRegs.size === 0) return null;
 
     const expr = new Map();
+    const exprKinds = new Map();
     const locals = new Set();
+    const localNames = new Map();
     const out = [];
     let declaredCount = 0;
+    let valueLocalCount = 0;
+    let tableLocalCount = 0;
+
+    function localName(name) {
+        return localNames.get(name) || name;
+    }
 
     function renderRhs(rhs) {
         if (isPrimitiveLiteral(rhs) || isEmptyTable(rhs)) return sourceOf(source, rhs);
@@ -253,15 +261,15 @@ function matchLocalRegisterProgram(source, leaf, stateName, returnName) {
             const fields = [];
             for (const field of rhs.fields || []) {
                 if (field?.type !== "TableKey" || !isIdentifier(field.key) || !isIdentifier(field.value)) return null;
-                const key = expr.get(field.key.name) ?? (locals.has(field.key.name) ? field.key.name : null);
-                const value = expr.get(field.value.name) ?? (locals.has(field.value.name) ? field.value.name : null);
+                const key = expr.get(field.key.name) ?? (locals.has(field.key.name) ? localName(field.key.name) : null);
+                const value = expr.get(field.value.name) ?? (locals.has(field.value.name) ? localName(field.value.name) : null);
                 if (key === null || key === undefined || value === null || value === undefined) return null;
                 const name = /^"[A-Za-z_][A-Za-z0-9_]*"$/.test(key) ? key.slice(1, -1) : null;
                 fields.push(name && isLuaIdentifier(name) ? `${name} = ${value}` : `[${key}] = ${value}`);
             }
             return `{ ${fields.join(", ")} }`;
         }
-        if (isIdentifier(rhs)) return expr.get(rhs.name) ?? (locals.has(rhs.name) ? rhs.name : null);
+        if (isIdentifier(rhs)) return expr.get(rhs.name) ?? (locals.has(rhs.name) ? localName(rhs.name) : null);
         if (rhs?.type === "IndexExpression" && isIdentifier(rhs.base) && isIdentifier(rhs.index)) {
             const key = expr.get(rhs.index.name);
             if (key === null || key === undefined) return null;
@@ -269,18 +277,18 @@ function matchLocalRegisterProgram(source, leaf, stateName, returnName) {
                 const globalName = /^"[A-Za-z_][A-Za-z0-9_]*"$/.test(key) ? key.slice(1, -1) : null;
                 return globalName && isLuaIdentifier(globalName) ? globalName : `_env[${key}]`;
             }
-            const base = expr.get(rhs.base.name) ?? (locals.has(rhs.base.name) ? rhs.base.name : null);
+            const base = expr.get(rhs.base.name) ?? (locals.has(rhs.base.name) ? localName(rhs.base.name) : null);
             if (base === null || base === undefined) return null;
             const member = /^"[A-Za-z_][A-Za-z0-9_]*"$/.test(key) ? key.slice(1, -1) : null;
             return member && isLuaIdentifier(member) ? `${base}.${member}` : `${base}[${key}]`;
         }
         if (rhs?.type === "CallExpression" && isIdentifier(rhs.base)) {
-            const base = expr.get(rhs.base.name) ?? (locals.has(rhs.base.name) ? rhs.base.name : null);
+            const base = expr.get(rhs.base.name) ?? (locals.has(rhs.base.name) ? localName(rhs.base.name) : null);
             if (!base) return null;
             const args = [];
             for (const arg of rhs.arguments || []) {
                 if (!isIdentifier(arg)) return null;
-                const value = expr.get(arg.name) ?? (locals.has(arg.name) ? arg.name : null);
+                const value = expr.get(arg.name) ?? (locals.has(arg.name) ? localName(arg.name) : null);
                 if (value === null || value === undefined) return null;
                 args.push(value);
             }
@@ -299,6 +307,7 @@ function matchLocalRegisterProgram(source, leaf, stateName, returnName) {
 
         if (isIdentifier(rhs, "args") && name !== stateName && name !== returnName && !locals.has(name)) {
             expr.set(name, "args");
+            exprKinds.set(name, "value");
             continue;
         }
 
@@ -309,6 +318,8 @@ function matchLocalRegisterProgram(source, leaf, stateName, returnName) {
             if (!locals.has(name)) return null;
             locals.delete(name);
             expr.delete(name);
+            exprKinds.delete(name);
+            localNames.delete(name);
             continue;
         }
 
@@ -317,11 +328,15 @@ function matchLocalRegisterProgram(source, leaf, stateName, returnName) {
         // RETURN temps cannot themselves be promoted, so these copies are strong
         // declaration evidence in the proven compiler shape.
         if (cleanupRegs.has(name) && !locals.has(name) && isIdentifier(rhs) && rhs.name !== name) {
-            const value = expr.get(rhs.name) ?? (locals.has(rhs.name) ? rhs.name : null);
+            const value = expr.get(rhs.name) ?? (locals.has(rhs.name) ? localName(rhs.name) : null);
             if (value === null || value === undefined) return null;
-            out.push(`local ${name} = ${value}`);
+            const kind = exprKinds.get(rhs.name) || "value";
+            const displayName = kind === "table" ? `t${++tableLocalCount}` : `v${++valueLocalCount}`;
+            localNames.set(name, displayName);
+            out.push(`local ${displayName} = ${value}`);
             locals.add(name);
-            expr.set(name, name);
+            expr.set(name, displayName);
+            exprKinds.set(name, kind);
             declaredCount++;
             continue;
         }
@@ -329,8 +344,9 @@ function matchLocalRegisterProgram(source, leaf, stateName, returnName) {
         if (locals.has(name)) {
             const value = renderRhs(rhs);
             if (value === null) return null;
-            out.push(`${name} = ${value}`);
-            expr.set(name, name);
+            out.push(`${localName(name)} = ${value}`);
+            expr.set(name, localName(name));
+            exprKinds.set(name, rhs?.type === "TableConstructorExpression" ? "table" : "value");
             continue;
         }
 
@@ -339,12 +355,14 @@ function matchLocalRegisterProgram(source, leaf, stateName, returnName) {
             if (value === null) return null;
             out.push(value);
             expr.set(name, value);
+            exprKinds.set(name, "value");
             continue;
         }
 
         const value = renderRhs(rhs);
         if (value === null) return null;
         expr.set(name, value);
+        exprKinds.set(name, rhs?.type === "TableConstructorExpression" ? "table" : "value");
     }
 
     if (declaredCount === 0 || locals.size !== 0 || out.length === 0) return null;

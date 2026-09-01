@@ -303,3 +303,16 @@ Latest scheduler canonicalization improvement:
 - Real compiler/main/fresh-CF fixture `local a = { b = 2 }; print(a.b)` recovers exactly `local r3 = { b = 2 }; print(r3.b)`.
 - Table field names/values are recovered dynamically from compiler expressions; no hardcoded `b`.
 - Fresh CF and existing VM regressions pass.
+
+
+## Fresh CF: Presentation Local Renaming
+
+- Recovered source locals are now presentation-renamed independently of physical VM register numbers.
+- Ordinary/value locals are named `v1`, `v2`, ... in declaration order.
+- Locals whose declaration value is a proven table constructor are named `t1`, `t2`, ... in declaration order.
+- `v` and `t` counters are independent, so a table local does not consume a value-local index and vice versa.
+- Renaming is presentation-only; lifetime ownership/recovery logic is unchanged.
+- References, calls, member reads, and later assignments use the stable recovered name consistently.
+- Real fixtures now recover `local v1 = math; v1.random(1, 2)`, `local v1 = math.random; v1(1, 2)`, `local v1 = game.Players; local v2 = v1.LocalPlayer; v2 = v2.Character`, and `local t1 = { b = 2 }; print(t1.b)`.
+- Mixed regression proves independent numbering: `local v1 = 1; local t1 = { x = 2 }`.
+- Fresh CF, scheduler, VM state reachability, and VM register naming regressions pass.

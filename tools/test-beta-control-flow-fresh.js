@@ -175,7 +175,7 @@ function vmSource(leaf) {
     const result = solveBetaControlFlow(source, parse(source));
     assert.strictEqual(result.applied, true);
     assert.strictEqual(result.mode, "fresh-register-locals");
-    assert.strictEqual(result.source, "local r1 = math\nr1.random(1, 2)\n");
+    assert.strictEqual(result.source, "local v1 = math\nv1.random(1, 2)\n");
 }
 
 {
@@ -196,7 +196,7 @@ function vmSource(leaf) {
     const result = solveBetaControlFlow(source, parse(source));
     assert.strictEqual(result.applied, true);
     assert.strictEqual(result.mode, "fresh-register-locals");
-    assert.strictEqual(result.source, "local r3 = math.random\nr3(1, 2)\n");
+    assert.strictEqual(result.source, "local v1 = math.random\nv1(1, 2)\n");
 }
 
 
@@ -247,7 +247,7 @@ function vmSource(leaf) {
     assert.strictEqual(result.applied, true);
     assert.strictEqual(result.mode, "fresh-register-locals");
     assert.strictEqual(result.localCount, 2);
-    assert.strictEqual(result.source, "local r1 = game.Players\nlocal r3 = r1.LocalPlayer\nr3 = r3.Character\n");
+    assert.strictEqual(result.source, "local v1 = game.Players\nlocal v2 = v1.LocalPlayer\nv2 = v2.Character\n");
 }
 
 
@@ -270,7 +270,26 @@ function vmSource(leaf) {
     const result = solveBetaControlFlow(source, parse(source));
     assert.strictEqual(result.applied, true);
     assert.strictEqual(result.mode, "fresh-register-locals");
-    assert.strictEqual(result.source, "local r3 = { b = 2 }\nprint(r3.b)\n");
+    assert.strictEqual(result.source, "local t1 = { b = 2 }\nprint(t1.b)\n");
+}
+
+{
+    const source = vmSource([
+        'ReturnVal = 1',
+        'r1 = ReturnVal',
+        'ReturnVal = "x"',
+        'state = 2',
+        'r2 = state',
+        'state = { [ReturnVal] = r2 }',
+        'r3 = state',
+        'r1 = nil',
+        'r3 = nil',
+        'ReturnVal = {}',
+        'state = nil',
+    ]);
+    const result = solveBetaControlFlow(source, parse(source));
+    assert.strictEqual(result.applied, true);
+    assert.strictEqual(result.source, "local v1 = 1\nlocal t1 = { x = 2 }\n");
 }
 
 console.log("fresh beta direct-global-call regression: ok");
