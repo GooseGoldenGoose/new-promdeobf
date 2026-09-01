@@ -622,4 +622,34 @@ function vmStatesSource(states) {
     assert.strictEqual(result.source, 'local v1 = function(v1)\n    return function()\n        return v1\n    end\nend\nprint(v1(1)())\n');
 }
 
+{
+    const source = vmStatesSource({
+        1: [
+            'r5 = allocUpvalue()', 'r4 = allocUpvalue()', 'state = 10', 'upvalueValues[r4] = state', 'state = 20', 'upvalueValues[r5] = state',
+            'state = createClosure2(2, { r4, r5 })', 'r1 = state', 'ReturnVal = 40', 'state = r1(ReturnVal)', 'r2 = state', 'r3 = args', 'r1 = nil',
+            'r5 = releaseUpvalue(r5)', 'ReturnVal = 50', 'state = r2(ReturnVal)', 'r6 = state', 'r4 = releaseUpvalue(r4)', 'r2 = nil',
+            'ReturnVal = "print"', 'state = _env[ReturnVal]', 'r7 = { r6() }', 'r6 = nil', 'ReturnVal = state(unpack(r7))', 'ReturnVal = {}', 'state = nil',
+        ],
+        2: [
+            'r3 = allocUpvalue()', 'r4 = allocUpvalue()', 'upvalueValues[r3] = args[1]', 'state = 30', 'upvalueValues[r4] = state',
+            'state = createClosure1(3, { upvalues[1], upvalues[2], r4, r3 })', 'ReturnVal = { state }', 'state = nil',
+        ],
+        3: [
+            'r3 = allocUpvalue()', 'upvalueValues[r3] = args[1]',
+            'state = createClosure0(4, { upvalues[1], upvalues[2], upvalues[3], upvalues[4], r3 })', 'ReturnVal = { state }', 'state = nil',
+        ],
+        4: [
+            'ReturnVal = "print"', 'state = _env[ReturnVal]',
+            'r3 = upvalueValues[upvalues[1]]', 'r4 = upvalueValues[upvalues[2]]', 'r5 = upvalueValues[upvalues[3]]', 'r1 = upvalueValues[upvalues[4]]', 'r2 = upvalueValues[upvalues[5]]',
+            'ReturnVal = state(r3, r4, r5, r1, r2)', 'r5 = upvalueValues[upvalues[1]]', 'r1 = upvalueValues[upvalues[2]]', 'r4 = r5 + r1',
+            'r5 = upvalueValues[upvalues[3]]', 'r3 = r4 + r5', 'r4 = upvalueValues[upvalues[4]]', 'ReturnVal = r3 + r4',
+            'r3 = upvalueValues[upvalues[5]]', 'state = ReturnVal + r3', 'ReturnVal = { state }', 'state = nil',
+        ],
+    });
+    const result = solveBetaControlFlow(source, parse(source));
+    assert.strictEqual(result.applied, true, "shared forwarded captures were not recovered");
+    assert.strictEqual(result.mode, "fresh-closure-entry");
+    assert.strictEqual(result.source, 'local v1 = 10\nlocal v2 = 20\nlocal v3 = function(v3)\n    return function(v4)\n        return function()\n            print(v1, v2, 30, v3, v4)\n            return ((((v1 + v2) + 30) + v3) + v4)\n        end\n    end\nend\nlocal v4 = v3(40)\nlocal v5 = v4(50)\nprint(v5())\n');
+}
+
 console.log("fresh beta direct-global-call regression: ok");

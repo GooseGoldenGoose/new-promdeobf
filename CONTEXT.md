@@ -417,3 +417,16 @@ Latest scheduler canonicalization improvement:
 - The generalized recursive renderer preserves existing empty-capture recursion and the earlier top-level read-only captured-local matcher.
 - Shared cells, captured writes, and arbitrary mutation through upvalue cells remain unsupported/fail-closed.
 - Fresh CF, scheduler, VM state reachability, and VM register naming regressions pass with a permanent captured-parameter case.
+
+
+## Fresh CF: Shared / Forwarded Capture Cells
+
+- Recursive capture recovery now resolves capture-table fields by logical source binding rather than requiring every child capture to come from a locally-created cell register.
+- A child capture field may be either a local cell register or forwarded upvalues[n]; forwarded slots keep the same source binding identity through arbitrary nested closure levels.
+- Root captured cells are presentation-named when upvalueValues[cell] = value is proven, then those names seed child capture maps.
+- Nested local/parameter cells may be mixed with inherited slots in one capture table, e.g. { upvalues[1], upvalues[2], r4, r3 }.
+- Parameter presentation names now avoid inherited capture names so nested parameters cannot shadow captured bindings and silently change semantics.
+- Real complex fixture with root captures a,b, nested captured local c, captured parameters x,y, 11 capture slots, 5 local cells, 4 shared cells, and 15/15 resolved accesses now recovers and runs correctly.
+- Current emitted form safely inlines immutable captured local c = 30 as 30 in the deepest closure; source-local re-materialization for that presentation case remains optional future cleanup.
+- Runtime parity for the complex fixture: prints 10 20 30 40 50 then 150.
+- Captured mutation/shared writable cells remain separate future work.

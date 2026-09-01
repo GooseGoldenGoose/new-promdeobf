@@ -245,6 +245,7 @@ function matchLocalRegisterProgram(source, leaf, stateName, returnName, options 
     let declaredCount = 0, valueLocalCount = 0, tableLocalCount = 0, pendingPack = null;
     let sawReturnReset = false, sawStop = false;
     const consumedPackRegs = new Set();
+    const upvalueCells = new Map();
 
     function localName(name) { return localNames.get(name) || name; }
     function nodeUsesIdentifier(node, name) {
@@ -340,6 +341,22 @@ function matchLocalRegisterProgram(source, leaf, stateName, returnName, options 
             return member && isLuaIdentifier(member) ? `${base}.${member}` : `${base}[${key}]`;
         }
         if (rhs?.type === "CallExpression" && isIdentifier(rhs.base)) {
+            if (/^createClosure\d*$/.test(rhs.base.name) && typeof options.renderCapturedCall === "function") {
+                const args = rhs.arguments || [];
+                const fields = args[1]?.type === "TableConstructorExpression" ? args[1].fields || [] : [];
+                if (args.length === 2 && args[0]?.type === "NumericLiteral" && fields.length > 0) {
+                    const captureNames = new Map();
+                    for (let i = 0; i < fields.length; i++) {
+                        const field = fields[i];
+                        if (field?.type !== "TableValue" || !isIdentifier(field.value)) return null;
+                        const captureName = upvalueCells.get(field.value.name);
+                        if (typeof captureName !== "string") return null;
+                        captureNames.set(i + 1, captureName);
+                    }
+                    const special = options.renderCapturedCall(rhs, captureNames);
+                    if (special != null) return special;
+                }
+            }
             if (typeof options.renderSpecialCall === "function") {
                 const special = options.renderSpecialCall(rhs);
                 if (special != null) return special;
@@ -365,6 +382,16 @@ function matchLocalRegisterProgram(source, leaf, stateName, returnName, options 
         const statement = leaf[index];
         if (!isSingleAssignment(statement)) return null;
         const dest = statement.variables[0], rhs = statement.init[0];
+        if (dest?.type === "IndexExpression" && isIdentifier(dest.base, "upvalueValues") && isIdentifier(dest.index)) {
+            if (!upvalueCells.has(dest.index.name)) return null;
+            const value = renderRhs(rhs);
+            if (typeof value !== "string" || typeof upvalueCells.get(dest.index.name) === "string") return null;
+            const displayName = `v${++valueLocalCount}`;
+            upvalueCells.set(dest.index.name, displayName);
+            out.push(`local ${displayName} = ${value}`);
+            declaredCount++;
+            continue;
+        }
         if (!isIdentifier(dest)) return null;
         const name = dest.name;
         const isPackIndex = rhs?.type === "IndexExpression" && isIdentifier(rhs.base) && exprKinds.get(rhs.base.name) === "return-pack" && rhs.index?.type === "NumericLiteral";
@@ -374,6 +401,17 @@ function matchLocalRegisterProgram(source, leaf, stateName, returnName, options 
             (rhs?.type === "NilLiteral" && cleanupRegs.has(name));
         if (pendingPack && !isPackIndex && !isPackSlotCopy && !isPendingNeutralBookkeeping && !flushPendingPack()) return null;
 
+        if (rhs?.type === "CallExpression" && isIdentifier(rhs.base, "allocUpvalue") && (rhs.arguments || []).length === 0) {
+            if (name === stateName || name === returnName || upvalueCells.has(name)) return null;
+            upvalueCells.set(name, null);
+            continue;
+        }
+        if (rhs?.type === "CallExpression" && isIdentifier(rhs.base, "releaseUpvalue")) {
+            const args = rhs.arguments || [];
+            if (args.length !== 1 || !isIdentifier(args[0]) || args[0].name !== name || !upvalueCells.has(name)) return null;
+            upvalueCells.delete(name);
+            continue;
+        }
         if (isIdentifier(rhs, "args") && name !== stateName && name !== returnName && !locals.has(name)) {
             expr.set(name, "args"); exprKinds.set(name, "value"); continue;
         }
@@ -484,8 +522,9 @@ function renderSimpleClosureLeaf(source, leaf, stateName, returnName, options = 
             if (value?.kind === "captured-closure") {
                 if (typeof options.renderCapturedCall !== "function") return null;
                 const captureNames = new Map();
-                for (let i = 0; i < value.captureRegs.length; i++) {
-                    const captureName = localCells.get(value.captureRegs[i]);
+                for (let i = 0; i < value.captureRefs.length; i++) {
+                    const ref = value.captureRefs[i];
+                    const captureName = typeof ref === "string" ? ref : localCells.get(ref.localCell);
                     if (typeof captureName !== "string") return null;
                     captureNames.set(i + 1, captureName);
                 }
@@ -504,7 +543,15 @@ function renderSimpleClosureLeaf(source, leaf, stateName, returnName, options = 
             if (isIdentifier(node.base, "args") && node.index?.type === "NumericLiteral") {
                 const index = Number(node.index.value);
                 if (!Number.isInteger(index) || index < 1) return null;
-                while (paramNames.length < index) paramNames.push(`v${paramNames.length + 1}`);
+                while (paramNames.length < index) {
+                    const reserved = new Set(paramNames);
+                    if (options.captureNames instanceof Map) {
+                        for (const value of options.captureNames.values()) if (typeof value === "string" && isLuaIdentifier(value)) reserved.add(value);
+                    }
+                    let suffix = 1;
+                    while (reserved.has(`v${suffix}`)) suffix++;
+                    paramNames.push(`v${suffix}`);
+                }
                 return paramNames[index - 1];
             }
             if (!isIdentifier(node.base) || !isIdentifier(node.index)) return null;
@@ -591,14 +638,26 @@ function renderSimpleClosureLeaf(source, leaf, stateName, returnName, options = 
             const args = rhs.arguments || [];
             const fields = args[1]?.type === "TableConstructorExpression" ? args[1].fields || [] : [];
             if (fields.length > 0) {
-                const captureRegs = [];
+                const captureRefs = [];
                 for (const field of fields) {
-                    if (field?.type !== "TableValue" || !isIdentifier(field.value)) return null;
-                    const cell = env.get(field.value.name);
-                    if (cell?.kind !== "upvalue-cell") return null;
-                    captureRegs.push(field.value.name);
+                    if (field?.type !== "TableValue") return null;
+                    if (isIdentifier(field.value)) {
+                        const cell = env.get(field.value.name);
+                        if (cell?.kind !== "upvalue-cell") return null;
+                        const captureName = localCells.get(field.value.name);
+                        captureRefs.push(captureName ?? { localCell: field.value.name });
+                        continue;
+                    }
+                    if (field.value?.type === "IndexExpression" && isIdentifier(field.value.base, "upvalues") && field.value.index?.type === "NumericLiteral" && options.captureNames instanceof Map) {
+                        const slot = Number(field.value.index.value);
+                        const captureName = options.captureNames.get(slot);
+                        if (typeof captureName !== "string") return null;
+                        captureRefs.push(captureName);
+                        continue;
+                    }
+                    return null;
                 }
-                env.set(name, { kind: "captured-closure", call: rhs, captureRegs });
+                env.set(name, { kind: "captured-closure", call: rhs, captureRefs });
                 continue;
             }
         }
@@ -794,7 +853,7 @@ function matchClosureEntryProgram(source, stateWhile, stateName, returnName) {
     }
 
     const root = leaves.get(1);
-    const program = matchLocalRegisterProgram(source, root, stateName, returnName, { renderSpecialCall: renderClosureCall });
+    const program = matchLocalRegisterProgram(source, root, stateName, returnName, { renderSpecialCall: renderClosureCall, renderCapturedCall: renderClosureCall });
     if (!program) return null;
     if (consumedEntries.size !== leaves.size) return null;
     return { ...program, stateCount: leaves.size, closureCount: consumedEntries.size - 1 };
