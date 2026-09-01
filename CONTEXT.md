@@ -356,3 +356,6 @@ Latest scheduler canonicalization improvement:
 - Mode: `fresh-closure-entry`; reports `closureCount`.
 - Nested closure creation, captured upvalues, vararg closures, and packed closure-call/multi-return lowering are not claimed supported yet and fail closed.
 - Fresh CF, scheduler, VM state reachability, and VM register naming regressions pass.
+
+- Closure child bodies now emit proven standalone call statements when the call result is unused before overwrite; this prevents side effects such as `print(1)` from disappearing.
+- Real fixture `local a = function() print(1) end` now recovers `local v1 = function() print(1) end`.

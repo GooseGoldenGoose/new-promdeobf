@@ -425,6 +425,29 @@ function renderSimpleClosureLeaf(source, leaf, stateName, returnName) {
     const paramNames = [];
     const body = [];
     let sawReturn = false;
+
+    function nodeUsesIdentifier(node, name) {
+        if (!node || typeof node !== "object") return false;
+        if (isIdentifier(node, name)) return true;
+        for (const [key, value] of Object.entries(node)) {
+            if (key === "range" || key === "loc" || key === "variables") continue;
+            if (Array.isArray(value)) {
+                if (value.some(item => nodeUsesIdentifier(item, name))) return true;
+            } else if (value && typeof value === "object" && nodeUsesIdentifier(value, name)) {
+                return true;
+            }
+        }
+        return false;
+    }
+
+    function valueUsedBeforeOverwrite(startIndex, name) {
+        for (let cursor = startIndex + 1; cursor < leaf.length; cursor++) {
+            const statement = leaf[cursor];
+            if (nodeUsesIdentifier(statement?.init, name)) return true;
+            if (isSingleAssignment(statement, name)) return false;
+        }
+        return false;
+    }
     let sawStop = false;
 
     function resolveNode(node) {
@@ -500,6 +523,7 @@ function renderSimpleClosureLeaf(source, leaf, stateName, returnName) {
 
         const value = resolveNode(rhs);
         if (value == null) return null;
+        if (rhs?.type === "CallExpression" && !valueUsedBeforeOverwrite(index, name)) body.push(value);
         env.set(name, value);
     }
 

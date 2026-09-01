@@ -414,4 +414,15 @@ function vmStatesSource(states) {
     assert.strictEqual(result.source, "local v1 = function(v1, v2)\n    return v1, v2\nend\n");
 }
 
+{
+    const source = vmStatesSource({
+        1: ['r2 = args', 'state = createClosure3(2, {})', 'r1 = state', 'r1 = nil', 'ReturnVal = {}', 'state = nil'],
+        2: ['ReturnVal = "print"', 'state = _env[ReturnVal]', 'r1 = 1', 'ReturnVal = state(r1)', 'ReturnVal = {}', 'state = nil'],
+    });
+    const result = solveBetaControlFlow(source, parse(source));
+    assert.strictEqual(result.applied, true);
+    assert.strictEqual(result.mode, "fresh-closure-entry");
+    assert.strictEqual(result.source, "local v1 = function()\n    print(1)\nend\n");
+}
+
 console.log("fresh beta direct-global-call regression: ok");
