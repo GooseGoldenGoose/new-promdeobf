@@ -1015,6 +1015,53 @@ function vmStatesSource(states) {
     assert.ok(result.source.includes('function(...)\n    return v1(...)\nend'), result.source);
 }
 
+
+{
+    const source = vmStatesSource({
+        1: [
+            'RegisterOverflow[25] = "math"',
+            'RegisterOverflow[26] = _env[RegisterOverflow[25]]',
+            'RegisterOverflow[27] = RegisterOverflow[26]',
+            'RegisterOverflow[27] = nil',
+            'ReturnVal = {}', 'state = nil',
+        ],
+    });
+    const result = solveBetaControlFlow(source, parse(source));
+    assert.strictEqual(result.applied, true, "RegisterOverflow propagation/lifetime cleanup was not recovered");
+    assert.strictEqual(result.mode, "fresh-register-locals");
+    assert.strictEqual(result.source, 'local v1 = math\n');
+}
+
+{
+    const source = vmStatesSource({
+        1: [
+            'RegisterOverflow[25] = 1',
+            'RegisterOverflow[26] = 2',
+            'RegisterOverflow[27] = { RegisterOverflow[25], RegisterOverflow[26] }',
+            'RegisterOverflow[28] = RegisterOverflow[27]',
+            'RegisterOverflow[28] = nil',
+            'ReturnVal = {}', 'state = nil',
+        ],
+    });
+    const result = solveBetaControlFlow(source, parse(source));
+    assert.strictEqual(result.applied, true, "RegisterOverflow table construction was not recovered");
+    assert.strictEqual(result.source, 'local t1 = { 1, 2 }\n');
+}
+
+{
+    const source = vmStatesSource({
+        1: [
+            'r1 = 25',
+            'RegisterOverflow[r1] = 1',
+            'ReturnVal = {}', 'state = nil',
+        ],
+    });
+    const result = solveBetaControlFlow(source, parse(source));
+    assert.strictEqual(result.applied, false, "dynamic RegisterOverflow indexes must fail closed");
+    assert.match(result.reason, /dynamic RegisterOverflow index/);
+}
+
+
 {
     const source = vmStatesSource({
         1: [
@@ -1040,6 +1087,5 @@ function vmStatesSource(states) {
     assert.strictEqual(result.applied, true, "dead initial nil before one meaningful source lifetime was not removed");
     assert.strictEqual(result.source, 'local v1 = 123\nprint(v1)\n');
 }
-
 
 console.log("fresh beta direct-global-call regression: ok");
