@@ -898,4 +898,21 @@ function vmStatesSource(states) {
     assert.strictEqual(result.source, 'local v1\nlocal v2\nlocal v3\n');
 }
 
+{
+    const source = vmStatesSource({
+        1: [
+            'state = true', 'r4 = state',
+            'ReturnVal = "math"', 'state = _env[ReturnVal]', 'r1 = state',
+            'state = nil', 'r5 = state',
+            'ReturnVal = "newproxy"', 'state = _env[ReturnVal]', 'r2 = state',
+            'ReturnVal = "floor"', 'state = r1[ReturnVal]', 'r3 = state',
+            'r1 = nil', 'r2 = nil', 'r3 = nil', 'r4 = nil', 'r5 = nil',
+            'r6 = args', 'ReturnVal = {}', 'state = nil',
+        ],
+    });
+    const result = solveBetaControlFlow(source, parse(source));
+    assert.strictEqual(result.applied, true, "canonical local declaration ordering did not recover");
+    assert.strictEqual(result.source, 'local v2 = math\nlocal v4 = newproxy\nlocal v5 = v2.floor\nlocal v1 = true\nlocal v3\n');
+}
+
 console.log("fresh beta direct-global-call regression: ok");

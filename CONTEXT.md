@@ -350,6 +350,19 @@ Implemented 2026-09-01 in fresh CF for proven nil-only source lifetimes.
 - A first nil write is treated as a source local only when the same physical register has a later nil lifetime-end write; otherwise ambiguous nil writes still fail closed.
 - Verified across 3 independent Prometheus obfuscations of `local a,b,c`; all produce `local v1`, `local v2`, `local v3`.
 
+## Canonical initial local ordering
+
+Implemented 2026-09-01 in fresh CF as presentation-only cleanup for prefixes containing nil-only locals.
+
+- Prometheus compiler randomly shuffles dependency-independent VM statements, so exact original declaration order is not recoverable.
+- Fresh CF now canonically reorders only the initial prefix of proven-simple local declarations when that prefix contains nil-only locals.
+- Supported reorderable forms are nil-only declarations, primitive constants, direct global bindings, and simple member chains.
+- Dependencies are topologically preserved; member-derived locals remain after their base.
+- No declaration moves across the first non-simple/non-local/effectful statement.
+- Constant-only programs keep their previous recovered ordering; this avoids broad presentation churn.
+- Generated variable numbers are not renumbered by this pass, avoiding unsafe cross-scope renaming.
+- Opcode matrix now groups globals/member loads -> constants -> all nil-only locals before NEW_GLOBAL.
+
 ## Remaining Feature Order
 
 After assignments + field/index writes:

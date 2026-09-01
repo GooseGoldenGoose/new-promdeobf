@@ -81,6 +81,55 @@ function sourceOf(source, node) {
     return source.slice(node.range[0], node.range[1]);
 }
 
+function canonicalizeInitialSimpleLocals(lines) {
+    const records = [];
+    let prefixLength = 0;
+    for (const line of lines) {
+        const match = line.match(/^local\s+([vt]\d+)(?:\s*=\s*(.+))?$/);
+        if (!match) break;
+        const name = match[1], rhs = match[2] ?? null;
+        let kind = null, sortKey = "";
+        const deps = new Set();
+        if (rhs === null) { kind = 3; sortKey = name; }
+        else if (/^(?:true|false)$/.test(rhs)) { kind = 2; sortKey = rhs === "true" ? "0:true" : "1:false"; }
+        else if (/^"(?:[^"\\]|\\.)*"$/.test(rhs)) { kind = 2; sortKey = `2:${rhs}`; }
+        else if (/^-?(?:\d+(?:\.\d*)?|\.\d+)$/.test(rhs)) { kind = 2; sortKey = `3:${Number(rhs)}`; }
+        else if (/^[A-Za-z_][A-Za-z0-9_]*$/.test(rhs) && !/^[vt]\d+$/.test(rhs)) { kind = 0; sortKey = rhs; }
+        else {
+            const member = rhs.match(/^([vt]\d+)(?:\.[A-Za-z_][A-Za-z0-9_]*)+$/);
+            if (!member) break;
+            kind = 1; deps.add(member[1]); sortKey = rhs.replace(/^[vt]\d+/, "");
+        }
+        records.push({ line, name, kind, sortKey, deps, originalIndex: records.length });
+        prefixLength++;
+    }
+    if (records.length < 2 || !records.some(record => record.kind === 3)) return lines;
+    const names = new Set(records.map(record => record.name));
+    for (const record of records) for (const dep of [...record.deps]) if (!names.has(dep)) record.deps.delete(dep);
+    const fanout = new Map(records.map(record => [record.name, 0]));
+    for (const record of records) for (const dep of record.deps) fanout.set(dep, (fanout.get(dep) || 0) + 1);
+    const remaining = new Map(records.map(record => [record.name, record]));
+    const emitted = new Set(), ordered = [];
+    while (remaining.size > 0) {
+        const ready = [...remaining.values()].filter(record => [...record.deps].every(dep => emitted.has(dep)));
+        if (ready.length === 0) return lines;
+        ready.sort((a, b) => {
+            if (a.kind !== b.kind) return a.kind - b.kind;
+            if (a.kind === 0) {
+                const fanoutDiff = (fanout.get(b.name) || 0) - (fanout.get(a.name) || 0);
+                if (fanoutDiff) return fanoutDiff;
+            }
+            if (a.kind === 2 && /^3:/.test(a.sortKey) && /^3:/.test(b.sortKey)) return Number(a.sortKey.slice(2)) - Number(b.sortKey.slice(2));
+            if (a.kind === 3) return Number(a.name.slice(1)) - Number(b.name.slice(1));
+            const keyCompare = a.sortKey.localeCompare(b.sortKey);
+            return keyCompare || a.originalIndex - b.originalIndex;
+        });
+        const next = ready[0];
+        ordered.push(next.line); emitted.add(next.name); remaining.delete(next.name);
+    }
+    return [...ordered, ...lines.slice(prefixLength)];
+}
+
 function renderUnary(operator, argument) {
     if (typeof argument !== "string") return null;
     if (operator === "not") return `(not ${argument})`;
@@ -570,7 +619,8 @@ function matchLocalRegisterProgram(source, leaf, stateName, returnName, options 
 
     if (!flushPendingPack()) return null;
     if ((options.allowNoLocals !== true && declaredCount === 0) || (options.allowNoLocals === true && (!sawReturnReset || !sawStop)) || locals.size !== 0 || out.length === 0) return null;
-    return { source: out.join("\n") + "\n", statementCount: out.length, localCount: declaredCount };
+    const canonicalOut = canonicalizeInitialSimpleLocals(out);
+    return { source: canonicalOut.join("\n") + "\n", statementCount: canonicalOut.length, localCount: declaredCount };
 }
 
 function renderSimpleClosureLeaf(source, leaf, stateName, returnName, options = {}) {
