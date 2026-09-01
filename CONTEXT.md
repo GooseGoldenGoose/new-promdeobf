@@ -197,6 +197,18 @@ local t = {1, f()}
 ```
 Fresh output preserves `{ 1, v1() }`; original and recovered both print `1 2 3 4`.
 
+### RegisterOverflow virtual registers
+
+Implemented 2026-09-02 in fresh CF.
+
+- constant `RegisterOverflow[N]` accesses are scalarized structurally to internal virtual registers before fresh register recovery
+- overflow virtual registers use the same propagation, lifetime, cleanup `= nil`, local promotion, table construction, and fail-closed rules as ordinary `rN` registers
+- dynamic/nonconstant overflow indexes remain fail closed
+- no runtime `reg` table is emitted; overflow storage is only an internal recovery model
+- synthetic proof: overflow global chain + lifetime cleanup recovers as `local v1 = math`
+- synthetic overflow-fed table recovers as `local t1 = { 1, 2 }`
+- real Prometheus proof with a 140-element table generated 41 overflow slots; full canonical pipeline recovered the complete table and `print((#t1), t1[1], t1[140])` as `fresh-register-locals`
+
 ### Multi-return / RETURN_ALL
 - fixed multi-return -> grouped local declaration
 - `{ f(...) }` + `unpack(pack)` final-argument form -> direct call
