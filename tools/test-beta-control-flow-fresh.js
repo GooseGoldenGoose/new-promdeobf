@@ -292,4 +292,33 @@ function vmSource(leaf) {
     assert.strictEqual(result.source, "local v1 = 1\nlocal t1 = { x = 2 }\n");
 }
 
+
+{
+    const source = vmSource([
+        'r6 = "math"',
+        'r8 = _env[r6]',
+        'r6 = "random"',
+        'r3 = r8[r6]',
+        'r6 = 1',
+        'r5 = 2',
+        'r8 = r3(r6, r5)',
+        'r3 = 1',
+        'r1 = r8 == r3',
+        'r3 = 123',
+        'r2 = r1 and r3',
+        'r4 = state',
+        'r4 = 321',
+        'ReturnVal = r2 or r4',
+        'r2 = ReturnVal',
+        'r2 = nil',
+        'ReturnVal = {}',
+        'state = nil',
+    ]);
+    const result = solveBetaControlFlow(source, parse(source));
+    assert.strictEqual(result.applied, true);
+    assert.strictEqual(result.mode, "fresh-register-locals");
+    assert.strictEqual(result.statementCount, 1);
+    assert.strictEqual(result.source, "local v1 = (((math.random(1, 2) == 1) and 123) or 321)\n");
+}
+
 console.log("fresh beta direct-global-call regression: ok");

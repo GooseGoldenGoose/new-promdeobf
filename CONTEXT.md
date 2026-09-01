@@ -316,3 +316,12 @@ Latest scheduler canonicalization improvement:
 - Real fixtures now recover `local v1 = math; v1.random(1, 2)`, `local v1 = math.random; v1(1, 2)`, `local v1 = game.Players; local v2 = v1.LocalPlayer; v2 = v2.Character`, and `local t1 = { b = 2 }; print(t1.b)`.
 - Mixed regression proves independent numbering: `local v1 = 1; local t1 = { x = 2 }`.
 - Fresh CF, scheduler, VM state reachability, and VM register naming regressions pass.
+
+## Fresh CF: Binary / Logical Expressions
+
+- Register-maker symbolic rendering now composes proven `BinaryExpression` and `LogicalExpression` nodes from already-resolved register expressions.
+- Real compiler/main/fresh-CF fixture `local a = math.random(1,2) == 1 and 123 or 321` recovers as `local v1 = (((math.random(1, 2) == 1) and 123) or 321)`.
+- Consumed call results are no longer emitted as standalone call statements; this prevents duplicate side effects when a call feeds a larger expression.
+- A non-local TEMP assignment with an unknown RHS may be skipped only when the immediately following statement overwrites the same register, proving the first write dead before observation.
+- Expression rendering remains fail-closed when operands are not already proven symbolic values.
+

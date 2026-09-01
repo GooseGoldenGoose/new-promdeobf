@@ -255,6 +255,29 @@ function matchLocalRegisterProgram(source, leaf, stateName, returnName) {
         return localNames.get(name) || name;
     }
 
+    function nodeUsesIdentifier(node, name) {
+        if (!node || typeof node !== "object") return false;
+        if (isIdentifier(node, name)) return true;
+        for (const [key, value] of Object.entries(node)) {
+            if (key === "range" || key === "loc" || key === "variables") continue;
+            if (Array.isArray(value)) {
+                if (value.some(item => nodeUsesIdentifier(item, name))) return true;
+            } else if (value && typeof value === "object" && nodeUsesIdentifier(value, name)) {
+                return true;
+            }
+        }
+        return false;
+    }
+
+    function valueUsedBeforeOverwrite(startIndex, name) {
+        for (let cursor = startIndex + 1; cursor < leaf.length; cursor++) {
+            const statement = leaf[cursor];
+            if (nodeUsesIdentifier(statement?.init, name)) return true;
+            if (isSingleAssignment(statement, name)) return false;
+        }
+        return false;
+    }
+
     function renderRhs(rhs) {
         if (isPrimitiveLiteral(rhs) || isEmptyTable(rhs)) return sourceOf(source, rhs);
         if (rhs?.type === "TableConstructorExpression") {
@@ -270,6 +293,12 @@ function matchLocalRegisterProgram(source, leaf, stateName, returnName) {
             return `{ ${fields.join(", ")} }`;
         }
         if (isIdentifier(rhs)) return expr.get(rhs.name) ?? (locals.has(rhs.name) ? localName(rhs.name) : null);
+        if ((rhs?.type === "BinaryExpression" || rhs?.type === "LogicalExpression") && isIdentifier(rhs.left) && isIdentifier(rhs.right)) {
+            const left = expr.get(rhs.left.name) ?? (locals.has(rhs.left.name) ? localName(rhs.left.name) : null);
+            const right = expr.get(rhs.right.name) ?? (locals.has(rhs.right.name) ? localName(rhs.right.name) : null);
+            if (left === null || left === undefined || right === null || right === undefined || typeof rhs.operator !== "string") return null;
+            return `(${left} ${rhs.operator} ${right})`;
+        }
         if (rhs?.type === "IndexExpression" && isIdentifier(rhs.base) && isIdentifier(rhs.index)) {
             const key = expr.get(rhs.index.name);
             if (key === null || key === undefined) return null;
@@ -353,14 +382,26 @@ function matchLocalRegisterProgram(source, leaf, stateName, returnName) {
         if (rhs?.type === "CallExpression") {
             const value = renderRhs(rhs);
             if (value === null) return null;
-            out.push(value);
+            if (!valueUsedBeforeOverwrite(index, name)) out.push(value);
             expr.set(name, value);
             exprKinds.set(name, "value");
             continue;
         }
 
         const value = renderRhs(rhs);
-        if (value === null) return null;
+        if (value === null) {
+            // Proven dead TEMP write: the very next statement overwrites the
+            // same non-local register before this value can be observed. This
+            // occurs when the compiler briefly borrows the POS register and the
+            // scheduler preserves the dead copy beside its overwrite.
+            const next = leaf[index + 1];
+            if (!locals.has(name) && !cleanupRegs.has(name) && isSingleAssignment(next, name)) {
+                expr.delete(name);
+                exprKinds.delete(name);
+                continue;
+            }
+            return null;
+        }
         expr.set(name, value);
         exprKinds.set(name, rhs?.type === "TableConstructorExpression" ? "table" : "value");
     }
