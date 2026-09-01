@@ -251,3 +251,14 @@ Latest scheduler canonicalization improvement:
 - `tools/beta-control-flow.js` is active again for normal-output Lua and validates the recovered source structurally.
 - Fresh matcher benchmark on the parsed real `print(1)` normal output: about 7.5 microseconds per solve over 100,000 iterations; parsing is outside this measurement.
 - Fresh CF regression, scheduler regression, VM state reachability regression, and VM register naming regression pass.
+
+## Fresh CF: Sequential / Multi-Argument Global Calls
+
+- One-state fresh CF now consumes multiple direct global calls sequentially in one linear pass.
+- Supported call arguments: primitive literals, empty table literals, and proven global-expression TEMP pairs such as `k = "math"; v = _env[k]`.
+- Compiler key TEMP slots may be reused later only after the key has been consumed by its `_env[...]` lookup; live argument TEMP overwrites still fail closed.
+- Real compiler/main/fresh-CF fixtures recover exactly `print(1)\nprint(2)\nprint(3)` and `print({}, 1, "wa", math, true, nil)`.
+- Function literal arguments remain intentionally unsupported/fail-closed.
+- Matcher remains linear, consume-once, with no CFG search/backtracking or legacy fallback.
+- Benchmark across parsed real sequential + multi-argument fixtures: about 8.87 microseconds/solve over 100,000 solves; parsing excluded.
+- Fresh CF, scheduler, VM state reachability, and VM register naming regressions pass.

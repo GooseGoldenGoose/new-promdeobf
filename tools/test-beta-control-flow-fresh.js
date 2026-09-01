@@ -77,4 +77,65 @@ function vmSource(leaf) {
     assert.strictEqual(result.applied, false, "legacy beta-register API was revived");
 }
 
+
+{
+    const source = vmSource([
+        'ReturnVal = "print"',
+        'state = _env[ReturnVal]',
+        'r1 = 1',
+        'ReturnVal = state(r1)',
+        'ReturnVal = "print"',
+        'state = _env[ReturnVal]',
+        'r1 = 2',
+        'ReturnVal = state(r1)',
+        'ReturnVal = "print"',
+        'state = _env[ReturnVal]',
+        'r1 = 3',
+        'ReturnVal = state(r1)',
+        'r2 = args',
+        'ReturnVal = {}',
+        'state = nil',
+    ]);
+    const result = solveBetaControlFlow(source, parse(source));
+    assert.strictEqual(result.applied, true);
+    assert.strictEqual(result.callCount, 3);
+    assert.strictEqual(result.source, "print(1)\nprint(2)\nprint(3)\n");
+}
+
+{
+    const source = vmSource([
+        'r5 = {}',
+        'ReturnVal = "print"',
+        'state = _env[ReturnVal]',
+        'r2 = "math"',
+        'r4 = _env[r2]',
+        'r6 = 1',
+        'r7 = "wa"',
+        'r3 = nil',
+        'r2 = true',
+        'ReturnVal = state(r5, r6, r7, r4, r2, r3)',
+        'r1 = args',
+        'ReturnVal = {}',
+        'state = nil',
+    ]);
+    const result = solveBetaControlFlow(source, parse(source));
+    assert.strictEqual(result.applied, true);
+    assert.strictEqual(result.callCount, 1);
+    assert.strictEqual(result.argumentCount, 6);
+    assert.strictEqual(result.source, 'print({}, 1, "wa", math, true, nil)\n');
+}
+
+{
+    const source = vmSource([
+        'ReturnVal = "print"',
+        'state = _env[ReturnVal]',
+        'r1 = function() end',
+        'ReturnVal = state(r1)',
+        'ReturnVal = {}',
+        'state = nil',
+    ]);
+    const result = solveBetaControlFlow(source, parse(source));
+    assert.strictEqual(result.applied, false, "function literal support was enabled prematurely");
+}
+
 console.log("fresh beta direct-global-call regression: ok");

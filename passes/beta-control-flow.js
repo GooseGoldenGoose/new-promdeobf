@@ -27,6 +27,10 @@ function isPrimitiveLiteral(node) {
     return ["StringLiteral", "NumericLiteral", "BooleanLiteral", "NilLiteral"].includes(node?.type);
 }
 
+function isEmptyTable(node) {
+    return node?.type === "TableConstructorExpression" && (node.fields || []).length === 0;
+}
+
 function significant(body) {
     return (body || []).filter(statement => statement?.type !== "CommentStatement");
 }
@@ -39,7 +43,7 @@ function findStateWhile(vmFunction, stateName) {
 }
 
 function unwrapSingleStateLeaf(stateWhile, stateName) {
-    let body = significant(stateWhile?.body);
+    const body = significant(stateWhile?.body);
     if (body.length !== 1 || body[0]?.type !== "IfStatement") return null;
     const clauses = body[0].clauses || [];
     if (clauses.length !== 1) return null;
@@ -47,9 +51,9 @@ function unwrapSingleStateLeaf(stateWhile, stateName) {
     if (clause?.type !== "IfClause") return null;
     const condition = clause.condition;
     if (condition?.type !== "BinaryExpression" || condition.operator !== "==") return null;
-    const stateOnLeft = isIdentifier(condition.left, stateName) && condition.right?.type === "NumericLiteral";
-    const stateOnRight = isIdentifier(condition.right, stateName) && condition.left?.type === "NumericLiteral";
-    if (!stateOnLeft && !stateOnRight) return null;
+    const left = isIdentifier(condition.left, stateName) && condition.right?.type === "NumericLiteral";
+    const right = isIdentifier(condition.right, stateName) && condition.left?.type === "NumericLiteral";
+    if (!left && !right) return null;
     return significant(clause.body);
 }
 
@@ -77,64 +81,119 @@ function sourceOf(source, node) {
     return source.slice(node.range[0], node.range[1]);
 }
 
-function matchDirectGlobalCallLeaf(source, leaf, stateName, returnName) {
-    if (!returnName || leaf.length < 4) return null;
-    let index = 0;
+function matchEnvLoad(statement, destinationName, keyName) {
+    if (!isSingleAssignment(statement, destinationName)) return false;
+    const rhs = statement.init[0];
+    return rhs?.type === "IndexExpression" && isIdentifier(rhs.base, "_env") && isIdentifier(rhs.index, keyName);
+}
 
-    // Compiler GETGLOBAL key load: ReturnVal = "name"
-    const keyLoad = leaf[index++];
+function matchGlobalCallable(source, leaf, index, stateName, returnName) {
+    const keyLoad = leaf[index];
     if (!isSingleAssignment(keyLoad, returnName)) return null;
     const globalName = decodeJsonStringLiteral(keyLoad.init[0]);
     if (!isLuaIdentifier(globalName)) return null;
+    if (!matchEnvLoad(leaf[index + 1], stateName, returnName)) return null;
+    return { next: index + 2, globalName };
+}
 
-    // Compiler GETGLOBAL environment read: state = _env[ReturnVal]
-    const globalLoad = leaf[index++];
-    if (!isSingleAssignment(globalLoad, stateName)) return null;
-    const globalIndex = globalLoad.init[0];
-    if (globalIndex?.type !== "IndexExpression" || !isIdentifier(globalIndex.base, "_env") || !isIdentifier(globalIndex.index, returnName)) return null;
+function readTempProducer(source, leaf, index, stateName, returnName, temps) {
+    const statement = leaf[index];
+    if (!isSingleAssignment(statement)) return null;
+    const destination = statement.variables[0];
+    const rhs = statement.init[0];
+    if (!isIdentifier(destination) || destination.name === stateName || destination.name === returnName) return null;
+    const name = destination.name;
+    if (temps.has(name) && temps.get(name) !== null) return null;
 
-    // Scheduler canonicalizes primitive argument producers immediately before
-    // the call. Track each producer once; no search/backtracking is required.
-    const argByRegister = new Map();
-    while (index < leaf.length) {
-        const statement = leaf[index];
-        if (!isSingleAssignment(statement)) break;
-        const destination = statement.variables[0];
-        const rhs = statement.init[0];
-        if (!isIdentifier(destination) || destination.name === stateName || destination.name === returnName || !isPrimitiveLiteral(rhs)) break;
-        if (argByRegister.has(destination.name)) return null;
-        const text = sourceOf(source, rhs);
-        if (text === null) return null;
-        argByRegister.set(destination.name, text);
-        index++;
+    // Prefer the proven two-statement global-expression producer over treating
+    // its string key as an ordinary argument literal.
+    const globalName = decodeJsonStringLiteral(rhs);
+    const load = leaf[index + 1];
+    if (isLuaIdentifier(globalName) && isSingleAssignment(load)) {
+        const valueDest = load.variables[0];
+        if (isIdentifier(valueDest) && valueDest.name !== stateName && valueDest.name !== returnName &&
+            (!temps.has(valueDest.name) || temps.get(valueDest.name) === null) && matchEnvLoad(load, valueDest.name, name)) {
+            temps.set(valueDest.name, globalName);
+            temps.set(name, null);
+            return index + 2;
+        }
     }
 
-    // Discarded source call result: ReturnVal = state(arg1, ...)
-    const callStatement = leaf[index++];
+    if (isPrimitiveLiteral(rhs) || isEmptyTable(rhs)) {
+        const text = sourceOf(source, rhs);
+        if (text === null) return null;
+        temps.set(name, text);
+        return index + 1;
+    }
+
+    return null;
+}
+
+function matchOneDirectGlobalCall(source, leaf, index, stateName, returnName) {
+    const temps = new Map();
+    let callable = null;
+
+    while (index < leaf.length) {
+        const statement = leaf[index];
+
+        if (isSingleAssignment(statement, returnName)) {
+            const rhs = statement.init[0];
+
+            if (rhs?.type === "CallExpression" && isIdentifier(rhs.base, stateName)) break;
+
+            const globalName = decodeJsonStringLiteral(rhs);
+            if (isLuaIdentifier(globalName) && matchEnvLoad(leaf[index + 1], stateName, returnName)) {
+                if (callable) return null;
+                callable = { globalName };
+                index += 2;
+                continue;
+            }
+        }
+
+        const next = readTempProducer(source, leaf, index, stateName, returnName, temps);
+        if (next === null) return null;
+        index = next;
+    }
+
+    if (!callable) return null;
+
+    const callStatement = leaf[index];
     if (!isSingleAssignment(callStatement, returnName)) return null;
     const call = callStatement.init[0];
     if (call?.type !== "CallExpression" || !isIdentifier(call.base, stateName)) return null;
-    const args = call.arguments || [];
+
     const renderedArgs = [];
     const used = new Set();
-    for (const arg of args) {
-        if (!isIdentifier(arg) || !argByRegister.has(arg.name) || used.has(arg.name)) return null;
+    for (const arg of call.arguments || []) {
+        if (!isIdentifier(arg) || !temps.has(arg.name) || temps.get(arg.name) === null || used.has(arg.name)) return null;
         used.add(arg.name);
-        renderedArgs.push(argByRegister.get(arg.name));
+        renderedArgs.push(temps.get(arg.name));
     }
-    if (used.size !== argByRegister.size) return null;
 
-    // Root VM terminal bookkeeping. It is accepted only in the exact proven
-    // shapes and must consume the remainder of the leaf.
+    for (const [name, value] of temps) {
+        if (value !== null && !used.has(name)) return null;
+    }
+
+    return {
+        next: index + 1,
+        source: `${callable.globalName}(${renderedArgs.join(", ")})`,
+        globalName: callable.globalName,
+        argumentCount: renderedArgs.length,
+    };
+}
+
+function matchTerminalBookkeeping(leaf, index, stateName, returnName) {
     let sawReturnReset = false;
     let sawStop = false;
+    let argsCopies = 0;
+
     for (; index < leaf.length; index++) {
         const statement = leaf[index];
         if (!isSingleAssignment(statement)) return null;
         const destination = statement.variables[0];
         const rhs = statement.init[0];
 
-        if (isIdentifier(destination, returnName) && rhs?.type === "TableConstructorExpression" && (rhs.fields || []).length === 0 && !sawReturnReset) {
+        if (isIdentifier(destination, returnName) && isEmptyTable(rhs) && !sawReturnReset) {
             sawReturnReset = true;
             continue;
         }
@@ -142,17 +201,46 @@ function matchDirectGlobalCallLeaf(source, leaf, stateName, returnName) {
             sawStop = true;
             continue;
         }
-        if (isIdentifier(destination) && destination.name !== stateName && destination.name !== returnName && isIdentifier(rhs, "args") && !sawReturnReset && !sawStop) {
+        if (isIdentifier(destination) && destination.name !== stateName && destination.name !== returnName &&
+            isIdentifier(rhs, "args") && !sawReturnReset && !sawStop) {
+            argsCopies++;
+            if (argsCopies > 1) return null;
             continue;
         }
         return null;
     }
-    if (!sawReturnReset || !sawStop) return null;
+
+    return sawReturnReset && sawStop ? index : null;
+}
+
+function matchDirectGlobalCallLeaf(source, leaf, stateName, returnName) {
+    if (!returnName || leaf.length < 4) return null;
+
+    let index = 0;
+    const calls = [];
+    let argumentCount = 0;
+
+    while (index < leaf.length) {
+        const terminal = matchTerminalBookkeeping(leaf, index, stateName, returnName);
+        if (terminal !== null) {
+            index = terminal;
+            break;
+        }
+
+        const matched = matchOneDirectGlobalCall(source, leaf, index, stateName, returnName);
+        if (!matched) return null;
+        calls.push(matched);
+        argumentCount += matched.argumentCount;
+        index = matched.next;
+    }
+
+    if (index !== leaf.length || calls.length === 0) return null;
 
     return {
-        source: `${globalName}(${renderedArgs.join(", ")})\n`,
-        globalName,
-        argumentCount: renderedArgs.length,
+        source: calls.map(call => call.source).join("\n") + "\n",
+        globalName: calls.length === 1 ? calls[0].globalName : null,
+        argumentCount,
+        callCount: calls.length,
     };
 }
 
@@ -169,26 +257,24 @@ function solveFreshSource(source, ast) {
     const leaf = unwrapSingleStateLeaf(stateWhile, stateName);
     if (!leaf) return { applied: false, reason: "Fresh beta CF: direct-call solver requires exactly one VM state", mode: "fresh" };
 
-    const directCall = matchDirectGlobalCallLeaf(source, leaf, stateName, returnName);
-    if (!directCall) return { applied: false, reason: "Fresh beta CF: one-state leaf is not a proven direct global call", mode: "fresh" };
+    const directCalls = matchDirectGlobalCallLeaf(source, leaf, stateName, returnName);
+    if (!directCalls) return { applied: false, reason: "Fresh beta CF: one-state leaf is not a proven direct global-call sequence", mode: "fresh" };
 
     return {
         applied: true,
         mode: "fresh-direct-global-call",
-        source: directCall.source,
+        source: directCalls.source,
         stateCount: 1,
-        statementCount: 1,
+        statementCount: directCalls.callCount,
         branchCount: 0,
-        globalName: directCall.globalName,
-        argumentCount: directCall.argumentCount,
+        globalName: directCalls.globalName,
+        argumentCount: directCalls.argumentCount,
+        callCount: directCalls.callCount,
     };
 }
 
 function solveBetaControlFlow(sourceOrAst, astOrBeta) {
-    // New active API: solveBetaControlFlow(normalOutputSource, normalOutputAst)
     if (typeof sourceOrAst === "string") return solveFreshSource(sourceOrAst, astOrBeta);
-
-    // Compatibility only: never revive the retired beta register pipeline.
     return {
         applied: false,
         reason: "Fresh beta CF no longer consumes beta register-version analysis; pass normal output source + AST",
