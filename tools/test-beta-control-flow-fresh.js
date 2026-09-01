@@ -27,6 +27,27 @@ function vmSource(leaf) {
     ].join("\n");
 }
 
+function vmStatesSource(states) {
+    const lines = [
+        "vm = function(state, args, upvalues, gcProxy)",
+        "    local r1, r2, r3, r4, r5, r6, r7, ReturnVal",
+        "    while state do",
+    ];
+    const ids = Object.keys(states).map(Number).sort((a, b) => a - b);
+    ids.forEach((id, index) => {
+        lines.push(`        ${index === 0 ? "if" : "elseif"} state == ${id} then`);
+        for (const line of states[id]) lines.push(`            ${line}`);
+    });
+    lines.push(
+        "        end",
+        "    end",
+        "    state = #gcProxy",
+        "    return unpack(ReturnVal)",
+        "end",
+    );
+    return lines.join("\n");
+}
+
 {
     const source = vmSource([
         'ReturnVal = "print"',
@@ -319,6 +340,54 @@ function vmSource(leaf) {
     assert.strictEqual(result.mode, "fresh-register-locals");
     assert.strictEqual(result.statementCount, 1);
     assert.strictEqual(result.source, "local v1 = (((math.random(1, 2) == 1) and 123) or 321)\n");
+}
+
+
+{
+    const source = vmStatesSource({
+        1: [
+            'ReturnVal = "game"',
+            'state = _env[ReturnVal]',
+            'r2 = state',
+            'ReturnVal = "workspace"',
+            'state = _env[ReturnVal]',
+            'r4 = state',
+            'state = r2 and 2 or 3',
+            'r1 = args',
+            'ReturnVal = r2',
+        ],
+        2: ['ReturnVal = r4', 'state = 3'],
+        3: ['state = r2 and 4 or 5', 'r3 = ReturnVal', 'ReturnVal = r2'],
+        4: ['r3 = nil', 'r2 = nil', 'r5 = ReturnVal', 'r5 = nil', 'r4 = nil', 'ReturnVal = {}', 'state = nil'],
+        5: ['ReturnVal = r4', 'state = 4'],
+    });
+    const result = solveBetaControlFlow(source, parse(source));
+    assert.strictEqual(result.applied, true);
+    assert.strictEqual(result.mode, "fresh-multistate-logical");
+    assert.strictEqual(result.source, "local v1 = game\nlocal v2 = workspace\nlocal v3 = (v1 and v2)\nlocal v4 = (v1 or v2)\n");
+}
+
+{
+    const source = vmStatesSource({
+        1: [
+            'ReturnVal = "game"', 'state = _env[ReturnVal]', 'r2 = state',
+            'ReturnVal = "workspace"', 'state = _env[ReturnVal]', 'r6 = state',
+            'ReturnVal = "math"', 'state = _env[ReturnVal]', 'r5 = state',
+            'state = r2 and 2 or 3', 'ReturnVal = r2',
+        ],
+        2: ['r1 = ReturnVal', 'state = r2 and 4 or 5', 'ReturnVal = r2'],
+        3: ['r3 = state', 'state = r6 and 6 or 7', 'r1 = r6'],
+        4: ['r4 = state', 'state = r6 and 8 or 9', 'r3 = r6'],
+        5: ['r1 = nil', 'r2 = nil', 'r5 = nil', 'r3 = ReturnVal', 'r3 = nil', 'r6 = nil', 'ReturnVal = {}', 'state = nil'],
+        6: ['state = r3', 'ReturnVal = r1', 'state = 2'],
+        7: ['r1 = r5', 'state = 6'],
+        8: ['r3 = r5', 'state = 9'],
+        9: ['state = r4', 'ReturnVal = r3', 'state = 5'],
+    });
+    const result = solveBetaControlFlow(source, parse(source));
+    assert.strictEqual(result.applied, true);
+    assert.strictEqual(result.mode, "fresh-multistate-logical");
+    assert.strictEqual(result.source, "local v1 = game\nlocal v2 = workspace\nlocal v3 = math\nlocal v4 = (v1 or (v2 or v3))\nlocal v5 = (v1 and (v2 and v3))\n");
 }
 
 console.log("fresh beta direct-global-call regression: ok");

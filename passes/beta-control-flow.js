@@ -414,6 +414,304 @@ function matchLocalRegisterProgram(source, leaf, stateName, returnName) {
     };
 }
 
+
+function extractNormalizedStateLeaves(stateWhile, stateName) {
+    const leaves = new Map();
+
+    function walk(node) {
+        if (!node) return true;
+        if (node.type === "IfStatement") {
+            for (const clause of node.clauses || []) {
+                if (clause?.type === "IfClause" || clause?.type === "ElseifClause") {
+                    const c = clause.condition;
+                    const left = isIdentifier(c?.left, stateName) && c?.right?.type === "NumericLiteral";
+                    const right = isIdentifier(c?.right, stateName) && c?.left?.type === "NumericLiteral";
+                    if (c?.type === "BinaryExpression" && c.operator === "==" && (left || right)) {
+                        const id = Number(left ? c.right.value : c.left.value);
+                        if (!Number.isInteger(id) || leaves.has(id)) return false;
+                        leaves.set(id, significant(clause.body));
+                        continue;
+                    }
+                }
+                for (const statement of significant(clause?.body)) {
+                    if (statement?.type === "IfStatement" && !walk(statement)) return false;
+                }
+            }
+            return true;
+        }
+        return true;
+    }
+
+    for (const statement of significant(stateWhile?.body)) {
+        if (statement?.type === "IfStatement" && !walk(statement)) return null;
+    }
+    return leaves.size ? leaves : null;
+}
+
+function decodeLogicalStateTransition(rhs) {
+    if (rhs?.type !== "LogicalExpression" || rhs.operator !== "or") return null;
+    const left = rhs.left;
+    if (left?.type !== "LogicalExpression" || left.operator !== "and") return null;
+    if (!isIdentifier(left.left) || left.right?.type !== "NumericLiteral" || rhs.right?.type !== "NumericLiteral") return null;
+    const onTrue = Number(left.right.value);
+    const onFalse = Number(rhs.right.value);
+    if (!Number.isInteger(onTrue) || !Number.isInteger(onFalse)) return null;
+    return { conditionRegister: left.left.name, onTrue, onFalse };
+}
+
+function matchMultiStateLogicalLocals(source, stateWhile, stateName, returnName) {
+    const leaves = extractNormalizedStateLeaves(stateWhile, stateName);
+    if (!leaves || leaves.size < 2 || !leaves.has(1)) return null;
+
+    const cleanupRegs = new Set();
+    for (const body of leaves.values()) {
+        for (const statement of body) {
+            if (!isSingleAssignment(statement)) continue;
+            const dest = statement.variables[0];
+            const rhs = statement.init[0];
+            if (isIdentifier(dest) && dest.name !== stateName && dest.name !== returnName && rhs?.type === "NilLiteral") cleanupRegs.add(dest.name);
+        }
+    }
+    if (!cleanupRegs.size) return null;
+
+    const nonNilDefinitionCount = new Map([...cleanupRegs].map(name => [name, 0]));
+    for (const body of leaves.values()) {
+        for (const statement of body) {
+            if (!isSingleAssignment(statement)) continue;
+            const dest = statement.variables[0];
+            const rhs = statement.init[0];
+            if (isIdentifier(dest) && cleanupRegs.has(dest.name) && rhs?.type !== "NilLiteral") {
+                nonNilDefinitionCount.set(dest.name, nonNilDefinitionCount.get(dest.name) + 1);
+            }
+        }
+    }
+    const accumulatorRegs = new Set([...cleanupRegs].filter(name => nonNilDefinitionCount.get(name) > 1));
+
+    const blocks = new Map();
+    for (const [id, body] of leaves) {
+        let transitionIndex = -1;
+        let transition = null;
+        for (let i = body.length - 1; i >= 0; i--) {
+            if (!isSingleAssignment(body[i], stateName)) continue;
+            const rhs = body[i].init[0];
+            if (rhs?.type === "NilLiteral") {
+                transitionIndex = i;
+                transition = { kind: "stop" };
+                break;
+            }
+            if (rhs?.type === "NumericLiteral" && Number.isInteger(Number(rhs.value))) {
+                transitionIndex = i;
+                transition = { kind: "jump", target: Number(rhs.value) };
+                break;
+            }
+            const branch = decodeLogicalStateTransition(rhs);
+            if (branch) {
+                transitionIndex = i;
+                transition = { kind: "branch", ...branch };
+                break;
+            }
+        }
+        if (!transition) return null;
+        blocks.set(id, { id, body, transitionIndex, transition });
+    }
+
+    const successors = new Map([...blocks.keys()].map(id => [id, []]));
+    const predecessors = new Map([...blocks.keys()].map(id => [id, []]));
+    for (const [id, block] of blocks) {
+        const targets = block.transition.kind === "jump" ? [block.transition.target]
+            : block.transition.kind === "branch" ? [block.transition.onTrue, block.transition.onFalse] : [];
+        for (const target of targets) {
+            if (!blocks.has(target)) return null;
+            successors.get(id).push(target);
+            predecessors.get(target).push(id);
+        }
+    }
+
+    const reachable = new Set();
+    const queue = [1];
+    while (queue.length) {
+        const id = queue.shift();
+        if (reachable.has(id)) continue;
+        reachable.add(id);
+        for (const next of successors.get(id) || []) queue.push(next);
+    }
+    if (reachable.size !== blocks.size) return null;
+
+    const indegree = new Map();
+    for (const id of reachable) indegree.set(id, (predecessors.get(id) || []).filter(p => reachable.has(p)).length);
+    const ready = [1];
+    const incoming = new Map([[1, [{ env: new Map(), markers: [] }]]]);
+    const processed = new Set();
+    const locals = new Set();
+    const localNames = new Map();
+    const out = [];
+    let valueCount = 0;
+    let tableCount = 0;
+
+    function displayLocal(reg) { return localNames.get(reg) || reg; }
+    function resolveId(name, env) {
+        if (locals.has(name)) return displayLocal(name);
+        return env.get(name) ?? null;
+    }
+    function render(rhs, env) {
+        if (isPrimitiveLiteral(rhs) || isEmptyTable(rhs)) return sourceOf(source, rhs);
+        if (isIdentifier(rhs)) return resolveId(rhs.name, env);
+        if (rhs?.type === "IndexExpression" && isIdentifier(rhs.base) && isIdentifier(rhs.index)) {
+            const key = resolveId(rhs.index.name, env);
+            if (key == null) return null;
+            if (rhs.base.name === "_env") {
+                const globalName = /^"[A-Za-z_][A-Za-z0-9_]*"$/.test(key) ? key.slice(1, -1) : null;
+                return globalName && isLuaIdentifier(globalName) ? globalName : `_env[${key}]`;
+            }
+            const base = resolveId(rhs.base.name, env);
+            if (base == null) return null;
+            const member = /^"[A-Za-z_][A-Za-z0-9_]*"$/.test(key) ? key.slice(1, -1) : null;
+            return member && isLuaIdentifier(member) ? `${base}.${member}` : `${base}[${key}]`;
+        }
+        if ((rhs?.type === "BinaryExpression" || rhs?.type === "LogicalExpression") && rhs.operator) {
+            const left = isIdentifier(rhs.left) ? resolveId(rhs.left.name, env) : (isPrimitiveLiteral(rhs.left) ? sourceOf(source, rhs.left) : null);
+            const right = isIdentifier(rhs.right) ? resolveId(rhs.right.name, env) : (isPrimitiveLiteral(rhs.right) ? sourceOf(source, rhs.right) : null);
+            if (left == null || right == null) return null;
+            return `(${left} ${rhs.operator} ${right})`;
+        }
+        if (rhs?.type === "CallExpression" && isIdentifier(rhs.base)) {
+            const base = resolveId(rhs.base.name, env);
+            if (base == null) return null;
+            const args = [];
+            for (const arg of rhs.arguments || []) {
+                const value = isIdentifier(arg) ? resolveId(arg.name, env) : (isPrimitiveLiteral(arg) ? sourceOf(source, arg) : null);
+                if (value == null) return null;
+                args.push(value);
+            }
+            return `${base}(${args.join(", ")})`;
+        }
+        return null;
+    }
+
+    function mergeCandidates(candidates) {
+        if (candidates.length === 1) return { env: new Map(candidates[0].env), markers: [...(candidates[0].markers || [])] };
+        if (candidates.length !== 2) return null;
+        const a = candidates[0], b = candidates[1];
+        const am = a.markers || [], bm = b.markers || [];
+        let prefix = 0;
+        while (prefix < am.length && prefix < bm.length && am[prefix].condition === bm[prefix].condition && am[prefix].truth === bm[prefix].truth) prefix++;
+        if (am.length !== prefix + 1 || bm.length !== prefix + 1) return null;
+        const al = am[prefix], bl = bm[prefix];
+        if (!al || !bl || al.condition !== bl.condition || al.truth === bl.truth) return null;
+        const t = al.truth ? a : b;
+        const f = al.truth ? b : a;
+        const cond = al.condition;
+        const keys = new Set([...t.env.keys(), ...f.env.keys()]);
+        keys.delete(stateName);
+        const env = new Map();
+        for (const key of keys) {
+            const tv = t.env.get(key);
+            const fv = f.env.get(key);
+            if (tv === fv) {
+                if (tv !== undefined) env.set(key, tv);
+                continue;
+            }
+            if (tv === undefined || fv === undefined) {
+                // Path-local TEMP: keep it unknown at the join. A later read
+                // before redefinition will still fail closed.
+                continue;
+            }
+            if (fv === cond && tv != null) env.set(key, `(${cond} and ${tv})`);
+            else if (tv === cond && fv != null) env.set(key, `(${cond} or ${fv})`);
+            else return null;
+        }
+        return { env, markers: am.slice(0, prefix) };
+    }
+
+    while (ready.length) {
+        const id = ready.shift();
+        if (processed.has(id)) continue;
+        const candidates = incoming.get(id) || [];
+        const merged = mergeCandidates(candidates);
+        if (!merged) return null;
+        let env = merged.env;
+        let markers = merged.markers;
+        const block = blocks.get(id);
+        // Normalized dispatcher invariant: entering this leaf proves state == id.
+        // The compiler may borrow/copy POS as an ordinary temporary before the
+        // real transition at the end of the block.
+        env.set(stateName, String(id));
+
+        for (let i = 0; i < block.body.length; i++) {
+            if (i === block.transitionIndex) continue;
+            const statement = block.body[i];
+            if (!isSingleAssignment(statement)) return null;
+            const dest = statement.variables[0];
+            const rhs = statement.init[0];
+            if (!isIdentifier(dest)) return null;
+            const name = dest.name;
+
+            if (isIdentifier(rhs, "args") && name !== stateName && name !== returnName) {
+                env.set(name, "args");
+                continue;
+            }
+            if (name === returnName && isEmptyTable(rhs)) continue;
+            if (cleanupRegs.has(name) && rhs?.type === "NilLiteral") {
+                if (accumulatorRegs.has(name)) {
+                    const value = env.get(name);
+                    if (value == null) return null;
+                    const display = `v${++valueCount}`;
+                    out.push(`local ${display} = ${value}`);
+                    env.delete(name);
+                    continue;
+                }
+                if (!locals.has(name)) return null;
+                locals.delete(name);
+                localNames.delete(name);
+                env.delete(name);
+                continue;
+            }
+
+            const value = render(rhs, env);
+            if (value == null) {
+                // Borrowed state/temp writes may be dead before overwrite; only allow
+                // an immediate same-register overwrite inside this block.
+                const next = block.body[i + 1];
+                if (name !== stateName && !locals.has(name) && isSingleAssignment(next, name)) continue;
+                return null;
+            }
+
+            if (cleanupRegs.has(name) && !accumulatorRegs.has(name) && !locals.has(name) && isIdentifier(rhs) && rhs.name !== name) {
+                const display = rhs?.type === "TableConstructorExpression" ? `t${++tableCount}` : `v${++valueCount}`;
+                localNames.set(name, display);
+                locals.add(name);
+                out.push(`local ${display} = ${value}`);
+                env.set(name, display);
+            } else if (locals.has(name)) {
+                out.push(`${displayLocal(name)} = ${value}`);
+                env.set(name, displayLocal(name));
+            } else {
+                env.set(name, value);
+            }
+        }
+
+        processed.add(id);
+        const tr = block.transition;
+        const sends = [];
+        if (tr.kind === "jump") sends.push({ target: tr.target, env, markers });
+        else if (tr.kind === "branch") {
+            const condition = resolveId(tr.conditionRegister, env);
+            if (condition == null) return null;
+            sends.push({ target: tr.onTrue, env, markers: [...markers, { condition, truth: true }] });
+            sends.push({ target: tr.onFalse, env, markers: [...markers, { condition, truth: false }] });
+        }
+        for (const send of sends) {
+            if (!incoming.has(send.target)) incoming.set(send.target, []);
+            incoming.get(send.target).push({ env: new Map(send.env), markers: [...(send.markers || [])] });
+            indegree.set(send.target, indegree.get(send.target) - 1);
+            if (indegree.get(send.target) === 0) ready.push(send.target);
+        }
+    }
+
+    if (processed.size !== reachable.size || locals.size !== 0 || out.length === 0) return null;
+    return { source: out.join("\n") + "\n", statementCount: out.length, localCount: valueCount + tableCount, stateCount: leaves.size };
+}
+
 function matchTerminalBookkeeping(leaf, index, stateName, returnName) {
     let sawReturnReset = false;
     let sawStop = false;
@@ -486,8 +784,22 @@ function solveFreshSource(source, ast) {
     const returnName = findVmReturnRegister(vm.functionNode)?.name || null;
     const stateWhile = findStateWhile(vm.functionNode, stateName);
     if (!stateWhile) return { applied: false, reason: "Fresh beta CF: no while <state> dispatcher", mode: "fresh" };
+
+    const multiLogical = matchMultiStateLogicalLocals(source, stateWhile, stateName, returnName);
+    if (multiLogical) {
+        return {
+            applied: true,
+            mode: "fresh-multistate-logical",
+            source: multiLogical.source,
+            stateCount: multiLogical.stateCount,
+            statementCount: multiLogical.statementCount,
+            branchCount: multiLogical.stateCount - 1,
+            localCount: multiLogical.localCount,
+        };
+    }
+
     const leaf = unwrapSingleStateLeaf(stateWhile, stateName);
-    if (!leaf) return { applied: false, reason: "Fresh beta CF: direct-call solver requires exactly one VM state", mode: "fresh" };
+    if (!leaf) return { applied: false, reason: "Fresh beta CF: unsupported multi-state control flow", mode: "fresh" };
 
     const localProgram = matchLocalRegisterProgram(source, leaf, stateName, returnName);
     if (localProgram) {

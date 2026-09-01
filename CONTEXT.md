@@ -325,3 +325,19 @@ Latest scheduler canonicalization improvement:
 - A non-local TEMP assignment with an unknown RHS may be skipped only when the immediately following statement overwrites the same register, proving the first write dead before observation.
 - Expression rendering remains fail-closed when operands are not already proven symbolic values.
 
+## Fresh CF: Multi-State Short-Circuit Logical Chains
+
+- Fresh CF now reconstructs Prometheus short-circuit `and` / `or` expressions that compile into multiple normalized VM states.
+- State leaves are extracted structurally from either nested `if state == N` dispatchers or `if/elseif` normalized dispatchers.
+- Logical transitions are recognized dynamically from the compiler form `state = condition and TRUE_STATE or FALSE_STATE`; state IDs and operand count are not hardcoded.
+- Symbolic execution propagates proven register expressions through the normalized state DAG and merges short-circuit joins using branch provenance.
+- Nested logical expressions use a provenance stack, so inner joins preserve outer branch conditions and arbitrary chain depth can merge inside-out.
+- Join merging ignores the VM control-state register itself because block entry proves `state == current normalized ID`; compiler POS-state copies can therefore be handled without becoming fake program values.
+- Path-local TEMP values present on only one predecessor are dropped at joins and remain fail-closed if read before redefinition.
+- Cleanup-backed registers with one non-nil definition remain stable source locals; cleanup-backed registers with multiple mutually-exclusive logical-path definitions are treated as short-circuit accumulators and emitted once at final cleanup instead of as fake assignments.
+- Real 5-state fixture recovers `local v1 = game; local v2 = workspace; local v3 = (v1 and v2); local v4 = (v1 or v2)`.
+- Real 9-state distinct-operand fixture recovers `local v4 = (v1 or (v2 or v3))` and `local v5 = (v1 and (v2 and v3))`.
+- Repeated nested fixture `a and b or a and b` safely simplifies through value merging to `(a and b)`.
+- Constant-only chains may already be folded by Prometheus before fresh CF; real `1 or 2 or 3 or 4 or 5` recovers as `local v1 = 1`, preserving semantics.
+- Fresh CF, scheduler, VM state reachability, and VM register naming regressions pass.
+
