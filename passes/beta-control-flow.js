@@ -1501,48 +1501,10 @@ function matchDirectGlobalCallLeaf(source, leaf, stateName, returnName) {
     };
 }
 
-function normalizeRegisterOverflowGraph(root) {
-    let applied = 0;
-    let unsupported = 0;
-
-    function visit(value, parent = null, key = null) {
-        if (!value || typeof value !== "object") return;
-        if (Array.isArray(value)) {
-            for (let i = 0; i < value.length; i++) visit(value[i], value, i);
-            return;
-        }
-        if (value.type === "IndexExpression" && isIdentifier(value.base, "RegisterOverflow")) {
-            const slot = value.index?.type === "NumericLiteral" ? Number(value.index.value) : NaN;
-            if (!Number.isInteger(slot) || slot < 0) {
-                unsupported++;
-                return;
-            }
-            const replacement = {
-                type: "Identifier",
-                name: `o${slot}`,
-                range: value.range,
-                loc: value.loc,
-            };
-            if (parent !== null) parent[key] = replacement;
-            applied++;
-            return;
-        }
-        for (const [childKey, child] of Object.entries(value)) {
-            if (childKey === "range" || childKey === "loc") continue;
-            visit(child, value, childKey);
-        }
-    }
-
-    visit(root);
-    return { applied: applied > 0, count: applied, unsupported };
-}
-
 function solveFreshSource(source, ast) {
     if (typeof source !== "string" || !ast) return { applied: false, reason: "Fresh beta CF requires normal output source and AST", mode: "fresh" };
     const vm = findVmFunction(ast);
     if (!vm) return { applied: false, reason: "Fresh beta CF: no semantically named vm function", mode: "fresh" };
-    const overflow = normalizeRegisterOverflowGraph(vm.functionNode);
-    if (overflow.unsupported > 0) return { applied: false, reason: "Fresh beta CF: dynamic RegisterOverflow index is unsupported", mode: "fresh" };
     const stateParam = (vm.functionNode.parameters || [])[0];
     if (!isIdentifier(stateParam)) return { applied: false, reason: "Fresh beta CF: VM state parameter is not an identifier", mode: "fresh" };
     const stateName = stateParam.name;
@@ -1649,5 +1611,4 @@ module.exports = {
     collapseCompilerStructuredLoops: unsupported("collapseCompilerStructuredLoops"),
     forwardControlOnlyJoinBranches: unsupported("forwardControlOnlyJoinBranches"),
     removeCompilerPosPreservationOperations: unsupported("removeCompilerPosPreservationOperations"),
-    normalizeRegisterOverflowGraph,
 };
