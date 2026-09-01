@@ -341,3 +341,18 @@ Latest scheduler canonicalization improvement:
 - Constant-only chains may already be folded by Prometheus before fresh CF; real `1 or 2 or 3 or 4 or 5` recovers as `local v1 = 1`, preserving semantics.
 - Fresh CF, scheduler, VM state reachability, and VM register naming regressions pass.
 
+
+
+## Fresh CF: Closure Entry Recovery
+
+- Fresh CF now recognizes normalized closure-factory calls structurally from semantically named `createClosure` / `createClosureN` calls carrying `(childEntryId, captureTable)`.
+- First implemented closure scope is empty-capture closures only; non-empty capture tables fail closed and remain future upvalue work.
+- Child function source is recovered from the normalized child entry state instead of using the randomized closure-helper arity.
+- Source parameters are derived from actual child `args[index]` reads, so compiler-added dummy helper arguments do not become fake parameters.
+- Child entry rendering currently supports primitive/global/member/binary/logical/call symbolic expressions and terminal return tables; multiple return values are preserved.
+- Closure expressions are fed into the existing register-maker via a special-call renderer, so local ownership/lifetime and `vN` naming stay unified with ordinary locals.
+- Real compiler/main/fresh-CF fixture `local a = function() return 123 end` recovers `local v1 = function() return 123 end`.
+- Real two-parameter/multi-return fixture recovers `local v1 = function(v1, v2) return v1, v2 end`, while the compiler helper may have a different randomized arity.
+- Mode: `fresh-closure-entry`; reports `closureCount`.
+- Nested closure creation, captured upvalues, vararg closures, and packed closure-call/multi-return lowering are not claimed supported yet and fail closed.
+- Fresh CF, scheduler, VM state reachability, and VM register naming regressions pass.

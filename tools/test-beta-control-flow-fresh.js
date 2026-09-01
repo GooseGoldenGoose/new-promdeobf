@@ -390,4 +390,28 @@ function vmStatesSource(states) {
     assert.strictEqual(result.source, "local v1 = game\nlocal v2 = workspace\nlocal v3 = math\nlocal v4 = (v1 or (v2 or v3))\nlocal v5 = (v1 and (v2 and v3))\n");
 }
 
+
+{
+    const source = vmStatesSource({
+        1: ['r2 = args', 'state = createClosure1(2, {})', 'r1 = state', 'r1 = nil', 'ReturnVal = {}', 'state = nil'],
+        2: ['state = 123', 'ReturnVal = { state }', 'state = nil'],
+    });
+    const result = solveBetaControlFlow(source, parse(source));
+    assert.strictEqual(result.applied, true);
+    assert.strictEqual(result.mode, "fresh-closure-entry");
+    assert.strictEqual(result.closureCount, 1);
+    assert.strictEqual(result.source, "local v1 = function()\n    return 123\nend\n");
+}
+
+{
+    const source = vmStatesSource({
+        1: ['r2 = args', 'state = createClosure2(2, {})', 'r1 = state', 'r1 = nil', 'ReturnVal = {}', 'state = nil'],
+        2: ['r2 = args[1]', 'r1 = args[2]', 'ReturnVal = { r2, r1 }', 'state = nil'],
+    });
+    const result = solveBetaControlFlow(source, parse(source));
+    assert.strictEqual(result.applied, true);
+    assert.strictEqual(result.mode, "fresh-closure-entry");
+    assert.strictEqual(result.source, "local v1 = function(v1, v2)\n    return v1, v2\nend\n");
+}
+
 console.log("fresh beta direct-global-call regression: ok");

@@ -230,7 +230,7 @@ function matchOneDirectGlobalCall(source, leaf, index, stateName, returnName) {
     };
 }
 
-function matchLocalRegisterProgram(source, leaf, stateName, returnName) {
+function matchLocalRegisterProgram(source, leaf, stateName, returnName, options = {}) {
     const cleanupRegs = new Set();
     for (const statement of leaf) {
         if (!isSingleAssignment(statement)) continue;
@@ -312,6 +312,10 @@ function matchLocalRegisterProgram(source, leaf, stateName, returnName) {
             return member && isLuaIdentifier(member) ? `${base}.${member}` : `${base}[${key}]`;
         }
         if (rhs?.type === "CallExpression" && isIdentifier(rhs.base)) {
+            if (typeof options.renderSpecialCall === "function") {
+                const special = options.renderSpecialCall(rhs);
+                if (special !== null && special !== undefined) return special;
+            }
             const base = expr.get(rhs.base.name) ?? (locals.has(rhs.base.name) ? localName(rhs.base.name) : null);
             if (!base) return null;
             const args = [];
@@ -414,6 +418,121 @@ function matchLocalRegisterProgram(source, leaf, stateName, returnName) {
     };
 }
 
+
+
+function renderSimpleClosureLeaf(source, leaf, stateName, returnName) {
+    const env = new Map();
+    const paramNames = [];
+    const body = [];
+    let sawReturn = false;
+    let sawStop = false;
+
+    function resolveNode(node) {
+        if (isPrimitiveLiteral(node) || isEmptyTable(node)) return sourceOf(source, node);
+        if (isIdentifier(node)) return env.get(node.name) ?? null;
+        if (node?.type === "IndexExpression") {
+            if (isIdentifier(node.base, "args") && node.index?.type === "NumericLiteral") {
+                const index = Number(node.index.value);
+                if (!Number.isInteger(index) || index < 1) return null;
+                while (paramNames.length < index) paramNames.push(`v${paramNames.length + 1}`);
+                return paramNames[index - 1];
+            }
+            if (!isIdentifier(node.base) || !isIdentifier(node.index)) return null;
+            const key = env.get(node.index.name);
+            if (key == null) return null;
+            if (node.base.name === "_env") {
+                const globalName = /^"[A-Za-z_][A-Za-z0-9_]*"$/.test(key) ? key.slice(1, -1) : null;
+                return globalName && isLuaIdentifier(globalName) ? globalName : `_env[${key}]`;
+            }
+            const base = env.get(node.base.name);
+            if (base == null) return null;
+            const member = /^"[A-Za-z_][A-Za-z0-9_]*"$/.test(key) ? key.slice(1, -1) : null;
+            return member && isLuaIdentifier(member) ? `${base}.${member}` : `${base}[${key}]`;
+        }
+        if ((node?.type === "BinaryExpression" || node?.type === "LogicalExpression") && node.operator) {
+            const left = resolveNode(node.left);
+            const right = resolveNode(node.right);
+            if (left == null || right == null) return null;
+            return `(${left} ${node.operator} ${right})`;
+        }
+        if (node?.type === "CallExpression" && isIdentifier(node.base)) {
+            const base = env.get(node.base.name);
+            if (base == null) return null;
+            const args = [];
+            for (const arg of node.arguments || []) {
+                const value = resolveNode(arg);
+                if (value == null) return null;
+                args.push(value);
+            }
+            return `${base}(${args.join(", ")})`;
+        }
+        return null;
+    }
+
+    for (let index = 0; index < leaf.length; index++) {
+        const statement = leaf[index];
+        if (!isSingleAssignment(statement)) return null;
+        const dest = statement.variables[0];
+        const rhs = statement.init[0];
+        if (!isIdentifier(dest)) return null;
+        const name = dest.name;
+
+        if (name === stateName && rhs?.type === "NilLiteral") {
+            sawStop = true;
+            continue;
+        }
+        if (name === returnName && rhs?.type === "TableConstructorExpression") {
+            const values = [];
+            for (const field of rhs.fields || []) {
+                if (field?.type !== "TableValue") return null;
+                const value = resolveNode(field.value);
+                if (value == null) return null;
+                values.push(value);
+            }
+            if (values.length > 0) body.push(`return ${values.join(", ")}`);
+            sawReturn = true;
+            continue;
+        }
+        if (rhs?.type === "NilLiteral" && name !== stateName && name !== returnName) {
+            env.delete(name);
+            continue;
+        }
+
+        const value = resolveNode(rhs);
+        if (value == null) return null;
+        env.set(name, value);
+    }
+
+    if (!sawReturn || !sawStop) return null;
+    const lines = body.length ? body.map(line => `    ${line}`).join("\n") : "";
+    return `function(${paramNames.join(", ")})${lines ? `\n${lines}\n` : ""}end`;
+}
+
+function matchClosureEntryProgram(source, stateWhile, stateName, returnName) {
+    const leaves = extractNormalizedStateLeaves(stateWhile, stateName);
+    if (!leaves || leaves.size < 2 || !leaves.has(1)) return null;
+    const consumedEntries = new Set([1]);
+
+    function renderClosureCall(call) {
+        if (call?.type !== "CallExpression" || !isIdentifier(call.base) || !/^createClosure\d*$/.test(call.base.name)) return null;
+        const args = call.arguments || [];
+        if (args.length !== 2 || args[0]?.type !== "NumericLiteral" || !isEmptyTable(args[1])) return null;
+        const entryId = Number(args[0].value);
+        if (!Number.isInteger(entryId) || entryId === 1 || consumedEntries.has(entryId)) return null;
+        const childLeaf = leaves.get(entryId);
+        if (!childLeaf) return null;
+        const rendered = renderSimpleClosureLeaf(source, childLeaf, stateName, returnName);
+        if (!rendered) return null;
+        consumedEntries.add(entryId);
+        return rendered;
+    }
+
+    const root = leaves.get(1);
+    const program = matchLocalRegisterProgram(source, root, stateName, returnName, { renderSpecialCall: renderClosureCall });
+    if (!program) return null;
+    if (consumedEntries.size !== leaves.size) return null;
+    return { ...program, stateCount: leaves.size, closureCount: consumedEntries.size - 1 };
+}
 
 function extractNormalizedStateLeaves(stateWhile, stateName) {
     const leaves = new Map();
@@ -784,6 +903,20 @@ function solveFreshSource(source, ast) {
     const returnName = findVmReturnRegister(vm.functionNode)?.name || null;
     const stateWhile = findStateWhile(vm.functionNode, stateName);
     if (!stateWhile) return { applied: false, reason: "Fresh beta CF: no while <state> dispatcher", mode: "fresh" };
+
+    const closureProgram = matchClosureEntryProgram(source, stateWhile, stateName, returnName);
+    if (closureProgram) {
+        return {
+            applied: true,
+            mode: "fresh-closure-entry",
+            source: closureProgram.source,
+            stateCount: closureProgram.stateCount,
+            statementCount: closureProgram.statementCount,
+            branchCount: 0,
+            localCount: closureProgram.localCount,
+            closureCount: closureProgram.closureCount,
+        };
+    }
 
     const multiLogical = matchMultiStateLogicalLocals(source, stateWhile, stateName, returnName);
     if (multiLogical) {
