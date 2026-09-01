@@ -88,28 +88,51 @@ function matchEnvLoad(statement, destinationName, keyName) {
 }
 
 function matchDirectMemberCallable(leaf, index, stateName, returnName) {
-    const baseKeyLoad = leaf[index];
+    let cursor = index;
+
+    // Start from a proven global load: key = "game"; value = _env[key].
+    const baseKeyLoad = leaf[cursor];
     if (!isSingleAssignment(baseKeyLoad)) return null;
     const baseKeyReg = baseKeyLoad.variables[0];
-    if (!isIdentifier(baseKeyReg) || baseKeyReg.name === stateName || baseKeyReg.name === returnName) return null;
+    if (!isIdentifier(baseKeyReg)) return null;
     const baseName = decodeJsonStringLiteral(baseKeyLoad.init[0]);
     if (!isLuaIdentifier(baseName)) return null;
 
-    if (!matchEnvLoad(leaf[index + 1], returnName, baseKeyReg.name)) return null;
+    const baseLoad = leaf[cursor + 1];
+    if (!isSingleAssignment(baseLoad)) return null;
+    const baseDest = baseLoad.variables[0];
+    if (!isIdentifier(baseDest) || !matchEnvLoad(baseLoad, baseDest.name, baseKeyReg.name)) return null;
 
-    const memberKeyLoad = leaf[index + 2];
-    if (!isSingleAssignment(memberKeyLoad)) return null;
-    const memberKeyReg = memberKeyLoad.variables[0];
-    if (!isIdentifier(memberKeyReg) || memberKeyReg.name === stateName || memberKeyReg.name === returnName) return null;
-    const memberName = decodeJsonStringLiteral(memberKeyLoad.init[0]);
-    if (!isLuaIdentifier(memberName)) return null;
+    let expression = baseName;
+    let currentRegister = baseDest.name;
+    let memberCount = 0;
+    cursor += 2;
 
-    const memberLoad = leaf[index + 3];
-    if (!isSingleAssignment(memberLoad, stateName)) return null;
-    const memberIndex = memberLoad.init[0];
-    if (memberIndex?.type !== "IndexExpression" || !isIdentifier(memberIndex.base, returnName) || !isIdentifier(memberIndex.index, memberKeyReg.name)) return null;
+    // Follow any number of compiler IndexExpression hops. Each hop is exactly:
+    // key = "member"; next = current[key]. No search or backtracking.
+    while (cursor + 1 < leaf.length) {
+        const keyLoad = leaf[cursor];
+        if (!isSingleAssignment(keyLoad)) break;
+        const keyReg = keyLoad.variables[0];
+        if (!isIdentifier(keyReg)) break;
+        const memberName = decodeJsonStringLiteral(keyLoad.init[0]);
+        if (!isLuaIdentifier(memberName)) break;
 
-    return { next: index + 4, globalName: `${baseName}.${memberName}` };
+        const memberLoad = leaf[cursor + 1];
+        if (!isSingleAssignment(memberLoad)) break;
+        const memberDest = memberLoad.variables[0];
+        const memberIndex = memberLoad.init[0];
+        if (!isIdentifier(memberDest) || memberIndex?.type !== "IndexExpression" ||
+            !isIdentifier(memberIndex.base, currentRegister) || !isIdentifier(memberIndex.index, keyReg.name)) break;
+
+        expression += `.${memberName}`;
+        currentRegister = memberDest.name;
+        memberCount++;
+        cursor += 2;
+    }
+
+    if (memberCount === 0) return null;
+    return { next: cursor, globalName: expression, register: currentRegister };
 }
 
 function readTempProducer(source, leaf, index, stateName, returnName, temps) {
@@ -155,7 +178,7 @@ function matchOneDirectGlobalCall(source, leaf, index, stateName, returnName) {
         if (!callable) {
             const memberCallable = matchDirectMemberCallable(leaf, index, stateName, returnName);
             if (memberCallable) {
-                callable = { globalName: memberCallable.globalName };
+                callable = { globalName: memberCallable.globalName, register: memberCallable.register };
                 index = memberCallable.next;
                 continue;
             }
@@ -164,12 +187,12 @@ function matchOneDirectGlobalCall(source, leaf, index, stateName, returnName) {
         if (isSingleAssignment(statement, returnName)) {
             const rhs = statement.init[0];
 
-            if (rhs?.type === "CallExpression" && isIdentifier(rhs.base, stateName)) break;
+            if (rhs?.type === "CallExpression" && callable && isIdentifier(rhs.base, callable.register)) break;
 
             const globalName = decodeJsonStringLiteral(rhs);
             if (isLuaIdentifier(globalName) && matchEnvLoad(leaf[index + 1], stateName, returnName)) {
                 if (callable) return null;
-                callable = { globalName };
+                callable = { globalName, register: stateName };
                 index += 2;
                 continue;
             }
@@ -185,7 +208,7 @@ function matchOneDirectGlobalCall(source, leaf, index, stateName, returnName) {
     const callStatement = leaf[index];
     if (!isSingleAssignment(callStatement, returnName)) return null;
     const call = callStatement.init[0];
-    if (call?.type !== "CallExpression" || !isIdentifier(call.base, stateName)) return null;
+    if (call?.type !== "CallExpression" || !isIdentifier(call.base, callable.register)) return null;
 
     const renderedArgs = [];
     const used = new Set();

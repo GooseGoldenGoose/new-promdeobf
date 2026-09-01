@@ -272,3 +272,14 @@ Latest scheduler canonicalization improvement:
 - Real `local a = math; a.random(1,2)` and `local a = math.random; a(1,2)` shapes are explicitly rejected by this direct-member case.
 - Parsed real `math.random(1,2)` matcher benchmark: about 14.43 microseconds/solve over 100,000 solves; parsing excluded.
 - Fresh CF, scheduler, VM state reachability, and VM register naming regressions pass.
+
+## Fresh CF: Arbitrary Direct Member Chains
+
+- Direct callable recovery is no longer hardcoded to a two-hop `math.random` shape.
+- The fresh solver now follows any number of proven compiler `IndexExpression` hops: `key = "member"; next = current[key]`, beginning from a proven global `_env[key]` load and ending at the immediate call.
+- Real compiler/main/fresh-CF fixtures recover exactly `math.random(1, 2)` and `game.foo.bar.baz.qux()`.
+- Destination registers may alternate across ordinary VM registers, `ReturnVal`, and `state`; provenance follows register identity at each hop.
+- Table/function local alias shapes remain rejected because visible copy/lifetime-cleanup evidence breaks the direct-chain consume pattern. Promoted-local cleanup also prevents terminal bookkeeping from matching.
+- Matching remains linear in the leaf with no depth limit, search, backtracking, or legacy fallback.
+- Parsed-fixture benchmark across `math.random(1, 2)` and a four-member chain: about 14.3 microseconds/solve over 100,000 solves; parsing excluded.
+- Fresh CF, scheduler, VM state reachability, and VM register naming regressions pass.

@@ -195,4 +195,28 @@ function vmSource(leaf) {
     assert.strictEqual(result.applied, false, "direct member solver erased a function-local lifetime");
 }
 
+
+{
+    const source = vmSource([
+        'r5 = "game"',
+        'r1 = _env[r5]',
+        'r5 = "foo"',
+        'r3 = r1[r5]',
+        'r1 = "bar"',
+        'r2 = r3[r1]',
+        'r3 = "baz"',
+        'ReturnVal = r2[r3]',
+        'r2 = "qux"',
+        'state = ReturnVal[r2]',
+        'ReturnVal = state()',
+        'r4 = args',
+        'ReturnVal = {}',
+        'state = nil',
+    ]);
+    const result = solveBetaControlFlow(source, parse(source));
+    assert.strictEqual(result.applied, true);
+    assert.strictEqual(result.source, "game.foo.bar.baz.qux()\n");
+    assert.strictEqual(result.globalName, "game.foo.bar.baz.qux");
+}
+
 console.log("fresh beta direct-global-call regression: ok");
