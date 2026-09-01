@@ -272,44 +272,64 @@ Post-commit verification 2026-09-01:
 - state reachability PASS
 - register naming PASS
 
-## CURRENT UNCOMMITTED WIP - Assignments / Field Writes
+## Assignments / Field Writes
 
-Important: after `c61ddf2`, `passes/beta-control-flow.js` currently has an uncommitted/unproven patch. Do not assume it is correct or committed.
+Implemented and tested in fresh CF.
 
-Current diff adds root/local handling for an index-expression assignment target:
-```js
-if (dest?.type === "IndexExpression" && isIdentifier(dest.base) && isIdentifier(dest.index)) {
-    const base = renderRhs(dest.base);
-    const key = renderRhs(dest.index);
-    const value = renderRhs(rhs);
-    ...
-    out.push(`${target} = ${value}`);
-}
+Supported structurally:
+- local field writes: `base.x = value`
+- dynamic index writes: `base[key] = value`
+- nested field writes such as `a.b.c = value`
+- global writes through `_env["name"] = value` -> `name = value`
+- writes through recovered closure parameters/captures when provenance proves a stable reference
+
+Safety:
+- literal identifier keys canonicalize to dot syntax
+- dynamic keys stay bracket syntax
+- no source-string call-shape regex
+- write bases require structural stable-base provenance
+- call-derived/effectful bases fail closed to avoid re-evaluation/side-effect duplication
+
+Real compiler proofs:
+```lua
+local t = {}
+t.x = 1
+print(t.x)
+```
+->
+```lua
+local t1 = {}
+t1.x = 1
+print(t1.x)
 ```
 
-Intent:
-- recover `base[key] = value`
-- use `base.field = value` when key resolves to a valid literal identifier
-- otherwise emit `base[key] = value`
+```lua
+local t = {}
+local k = "x"
+t[k] = 2
+print(t[k])
+```
+->
+```lua
+local t1 = {}
+local v1 = "x"
+t1[v1] = 2
+print(t1[v1])
+```
 
-Current patch also rejects a rendered base matching a call-like string with `/\([^)]*\)$/`; this has NOT been reviewed/proven and may be too heuristic.
+```lua
+local a = { b = { c = 1 } }
+a.b.c = 123
+print(a.b.c)
+```
+->
+```lua
+local t1 = { b = { c = 1 } }
+t1.b.c = 123
+print(t1.b.c)
+```
 
-No permanent regression is currently staged for this field-write WIP.
-No claim of runtime correctness has been made.
-
-Next chat should start here:
-1. inspect current `git diff -- passes/beta-control-flow.js`
-2. inspect compiler assignment/index-write handlers before trusting this patch
-3. create real compiler fixtures for:
-   - `local t={}; t.x=1; print(t.x)`
-   - `local t={}; local k="x"; t[k]=2; print(t[k])`
-   - nested `a.b.c = value` if compiler shape supports it
-   - side-effectful base/key/value ordering cases
-   - writes inside closures / captured table aliases
-4. remove/replace any string-regex heuristic with structural provenance if possible
-5. add positive + negative regressions
-6. run runtime parity and standard regression suite
-7. only then update CONTEXT, commit task files, push
+Permanent regressions cover local/dynamic/global/captured writes plus fail-closed call-derived bases.
 
 ## Remaining Feature Order
 

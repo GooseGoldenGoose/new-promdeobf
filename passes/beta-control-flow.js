@@ -435,6 +435,24 @@ function matchLocalRegisterProgram(source, leaf, stateName, returnName, options 
             declaredCount++;
             continue;
         }
+        if (dest?.type === "IndexExpression" && isIdentifier(dest.base) && isIdentifier(dest.index)) {
+            const key = renderRhs(dest.index);
+            const value = renderRhs(rhs);
+            if (typeof key !== "string" || typeof value !== "string") return null;
+            const fieldName = /^"[A-Za-z_][A-Za-z0-9_]*"$/.test(key) ? key.slice(1, -1) : null;
+            if (dest.base.name === "_env") {
+                if (!fieldName || !isLuaIdentifier(fieldName)) return null;
+                out.push(`${fieldName} = ${value}`);
+                continue;
+            }
+            const base = renderRhs(dest.base);
+            const baseMeta = exprMeta.get(dest.base.name);
+            const stableBase = locals.has(dest.base.name) || exprKinds.get(dest.base.name) === "table" || baseMeta?.kind === "member";
+            if (typeof base !== "string" || !stableBase) return null;
+            const target = fieldName && isLuaIdentifier(fieldName) ? `${base}.${fieldName}` : `${base}[${key}]`;
+            out.push(`${target} = ${value}`);
+            continue;
+        }
         if (!isIdentifier(dest)) return null;
         const name = dest.name;
         const isPackIndex = rhs?.type === "IndexExpression" && isIdentifier(rhs.base) && exprKinds.get(rhs.base.name) === "return-pack" && rhs.index?.type === "NumericLiteral";
@@ -458,7 +476,7 @@ function matchLocalRegisterProgram(source, leaf, stateName, returnName, options 
         if (isIdentifier(rhs, "args") && name !== stateName && name !== returnName && !locals.has(name)) {
             expr.set(name, "args"); exprKinds.set(name, "value"); continue;
         }
-        if (name === returnName && isEmptyTable(rhs)) { sawReturnReset = true; continue; }
+        if (name === returnName && isEmptyTable(rhs) && !valueUsedBeforeOverwrite(index, returnName)) { sawReturnReset = true; continue; }
         if (name === stateName && rhs?.type === "NilLiteral") { sawStop = true; continue; }
         if (cleanupRegs.has(name) && rhs?.type === "NilLiteral") {
             if (!locals.has(name)) return null;
@@ -690,6 +708,24 @@ function renderSimpleClosureLeaf(source, leaf, stateName, returnName, options = 
             return null;
         }
 
+        if (dest?.type === "IndexExpression" && isIdentifier(dest.base) && isIdentifier(dest.index)) {
+            const key = resolveNode(dest.index);
+            const value = resolveNode(rhs);
+            if (typeof key !== "string" || typeof value !== "string") return null;
+            const fieldName = /^"[A-Za-z_][A-Za-z0-9_]*"$/.test(key) ? key.slice(1, -1) : null;
+            if (dest.base.name === "_env") {
+                if (!fieldName || !isLuaIdentifier(fieldName)) return null;
+                body.push(`${fieldName} = ${value}`);
+                continue;
+            }
+            const base = resolveNode(dest.base);
+            const baseMeta = envMeta.get(dest.base.name);
+            const stableBase = baseMeta?.kind === "table" || baseMeta?.kind === "member" || baseMeta?.kind === "stable-ref";
+            if (typeof base !== "string" || !stableBase) return null;
+            const target = fieldName && isLuaIdentifier(fieldName) ? `${base}.${fieldName}` : `${base}[${key}]`;
+            body.push(`${target} = ${value}`);
+            continue;
+        }
         if (!isIdentifier(dest)) return null;
         const name = dest.name;
 
@@ -777,6 +813,15 @@ function renderSimpleClosureLeaf(source, leaf, stateName, returnName, options = 
             envMeta.set(name, { kind: "return-pack", call });
         } else if (member) {
             envMeta.set(name, member);
+        } else if (rhs?.type === "TableConstructorExpression") {
+            envMeta.set(name, { kind: "table" });
+        } else if (rhs?.type === "IndexExpression" && (
+            (isIdentifier(rhs.base, "args") && rhs.index?.type === "NumericLiteral") ||
+            isIdentifier(rhs.base, "upvalueValues")
+        )) {
+            envMeta.set(name, { kind: "stable-ref" });
+        } else if (isIdentifier(rhs) && envMeta.has(rhs.name)) {
+            envMeta.set(name, envMeta.get(rhs.name));
         } else {
             envMeta.delete(name);
         }

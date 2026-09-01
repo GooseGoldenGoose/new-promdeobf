@@ -819,4 +819,66 @@ function vmStatesSource(states) {
     assert.strictEqual(result.source, 'local v1 = function(v1)\n    return v1:sub(2)\nend\nprint(v1("abc"))\n');
 }
 
+
+{
+    const source = vmStatesSource({
+        1: [
+            'ReturnVal = {}', 'r8 = ReturnVal', 'state = 1', 'r2 = state', 'state = 2', 'r2 = state',
+            'r6 = r2', 'ReturnVal = "x"', 'r8[ReturnVal] = r6', 'ReturnVal = "y"', 'r6 = ReturnVal',
+            'ReturnVal = 3', 'r8[r6] = ReturnVal', 'r1 = "print"', 'ReturnVal = _env[r1]',
+            'r4 = "x"', 'r3 = r8[r4]', 'r7 = "y"', 'r4 = r8[r7]', 'r5 = args',
+            'r6 = nil', 'r8 = nil', 'r1 = ReturnVal(r2, r3, r4)', 'r2 = nil', 'ReturnVal = {}', 'state = nil',
+        ],
+    });
+    const result = solveBetaControlFlow(source, parse(source));
+    assert.strictEqual(result.applied, true, "local assignment/field writes were not recovered");
+    assert.strictEqual(result.mode, "fresh-register-locals");
+    assert.strictEqual(result.source, 'local t1 = {}\nlocal v1 = 1\nv1 = 2\nlocal v2 = v1\nt1.x = v2\nv2 = "y"\nt1[v2] = 3\nprint(v1, t1.x, t1.y)\n');
+}
+
+{
+    const source = vmStatesSource({
+        1: [
+            'ReturnVal = "foo"', 'state = 123', '_env[ReturnVal] = state', 'r1 = "print"',
+            'ReturnVal = _env[r1]', 'r2 = "foo"', 'r4 = _env[r2]', 'r1 = ReturnVal(r4)',
+            'r3 = args', 'ReturnVal = {}', 'state = nil',
+        ],
+    });
+    const result = solveBetaControlFlow(source, parse(source));
+    assert.strictEqual(result.applied, true, "global assignment was not recovered");
+    assert.strictEqual(result.source, 'foo = 123\nprint(foo)\n');
+}
+
+{
+    const source = vmStatesSource({
+        1: [
+            'r7 = allocUpvalue()', 'state = {}', 'upvalueValues[r7] = state', 'state = createClosure4(2, { r7 })',
+            'r3 = state', 'ReturnVal = 5', 'state = r3(ReturnVal)', 'r4 = args', 'r1 = "y"', 'r3 = nil',
+            'ReturnVal = "print"', 'state = _env[ReturnVal]', 'r6 = upvalueValues[r7]', 'r2 = "x"',
+            'r5 = r6[r2]', 'r2 = upvalueValues[r7]', 'r6 = r2[r1]', 'ReturnVal = state(r5, r6)',
+            'ReturnVal = {}', 'r7 = releaseUpvalue(r7)', 'state = nil',
+        ],
+        2: [
+            'state = upvalueValues[upvalues[1]]', 'r4 = args[1]', 'r7 = r4', 'ReturnVal = "x"',
+            'state[ReturnVal] = r7', 'state = upvalueValues[upvalues[1]]', 'r3 = 1', 'r7 = r4 + r3',
+            'ReturnVal = "y"', 'state[ReturnVal] = r7', 'r4 = nil', 'ReturnVal = {}', 'state = nil',
+        ],
+    });
+    const result = solveBetaControlFlow(source, parse(source));
+    assert.strictEqual(result.applied, true, "captured table field writes were not recovered");
+    assert.strictEqual(result.mode, "fresh-closure-entry");
+    assert.strictEqual(result.source, 'local v1 = {}\nlocal v2 = function(v2)\n    v1.x = v2\n    v1.y = (v2 + 1)\nend\nv2(5)\nprint(v1.x, v1.y)\n');
+}
+
+{
+    const source = vmStatesSource({
+        1: [
+            'r4 = {}', 'r1 = "make"', 'state = _env[r1]', 'r2 = state()',
+            'ReturnVal = "x"', 'r3 = 1', 'r2[ReturnVal] = r3',
+            'r4 = nil', 'ReturnVal = {}', 'state = nil',
+        ],
+    });
+    const result = solveBetaControlFlow(source, parse(source));
+    assert.strictEqual(result.applied, false, "call-derived field-write base must fail closed");
+}
 console.log("fresh beta direct-global-call regression: ok");
