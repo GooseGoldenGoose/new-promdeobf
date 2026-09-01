@@ -555,4 +555,36 @@ function vmStatesSource(states) {
     assert.strictEqual(result.source, 'local v1 = 123\nprint(v1, 123)\nprint(pcall(print, 1))\nlocal v2 = function()\n    return function()\n        print(321)\n    end\nend\nv2()()\n');
 }
 
+
+{
+    const source = vmStatesSource({
+        1: [
+            'r1 = args',
+            'r2 = allocUpvalue()',
+            'ReturnVal = {}',
+            'state = 123',
+            'upvalueValues[r2] = state',
+            'state = createClosure1(2, { r2 })',
+            'r3 = state',
+            'r2 = releaseUpvalue(r2)',
+            'state = r3()',
+            'r3 = nil',
+            'state = nil',
+        ],
+        2: [
+            'state = _env[ReturnVal]',
+            'ReturnVal = "print"',
+            'r1 = upvalueValues[upvalues[1]]',
+            'ReturnVal = state(r1)',
+            'ReturnVal = {}',
+            'state = nil',
+        ],
+    });
+    const result = solveBetaControlFlow(source, parse(source));
+    assert.strictEqual(result.applied, true, "read-only captured local was not recovered");
+    assert.strictEqual(result.mode, "fresh-captured-closure");
+    assert.strictEqual(result.captureCount, 1);
+    assert.strictEqual(result.source, 'local v1 = 123\nlocal v2 = function()\n    print(v1)\nend\nv2()\n');
+}
+
 console.log("fresh beta direct-global-call regression: ok");

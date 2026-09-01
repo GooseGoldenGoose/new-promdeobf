@@ -394,3 +394,16 @@ Latest scheduler canonicalization improvement:
 - Real compiler/main fixture `local a=123; print(a,123); print(pcall(print,1)); local b=function() return function() print(321) end end; b()()` now recovers as `local v1 = 123; print(v1, 123); print(pcall(print, 1)); local v2 = function() return function() print(321) end end; v2()()` with proper nesting/indentation.
 - Current recursive support remains empty-capture only; captured nested closures still belong to upvalue recovery.
 - Fresh CF, scheduler, VM state reachability, and VM register naming regressions pass with the full mixed nested-closure case.
+
+
+## Fresh CF: First Read-Only Captured Local
+
+- Fresh CF now recovers the first proven captured-local/upvalue shape from the actual compiler cell lifecycle.
+- Proven root chain: `cell = allocUpvalue(); value = ...; upvalueValues[cell] = value; closure = createClosureN(child, { cell }); releaseUpvalue(cell)`.
+- Proven child read: `upvalueValues[upvalues[1]]` maps back to the parent captured source local.
+- Real compiler/main fixture `local a = 123; local f = function() print(a) end; f()` now recovers as `local v1 = 123; local v2 = function() print(v1) end; v2()` through mode `fresh-captured-closure`.
+- The matcher uses capture-slot identity (`child slot 1 -> cell -> parent value`) rather than physical register identity.
+- Child closure rendering can resolve direct captured reads and the compiler-shuffled `_env[key]` load where the key literal is the immediately following proven producer.
+- Current scope is deliberately read-only, one captured cell, one child closure. Shared cells, captured writes, multiple captures, and captured nested closures remain unsupported/fail-closed.
+- Original obfuscated fixture, normal deobfuscated VM, and recovered fresh-CF output all execute and print `123`.
+- Fresh CF, scheduler, VM state reachability, and VM register naming regressions pass with a permanent captured-local case.

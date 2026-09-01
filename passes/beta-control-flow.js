@@ -480,6 +480,13 @@ function renderSimpleClosureLeaf(source, leaf, stateName, returnName, options = 
         if (isPrimitiveLiteral(node) || isEmptyTable(node)) return sourceOf(source, node);
         if (isIdentifier(node)) return env.get(node.name) ?? null;
         if (node?.type === "IndexExpression") {
+            if (isIdentifier(node.base, "upvalueValues") && node.index?.type === "IndexExpression" &&
+                isIdentifier(node.index.base, "upvalues") && node.index.index?.type === "NumericLiteral" &&
+                options.captureNames instanceof Map) {
+                const slot = Number(node.index.index.value);
+                if (!Number.isInteger(slot) || slot < 1) return null;
+                return options.captureNames.get(slot) ?? null;
+            }
             if (isIdentifier(node.base, "args") && node.index?.type === "NumericLiteral") {
                 const index = Number(node.index.value);
                 if (!Number.isInteger(index) || index < 1) return null;
@@ -551,6 +558,17 @@ function renderSimpleClosureLeaf(source, leaf, stateName, returnName, options = 
             continue;
         }
 
+        if (rhs?.type === "IndexExpression" && isIdentifier(rhs.base, "_env") && isIdentifier(rhs.index) && !env.has(rhs.index.name)) {
+            const next = leaf[index + 1];
+            if (isSingleAssignment(next, rhs.index.name)) {
+                const globalName = decodeJsonStringLiteral(next.init[0]);
+                if (globalName && isLuaIdentifier(globalName)) {
+                    env.set(name, globalName);
+                    continue;
+                }
+            }
+        }
+
         const value = resolveNode(rhs);
         if (value == null) return null;
         if (rhs?.type === "CallExpression" && !valueUsedBeforeOverwrite(index, name)) body.push(value);
@@ -560,6 +578,145 @@ function renderSimpleClosureLeaf(source, leaf, stateName, returnName, options = 
     if (!sawReturn || !sawStop) return null;
     const lines = body.length ? body.map(line => line.split("\n").map(part => `    ${part}`).join("\n")).join("\n") : "";
     return `function(${paramNames.join(", ")})${lines ? `\n${lines}\n` : ""}end`;
+}
+
+function matchReadOnlyCapturedClosureProgram(source, stateWhile, stateName, returnName) {
+    const leaves = extractNormalizedStateLeaves(stateWhile, stateName);
+    if (!leaves || leaves.size !== 2 || !leaves.has(1)) return null;
+    const root = leaves.get(1);
+    const cleanupRegs = new Set();
+    for (const statement of root) {
+        if (!isSingleAssignment(statement)) continue;
+        const dest = statement.variables[0];
+        if (isIdentifier(dest) && dest.name !== stateName && dest.name !== returnName && statement.init[0]?.type === "NilLiteral") cleanupRegs.add(dest.name);
+    }
+
+    const env = new Map();
+    let cellReg = null;
+    let captureValue = null;
+    let closureEntry = null;
+    let closureExpression = null;
+    let closureLocalReg = null;
+    let sawCaptureWrite = false;
+    let sawRelease = false;
+    let sawClosureCall = false;
+    let sawStop = false;
+    const out = [];
+    const captureName = "v1";
+    const closureName = "v2";
+
+    function renderCapturedChild(entryId) {
+        const child = leaves.get(entryId);
+        if (!child) return null;
+        return renderSimpleClosureLeaf(source, child, stateName, returnName, {
+            captureNames: new Map([[1, captureName]]),
+        });
+    }
+
+    for (let index = 0; index < root.length; index++) {
+        const statement = root[index];
+        if (statement?.type !== "AssignmentStatement" || (statement.variables || []).length !== 1 || (statement.init || []).length !== 1) return null;
+        const dest = statement.variables[0];
+        const rhs = statement.init[0];
+
+        if (dest?.type === "IndexExpression") {
+            if (!isIdentifier(dest.base, "upvalueValues") || !isIdentifier(dest.index, cellReg) || !isIdentifier(rhs) || sawCaptureWrite) return null;
+            const value = env.get(rhs.name);
+            if (typeof value !== "string") return null;
+            captureValue = value;
+            out.push(`local ${captureName} = ${captureValue}`);
+            sawCaptureWrite = true;
+            continue;
+        }
+
+        if (!isIdentifier(dest)) return null;
+        const name = dest.name;
+
+        if (isIdentifier(rhs, "args") && name !== stateName && name !== returnName) {
+            env.set(name, "args");
+            continue;
+        }
+        if (name === returnName && isEmptyTable(rhs)) continue;
+        if (name === stateName && rhs?.type === "NilLiteral") {
+            sawStop = true;
+            continue;
+        }
+        if (cleanupRegs.has(name) && rhs?.type === "NilLiteral") {
+            if (name !== closureLocalReg) return null;
+            env.delete(name);
+            continue;
+        }
+
+        if (rhs?.type === "CallExpression" && isIdentifier(rhs.base, "allocUpvalue") && (rhs.arguments || []).length === 0) {
+            if (cellReg !== null || name === stateName || name === returnName) return null;
+            cellReg = name;
+            env.set(name, "<upvalue-cell>");
+            continue;
+        }
+
+        if (rhs?.type === "CallExpression" && isIdentifier(rhs.base, "releaseUpvalue")) {
+            const args = rhs.arguments || [];
+            if (name !== cellReg || args.length !== 1 || !isIdentifier(args[0], cellReg) || !sawCaptureWrite || sawRelease) return null;
+            sawRelease = true;
+            env.delete(cellReg);
+            continue;
+        }
+
+        if (rhs?.type === "CallExpression" && isIdentifier(rhs.base) && /^createClosure\d*$/.test(rhs.base.name)) {
+            const args = rhs.arguments || [];
+            const captures = args[1];
+            const fields = captures?.type === "TableConstructorExpression" ? captures.fields || [] : [];
+            if (!sawCaptureWrite || closureEntry !== null || args.length !== 2 || args[0]?.type !== "NumericLiteral" || fields.length !== 1 ||
+                fields[0]?.type !== "TableValue" || !isIdentifier(fields[0].value, cellReg)) return null;
+            const entryId = Number(args[0].value);
+            if (!Number.isInteger(entryId) || entryId === 1) return null;
+            const rendered = renderCapturedChild(entryId);
+            if (!rendered) return null;
+            closureEntry = entryId;
+            closureExpression = rendered;
+            env.set(name, rendered);
+            continue;
+        }
+
+        if (cleanupRegs.has(name) && closureLocalReg === null && isIdentifier(rhs) && env.get(rhs.name) === closureExpression && closureExpression) {
+            closureLocalReg = name;
+            env.set(name, closureName);
+            out.push(`local ${closureName} = ${closureExpression}`);
+            continue;
+        }
+
+        if (rhs?.type === "CallExpression" && isIdentifier(rhs.base, closureLocalReg) && (rhs.arguments || []).length === 0) {
+            if (!closureLocalReg || sawClosureCall) return null;
+            out.push(`${closureName}()`);
+            sawClosureCall = true;
+            env.set(name, `<result:${closureName}>`);
+            continue;
+        }
+
+        if (isPrimitiveLiteral(rhs)) {
+            const value = sourceOf(source, rhs);
+            if (value == null) return null;
+            env.set(name, value);
+            continue;
+        }
+        if (isIdentifier(rhs)) {
+            const value = env.get(rhs.name);
+            if (value == null) return null;
+            env.set(name, value);
+            continue;
+        }
+        return null;
+    }
+
+    if (!cellReg || !captureValue || closureEntry === null || !closureLocalReg || !sawCaptureWrite || !sawRelease || !sawClosureCall || !sawStop) return null;
+    return {
+        source: out.join("\n") + "\n",
+        statementCount: out.length,
+        localCount: 2,
+        stateCount: leaves.size,
+        closureCount: 1,
+        captureCount: 1,
+    };
 }
 
 function matchClosureEntryProgram(source, stateWhile, stateName, returnName) {
@@ -960,6 +1117,21 @@ function solveFreshSource(source, ast) {
     const returnName = findVmReturnRegister(vm.functionNode)?.name || null;
     const stateWhile = findStateWhile(vm.functionNode, stateName);
     if (!stateWhile) return { applied: false, reason: "Fresh beta CF: no while <state> dispatcher", mode: "fresh" };
+
+    const capturedClosureProgram = matchReadOnlyCapturedClosureProgram(source, stateWhile, stateName, returnName);
+    if (capturedClosureProgram) {
+        return {
+            applied: true,
+            mode: "fresh-captured-closure",
+            source: capturedClosureProgram.source,
+            stateCount: capturedClosureProgram.stateCount,
+            statementCount: capturedClosureProgram.statementCount,
+            branchCount: 0,
+            localCount: capturedClosureProgram.localCount,
+            closureCount: capturedClosureProgram.closureCount,
+            captureCount: capturedClosureProgram.captureCount,
+        };
+    }
 
     const closureProgram = matchClosureEntryProgram(source, stateWhile, stateName, returnName);
     if (closureProgram) {
