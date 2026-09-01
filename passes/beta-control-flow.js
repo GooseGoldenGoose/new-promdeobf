@@ -563,7 +563,24 @@ function matchLocalRegisterProgram(source, leaf, stateName, returnName, options 
         }
         if (cleanupRegs.has(name) && rhs?.type === "NilLiteral") {
             if (!locals.has(name)) {
-                if (!hasLaterNilAssignment(index, name)) return null;
+                // Prometheus uses nil for both semantic source values and dead/temporary register state.
+                // Preserve a nil lifetime only when this exact definition reaches a read before overwrite.
+                // Otherwise the definition is unobservable and may be dropped; a later meaningful write can
+                // still establish the source lifetime through the normal cleanup-backed promotion rules.
+                if (!valueUsedBeforeOverwrite(index, name)) {
+                    const nonNilDefs = nonNilDefinitionCount.get(name) || 0;
+                    // A nil-only VAR lifetime has a compiler-emitted nil value plus a later scope-end nil.
+                    // Ordinary TEMP registers are freed internally and do not receive that cleanup write.
+                    if (nonNilDefs === 0 && hasLaterNilAssignment(index, name)) {
+                        const displayName = allocateLocal(name, "value");
+                        out.push(`local ${displayName}`);
+                        continue;
+                    }
+                    // Multiple meaningful definitions before cleanup cannot prove where VAR ownership began.
+                    if (nonNilDefs > 1) return null;
+                    // Single unobserved nil (or nil overwritten by one meaningful definition) is dead.
+                    continue;
+                }
                 const displayName = allocateLocal(name, "value");
                 out.push(`local ${displayName}`);
                 continue;

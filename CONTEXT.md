@@ -365,7 +365,12 @@ Implemented 2026-09-01 in fresh CF for proven nil-only source lifetimes.
 - `local a,b,c` now recovers as three separate locals with no initializer.
 - Handles Prometheus nil production through direct `rN = nil`, borrowed `state = nil; rN = state`, and `ReturnVal = nil; rN = ReturnVal`.
 - Later `rN = nil` lifetime cleanup is still omitted.
-- A first nil write is treated as a source local only when the same physical register has a later nil lifetime-end write; otherwise ambiguous nil writes still fail closed.
+- Nil classification now follows compiler ownership behavior more closely: Prometheus TEMP registers are freed internally, while source VAR lifetimes receive explicit scope-end `= nil` cleanup.
+- A live nil definition (read before overwrite) is preserved as a source nil lifetime.
+- A nil-only register with a later nil cleanup and no non-nil definitions is preserved as a nil-only source local.
+- A single unobserved nil definition is dropped as dead TEMP/register state; an unobserved initial nil followed by exactly one meaningful definition is also dropped so the meaningful definition can establish the cleanup-backed source lifetime.
+- Cleanup-backed registers with multiple meaningful pre-lifetime definitions remain fail-closed because TEMP-to-VAR ownership cannot be proven.
+- Permanent regressions cover dead single nil removal, nil-before-one-value promotion, nil-only locals, and ambiguous TEMP reuse.
 - Verified across 3 independent Prometheus obfuscations of `local a,b,c`; all produce `local v1`, `local v2`, `local v3`.
 
 ## VM state root constant expressions
