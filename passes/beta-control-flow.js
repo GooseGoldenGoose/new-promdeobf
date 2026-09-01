@@ -323,7 +323,8 @@ function matchLocalRegisterProgram(source, leaf, stateName, returnName, options 
 
     const expr = new Map(), exprKinds = new Map(), exprMeta = new Map();
     const locals = new Set(), localNames = new Map(), out = [];
-    let declaredCount = 0, valueLocalCount = 0, tableLocalCount = 0, pendingPack = null;
+    let declaredCount = 0, valueLocalCount = 0, tableLocalCount = 0, nextPackOrder = 0;
+    const pendingPacks = new Map(), packCreationOrder = new Map();
     let sawReturnReset = false, sawStop = false;
     const consumedPackRegs = new Set();
     const upvalueCells = new Map();
@@ -365,18 +366,31 @@ function matchLocalRegisterProgram(source, leaf, stateName, returnName, options 
         locals.add(reg);
         exprKinds.set(reg, "value");
     }
-    function flushPendingPack() {
-        if (!pendingPack) return true;
-        const slots = [...pendingPack.slots.keys()].sort((a, b) => a - b);
-        if (!slots.length || slots[0] !== 1) return false;
-        for (let i = 0; i < slots.length; i++) {
-            if (slots[i] !== i + 1) return false;
-            const slot = pendingPack.slots.get(slots[i]);
-            if (!slot?.localReg || !locals.has(slot.localReg)) return false;
+    function flushPendingPacks() {
+        if (!pendingPacks.size) return true;
+        const packs = [...pendingPacks.values()].sort((a, b) => a.order - b.order);
+        for (const pendingPack of packs) {
+            const slots = [...pendingPack.slots.keys()].sort((a, b) => a - b);
+            if (!slots.length || slots[0] !== 1) return false;
+            for (let i = 0; i < slots.length; i++) {
+                if (slots[i] !== i + 1) return false;
+                const slot = pendingPack.slots.get(slots[i]);
+                if (!slot?.localReg) return false;
+                if (typeof slot.displayName !== "string") {
+                    if (locals.has(slot.localReg)) {
+                        slot.displayName = allocateLocal(slot.localReg, "value");
+                    } else {
+                        slot.displayName = `v${++valueLocalCount}`;
+                        declaredCount++;
+                    }
+                }
+            }
+            const names = slots.map(i => pendingPack.slots.get(i).displayName);
+            out.push(`local ${names.join(", ")} = ${pendingPack.call}`);
+            consumedPackRegs.add(pendingPack.packReg);
         }
-        const names = slots.map(i => allocateLocal(pendingPack.slots.get(i).localReg, "value"));
-        out.push(`local ${names.join(", ")} = ${pendingPack.call}`);
-        consumedPackRegs.add(pendingPack.packReg); pendingPack = null; return true;
+        pendingPacks.clear();
+        return true;
     }
     function memberMeta(rhs) {
         if (rhs?.type !== "IndexExpression" || !isIdentifier(rhs.base) || !isIdentifier(rhs.index) || rhs.base.name === "_env") return null;
@@ -519,10 +533,12 @@ function matchLocalRegisterProgram(source, leaf, stateName, returnName, options 
         const name = dest.name;
         const isPackIndex = rhs?.type === "IndexExpression" && isIdentifier(rhs.base) && exprKinds.get(rhs.base.name) === "return-pack" && rhs.index?.type === "NumericLiteral";
         const isPackSlotCopy = isIdentifier(rhs) && exprKinds.get(rhs.name) === "pack-slot";
+        const returnPackFields = rhs?.type === "TableConstructorExpression" ? (rhs.fields || []) : [];
+        const isReturnPackCreation = returnPackFields.length === 1 && returnPackFields[0]?.type === "TableValue" && returnPackFields[0].value?.type === "CallExpression";
         const isPendingNeutralBookkeeping =
             (isIdentifier(rhs, "args") && name !== stateName && name !== returnName) ||
             (rhs?.type === "NilLiteral" && cleanupRegs.has(name));
-        if (pendingPack && !isPackIndex && !isPackSlotCopy && !isPendingNeutralBookkeeping && !flushPendingPack()) return null;
+        if (pendingPacks.size && !isPackIndex && !isPackSlotCopy && !isReturnPackCreation && !isPendingNeutralBookkeeping && !flushPendingPacks()) return null;
 
         if (rhs?.type === "CallExpression" && isIdentifier(rhs.base, "allocUpvalue") && (rhs.arguments || []).length === 0) {
             if (name === stateName || name === returnName || upvalueCells.has(name)) return null;
@@ -558,9 +574,13 @@ function matchLocalRegisterProgram(source, leaf, stateName, returnName, options 
         if (isPackIndex) {
             const rendered = renderRhs(rhs);
             if (!rendered?.packSlot || consumedPackRegs.has(rendered.packReg)) return null;
-            if (!pendingPack) pendingPack = { packReg: rendered.packReg, call: rendered.call, slots: new Map() };
-            if (pendingPack.packReg !== rendered.packReg || pendingPack.call !== rendered.call || pendingPack.slots.has(rendered.slot)) return null;
-            const slotInfo = { tempReg: name, localReg: null };
+            let pendingPack = pendingPacks.get(rendered.packReg);
+            if (!pendingPack) {
+                pendingPack = { packReg: rendered.packReg, call: rendered.call, slots: new Map(), order: packCreationOrder.get(rendered.packReg) ?? ++nextPackOrder };
+                pendingPacks.set(rendered.packReg, pendingPack);
+            }
+            if (pendingPack.call !== rendered.call || pendingPack.slots.has(rendered.slot)) return null;
+            const slotInfo = { tempReg: name, localReg: null, displayName: null };
             pendingPack.slots.set(rendered.slot, slotInfo);
             expr.set(name, rendered.call); exprKinds.set(name, "pack-slot"); exprMeta.set(name, { packReg: rendered.packReg, slot: rendered.slot });
             if (cleanupRegs.has(name)) { reserveLocal(name); slotInfo.localReg = name; }
@@ -569,7 +589,8 @@ function matchLocalRegisterProgram(source, leaf, stateName, returnName, options 
 
         if (cleanupRegs.has(name) && !locals.has(name) && isPackSlotCopy) {
             const meta = exprMeta.get(rhs.name);
-            if (!meta || !pendingPack || meta.packReg !== pendingPack.packReg) return null;
+            const pendingPack = meta ? pendingPacks.get(meta.packReg) : null;
+            if (!meta || !pendingPack) return null;
             const slotInfo = pendingPack.slots.get(meta.slot);
             if (!slotInfo || slotInfo.localReg) return null;
             reserveLocal(name); slotInfo.localReg = name; continue;
@@ -621,9 +642,10 @@ function matchLocalRegisterProgram(source, leaf, stateName, returnName, options 
         const fields = rhs?.type === "TableConstructorExpression" ? (rhs.fields || []) : [];
         const isReturnPack = fields.length === 1 && fields[0]?.type === "TableValue" && fields[0].value?.type === "CallExpression";
         exprKinds.set(name, isReturnPack ? "return-pack" : (rhs?.type === "TableConstructorExpression" ? "table" : "value"));
+        if (isReturnPack && !packCreationOrder.has(name)) packCreationOrder.set(name, ++nextPackOrder);
     }
 
-    if (!flushPendingPack()) return null;
+    if (!flushPendingPacks()) return null;
     if ((options.allowNoLocals !== true && declaredCount === 0) || (options.allowNoLocals === true && (!sawReturnReset || !sawStop)) || locals.size !== 0 || out.length === 0) return null;
     const canonicalOut = canonicalizeInitialSimpleLocals(out);
     return { source: canonicalOut.join("\n") + "\n", statementCount: canonicalOut.length, localCount: declaredCount };
@@ -905,10 +927,111 @@ function renderSimpleClosureLeaf(source, leaf, stateName, returnName, options = 
     return `function(${paramNames.join(", ")})${lines ? `\n${lines}\n` : ""}end`;
 }
 
+function flattenLogicalRootLeaf(leaves, entryId, stateName, returnName) {
+    const consumed = new Set();
+    const out = [];
+    let current = entryId;
+
+    function findTransition(body) {
+        for (let i = body.length - 1; i >= 0; i--) {
+            if (!isSingleAssignment(body[i], stateName)) continue;
+            const rhs = body[i].init[0];
+            if (rhs?.type === "NilLiteral") return { index: i, kind: "stop" };
+            if (rhs?.type === "NumericLiteral" && Number.isInteger(Number(rhs.value))) {
+                return { index: i, kind: "jump", target: Number(rhs.value) };
+            }
+            const branch = decodeLogicalStateTransition(rhs);
+            if (branch) return { index: i, kind: "branch", ...branch };
+        }
+        return null;
+    }
+
+    while (true) {
+        if (consumed.has(current)) return null;
+        const body = leaves.get(current);
+        if (!body) return null;
+        const transition = findTransition(body);
+        if (!transition) return null;
+        consumed.add(current);
+
+        if (transition.kind === "branch") {
+            const trueBody = leaves.get(transition.onTrue);
+            const falseBody = leaves.get(transition.onFalse);
+            if (!trueBody || !falseBody) return null;
+            const trueTransition = findTransition(trueBody);
+            const falseTransition = findTransition(falseBody);
+
+            let joinId = null;
+            let alternateId = null;
+            let alternateBody = null;
+            let primaryOnTrue = false;
+            if (falseTransition?.kind === "jump" && falseTransition.target === transition.onTrue) {
+                joinId = transition.onTrue;
+                alternateId = transition.onFalse;
+                alternateBody = falseBody;
+                primaryOnTrue = true;
+            } else if (trueTransition?.kind === "jump" && trueTransition.target === transition.onFalse) {
+                joinId = transition.onFalse;
+                alternateId = transition.onTrue;
+                alternateBody = trueBody;
+                primaryOnTrue = false;
+            } else {
+                return null;
+            }
+            if (consumed.has(alternateId)) return null;
+
+            const alternateTransition = findTransition(alternateBody);
+            const alternateStatements = alternateBody.filter((_, index) => index !== alternateTransition.index);
+            if (alternateStatements.length !== 1 || !isSingleAssignment(alternateStatements[0], returnName)) return null;
+            const fallback = alternateStatements[0].init[0];
+            if (!(isIdentifier(fallback) || isPrimitiveLiteral(fallback))) return null;
+
+            let primaryAssignmentIndex = -1;
+            for (let i = body.length - 1; i >= 0; i--) {
+                if (i === transition.index || !isSingleAssignment(body[i], returnName)) continue;
+                const rhs = body[i].init[0];
+                if (isIdentifier(rhs, transition.conditionRegister)) {
+                    primaryAssignmentIndex = i;
+                    break;
+                }
+            }
+            if (primaryAssignmentIndex < 0) return null;
+
+            for (let i = 0; i < body.length; i++) {
+                if (i === transition.index) continue;
+                if (i === primaryAssignmentIndex) {
+                    const statement = body[i];
+                    out.push({
+                        ...statement,
+                        init: [{
+                            type: "LogicalExpression",
+                            operator: primaryOnTrue ? "or" : "and",
+                            left: statement.init[0],
+                            right: fallback,
+                        }],
+                    });
+                } else {
+                    out.push(body[i]);
+                }
+            }
+            consumed.add(alternateId);
+            current = joinId;
+            continue;
+        }
+
+        for (let i = 0; i < body.length; i++) {
+            if (i !== transition.index) out.push(body[i]);
+        }
+        if (transition.kind === "stop") return { leaf: out, consumed };
+        current = transition.target;
+    }
+}
+
 function matchClosureEntryProgram(source, stateWhile, stateName, returnName) {
     const leaves = extractNormalizedStateLeaves(stateWhile, stateName);
     if (!leaves || leaves.size < 2 || !leaves.has(1)) return null;
-    const consumedEntries = new Set([1]);
+    const flattenedRoot = flattenLogicalRootLeaf(leaves, 1, stateName, returnName);
+    const consumedEntries = new Set(flattenedRoot ? flattenedRoot.consumed : [1]);
 
     function renderClosureCall(call, captureNames = null) {
         if (call?.type !== "CallExpression" || !isIdentifier(call.base) || !/^createClosure\d*$/.test(call.base.name)) return null;
@@ -934,11 +1057,13 @@ function matchClosureEntryProgram(source, stateWhile, stateName, returnName) {
         return rendered;
     }
 
-    const root = leaves.get(1);
+    const root = flattenedRoot?.leaf || leaves.get(1);
     const program = matchLocalRegisterProgram(source, root, stateName, returnName, { renderSpecialCall: renderClosureCall, renderCapturedCall: renderClosureCall });
     if (!program) return null;
+    const rootStateCount = flattenedRoot ? flattenedRoot.consumed.size : 1;
+    if (consumedEntries.size === rootStateCount) return null;
     if (consumedEntries.size !== leaves.size) return null;
-    return { ...program, stateCount: leaves.size, closureCount: consumedEntries.size - 1 };
+    return { ...program, stateCount: leaves.size, closureCount: consumedEntries.size - rootStateCount };
 }
 
 function extractNormalizedStateLeaves(stateWhile, stateName) {

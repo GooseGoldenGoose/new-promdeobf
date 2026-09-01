@@ -209,6 +209,8 @@ Fresh output preserves `{ 1, v1() }`; original and recovered both print `1 2 3 4
 - path-local TEMP dropping at joins
 - join merge is liveness-aware: unequal path temporaries are discarded only when proven unread before overwrite/exit; live unequal values still fail closed
 - real full-pipeline TESTSET fixture `local ds = b or c` normalizes to 3 states and now recovers as `local v1 = (b or c)`
+- fresh closure orchestration now supports a multi-state logical root subgraph plus independent child closure roots; the root TESTSET diamonds are flattened structurally before the existing closure/upvalue renderer runs
+- multi-return pack recovery now supports scheduler-interleaved packs, overlapping pack creation/extraction, and slots cleaned before later slots are extracted, while preserving return-slot and call creation order
 - ambiguity fails closed
 
 ### Closures / upvalues

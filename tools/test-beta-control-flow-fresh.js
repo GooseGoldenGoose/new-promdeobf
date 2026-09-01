@@ -953,4 +953,45 @@ function vmStatesSource(states) {
     assert.strictEqual(result.mode, "fresh-register-locals");
 }
 
+{
+    const source = vmStatesSource({
+        1: [
+            'ReturnVal = "b"', 'state = _env[ReturnVal]', 'r1 = state',
+            'ReturnVal = "c"', 'state = _env[ReturnVal]', 'r2 = state',
+            'state = r1 and 2 or 3', 'ReturnVal = r1',
+        ],
+        2: [
+            'r3 = ReturnVal', 'state = createClosure0(4, {})', 'r4 = state',
+            'r3 = nil', 'r4 = nil', 'ReturnVal = {}', 'state = nil',
+        ],
+        3: ['ReturnVal = r2', 'state = 2'],
+        4: ['ReturnVal = { 1 }', 'state = nil'],
+    });
+    const result = solveBetaControlFlow(source, parse(source));
+    assert.strictEqual(result.applied, true, "multi-state logical root with child closure was not recovered");
+    assert.strictEqual(result.mode, "fresh-closure-entry");
+    assert.strictEqual(result.closureCount, 1);
+    assert.strictEqual(result.source, 'local v1 = (b or c)\nlocal v2 = function()\n    return 1\nend\n');
+}
+
+{
+    const source = vmStatesSource({
+        1: [
+            'ReturnVal = "f"', 'state = _env[ReturnVal]', 'r1 = state',
+            'ReturnVal = "g"', 'state = _env[ReturnVal]', 'r2 = state',
+            'r3 = { r1() }', 'r4 = { r2() }',
+            'ReturnVal = r3[1]', 'r5 = r3[2]', 'r6 = r4[2]', 'r7 = r4[3]',
+            'r3 = ReturnVal', 'ReturnVal = r4[1]', 'r4 = ReturnVal',
+            'r7 = nil', 'r5 = nil', 'r6 = nil', 'r3 = nil', 'r4 = nil',
+            'ReturnVal = {}', 'state = nil',
+        ],
+    });
+    const result = solveBetaControlFlow(source, parse(source));
+    assert.strictEqual(result.applied, true, "interleaved multi-return packs were not recovered");
+    assert.strictEqual(result.mode, "fresh-register-locals");
+    const fIndex = result.source.indexOf(' = f()');
+    const gIndex = result.source.indexOf(' = g()');
+    assert.ok(fIndex >= 0 && gIndex > fIndex, "multi-return call creation order was not preserved");
+}
+
 console.log("fresh beta direct-global-call regression: ok");
