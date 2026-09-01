@@ -81,6 +81,13 @@ function sourceOf(source, node) {
     return source.slice(node.range[0], node.range[1]);
 }
 
+function renderUnary(operator, argument) {
+    if (typeof argument !== "string") return null;
+    if (operator === "not") return `(not ${argument})`;
+    if (operator === "-" || operator === "#") return `(${operator}${argument})`;
+    return null;
+}
+
 function matchEnvLoad(statement, destinationName, keyName) {
     if (!isSingleAssignment(statement, destinationName)) return false;
     const rhs = statement.init[0];
@@ -319,6 +326,10 @@ function matchLocalRegisterProgram(source, leaf, stateName, returnName, options 
             return `{ ${renderedFields.join(", ")} }`;
         }
         if (isIdentifier(rhs)) return expr.get(rhs.name) ?? (locals.has(rhs.name) ? localName(rhs.name) : null);
+        if (rhs?.type === "UnaryExpression") {
+            const argument = renderRhs(rhs.argument);
+            return renderUnary(rhs.operator, argument);
+        }
         if ((rhs?.type === "BinaryExpression" || rhs?.type === "LogicalExpression") && isIdentifier(rhs.left) && isIdentifier(rhs.right)) {
             const left = expr.get(rhs.left.name) ?? (locals.has(rhs.left.name) ? localName(rhs.left.name) : null);
             const right = expr.get(rhs.right.name) ?? (locals.has(rhs.right.name) ? localName(rhs.right.name) : null);
@@ -585,6 +596,10 @@ function renderSimpleClosureLeaf(source, leaf, stateName, returnName, options = 
             if (base == null) return null;
             const member = /^"[A-Za-z_][A-Za-z0-9_]*"$/.test(key) ? key.slice(1, -1) : null;
             return member && isLuaIdentifier(member) ? `${base}.${member}` : `${base}[${key}]`;
+        }
+        if (node?.type === "UnaryExpression") {
+            const argument = resolveNode(node.argument);
+            return renderUnary(node.operator, argument);
         }
         if ((node?.type === "BinaryExpression" || node?.type === "LogicalExpression") && node.operator) {
             const left = resolveNode(node.left);
@@ -905,6 +920,10 @@ function matchMultiStateLogicalLocals(source, stateWhile, stateName, returnName)
             if (base == null) return null;
             const member = /^"[A-Za-z_][A-Za-z0-9_]*"$/.test(key) ? key.slice(1, -1) : null;
             return member && isLuaIdentifier(member) ? `${base}.${member}` : `${base}[${key}]`;
+        }
+        if (rhs?.type === "UnaryExpression") {
+            const argument = isIdentifier(rhs.argument) ? resolveId(rhs.argument.name, env) : (isPrimitiveLiteral(rhs.argument) ? sourceOf(source, rhs.argument) : null);
+            return renderUnary(rhs.operator, argument);
         }
         if ((rhs?.type === "BinaryExpression" || rhs?.type === "LogicalExpression") && rhs.operator) {
             const left = isIdentifier(rhs.left) ? resolveId(rhs.left.name, env) : (isPrimitiveLiteral(rhs.left) ? sourceOf(source, rhs.left) : null);

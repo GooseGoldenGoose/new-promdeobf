@@ -719,4 +719,36 @@ function vmStatesSource(states) {
     assert.strictEqual(result.applied, false, "ambiguous pre-lifetime TEMP reuse must fail closed");
 }
 
+{
+    const source = vmStatesSource({
+        1: [
+            'r3 = "math"', 'ReturnVal = _env[r3]', 'r3 = "random"', 'state = ReturnVal[r3]',
+            'r3 = 1', 'r2 = 2', 'ReturnVal = state(r3, r2)', 'r3 = ReturnVal',
+            'state = "abc"', 'r2 = state', 'r1 = not r3', 'ReturnVal = "print"', 'state = _env[ReturnVal]',
+            'r4 = -r3', 'r5 = #r2', 'r6 = args', 'r2 = nil', 'r3 = nil',
+            'ReturnVal = state(r1, r4, r5)', 'ReturnVal = {}', 'state = nil',
+        ],
+    });
+    const result = solveBetaControlFlow(source, parse(source));
+    assert.strictEqual(result.applied, true, "unary expressions were not recovered");
+    assert.strictEqual(result.mode, "fresh-register-locals");
+    assert.strictEqual(result.source, 'local v1 = math.random(1, 2)\nlocal v2 = "abc"\nprint((not v1), (-v1), (#v2))\n');
+}
+
+{
+    const source = vmStatesSource({
+        1: [
+            'state = createClosure0(2, {})', 'r1 = state', 'r1 = nil', 'ReturnVal = {}', 'state = nil',
+        ],
+        2: [
+            'r1 = args[1]', 'r2 = not r1', 'r3 = -r1', 'r4 = "abc"', 'r5 = #r4',
+            'ReturnVal = { r2, r3, r5 }', 'state = nil',
+        ],
+    });
+    const result = solveBetaControlFlow(source, parse(source));
+    assert.strictEqual(result.applied, true, "closure unary expressions were not recovered");
+    assert.strictEqual(result.mode, "fresh-closure-entry");
+    assert.strictEqual(result.source, 'local v1 = function(v1)\n    return (not v1), (-v1), (#"abc")\nend\n');
+}
+
 console.log("fresh beta direct-global-call regression: ok");

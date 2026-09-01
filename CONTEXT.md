@@ -462,3 +462,14 @@ Latest scheduler canonicalization improvement:
 - Original and recovered fixture both print `1 2 3`.
 - Permanent positive regression covers promotion-only recovery; negative regression proves an earlier TEMP definition on the same cleanup-backed register remains fail-closed.
 - Fresh CF, VM register scheduler, VM state reachability, and VM register naming regressions pass.
+
+
+## Fresh CF: Unary Expressions
+
+- Fresh symbolic rendering now supports parser UnaryExpression nodes for operators not, unary -, and #.
+- Support is shared across one-state register/local recovery, closure-body recovery, and multi-state symbolic execution.
+- Operands must already resolve structurally; unsupported/unresolved unary operators fail closed.
+- Real compiler fixture local a=math.random(1,2); local s="abc"; print(not a,-a,#s) recovers as local v1=math.random(1,2); local v2="abc"; print((not v1),(-v1),(#v2)).
+- Recovered fixture runtime prints false, a negative random value, and 3 as expected for the sampled run.
+- Permanent regressions cover root/local unary rendering and unary expressions inside recovered closures.
+- Fresh CF, VM register scheduler, VM state reachability, and VM register naming regressions pass.
