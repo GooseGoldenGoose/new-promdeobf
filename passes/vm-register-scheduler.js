@@ -36,9 +36,18 @@ const BORROWED_STATE_TEMP_WRITES = new WeakSet();
 const ANCHORED_LIFETIME_WRITES = new WeakSet();
 const LIFETIME_BOUNDARY_WRITES = new WeakSet();
 
+function isVmArgsSnapshotAssignment(statement, overflowName = null) {
+    if (statement?.type !== "AssignmentStatement") return false;
+    const variables = statement.variables || [];
+    const init = statement.init || [];
+    if (variables.length !== 1 || init.length !== 1 || !isIdentifier(init[0], "args")) return false;
+    const destination = registerIdentity(variables[0], overflowName);
+    return destination !== null && destination !== "args";
+}
+
 function isDelayableAssignment(statement, stateName, overflowName = null) {
     if (statement?.type !== "AssignmentStatement") return false;
-    if (ANCHORED_LIFETIME_WRITES.has(statement)) return false;
+    if (ANCHORED_LIFETIME_WRITES.has(statement) && !isVmArgsSnapshotAssignment(statement, overflowName)) return false;
     const variables = statement.variables || [];
     const init = statement.init || [];
     if (variables.length !== 1 || init.length !== 1) return false;
@@ -137,7 +146,7 @@ function intersects(a, b) {
 
 function canSwapRightAssignmentWithLeftStatement(delayable, current, stateName, overflowName = null) {
     if (!isDelayableAssignment(delayable, stateName, overflowName)) return false;
-    if (LIFETIME_BOUNDARY_WRITES.has(current)) return false;
+    if (LIFETIME_BOUNDARY_WRITES.has(current) && !isVmArgsSnapshotAssignment(delayable, overflowName)) return false;
 
     const delayReads = statementReads(delayable, overflowName);
     const delayWrites = statementWrites(delayable, overflowName);

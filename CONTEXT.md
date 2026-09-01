@@ -331,6 +331,15 @@ print(t1.b.c)
 
 Permanent regressions cover local/dynamic/global/captured writes plus fail-closed call-derived bases.
 
+## VM register scheduler: dead args snapshots
+
+Updated 2026-09-01:
+- proven VM bookkeeping copies like `rN = args` may sink despite a later lifetime-cleanup anchor on the same physical register
+- they may cross unrelated lifetime-boundary cleanups only when normal RAW/WAR/WAW dependency checks permit it
+- they still stop before their own read/overwrite and before the terminal `ReturnVal = {}; state = nil` tail
+- verified on 3 independent Prometheus obfuscations of `local a,b,c`: dead args snapshot sinks immediately before terminal return bookkeeping
+- scheduler/fresh-CF/state-reachability/register-naming regressions pass
+
 ## Remaining Feature Order
 
 After assignments + field/index writes:

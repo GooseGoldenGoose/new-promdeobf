@@ -224,6 +224,20 @@ function schedule(source, returnName = null) {
     assert.strictEqual(out[out.length - 1], 'state = 3', 'final state transition lost its anchor');
 }
 
+{
+    const source = [
+        'R = args',
+        'A = 1',
+        'B = A',
+        'R = nil',
+        'ReturnReg = {}',
+        'state = nil',
+    ].join("\n");
+    const out = schedule(source, "ReturnReg");
+    assert.ok(out.indexOf('B = A') < out.indexOf('R = args'), 'unused args snapshot did not sink out of active code');
+    assert.ok(out.indexOf('R = args') < out.indexOf('R = nil'), 'args snapshot crossed its register overwrite');
+}
+
 function scheduleOverflow(source, overflowName = "Overflow") {
     const statements = parseStatements(source);
     const result = scheduleStatementList(statements, "state", overflowName);
