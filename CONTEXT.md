@@ -373,3 +373,13 @@ Latest scheduler canonicalization improvement:
 - Packed return slots must be contiguous from 1 and uniquely owned; ambiguous/missing slots fail closed.
 - The no-local packed-call fallback requires proven terminal root bookkeeping (`ReturnVal = {}` then `state = nil`) and does not accept non-terminal state transitions.
 - Fresh CF, scheduler, VM state reachability, and VM register naming regressions pass, including fixed multi-return and generic `RETURN_ALL` tests.
+
+
+## Fresh CF: Separated Closure Local Into Multi-Return Call
+
+- Fresh CF now tolerates proven neutral bookkeeping and source-local cleanup between packed fixed-return slot extraction and the later source-local ownership handoff.
+- Compiler scheduling can emit `ReturnVal = pack[1]; r4 = pack[2]; argsTemp = args; closureLocal = nil; resultLocal = ReturnVal` before the packed call can be finalized.
+- Recovered source locals already resolve as later call arguments; the actual blocker was premature packed-call flushing before all result slots acquired source-local owners.
+- Real compiler/main fixture `local c = function() error("231sadsa") end; local a,b = pcall(c); print(a,b)` now recovers as `local v1 = function() error("231sadsa") end; local v2, v3 = pcall(v1); print(v2, v3)`.
+- Neutral statements allowed while a packed call is pending are restricted to the proven `args` bookkeeping copy and direct cleanup-backed `rN = nil`; unrelated statements still force a successful flush or fail closed.
+- Fresh CF, scheduler, VM state reachability, and VM register naming regressions pass with a permanent separated-closure `pcall` case.

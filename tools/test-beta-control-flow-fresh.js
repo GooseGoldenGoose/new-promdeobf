@@ -471,4 +471,39 @@ function vmStatesSource(states) {
     assert.strictEqual(result.mode, "fresh-call-results");
     assert.strictEqual(result.source, "print(1, math.modf(1.5))\n");
 }
+
+{
+    const source = vmStatesSource({
+        1: [
+            'state = createClosure3(2, {})',
+            'r3 = state',
+            'ReturnVal = "pcall"',
+            'state = _env[ReturnVal]',
+            'r1 = { state(r3) }',
+            'ReturnVal = r1[1]',
+            'r4 = r1[2]',
+            'r2 = args',
+            'r3 = nil',
+            'r1 = ReturnVal',
+            'ReturnVal = "print"',
+            'state = _env[ReturnVal]',
+            'ReturnVal = state(r1, r4)',
+            'r1 = nil',
+            'r4 = nil',
+            'ReturnVal = {}',
+            'state = nil',
+        ],
+        2: [
+            'ReturnVal = "error"',
+            'state = _env[ReturnVal]',
+            'r2 = "231sadsa"',
+            'ReturnVal = state(r2)',
+            'ReturnVal = {}',
+            'state = nil',
+        ],
+    });
+    const result = solveBetaControlFlow(source, parse(source));
+    assert.strictEqual(result.applied, true, "separated closure local + pcall multi-return was not recovered");
+    assert.strictEqual(result.source, 'local v1 = function()\n    error("231sadsa")\nend\nlocal v2, v3 = pcall(v1)\nprint(v2, v3)\n');
+}
 console.log("fresh beta direct-global-call regression: ok");

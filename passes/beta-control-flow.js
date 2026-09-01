@@ -369,7 +369,10 @@ function matchLocalRegisterProgram(source, leaf, stateName, returnName, options 
         const name = dest.name;
         const isPackIndex = rhs?.type === "IndexExpression" && isIdentifier(rhs.base) && exprKinds.get(rhs.base.name) === "return-pack" && rhs.index?.type === "NumericLiteral";
         const isPackSlotCopy = isIdentifier(rhs) && exprKinds.get(rhs.name) === "pack-slot";
-        if (pendingPack && !isPackIndex && !isPackSlotCopy && !flushPendingPack()) return null;
+        const isPendingNeutralBookkeeping =
+            (isIdentifier(rhs, "args") && name !== stateName && name !== returnName) ||
+            (rhs?.type === "NilLiteral" && cleanupRegs.has(name));
+        if (pendingPack && !isPackIndex && !isPackSlotCopy && !isPendingNeutralBookkeeping && !flushPendingPack()) return null;
 
         if (isIdentifier(rhs, "args") && name !== stateName && name !== returnName && !locals.has(name)) {
             expr.set(name, "args"); exprKinds.set(name, "value"); continue;
