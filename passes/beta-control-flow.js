@@ -1119,7 +1119,42 @@ function matchMultiStateLogicalLocals(source, stateWhile, stateName, returnName)
         return null;
     }
 
-    function mergeCandidates(candidates) {
+    function nodeReadsIdentifier(node, name) {
+        if (!node || typeof node !== "object") return false;
+        if (isIdentifier(node, name)) return true;
+        for (const [key, value] of Object.entries(node)) {
+            if (key === "range" || key === "loc" || key === "variables") continue;
+            if (Array.isArray(value)) {
+                if (value.some(item => nodeReadsIdentifier(item, name))) return true;
+            } else if (value && typeof value === "object" && nodeReadsIdentifier(value, name)) return true;
+        }
+        return false;
+    }
+
+    function valueMayBeReadFrom(blockId, name, visiting = new Set()) {
+        if (visiting.has(blockId)) return true;
+        const block = blocks.get(blockId);
+        if (!block) return true;
+        const nextVisiting = new Set(visiting);
+        nextVisiting.add(blockId);
+        for (let i = 0; i < block.body.length; i++) {
+            if (i === block.transitionIndex) continue;
+            const statement = block.body[i];
+            if (!isSingleAssignment(statement)) return true;
+            const dest = statement.variables[0];
+            const rhs = statement.init[0];
+            if (nodeReadsIdentifier(rhs, name)) return true;
+            if (dest?.type === "IndexExpression" && nodeReadsIdentifier(dest, name)) return true;
+            if (isIdentifier(dest, name)) return false;
+        }
+        if (block.transition.kind === "branch" && block.transition.conditionRegister === name) return true;
+        for (const next of successors.get(blockId) || []) {
+            if (valueMayBeReadFrom(next, name, nextVisiting)) return true;
+        }
+        return false;
+    }
+
+    function mergeCandidates(candidates, joinId) {
         if (candidates.length === 1) return { env: new Map(candidates[0].env), markers: [...(candidates[0].markers || [])] };
         if (candidates.length !== 2) return null;
         const a = candidates[0], b = candidates[1];
@@ -1149,6 +1184,7 @@ function matchMultiStateLogicalLocals(source, stateWhile, stateName, returnName)
             }
             if (fv === cond && tv != null) env.set(key, `(${cond} and ${tv})`);
             else if (tv === cond && fv != null) env.set(key, `(${cond} or ${fv})`);
+            else if (!valueMayBeReadFrom(joinId, key)) continue;
             else return null;
         }
         return { env, markers: am.slice(0, prefix) };
@@ -1158,7 +1194,7 @@ function matchMultiStateLogicalLocals(source, stateWhile, stateName, returnName)
         const id = ready.shift();
         if (processed.has(id)) continue;
         const candidates = incoming.get(id) || [];
-        const merged = mergeCandidates(candidates);
+        const merged = mergeCandidates(candidates, id);
         if (!merged) return null;
         let env = merged.env;
         let markers = merged.markers;

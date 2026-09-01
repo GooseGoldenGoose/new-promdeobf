@@ -207,6 +207,8 @@ Fresh output preserves `{ 1, v1() }`; original and recovered both print `1 2 3 4
 - structural Prometheus `and/or` state-DAG recovery
 - nested short-circuit chains
 - path-local TEMP dropping at joins
+- join merge is liveness-aware: unequal path temporaries are discarded only when proven unread before overwrite/exit; live unequal values still fail closed
+- real full-pipeline TESTSET fixture `local ds = b or c` normalizes to 3 states and now recovers as `local v1 = (b or c)`
 - ambiguity fails closed
 
 ### Closures / upvalues
@@ -432,3 +434,7 @@ For structural features:
 
 Never claim compiler behavior until actual compiler source/output proves it.
 Never hardcode a fixture pattern just to clean output later.
+
+
+## Latest test rule
+Always validate user fixtures through the full canonical `main.js` pipeline with formatter enabled before fresh CF; proof runners that bypass formatting are not authoritative.

@@ -393,6 +393,29 @@ function vmStatesSource(states) {
 
 {
     const source = vmStatesSource({
+        1: ['r1 = "b"', 'r2 = _env[r1]', 'state = r2 and 2 or 3', 'r3 = args', 'ReturnVal = r2'],
+        2: ['r2 = ReturnVal', 'r2 = nil', 'ReturnVal = {}', 'state = nil'],
+        3: ['r1 = "c"', 'r2 = _env[r1]', 'ReturnVal = r2', 'state = 2'],
+    });
+    const result = solveBetaControlFlow(source, parse(source));
+    assert.strictEqual(result.applied, true);
+    assert.strictEqual(result.mode, "fresh-multistate-logical");
+    assert.strictEqual(result.source, "local v1 = (b or c)\n");
+}
+
+{
+    const source = vmStatesSource({
+        1: ['r1 = "b"', 'r2 = _env[r1]', 'state = r2 and 2 or 3', 'ReturnVal = r2'],
+        2: ['ReturnVal = r1', 'r2 = ReturnVal', 'r2 = nil', 'ReturnVal = {}', 'state = nil'],
+        3: ['r1 = "c"', 'r2 = _env[r1]', 'ReturnVal = r2', 'state = 2'],
+    });
+    const result = solveBetaControlFlow(source, parse(source));
+    assert.strictEqual(result.applied, false, "live differing path temporary was dropped at a logical join");
+}
+
+
+{
+    const source = vmStatesSource({
         1: ['r2 = args', 'state = createClosure1(2, {})', 'r1 = state', 'r1 = nil', 'ReturnVal = {}', 'state = nil'],
         2: ['state = 123', 'ReturnVal = { state }', 'state = nil'],
     });
