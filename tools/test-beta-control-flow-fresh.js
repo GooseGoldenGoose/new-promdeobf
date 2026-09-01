@@ -694,4 +694,29 @@ function vmStatesSource(states) {
     assert.strictEqual(result.source, 'local v1 = 1\nlocal v2 = function()\n    v1 = (v1 + 1)\nend\nlocal v3 = function()\n    v1 = (v1 + 10)\nend\nv2()\nv3()\nprint(v1)\n');
 }
 
+{
+    const source = vmStatesSource({
+        1: [
+            'r4 = args', 'r1 = 3', 'state = 1', 'r2 = state', 'ReturnVal = 2', 'r3 = ReturnVal',
+            'ReturnVal = "print"', 'state = _env[ReturnVal]', 'ReturnVal = state(r2, r3, r1)',
+            'r2 = nil', 'r3 = nil', 'r1 = nil', 'ReturnVal = {}', 'state = nil',
+        ],
+    });
+    const result = solveBetaControlFlow(source, parse(source));
+    assert.strictEqual(result.applied, true, "promotion-only local was not recovered");
+    assert.strictEqual(result.mode, "fresh-register-locals");
+    assert.strictEqual(result.source, 'local v1 = 3\nlocal v2 = 1\nlocal v3 = 2\nprint(v2, v3, v1)\n');
+}
+
+{
+    const source = vmStatesSource({
+        1: [
+            'r1 = "print"', 'state = _env[r1]', 'r1 = 3', 'ReturnVal = state(r1)',
+            'r1 = nil', 'ReturnVal = {}', 'state = nil',
+        ],
+    });
+    const result = solveBetaControlFlow(source, parse(source));
+    assert.strictEqual(result.applied, false, "ambiguous pre-lifetime TEMP reuse must fail closed");
+}
+
 console.log("fresh beta direct-global-call regression: ok");

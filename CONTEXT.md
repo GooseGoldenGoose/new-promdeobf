@@ -451,3 +451,14 @@ Latest scheduler canonicalization improvement:
 - Shared writable-cell fixture with two closures mutating the same a by +1 and +10 recovers both closures against the same v1 and prints 12 at runtime.
 - Normal binding analysis for the shared fixture reports 2 capture slots, 1 local cell, 1 shared cell, 6/6 upvalue accesses resolved, complete cell graph.
 - Fresh CF, scheduler, VM state reachability, and VM register naming regressions pass with permanent writable and shared-writable capture cases.
+
+
+## Fresh CF: Promotion-Only Source Locals
+
+- Fresh register-local recovery now supports compiler `getVarRegister(..., potentialId)` promotion when an ordinary TEMP result register is promoted directly to a source VAR and `copyRegisters` emits no assignment because source/destination are the same physical register.
+- Structural proof is cleanup-backed and conservative: a promoted local is declared directly from its own first/only non-nil definition only when that cleanup-backed register has exactly one non-nil definition in the leaf.
+- This prevents pre-lifetime TEMP reuse from being misclassified as a source local. If the same cleanup-backed physical register has multiple non-nil definitions without an explicit ownership handoff, fresh CF still fails closed because the promotion boundary is not observable from emitted VM code alone.
+- Real compiler fixture `local a,b,c=1,2,3; print(a,b,c)` produces promotion-only `r1 = 3` with no `r1 = temp` handoff and now recovers structurally; scheduler order yields `local v1=3; local v2=1; local v3=2; print(v2,v3,v1)`, preserving semantics.
+- Original and recovered fixture both print `1 2 3`.
+- Permanent positive regression covers promotion-only recovery; negative regression proves an earlier TEMP definition on the same cleanup-backed register remains fail-closed.
+- Fresh CF, VM register scheduler, VM state reachability, and VM register naming regressions pass.

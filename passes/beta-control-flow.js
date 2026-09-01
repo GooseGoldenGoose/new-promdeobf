@@ -232,11 +232,14 @@ function matchOneDirectGlobalCall(source, leaf, index, stateName, returnName) {
 
 function matchLocalRegisterProgram(source, leaf, stateName, returnName, options = {}) {
     const cleanupRegs = new Set();
+    const nonNilDefinitionCount = new Map();
     for (const statement of leaf) {
         if (!isSingleAssignment(statement)) continue;
         const dest = statement.variables[0];
         const rhs = statement.init[0];
-        if (isIdentifier(dest) && dest.name !== stateName && dest.name !== returnName && rhs?.type === "NilLiteral") cleanupRegs.add(dest.name);
+        if (!isIdentifier(dest) || dest.name === stateName || dest.name === returnName) continue;
+        if (rhs?.type === "NilLiteral") cleanupRegs.add(dest.name);
+        else nonNilDefinitionCount.set(dest.name, (nonNilDefinitionCount.get(dest.name) || 0) + 1);
     }
     if (cleanupRegs.size === 0 && options.allowNoLocals !== true) return null;
 
@@ -452,6 +455,15 @@ function matchLocalRegisterProgram(source, leaf, stateName, returnName, options 
             const kind = exprKinds.get(rhs.name) || "value";
             const displayName = allocateLocal(name, kind);
             out.push(`local ${displayName} = ${value}`); continue;
+        }
+
+        if (cleanupRegs.has(name) && !locals.has(name) && nonNilDefinitionCount.get(name) === 1) {
+            const value = renderRhs(rhs);
+            if (typeof value !== "string") return null;
+            const kind = rhs?.type === "TableConstructorExpression" ? "table" : "value";
+            const displayName = allocateLocal(name, kind);
+            out.push(`local ${displayName} = ${value}`);
+            continue;
         }
 
         if (locals.has(name)) {
