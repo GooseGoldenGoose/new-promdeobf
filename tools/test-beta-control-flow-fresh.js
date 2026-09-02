@@ -1088,4 +1088,16 @@ function vmStatesSource(states) {
     assert.strictEqual(result.source, 'local v1 = 123\nprint(v1)\n');
 }
 
+{
+    const source = vmStatesSource({
+        1: ['r1 = nil', 'state = 2'],
+        2: ['r2 = r1', 'ReturnVal = {}', 'state = nil'],
+    });
+    const result = solveBetaControlFlow(source, parse(source));
+    assert.strictEqual(result.applied, false, "unsupported multi-state program unexpectedly recovered");
+    assert.match(result.reason, /unsupported multi-state control flow \(2 normalized states\)/);
+    assert.match(result.reason, /state 1/);
+    assert.match(result.reason, /root statement/);
+}
+
 console.log("fresh beta direct-global-call regression: ok");

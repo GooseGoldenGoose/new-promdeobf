@@ -458,5 +458,14 @@ Never claim compiler behavior until actual compiler source/output proves it.
 Never hardcode a fixture pattern just to clean output later.
 
 
+## Fresh-CF diagnostics
+
+Updated 2026-09-02:
+- unsupported multi-state failures now report normalized state count plus closure-root matcher detail
+- closure-root diagnostics include the rejected state and last processed root statement text/index when available
+- closure orchestration reports unconsumed normalized states when child-entry consumption is incomplete
+- failing reduced opcode fixture now reports: 11 normalized states; state 1; root statement 57: `r16 = ReturnVal` instead of only `unsupported multi-state control flow`
+- permanent regression verifies multi-state diagnostic includes state count/state/root statement context
+
 ## Latest test rule
 Always validate user fixtures through the full canonical `main.js` pipeline with formatter enabled before fresh CF; proof runners that bypass formatting are not authoritative.

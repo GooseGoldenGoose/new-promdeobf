@@ -499,6 +499,7 @@ function matchLocalRegisterProgram(source, leaf, stateName, returnName, options 
 
     for (let index = 0; index < leaf.length; index++) {
         const statement = leaf[index];
+        if (options.diagnostics) { options.diagnostics.statementIndex = index; options.diagnostics.statement = sourceOf(source, statement) || statement?.type || "unknown"; }
         if (!isSingleAssignment(statement)) return null;
         const dest = statement.variables[0], rhs = statement.init[0];
         if (dest?.type === "IndexExpression" && isIdentifier(dest.base, "upvalueValues") && isIdentifier(dest.index)) {
@@ -662,8 +663,11 @@ function matchLocalRegisterProgram(source, leaf, stateName, returnName, options 
         if (isReturnPack && !packCreationOrder.has(name)) packCreationOrder.set(name, ++nextPackOrder);
     }
 
-    if (!flushPendingPacks()) return null;
-    if ((options.allowNoLocals !== true && declaredCount === 0) || (options.allowNoLocals === true && (!sawReturnReset || !sawStop)) || locals.size !== 0 || out.length === 0) return null;
+    if (!flushPendingPacks()) { if (options.diagnostics) options.diagnostics.reason = "final pending multi-return pack flush failed"; return null; }
+    if (options.allowNoLocals !== true && declaredCount === 0) { if (options.diagnostics) options.diagnostics.reason = "no proven source locals were recovered"; return null; }
+    if (options.allowNoLocals === true && (!sawReturnReset || !sawStop)) { if (options.diagnostics) options.diagnostics.reason = `terminal bookkeeping incomplete: return=${sawReturnReset}, stop=${sawStop}`; return null; }
+    if (locals.size !== 0) { if (options.diagnostics) options.diagnostics.reason = `recovered locals still live at terminal: ${[...locals].join(",")}`; return null; }
+    if (out.length === 0) { if (options.diagnostics) options.diagnostics.reason = "recovered program emitted no source statements"; return null; }
     const canonicalOut = canonicalizeInitialSimpleLocals(out);
     return { source: canonicalOut.join("\n") + "\n", statementCount: canonicalOut.length, localCount: declaredCount };
 }
@@ -962,7 +966,11 @@ function renderSimpleClosureLeaf(source, leaf, stateName, returnName, options = 
     return `function(${params.join(", ")})${lines ? `\n${lines}\n` : ""}end`;
 }
 
-function flattenLogicalRootLeaf(leaves, entryId, stateName, returnName) {
+function flattenLogicalRootLeaf(leaves, entryId, stateName, returnName, diagnostics = null) {
+    function fail(reason, state = current) {
+        if (diagnostics && !diagnostics.reason) { diagnostics.reason = reason; diagnostics.state = state; }
+        return null;
+    }
     const consumed = new Set();
     const out = [];
     let current = entryId;
@@ -982,11 +990,11 @@ function flattenLogicalRootLeaf(leaves, entryId, stateName, returnName) {
     }
 
     while (true) {
-        if (consumed.has(current)) return null;
+        if (consumed.has(current)) return fail("root revisits an already-consumed state");
         const body = leaves.get(current);
-        if (!body) return null;
+        if (!body) return fail("root references a missing state leaf");
         const transition = findTransition(body);
-        if (!transition) return null;
+        if (!transition) return fail("root state has no recognized terminal state transition");
         consumed.add(current);
 
         if (transition.kind === "branch") {
@@ -1062,10 +1070,11 @@ function flattenLogicalRootLeaf(leaves, entryId, stateName, returnName) {
     }
 }
 
-function matchClosureEntryProgram(source, stateWhile, stateName, returnName) {
+function matchClosureEntryProgram(source, stateWhile, stateName, returnName, diagnostics = null) {
     const leaves = extractNormalizedStateLeaves(stateWhile, stateName);
     if (!leaves || leaves.size < 2 || !leaves.has(1)) return null;
-    const flattenedRoot = flattenLogicalRootLeaf(leaves, 1, stateName, returnName);
+    const rootDiagnostics = {};
+    const flattenedRoot = flattenLogicalRootLeaf(leaves, 1, stateName, returnName, rootDiagnostics);
     const consumedEntries = new Set(flattenedRoot ? flattenedRoot.consumed : [1]);
 
     function renderClosureCall(call, captureNames = null) {
@@ -1093,11 +1102,23 @@ function matchClosureEntryProgram(source, stateWhile, stateName, returnName) {
     }
 
     const root = flattenedRoot?.leaf || leaves.get(1);
-    const program = matchLocalRegisterProgram(source, root, stateName, returnName, { renderSpecialCall: renderClosureCall, renderCapturedCall: renderClosureCall });
-    if (!program) return null;
+    const rootProgramDiagnostics = {};
+    const program = matchLocalRegisterProgram(source, root, stateName, returnName, { renderSpecialCall: renderClosureCall, renderCapturedCall: renderClosureCall, diagnostics: rootProgramDiagnostics });
+    if (!program) {
+        if (diagnostics && !diagnostics.reason) {
+            diagnostics.reason = flattenedRoot ? "flattened root is not a proven register-local program" : (rootDiagnostics.reason || "root is not a proven register-local program");
+            diagnostics.state = rootDiagnostics.state || 1;
+            diagnostics.statementIndex = rootProgramDiagnostics.statementIndex;
+            diagnostics.statement = rootProgramDiagnostics.statement;
+        }
+        return null;
+    }
     const rootStateCount = flattenedRoot ? flattenedRoot.consumed.size : 1;
-    if (consumedEntries.size === rootStateCount) return null;
-    if (consumedEntries.size !== leaves.size) return null;
+    if (consumedEntries.size === rootStateCount) { if (diagnostics) diagnostics.reason = "root recovered but no child closure entry was consumed"; return null; }
+    if (consumedEntries.size !== leaves.size) {
+        if (diagnostics) { diagnostics.reason = "not all normalized state leaves were consumed"; diagnostics.unconsumed = [...leaves.keys()].filter(id => !consumedEntries.has(id)); }
+        return null;
+    }
     return { ...program, stateCount: leaves.size, closureCount: consumedEntries.size - rootStateCount };
 }
 
@@ -1550,7 +1571,8 @@ function solveFreshSource(source, ast) {
     const stateWhile = findStateWhile(vm.functionNode, stateName);
     if (!stateWhile) return { applied: false, reason: "Fresh beta CF: no while <state> dispatcher", mode: "fresh" };
 
-    const closureProgram = matchClosureEntryProgram(source, stateWhile, stateName, returnName);
+    const closureDiagnostics = {};
+    const closureProgram = matchClosureEntryProgram(source, stateWhile, stateName, returnName, closureDiagnostics);
     if (closureProgram) {
         return {
             applied: true,
@@ -1578,7 +1600,15 @@ function solveFreshSource(source, ast) {
     }
 
     const leaf = unwrapSingleStateLeaf(stateWhile, stateName);
-    if (!leaf) return { applied: false, reason: "Fresh beta CF: unsupported multi-state control flow", mode: "fresh" };
+    if (!leaf) {
+        const leaves = extractNormalizedStateLeaves(stateWhile, stateName);
+        const count = leaves?.size || 0;
+        const detail = closureDiagnostics.reason ? `; closure recovery: ${closureDiagnostics.reason}` : "";
+        const stateDetail = closureDiagnostics.state != null ? ` at state ${closureDiagnostics.state}` : "";
+        const statementDetail = closureDiagnostics.statementIndex != null ? `; root statement ${closureDiagnostics.statementIndex}: ${String(closureDiagnostics.statement || "unknown").replace(/\s+/g, " ").slice(0, 180)}` : "";
+        const unconsumed = Array.isArray(closureDiagnostics.unconsumed) && closureDiagnostics.unconsumed.length ? `; unconsumed states: ${closureDiagnostics.unconsumed.join(",")}` : "";
+        return { applied: false, reason: `Fresh beta CF: unsupported multi-state control flow (${count} normalized states)${detail}${stateDetail}${statementDetail}${unconsumed}`, mode: "fresh" };
+    }
 
     const localProgram = matchLocalRegisterProgram(source, leaf, stateName, returnName);
     if (localProgram) {
