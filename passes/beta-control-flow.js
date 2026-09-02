@@ -1314,6 +1314,12 @@ function renderSimpleClosureLeaf(source, leaf, stateName, returnName, options = 
         }
     }
     let nextParamSuffix = 1;
+    function allocateClosureBindingName() {
+        while (reservedParamNames.has(`v${nextParamSuffix}`)) nextParamSuffix++;
+        const name = `v${nextParamSuffix++}`;
+        reservedParamNames.add(name);
+        return name;
+    }
     let sawReturn = false;
     let sawVarargs = false;
 
@@ -1360,6 +1366,10 @@ function renderSimpleClosureLeaf(source, leaf, stateName, returnName, options = 
             return typeof value === "string" ? value : null;
         }
         if (node?.type === "IndexExpression") {
+            if (isIdentifier(node.base, "upvalueValues") && isIdentifier(node.index)) {
+                const localName = localCells.get(node.index.name);
+                return typeof localName === "string" ? localName : null;
+            }
             if (isIdentifier(node.base, "upvalueValues") && node.index?.type === "IndexExpression" &&
                 isIdentifier(node.index.base, "upvalues") && node.index.index?.type === "NumericLiteral" &&
                 options.captureNames instanceof Map) {
@@ -1370,12 +1380,7 @@ function renderSimpleClosureLeaf(source, leaf, stateName, returnName, options = 
             if (isIdentifier(node.base, "args") && node.index?.type === "NumericLiteral") {
                 const index = Number(node.index.value);
                 if (!Number.isInteger(index) || index < 1) return null;
-                while (paramNames.length < index) {
-                    while (reservedParamNames.has(`v${nextParamSuffix}`)) nextParamSuffix++;
-                    const paramName = `v${nextParamSuffix++}`;
-                    reservedParamNames.add(paramName);
-                    paramNames.push(paramName);
-                }
+                while (paramNames.length < index) paramNames.push(allocateClosureBindingName());
                 return paramNames[index - 1];
             }
             if (!isIdentifier(node.base) || !isIdentifier(node.index)) return null;
@@ -1445,8 +1450,22 @@ function renderSimpleClosureLeaf(source, leaf, stateName, returnName, options = 
                 const cell = env.get(dest.index.name);
                 if (cell?.kind !== "upvalue-cell") return null;
                 const value = resolveNode(rhs);
-                if (typeof value !== "string" || localCells.has(dest.index.name)) return null;
-                localCells.set(dest.index.name, value);
+                if (typeof value !== "string") return null;
+                const existingName = localCells.get(dest.index.name);
+                if (typeof existingName === "string") {
+                    body.push(`${existingName} = ${value}`);
+                    continue;
+                }
+                const capturedParameterInit = rhs?.type === "IndexExpression" &&
+                    isIdentifier(rhs.base, "args") && rhs.index?.type === "NumericLiteral";
+                if (capturedParameterInit) {
+                    if (!isLuaIdentifier(value)) return null;
+                    localCells.set(dest.index.name, value);
+                    continue;
+                }
+                const localName = allocateClosureBindingName();
+                localCells.set(dest.index.name, localName);
+                body.push(`local ${localName} = ${value}`);
                 continue;
             }
             if (dest.index?.type === "IndexExpression" && isIdentifier(dest.index.base, "upvalues") &&

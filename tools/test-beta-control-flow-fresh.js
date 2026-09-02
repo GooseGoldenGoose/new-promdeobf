@@ -672,7 +672,29 @@ function vmStatesSource(states) {
     const result = solveBetaControlFlow(source, parse(source));
     assert.strictEqual(result.applied, true, "shared forwarded captures were not recovered");
     assert.strictEqual(result.mode, "fresh-closure-entry");
-    assert.strictEqual(result.source, 'local v1 = 10\nlocal v2 = 20\nlocal v3 = function(v3)\n    return function(v4)\n        return function()\n            print(v1, v2, 30, v3, v4)\n            return ((((v1 + v2) + 30) + v3) + v4)\n        end\n    end\nend\nlocal v4 = v3(40)\nlocal v5 = v4(50)\nprint(v5())\n');
+    assert.strictEqual(result.source, 'local v1 = 10\nlocal v2 = 20\nlocal v3 = function(v3)\n    local v4 = 30\n    return function(v5)\n        return function()\n            print(v1, v2, v4, v3, v5)\n            return ((((v1 + v2) + v4) + v3) + v5)\n        end\n    end\nend\nlocal v4 = v3(40)\nlocal v5 = v4(50)\nprint(v5())\n');
+}
+
+{
+    const source = vmStatesSource({
+        1: [
+            'state = createClosure0(2, {})', 'r1 = state', 'r1 = nil', 'ReturnVal = {}', 'state = nil',
+        ],
+        2: [
+            'r2 = allocUpvalue()', 'state = 5', 'upvalueValues[r2] = state',
+            'state = upvalueValues[r2]', 'r3 = 1', 'ReturnVal = state + r3', 'upvalueValues[r2] = ReturnVal',
+            'state = createClosure2(3, { r2 })', 'ReturnVal = { state }', 'state = nil',
+        ],
+        3: [
+            'ReturnVal = upvalueValues[upvalues[1]]', 'r4 = args[1]', 'state = ReturnVal + r4',
+            'upvalueValues[upvalues[1]] = state', 'ReturnVal = upvalueValues[upvalues[1]]',
+            'ReturnVal = { ReturnVal }', 'state = nil',
+        ],
+    });
+    const result = solveBetaControlFlow(source, parse(source));
+    assert.strictEqual(result.applied, true, "nested mutable captured local was not recovered");
+    assert.strictEqual(result.mode, "fresh-closure-entry");
+    assert.strictEqual(result.source, 'local v1 = function()\n    local v1 = 5\n    v1 = (v1 + 1)\n    return function(v2)\n        v1 = (v1 + v2)\n        return v1\n    end\nend\n');
 }
 
 {
