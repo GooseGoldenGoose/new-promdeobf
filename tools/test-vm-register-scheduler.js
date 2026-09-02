@@ -335,4 +335,55 @@ function scheduleOverflow(source, overflowName = "Overflow") {
     assert.ok(out.indexOf('R = F(A, X)') < out.indexOf('A = nil'), 'TEMP scheduling crossed the source lifetime cleanup boundary');
 }
 
+
+{
+    const source = [
+        'Pack = { f() }',
+        'state = Pack[1]',
+        'Previous = ReturnReg',
+        'ReturnReg = Pack[2]',
+        'Second = ReturnReg',
+    ].join("\n");
+    const out = schedule(source, "ReturnReg");
+    assert.strictEqual(out[0], 'Previous = ReturnReg', 'live-in ReturnReg snapshot was not pulled before the next return-pack work');
+    assert.ok(out.indexOf('Pack = { f() }') < out.indexOf('ReturnReg = Pack[2]'), 'return-pack effect/index order changed');
+}
+
+{
+    const source = [
+        'Pack = { f() }',
+        'ReturnReg = Pack[2]',
+        'state = Pack[1]',
+        'A = state',
+        'B = ReturnReg',
+    ].join("\n");
+    const out = schedule(source, "ReturnReg");
+    assert.ok(out.indexOf('state = Pack[1]') < out.indexOf('ReturnReg = Pack[2]'), 'compiler return-pack slots were not canonicalized in ascending order');
+    assert.ok(out.indexOf('Pack = { f() }') < out.indexOf('state = Pack[1]'), 'pack slot read moved before pack creation');
+}
+
+{
+    const source = [
+        'FirstPack = { f() }',
+        'ReturnReg = FirstPack[2]',
+        'Previous = ReturnReg',
+        'SecondPack = { g() }',
+        'ReturnReg = SecondPack[2]',
+        'Previous = nil',
+    ].join("\n");
+    const out = schedule(source, "ReturnReg");
+    assert.strictEqual(out.indexOf('ReturnReg = FirstPack[2]') + 1, out.indexOf('Previous = ReturnReg'), 'cleanup-backed ReturnReg snapshot was not pulled beside its producer');
+    assert.ok(out.indexOf('Previous = ReturnReg') < out.indexOf('SecondPack = { g() }'), 'source handoff stayed inside the next return-pack work');
+}
+
+{
+    const source = [
+        'Pack = { f() }',
+        'ReturnReg = Pack[1]',
+        'Previous = ReturnReg',
+    ].join("\n");
+    const out = schedule(source, "ReturnReg");
+    assert.ok(out.indexOf('ReturnReg = Pack[1]') < out.indexOf('Previous = ReturnReg'), 'post-write ReturnReg copy was incorrectly treated as a live-in snapshot');
+}
+
 console.log("vm register scheduler regression: ok");

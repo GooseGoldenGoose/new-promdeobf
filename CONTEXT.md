@@ -1073,12 +1073,16 @@ POS/state safety:
 - final state transition stays control-flow authority
 
 Scheduling phases:
-1. sink pure primitive producers toward next touch
-2. pull register-copy consumers toward nearest producer
-3. compact producer/consumer gaps by moving only independent pure assignments
-4. sink unread pure assignments toward next overwrite or state tail
+1. identify proven compiler `{ call() }` return packs and their static numeric slot reads
+2. pull live-in `ReturnVal` snapshots before independent work and canonicalize proven pack-slot reads (slot 1, slot 2, ...) without crossing RAW/WAR/WAW hazards
+3. sink pure primitive producers toward next touch
+4. pull register-copy consumers toward nearest producer; proven `dest = ReturnVal` snapshots are movable even when `dest` is cleanup-backed source storage, because the snapshot itself is a pure VM-local handoff
+5. compact producer/consumer gaps by moving only independent pure assignments
+6. sink unread pure assignments toward next overwrite or state tail
 
 The scheduler NEVER deletes these assignments merely because they look dead.
+
+Return-pack scheduling is deliberately narrower than treating arbitrary table indexing as pure. A pack is recognized only from a direct compiler-shaped `pack = { call(...) }` definition; only static positive numeric reads from that still-unmodified pack are marked as compiler pack-slot reads. These reads may be reordered only by normal register-hazard proof and never before pack creation. This lets a shuffled `ReturnVal = pack[2]; state = pack[1]` become canonical and then lets a delayed source handoff such as `sourceVar = ReturnVal` move beside the exact `ReturnVal` definition, including when `sourceVar` has a final nil cleanup. Generic user-table index reads remain non-delayable.
 
 After generic scheduling it may also:
 - move a proven direct numeric state transition to the physical tail when safe
@@ -1732,7 +1736,7 @@ A six-line call fixture (`floor(pi)`, one result, two results, three results) wa
 
 The full 15-state opcode/call/closure/table fixture was recompiled with Medium and now preserves terminal source aliases as generated locals: a `math` binding, `newproxy` binding, `math.floor` member binding, `math.pi` member binding, `false` binding, and the terminal-live nil binding used by the two TESTSET-style expressions are emitted separately and reused by later expressions/calls. The logical lines recover as generated-binding equivalents of `b or c` and `not b or c`, not `(nil or c)` / `((not nil) or c)`. The recovered output contains no direct `math.pi` or `math.floor` substitutions in those later operations, still completes all 15 states, and parses successfully. Focused negatives verify that ordinary one-use call arguments, one-use short-circuit transports, table-constructor operand temps, and interleaved return-pack callables are not falsely promoted to source aliases.
 
-A minimal captured-upvalue short-circuit fixture (`local x = a and b` where `a`/`b` are captured by a child closure) passes Medium -> normal -> fresh CF, with focused regression coverage for both `and` and `or` branch polarity. The previously failing alternate state `temp = upvalueValues[cell]; ReturnVal = temp; state = join` is folded into the logical RHS without exposing the compiler TEMP. Chained/fused logical CFGs are now also supported: a real 9-state Medium fixture containing `a and b and c` immediately followed by `d or e or f` recovers both logical locals, and 5/5 randomized Medium recompiles passed. The larger 130-state stress fixture now flattens all 119 root logical states and gets beyond the former state-16 chained-`and` blocker; its current next failure is later at source `local r1, r2 = getTwo()` on a multi-return slot handoff (`ReturnVal = pack[2]`), which is a separate issue and was not changed by the chained-logical fix.
+A minimal captured-upvalue short-circuit fixture (`local x = a and b` where `a`/`b` are captured by a child closure) passes Medium -> normal -> fresh CF, with focused regression coverage for both `and` and `or` branch polarity. The previously failing alternate state `temp = upvalueValues[cell]; ReturnVal = temp; state = join` is folded into the logical RHS without exposing the compiler TEMP. Chained/fused logical CFGs are now also supported: a real 9-state Medium fixture containing `a and b and c` immediately followed by `d or e or f` recovers both logical locals, and 5/5 randomized Medium recompiles passed. The larger 130-state stress fixture now flattens all 119 root logical states. Scheduler canonicalization of proven compiler return-pack slots + `ReturnVal` source handoffs gets past the former `local r1, r2 = getTwo()` multi-return blocker, and `solveBetaControlFlow` now applies across all 130 states. The next unrelated failure is emitted-source validity inside the nested `nestedUpvalue` closure: the captured/mutable local initialized as `local inner = 5` is rendered as literal lvalue `5 = (5 + v1)` / `return 5, ...`. That is a closure/upvalue source-binding recovery issue, not a remaining multi-return scheduling failure.
 
 ## 31. Current Baseline / History That Matters
 

@@ -33,6 +33,10 @@ function registerIdentity(node, overflowName) {
 }
 
 const BORROWED_STATE_TEMP_WRITES = new WeakSet();
+const RETURN_SNAPSHOT_WRITES = new WeakSet();
+const COMPILER_RETURN_PACK_SLOT_READS = new WeakSet();
+const COMPILER_RETURN_PACK_SLOT_META = new WeakMap();
+const LIVE_IN_RETURN_SNAPSHOT_WRITES = new WeakSet();
 const ANCHORED_LIFETIME_WRITES = new WeakSet();
 const LIFETIME_BOUNDARY_WRITES = new WeakSet();
 
@@ -47,7 +51,7 @@ function isVmArgsSnapshotAssignment(statement, overflowName = null) {
 
 function isDelayableAssignment(statement, stateName, overflowName = null) {
     if (statement?.type !== "AssignmentStatement") return false;
-    if (ANCHORED_LIFETIME_WRITES.has(statement) && !isVmArgsSnapshotAssignment(statement, overflowName)) return false;
+    if (ANCHORED_LIFETIME_WRITES.has(statement) && !isVmArgsSnapshotAssignment(statement, overflowName) && !RETURN_SNAPSHOT_WRITES.has(statement) && !COMPILER_RETURN_PACK_SLOT_READS.has(statement)) return false;
     const variables = statement.variables || [];
     const init = statement.init || [];
     if (variables.length !== 1 || init.length !== 1) return false;
@@ -56,11 +60,11 @@ function isDelayableAssignment(statement, stateName, overflowName = null) {
     if (!destination) return false;
     if (isIdentifier(variables[0])) {
         if (["args", "upvalues", "gcProxy"].includes(destination)) return false;
-        if (destination === stateName && !BORROWED_STATE_TEMP_WRITES.has(statement)) return false;
+        if (destination === stateName && !BORROWED_STATE_TEMP_WRITES.has(statement) && !COMPILER_RETURN_PACK_SLOT_READS.has(statement)) return false;
     }
 
     const rhs = init[0];
-    return isPrimitiveLiteral(rhs) || registerIdentity(rhs, overflowName) !== null;
+    return isPrimitiveLiteral(rhs) || registerIdentity(rhs, overflowName) !== null || COMPILER_RETURN_PACK_SLOT_READS.has(statement);
 }
 
 const READS_CACHE = new WeakMap();
@@ -614,13 +618,142 @@ function markBorrowedStateTempWrites(statements, stateName) {
     return marked;
 }
 
+function isCompilerReturnPackCreation(statement, overflowName = null) {
+    if (statement?.type !== "AssignmentStatement") return null;
+    const variables = statement.variables || [];
+    const init = statement.init || [];
+    if (variables.length !== 1 || init.length !== 1) return null;
+    const packReg = registerIdentity(variables[0], overflowName);
+    const table = init[0];
+    const fields = table?.type === "TableConstructorExpression" ? (table.fields || []) : [];
+    if (!packReg || fields.length !== 1 || fields[0]?.type !== "TableValue" || fields[0].value?.type !== "CallExpression") return null;
+    return packReg;
+}
+
+function markCompilerReturnPackSlotReads(statements, overflowName = null) {
+    const activePacks = new Set();
+    let marked = 0;
+    for (const statement of statements) {
+        if (statement?.type === "AssignmentStatement") {
+            const variables = statement.variables || [];
+            const init = statement.init || [];
+            if (variables.length === 1 && init.length === 1 && init[0]?.type === "IndexExpression") {
+                const base = registerIdentity(init[0].base, overflowName);
+                const slot = init[0].index?.type === "NumericLiteral" ? Number(init[0].index.value) : NaN;
+                if (base && activePacks.has(base) && Number.isInteger(slot) && slot >= 1 && registerIdentity(variables[0], overflowName)) {
+                    COMPILER_RETURN_PACK_SLOT_READS.add(statement);
+                    COMPILER_RETURN_PACK_SLOT_META.set(statement, { packReg: base, slot });
+                    marked++;
+                }
+            }
+        }
+
+        const creation = isCompilerReturnPackCreation(statement, overflowName);
+        for (const name of statementWrites(statement, overflowName)) activePacks.delete(name);
+        if (creation) activePacks.add(creation);
+    }
+    return marked;
+}
+
+function canonicalizeCompilerReturnPackSlots(statements, overflowName = null) {
+    const originalOrder = [...statements];
+    let swaps = 0;
+    let moved = 0;
+    for (const candidate of originalOrder) {
+        const meta = COMPILER_RETURN_PACK_SLOT_META.get(candidate);
+        if (!meta) continue;
+        let currentIndex = statements.indexOf(candidate);
+        if (currentIndex <= 0) continue;
+        let didMove = false;
+        while (currentIndex > 0) {
+            const previous = statements[currentIndex - 1];
+            const creation = isCompilerReturnPackCreation(previous, overflowName);
+            if (creation === meta.packReg) break;
+            if (statementWrites(previous, overflowName).has(meta.packReg)) break;
+            const previousMeta = COMPILER_RETURN_PACK_SLOT_META.get(previous);
+            if (previousMeta?.packReg === meta.packReg && previousMeta.slot <= meta.slot) break;
+            if (hasRegisterHazard(previous, candidate, overflowName)) break;
+            statements[currentIndex - 1] = candidate;
+            statements[currentIndex] = previous;
+            currentIndex--;
+            swaps++;
+            didMove = true;
+        }
+        if (didMove) moved++;
+    }
+    return { swaps, moved };
+}
+
+function markLiveInReturnSnapshots(statements, stateName, returnName, overflowName = null) {
+    if (!returnName) return 0;
+    let sawReturnWrite = false;
+    let marked = 0;
+    for (const statement of statements) {
+        if (!sawReturnWrite && statement?.type === "AssignmentStatement") {
+            const variables = statement.variables || [];
+            const init = statement.init || [];
+            if (variables.length === 1 && init.length === 1 && isIdentifier(init[0], returnName)) {
+                const destination = registerIdentity(variables[0], overflowName);
+                if (destination && destination !== stateName && destination !== returnName && !["args", "upvalues", "gcProxy"].includes(destination)) {
+                    RETURN_SNAPSHOT_WRITES.add(statement);
+                    if (!sawReturnWrite) {
+                        LIVE_IN_RETURN_SNAPSHOT_WRITES.add(statement);
+                        marked++;
+                    }
+                }
+            }
+        }
+        if (statementWrites(statement, overflowName).has(returnName)) sawReturnWrite = true;
+    }
+    return marked;
+}
+
+function pullLiveInReturnSnapshotsLeft(statements, overflowName = null) {
+    const originalOrder = [...statements];
+    let swaps = 0;
+    let moved = 0;
+    for (const candidate of originalOrder) {
+        if (!LIVE_IN_RETURN_SNAPSHOT_WRITES.has(candidate)) continue;
+        let currentIndex = statements.indexOf(candidate);
+        if (currentIndex <= 0) continue;
+        let didMove = false;
+        while (currentIndex > 0) {
+            const previous = statements[currentIndex - 1];
+            if (hasRegisterHazard(previous, candidate, overflowName)) break;
+            statements[currentIndex - 1] = candidate;
+            statements[currentIndex] = previous;
+            currentIndex--;
+            swaps++;
+            didMove = true;
+        }
+        if (didMove) moved++;
+    }
+    return { swaps, moved };
+}
+
 function scheduleStatementList(statements, stateName, overflowName = null, returnName = null) {
+    const compilerReturnPackSlotReads = markCompilerReturnPackSlotReads(statements, overflowName);
+    const liveInReturnSnapshots = markLiveInReturnSnapshots(statements, stateName, returnName, overflowName);
     const anchoredLifetimeWrites = markAnchoredLifetimeWrites(statements, stateName, overflowName, returnName);
     const borrowedStateTemps = markBorrowedStateTempWrites(statements, stateName);
     const scheduled = [...statements];
     const schedulingBaseline = [...scheduled];
     const originalOrder = [...scheduled];
     let swaps = 0;
+
+    // A copy from ReturnVal before any ReturnVal write in this leaf snapshots the
+    // value carried in from the predecessor state. Pull it before independent
+    // work so a later compiler return pack cannot split the previous source
+    // handoff. The copy is pure VM-local state and every inversion is still
+    // guarded by RAW/WAR/WAW hazards.
+    const liveInReturnPulled = pullLiveInReturnSnapshotsLeft(scheduled, overflowName);
+    swaps += liveInReturnPulled.swaps;
+
+    // Numeric reads from a proven compiler-created { call() } pack are plain-table
+    // reads. Canonicalize their order/position before generic copy pulling so
+    // source-storage handoffs cannot remain trapped behind later pack work.
+    const packSlots = canonicalizeCompilerReturnPackSlots(scheduled, overflowName);
+    swaps += packSlots.swaps;
 
     // First move pure register assignments toward the next semantic touch of
     // the same register. This covers both producer -> read and write -> write
@@ -661,6 +794,10 @@ function scheduleStatementList(statements, stateName, overflowName = null, retur
             safetyRejected: true,
             borrowedStateTemps,
             anchoredLifetimeWrites,
+            liveInReturnSnapshots,
+            liveInReturnPulls: 0,
+            compilerReturnPackSlotReads,
+            compilerReturnPackSlotMoves: 0,
         };
     }
 
@@ -688,6 +825,10 @@ function scheduleStatementList(statements, stateName, overflowName = null, retur
         safetyRejected: false,
         borrowedStateTemps,
         anchoredLifetimeWrites,
+        liveInReturnSnapshots,
+        liveInReturnPulls: liveInReturnPulled.moved,
+        compilerReturnPackSlotReads,
+        compilerReturnPackSlotMoves: packSlots.moved,
     };
 }
 
@@ -810,6 +951,8 @@ function scheduleVmRegisterUses(source, ast) {
     let producerPulls = 0;
     let unreadSinks = 0;
     let directStateTransitionMoves = 0;
+    let liveInReturnPulls = 0;
+    let compilerReturnPackSlotMoves = 0;
 
     for (const body of leaves) {
         const segments = [];
@@ -835,6 +978,8 @@ function scheduleVmRegisterUses(source, ast) {
             producerPulls += scheduled.producerPulls || 0;
             unreadSinks += scheduled.unreadSinks || 0;
             directStateTransitionMoves += scheduled.directStateTransitionMoves || 0;
+            liveInReturnPulls += scheduled.liveInReturnPulls || 0;
+            compilerReturnPackSlotMoves += scheduled.compilerReturnPackSlotMoves || 0;
             if (scheduled.swaps === 0) continue;
 
             edits.push({
@@ -848,7 +993,7 @@ function scheduleVmRegisterUses(source, ast) {
     }
 
     if (edits.length === 0) {
-        return { source, found: true, applied: false, blocksChanged: 0, swaps: 0, producerSinks, producerPulls, unreadSinks, directStateTransitionMoves, safetyRejectedSegments, overflowRegisterBank: overflowName, overflowRegisterSlots: overflow?.indices?.size || 0 };
+        return { source, found: true, applied: false, blocksChanged: 0, swaps: 0, producerSinks, producerPulls, unreadSinks, directStateTransitionMoves, liveInReturnPulls, compilerReturnPackSlotMoves, safetyRejectedSegments, overflowRegisterBank: overflowName, overflowRegisterSlots: overflow?.indices?.size || 0 };
     }
 
     return {
@@ -861,6 +1006,8 @@ function scheduleVmRegisterUses(source, ast) {
         producerPulls,
         unreadSinks,
         directStateTransitionMoves,
+        liveInReturnPulls,
+        compilerReturnPackSlotMoves,
         safetyRejectedSegments,
         overflowRegisterBank: overflowName,
         overflowRegisterSlots: overflow?.indices?.size || 0,
