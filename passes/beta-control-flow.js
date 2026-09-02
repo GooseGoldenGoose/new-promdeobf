@@ -367,6 +367,27 @@ function matchLocalRegisterProgram(source, leaf, stateName, returnName, options 
         }
         return false;
     }
+    function hasOnlyDeadCopyUses(startIndex, name, seen = new Set()) {
+        if (seen.has(name)) return false;
+        const nextSeen = new Set(seen);
+        nextSeen.add(name);
+        for (let cursor = startIndex + 1; cursor < leaf.length; cursor++) {
+            const statement = leaf[cursor];
+            if (!isSingleAssignment(statement)) {
+                if (nodeUsesIdentifier(statement?.init, name)) return false;
+                continue;
+            }
+            const dest = statement.variables[0];
+            const value = statement.init[0];
+            const rhsUses = nodeUsesIdentifier(value, name) || (dest?.type === "IndexExpression" && nodeUsesIdentifier(dest, name));
+            if (rhsUses) {
+                if (!isIdentifier(value, name) || !isIdentifier(dest) || dest.name === name || cleanupRegs.has(dest.name) || !hasOnlyDeadCopyUses(cursor, dest.name, nextSeen)) return false;
+                continue;
+            }
+            if (isIdentifier(dest, name)) return true;
+        }
+        return true;
+    }
     function findFutureCleanupCopy(startIndex, tempReg) {
         for (let cursor = startIndex + 1; cursor < leaf.length; cursor++) {
             const statement = leaf[cursor];
@@ -613,15 +634,19 @@ function matchLocalRegisterProgram(source, leaf, stateName, returnName, options 
         const returnPackFields = rhs?.type === "TableConstructorExpression" ? (rhs.fields || []) : [];
         const isReturnPackCreation = returnPackFields.length === 1 && returnPackFields[0]?.type === "TableValue" && returnPackFields[0].value?.type === "CallExpression";
         const isDeferredStorageCopy = isIdentifier(rhs) && deferredStorageCopies.get(name) === rhs.name;
+        const isDeadRegisterCopy = isIdentifier(rhs) && name !== stateName && name !== returnName && !cleanupRegs.has(name) && hasOnlyDeadCopyUses(index, name);
         const isKnownUpvalueRead = rhs?.type === "IndexExpression" && isIdentifier(rhs.base, "upvalueValues") && isIdentifier(rhs.index) && typeof upvalueCells.get(rhs.index.name) === "string";
         const isUpvalueAllocation = rhs?.type === "CallExpression" && isIdentifier(rhs.base, "allocUpvalue") && (rhs.arguments || []).length === 0 && name !== stateName && name !== returnName && !upvalueCells.has(name);
         const releaseArgs = rhs?.type === "CallExpression" && isIdentifier(rhs.base, "releaseUpvalue") ? (rhs.arguments || []) : null;
         const isKnownUpvalueRelease = releaseArgs?.length === 1 && isIdentifier(releaseArgs[0], name) && name !== stateName && name !== returnName && upvalueCells.has(name);
-        const isClosureCreation = rhs?.type === "CallExpression" && isIdentifier(rhs.base) && /^createClosure\d*$/.test(rhs.base.name);
-        const closureFutureLocal = isClosureCreation ? findFutureCleanupCopy(index, name) : null;
-        const outstandingPackRegs = [...exprKinds.entries()].filter(([reg, kind]) => kind === "return-pack" && !consumedPackRegs.has(reg)).map(([reg]) => reg);
-        const closurePackBarrier = isClosureCreation && outstandingPackRegs.length ? Math.max(...outstandingPackRegs.map(reg => packCreationOrder.get(reg) || 0)) : 0;
-        const isDeferredClosureCreation = !!closureFutureLocal && closurePackBarrier > 0 && outstandingPackRegs.every(reg => pendingPacks.has(reg));
+        const isCallExpression = rhs?.type === "CallExpression";
+        const isClosureCreation = isCallExpression && isIdentifier(rhs.base) && /^createClosure\d*$/.test(rhs.base.name);
+        const callFutureLocal = isCallExpression ? findFutureCleanupCopy(index, name) : null;
+        const callResultIsDiscarded = isCallExpression && hasOnlyDeadCopyUses(index, name);
+        const callPackBarrier = isCallExpression && pendingPacks.size ? Math.max(...[...pendingPacks.values()].map(pack => pack.order)) : 0;
+        const hasTrackedPackBarrier = callPackBarrier > 0;
+        const isDeferredClosureCreation = isClosureCreation && !!callFutureLocal && hasTrackedPackBarrier;
+        const isDeferredOrdinaryCall = isCallExpression && !isClosureCreation && hasTrackedPackBarrier && (!!callFutureLocal || callResultIsDiscarded);
         const isPendingNeutralBookkeeping =
             (isIdentifier(rhs, "args") && name !== stateName && name !== returnName) ||
             (rhs?.type === "NilLiteral" && cleanupRegs.has(name)) ||
@@ -629,6 +654,8 @@ function matchLocalRegisterProgram(source, leaf, stateName, returnName, options 
             isUpvalueAllocation ||
             isKnownUpvalueRelease ||
             isDeferredClosureCreation ||
+            isDeferredOrdinaryCall ||
+            isDeadRegisterCopy ||
             isDeferredStorageCopy;
         if (pendingPacks.size && !isPackIndex && !isPackSlotCopy && !isReturnPackCreation && !isPendingNeutralBookkeeping && !flushPendingPacks()) return null;
 
@@ -762,17 +789,17 @@ function matchLocalRegisterProgram(source, leaf, stateName, returnName, options 
         if (rhs?.type === "CallExpression") {
             const value = renderRhs(rhs);
             if (typeof value !== "string") return null;
-            const futureLocal = findFutureCleanupCopy(index, name);
+            const futureLocal = callFutureLocal;
             if (futureLocal) {
-                let displayName;
                 const sourceLine = locals.has(futureLocal)
                     ? `${allocateLocal(futureLocal, "value")} = ${value}`
                     : `local ${allocateLocal(futureLocal, "value")} = ${value}`;
-                if (isClosureCreation && pendingPacks.size) deferredSourceLines.push({ line: sourceLine, afterPackOrder: closurePackBarrier });
+                if ((isDeferredClosureCreation || isDeferredOrdinaryCall) && pendingPacks.size) deferredSourceLines.push({ line: sourceLine, afterPackOrder: callPackBarrier });
                 else out.push(sourceLine);
                 deferredStorageCopies.set(futureLocal, name);
-            } else if (!valueUsedBeforeOverwrite(index, name)) {
-                out.push(value);
+            } else if (callResultIsDiscarded) {
+                if (isDeferredOrdinaryCall && pendingPacks.size) deferredSourceLines.push({ line: value, afterPackOrder: callPackBarrier });
+                else out.push(value);
             }
             expr.set(name, value); exprKinds.set(name, "value"); continue;
         }

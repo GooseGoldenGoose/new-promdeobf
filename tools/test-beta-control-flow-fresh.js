@@ -1234,4 +1234,34 @@ function vmStatesSource(states) {
     const secondCall = result.source.indexOf('= g()');
     assert.ok(firstCall >= 0 && closure > firstCall && secondCall > closure, result.source);
 }
+{
+    const source = vmStatesSource({
+        1: [
+            'r1 = "f"', 'r2 = _env[r1]', 'r5 = "g"', 'r6 = _env[r5]',
+            'r3 = { r2() }', 'ReturnVal = r3[2]', 'r4 = ReturnVal',
+            'ReturnVal = r6()',
+            'ReturnVal = r3[1]', 'r3 = ReturnVal',
+            'r3 = nil', 'r4 = nil',
+            'ReturnVal = {}', 'state = nil',
+        ],
+    });
+    const result = solveBetaControlFlow(source, parse(source));
+    assert.strictEqual(result.applied, true, "ordinary call interrupted a pending multi-return pack");
+    assert.strictEqual(result.source, "local v1, v2 = f()\ng()\n");
+}
+{
+    const source = vmStatesSource({
+        1: [
+            'r1 = "f"', 'r2 = _env[r1]', 'r5 = "g"', 'r6 = _env[r5]',
+            'r3 = { r2() }', 'ReturnVal = r3[2]', 'r4 = ReturnVal',
+            'ReturnVal = r6()', 'r8 = ReturnVal',
+            'ReturnVal = r3[1]', 'r3 = ReturnVal',
+            'r3 = nil', 'r4 = nil',
+            'ReturnVal = {}', 'state = nil',
+        ],
+    });
+    const result = solveBetaControlFlow(source, parse(source));
+    assert.strictEqual(result.applied, true, "dead call-result copy interrupted a pending multi-return pack");
+    assert.strictEqual(result.source, "local v1, v2 = f()\ng()\n");
+}
 console.log("fresh beta direct-global-call regression: ok");
