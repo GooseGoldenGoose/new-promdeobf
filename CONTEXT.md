@@ -1,4 +1,4 @@
-﻿# Prometheus Lua/Luau Deobfuscator - Authoritative Handoff
+# Prometheus Lua/Luau Deobfuscator - Authoritative Handoff
 
 ## Communication
 
@@ -9,7 +9,7 @@ Use caveman mode for project work:
 - no filler, unnecessary questions, or repeated project history
 - compact final unless explanation is requested
 - end every project-related turn exactly:
-  `Done for this turn — you can prompt now.`
+  `Done for this turn � you can prompt now.`
 
 ## Workspace / Git
 
@@ -149,207 +149,57 @@ Presentation:
 - counters are independent
 - original identifiers are generally unrecoverable
 
-## Current Fresh CF Capabilities
+## Current Fresh CF Baseline
 
-### Globals / expressions / locals
-- direct global calls
-- sequential global calls
-- primitive/empty-table args
-- arbitrary proven global member chains
-- explicit source locals with cleanup-backed ownership handoff
-- promotion-only locals when cleanup-backed physical register has exactly one non-nil definition
-- ambiguous pre-lifetime TEMP reuse stays fail-closed
-- binary/logical expressions
-- unary `not`, unary `-`, `#`
-- consumed call results are not duplicated as standalone calls
+Reset 2026-09-02 by user request to the minimal proven `print(1)` solver from commit `2567c29`.
 
-### Tables
-Supports structurally resolved:
-- array fields `{1,2,3}`
-- keyed fields `{x=1}`
-- dynamic keys `{[k]=v}`
-- mixed array/keyed fields
-- recursive nested constructors
-- closures inside tables
-- closures returning tables containing closures
-- last-field multi-return expansion
-
-Real broader-table proof recovered:
+Fresh CF currently supports only the direct one-state global-call proof shape used by:
 ```lua
-local v1 = 10
-local t1 = { 1, 2, name = "hello", [v1] = 123, nested = { x = 5, 6, 7 } }
-print(t1[1], t1[2], t1.name, t1[10], t1.nested.x, t1.nested[1])
-```
-Runtime parity: `1 2 hello 123 5 6`.
-
-Nested function-in-table proof:
-```lua
-local t1 = { function()
-    return { function()end }
-end }
-```
-Runtime `type(t1[1]), type(t1[1]()[1])` -> `function function`.
-
-Last-field RETURN_ALL proof:
-source equivalent to:
-```lua
-local f = function() return 2,3,4 end
-local t = {1, f()}
-```
-Fresh output preserves `{ 1, v1() }`; original and recovered both print `1 2 3 4`.
-
-### RegisterOverflow virtual registers
-
-Updated 2026-09-02: scalarization now runs in the normal canonical pipeline **before register scheduling**.
-
-- physical VM locals are first presentation-named to collision-free `rN` / `ReturnVal`
-- then every proven static `RegisterOverflow[N]` becomes scalar `oN`
-- the dead `local RegisterOverflow = {}` bank declaration is removed
-- scheduler therefore sees ordinary scalar identifiers `rN` and `oN` and applies the same dependency rules to both
-- dynamic/nonconstant overflow indexes remain fail closed
-- fresh CF still accepts old normal files containing `RegisterOverflow[N]` through its fallback scalarizer, but canonical new normal output already contains `oN`
-- big opcode fixture proof: 128 overflow slots / 587 references scalarized before scheduling; scheduler still performs 678 dependency-safe swaps
-
-### Multi-return / RETURN_ALL
-- fixed multi-return -> grouped local declaration
-- `{ f(...) }` + `unpack(pack)` final-argument form -> direct call
-- contiguous uniquely owned slots only
-- separated closure local into `pcall` multi-return supported
-- VARARG/TCO forwarding supported for compiler shape `{ select(1, unpack(args)) } -> call(unpack(pack)) -> { unpack(ReturnVal) }`; recovered closure emits `function(...) return target(...) end`
-- supports both direct/global forwarded calls and captured-function forwarding; preserves RETURN_ALL semantics
-
-### Multi-state logical
-- structural Prometheus `and/or` state-DAG recovery
-- nested short-circuit chains
-- path-local TEMP dropping at joins
-- join merge is liveness-aware: unequal path temporaries are discarded only when proven unread before overwrite/exit; live unequal values still fail closed
-- real full-pipeline TESTSET fixture `local ds = b or c` normalizes to 3 states and now recovers as `local v1 = (b or c)`
-- fresh closure orchestration now supports a multi-state logical root subgraph plus independent child closure roots; the root TESTSET diamonds are flattened structurally before the existing closure/upvalue renderer runs
-- multi-return pack recovery now supports scheduler-interleaved packs, overlapping pack creation/extraction, and slots cleaned before later slots are extracted, while preserving return-slot and call creation order
-- ambiguity fails closed
-
-### Closures / upvalues
-- closure entry recovery from normalized child entry ID
-- parameters from child `args[index]`, never randomized helper arity
-- multiple returns
-- recursive empty-capture closures
-- effectful child calls
-- read-only captures
-- captured parameters
-- multiple/shared/forwarded captures
-- writable captured variables
-- shared mutable captured cells
-- root read after child mutation
-- captured values callable as functions
-
-Writable proof:
-```lua
-local v1 = 1
-local v2 = function()
-    v1 = (v1 + 1)
-end
+print(1)
 ```
 
-Shared writable proof: two closures mutate same cell by +1 and +10; runtime `12`.
+Do not re-add locals/tables/closures/multi-return/control-flow recovery until compiler register ownership is rebuilt from first principles.
 
-Complex forwarding proof: root `a,b`, nested `c`, params `x,y`; deepest closure prints `10 20 30 40 50` and returns `150`.
+Key compiler proof from real Prometheus output:
 
-### Namecall / method calls
-Committed/pushed: `c61ddf2 Recover method calls`.
-
-Compiler shape:
+`print(1)`:
 ```lua
-methodKey = "sub"
-method = base[methodKey]
-result = method(base, arg)
+r1 = 1
+ReturnVal = print(r1)
+-- no r1 = nil
 ```
-Often the key register is reused as method destination:
+`r1` is a TEMP.
+
+`local a = 1; print(a)`:
 ```lua
-r1 = "sub"
-r1 = r4[r1]
-r5 = { r1(r4, r3) }
+state = 1
+r2 = state
+ReturnVal = print(r2)
+r2 = nil
 ```
+`r2` is a source VAR. Its scope-end `= nil` is compiler lifetime cleanup.
 
-Canonicalization proof:
-- track structural member provenance `{base, member}`
-- if later call uses that exact method value and first resolved arg is the same base, emit `base:member(rest...)`
-- otherwise preserve ordinary call semantics / fail closed
-- `obj:method(x)` and explicit `obj.method(obj,x)` can compile identically, so colon syntax is a semantic canonical form, not guaranteed original punctuation
-- derive member metadata before destination overwrite to handle key-register reuse
+Compiler source rule:
+- local declarations compile RHS first to expression registers
+- `getVarRegister(scope,id,depth,potentialId)` may promote an ordinary RHS TEMP directly to `VAR_REGISTER`
+- POS/state and RETURN registers cannot be promoted, so compiler copies into a VAR register instead
+- `copyRegisters` emits nothing when promoted source register already equals destination register
+- normal `freeRegister(reg,false)` does not free a VAR register
+- scope exit emits `varReg = nil` (or release-upvalue bookkeeping) then `freeRegister(varReg,true)`
 
-Proven:
-- local: `local s="abc"; print(s:sub(2))` -> `local v1="abc"; print(v1:sub(2))`
-- chained: `s:sub(2):upper()`
-- inside recovered closure: `return v1:sub(2)` including child RETURN_ALL packing
-- global base: `game:GetService("Players")`
-- no hardcoded method/base names
+Therefore source-local proof must track register ownership/lifetime, not merely "has a nil somewhere" or "value was read". TEMP operations must not be promoted to source locals just to make a fixture pass.
 
-Permanent regressions cover local, chained, and closure namecalls.
-Post-commit verification 2026-09-01:
-- fresh CF PASS
-- scheduler PASS
-- state reachability PASS
-- register naming PASS
-
-## Assignments / Field Writes
-
-Implemented and tested in fresh CF.
-
-Supported structurally:
-- local field writes: `base.x = value`
-- dynamic index writes: `base[key] = value`
-- nested field writes such as `a.b.c = value`
-- global writes through `_env["name"] = value` -> `name = value`
-- writes through recovered closure parameters/captures when provenance proves a stable reference
-
-Safety:
-- literal identifier keys canonicalize to dot syntax
-- dynamic keys stay bracket syntax
-- no source-string call-shape regex
-- write bases require structural stable-base provenance
-- call-derived/effectful bases fail closed to avoid re-evaluation/side-effect duplication
-
-Real compiler proofs:
+Table opcode examples to revisit only after local ownership is proven:
 ```lua
-local t = {}
-t.x = 1
-print(t.x)
+_table[_kst] = _nil
+local ds = _table[_kst]
+_table["Index"] = _nil
+local ds = _table["Index"]
+_table[1] = _nil
+local ds = _table[1]
+_table = { ["SELFCALL"] = function() end }
+_table:SELFCALL()
 ```
-->
-```lua
-local t1 = {}
-t1.x = 1
-print(t1.x)
-```
-
-```lua
-local t = {}
-local k = "x"
-t[k] = 2
-print(t[k])
-```
-->
-```lua
-local t1 = {}
-local v1 = "x"
-t1[v1] = 2
-print(t1[v1])
-```
-
-```lua
-local a = { b = { c = 1 } }
-a.b.c = 123
-print(a.b.c)
-```
-->
-```lua
-local t1 = { b = { c = 1 } }
-t1.b.c = 123
-print(t1.b.c)
-```
-
-Permanent regressions cover local/dynamic/global/captured writes plus fail-closed call-derived bases.
-
 ## VM register scheduler: dead args snapshots
 
 Updated 2026-09-01:
@@ -457,31 +307,6 @@ For structural features:
 Never claim compiler behavior until actual compiler source/output proves it.
 Never hardcode a fixture pattern just to clean output later.
 
-
-## Fresh-CF diagnostics
-
-Updated 2026-09-02:
-- unsupported multi-state failures now report normalized state count plus closure-root matcher detail
-- closure-root diagnostics include the rejected state and last processed root statement text/index when available
-- closure orchestration reports unconsumed normalized states when child-entry consumption is incomplete
-- failing reduced opcode fixture now reports: 11 normalized states; state 1; root statement 57: `r16 = ReturnVal` instead of only `unsupported multi-state control flow`
-- permanent regression verifies multi-state diagnostic includes state count/state/root statement context
-
-## Full opcode matrix fresh-CF recovery
-
-Updated 2026-09-02:
-- exact canonical normal fixture `output/_tmp_opcode_matrix_full2.normal.lua` now recovers through fresh CF: 15 normalized states, 32 statements
-- reduced fixture remains PASS: 11 states, 32 statements
-- fixed scheduler-interleaved multi-return packs where a previous `ReturnVal` copy or upvalue bookkeeping crosses an incomplete pack
-- dead trailing multi-return slots no longer force fake locals; dead slots before a live later slot synthesize positional locals so Lua multi-return indexing stays exact
-- copied table-reference metadata now survives identifier copies and materializes one stable table local for later mutation/method use
-- immediate anonymous recovered closures are parenthesized before calls
-- pending-pack failures report pack/slot details
-- final `r46` blocker was proven to be a logical-fallback TEMP: in the flattened root its nil definition fed synthesized `or` fallbacks after branch-state bridge reads were consumed
-- logical flattening now substitutes only a proven reaching primitive fallback definition; the original assignment remains for normal lifetime analysis, so real cleanup-backed locals are still preserved
-- logical renderer accepts proven identifier/primitive operands, enabling literal `nil` fallback without weakening arbitrary expression support
-- permanent regressions cover previous-ReturnVal crossing, upvalue bookkeeping crossing, copied table identity, immediate closure calls, fully dead return packs, dead-leading/live-later pack slots, and primitive logical fallback temps
-- generated full-matrix CF parses successfully and contains `print("PASSED")`; runtime parity was not used because the fixture depends on external globals/runtime behavior
 
 ## Latest test rule
 Always validate user fixtures through the full canonical `main.js` pipeline with formatter enabled before fresh CF; proof runners that bypass formatting are not authoritative.
