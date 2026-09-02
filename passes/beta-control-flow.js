@@ -11,6 +11,10 @@ function unsupported(name) {
     };
 }
 
+function isVmRegisterName(name) {
+    return typeof name === "string" && /^(?:r|o)\d+$/.test(name);
+}
+
 function isIdentifier(node, name = null) {
     return node?.type === "Identifier" && (name === null || node.name === name);
 }
@@ -334,16 +338,28 @@ function matchLocalRegisterProgram(source, leaf, stateName, returnName, options 
     let declaredCount = 0, valueLocalCount = 0, tableLocalCount = 0, nextPackOrder = 0;
     const pendingPacks = new Map(), packCreationOrder = new Map();
     let sawReturnReset = false, sawStop = false;
+    let terminalReturnLine = null;
     const consumedPackRegs = new Set();
     const upvalueCells = new Map();
     const predeclaredNilLocals = new Set();
     const deferredStorageCopies = new Map();
     const deferredTerminalClosureCopies = new Map();
     const deferredUpvalueClosureStores = new Map();
+    const deferredLiveTableCopies = new Map();
     const terminalClosureLocals = new Set();
+    const terminalTableLocals = new Set();
+    const terminalNilLocals = new Set();
+    const plainTableLocals = new Set();
     const deferredSourceLines = [];
+    const deferredLocalBarriers = new Map();
 
     function localName(name) { return localNames.get(name) || name; }
+    function emitSourceLine(line, registers = []) {
+        let barrier = 0;
+        for (const reg of registers) barrier = Math.max(barrier, deferredLocalBarriers.get(reg) || 0);
+        if (barrier > 0) deferredSourceLines.push({ line, afterPackOrder: barrier });
+        else out.push(line);
+    }
     function nodeUsesIdentifier(node, name) {
         if (!node || typeof node !== "object") return false;
         if (isIdentifier(node, name)) return true;
@@ -456,10 +472,98 @@ function matchLocalRegisterProgram(source, leaf, stateName, returnName, options 
         }
         return false;
     }
+    function rhsDependsOnPendingPack(node) {
+        if (!node || typeof node !== "object") return false;
+        if (isIdentifier(node)) {
+            if (exprKinds.get(node.name) === "return-pack" && pendingPacks.has(node.name)) return true;
+            if (exprKinds.get(node.name) === "pack-slot") {
+                const meta = exprMeta.get(node.name);
+                if (meta?.packReg && pendingPacks.has(meta.packReg)) return true;
+            }
+            return false;
+        }
+        for (const [key, value] of Object.entries(node)) {
+            if (key === "range" || key === "loc" || key === "variables") continue;
+            if (Array.isArray(value)) {
+                if (value.some(item => rhsDependsOnPendingPack(item))) return true;
+            } else if (value && typeof value === "object" && rhsDependsOnPendingPack(value)) return true;
+        }
+        return false;
+    }
+
     function isDeadPurePendingTemp(index, name, rhs) {
         if (!isPurePendingTempRhs(rhs)) return false;
-        for (const packReg of pendingPacks.keys()) if (nodeUsesIdentifier(rhs, packReg)) return false;
+        if (rhsDependsOnPendingPack(rhs)) return false;
         return hasOnlyDeadCopyUses(index, name);
+    }
+
+    function findFutureLiveTableCopy(startIndex, tempReg, rhs) {
+        if (rhs?.type !== "TableConstructorExpression" || !isPurePendingTempRhs(rhs)) return null;
+        if (rhsDependsOnPendingPack(rhs)) return null;
+        for (let cursor = startIndex + 1; cursor < leaf.length; cursor++) {
+            const statement = leaf[cursor];
+            if (!isSingleAssignment(statement)) {
+                if (nodeUsesIdentifier(statement?.init, tempReg)) return null;
+                continue;
+            }
+            const dest = statement.variables[0];
+            const value = statement.init[0];
+            if (isIdentifier(dest) && isIdentifier(value, tempReg)) {
+                for (let probe = startIndex + 1; probe < cursor; probe++) {
+                    const between = leaf[probe];
+                    if (nodeUsesIdentifier(between?.init, dest.name)) return null;
+                    const betweenDest = isSingleAssignment(between) ? between.variables[0] : null;
+                    if (betweenDest?.type === "IndexExpression" && nodeUsesIdentifier(betweenDest, dest.name)) return null;
+                }
+                if (locals.has(dest.name)) return dest.name;
+                if (dest.name !== stateName && dest.name !== returnName && !cleanupRegs.has(dest.name) && valueUsedBeforeOverwrite(cursor, dest.name)) return dest.name;
+                return null;
+            }
+            if (nodeUsesIdentifier(value, tempReg) || (dest?.type === "IndexExpression" && nodeUsesIdentifier(dest, tempReg))) return null;
+            if (isIdentifier(dest, tempReg)) return null;
+        }
+        return null;
+    }
+
+    function isDeadPlainTableIndexRead(index, name, rhs) {
+        if (rhs?.type !== "IndexExpression" || !isIdentifier(rhs.base) || !plainTableLocals.has(rhs.base.name)) return false;
+        if (rhsDependsOnPendingPack(rhs)) return false;
+        return hasOnlyDeadCopyUses(index, name);
+    }
+
+    function countIdentifierUses(node, name) {
+        if (!node || typeof node !== "object") return 0;
+        if (isIdentifier(node, name)) return 1;
+        let count = 0;
+        for (const [key, value] of Object.entries(node)) {
+            if (key === "range" || key === "loc" || key === "variables") continue;
+            if (Array.isArray(value)) for (const item of value) count += countIdentifierUses(item, name);
+            else if (value && typeof value === "object") count += countIdentifierUses(value, name);
+        }
+        return count;
+    }
+    function isUniqueFutureTableOperand(startIndex, tempReg) {
+        for (let cursor = startIndex + 1; cursor < leaf.length; cursor++) {
+            const statement = leaf[cursor];
+            if (!isSingleAssignment(statement)) {
+                if (nodeUsesIdentifier(statement?.init, tempReg)) return false;
+                continue;
+            }
+            const dest = statement.variables[0];
+            const rhs = statement.init[0];
+            const uses = countIdentifierUses(rhs, tempReg) + ((dest?.type === "IndexExpression") ? countIdentifierUses(dest, tempReg) : 0);
+            if (uses > 0) return rhs?.type === "TableConstructorExpression" && uses === 1;
+            if (isIdentifier(dest, tempReg)) return false;
+        }
+        return false;
+    }
+
+    function isPlainTableMethodLoad(index, name, rhs) {
+        if (rhs?.type !== "IndexExpression" || !isIdentifier(rhs.base) || !plainTableLocals.has(rhs.base.name)) return false;
+        const next = leaf[index + 1];
+        if (!isSingleAssignment(next, name)) return false;
+        const call = next.init[0];
+        return call?.type === "CallExpression" && isIdentifier(call.base, name) && (call.arguments || []).length > 0 && isIdentifier(call.arguments[0], rhs.base.name);
     }
 
     function findFutureCleanupCopy(startIndex, tempReg) {
@@ -535,26 +639,31 @@ function matchLocalRegisterProgram(source, leaf, stateName, returnName, options 
         const packs = [...pendingPacks.values()].sort((a, b) => a.order - b.order);
         for (const pendingPack of packs) {
             const slots = [...pendingPack.slots.keys()].sort((a, b) => a - b);
-            if (!slots.length || slots[0] !== 1) return false;
-            for (let i = 0; i < slots.length; i++) {
-                if (slots[i] !== i + 1) return false;
-                const slot = pendingPack.slots.get(slots[i]);
-                if (!slot?.localReg) return false;
-                if (typeof slot.displayName !== "string") {
-                    if (locals.has(slot.localReg)) {
-                        slot.displayName = allocateLocal(slot.localReg, "value");
-                    } else {
-                        slot.displayName = `v${++valueLocalCount}`;
-                        declaredCount++;
+            if (!slots.length || slots[0] !== 1) { return false; }
+            for (let i = 0; i < slots.length; i++) if (slots[i] !== i + 1) { return false; }
+            const slotInfos = slots.map(i => pendingPack.slots.get(i));
+            const hasAnyLocal = slotInfos.some(slot => !!slot?.localReg);
+            if (!hasAnyLocal) {
+                if (!slotInfos.every(slot => slot && hasOnlyDeadCopyUses(slot.extractionIndex, slot.tempReg))) { return false; }
+                out.push(pendingPack.call);
+                consumedPackRegs.add(pendingPack.packReg);
+            } else {
+                for (const slot of slotInfos) {
+                    if (!slot?.localReg) { return false; }
+                    if (typeof slot.displayName !== "string") {
+                        if (locals.has(slot.localReg)) slot.displayName = allocateLocal(slot.localReg, "value");
+                        else { slot.displayName = `v${++valueLocalCount}`; declaredCount++; }
                     }
                 }
+                const names = slotInfos.map(slot => slot.displayName);
+                out.push(`local ${names.join(", ")} = ${pendingPack.call}`);
+                consumedPackRegs.add(pendingPack.packReg);
             }
-            const names = slots.map(i => pendingPack.slots.get(i).displayName);
-            out.push(`local ${names.join(", ")} = ${pendingPack.call}`);
-            consumedPackRegs.add(pendingPack.packReg);
             for (let i = 0; i < deferredSourceLines.length;) {
                 if (deferredSourceLines[i].afterPackOrder <= pendingPack.order) {
-                    out.push(deferredSourceLines[i].line);
+                    const deferred = deferredSourceLines[i];
+                    out.push(deferred.line);
+                    if (deferred.declaresReg) deferredLocalBarriers.delete(deferred.declaresReg);
                     deferredSourceLines.splice(i, 1);
                 } else i++;
             }
@@ -704,7 +813,7 @@ function matchLocalRegisterProgram(source, leaf, stateName, returnName, options 
             const stableBase = locals.has(dest.base.name) || exprKinds.get(dest.base.name) === "table" || baseMeta?.kind === "member";
             if (typeof base !== "string" || !stableBase) return null;
             const target = fieldName && isLuaIdentifier(fieldName) ? `${base}.${fieldName}` : `${base}[${key}]`;
-            out.push(`${target} = ${value}`);
+            emitSourceLine(`${target} = ${value}`, [dest.base.name]);
             continue;
         }
         if (!isIdentifier(dest)) return null;
@@ -717,6 +826,7 @@ function matchLocalRegisterProgram(source, leaf, stateName, returnName, options 
         const isDeferredTerminalClosureCopy = isIdentifier(rhs) && deferredTerminalClosureCopies.get(name) === rhs.name;
         const isDeadRegisterCopy = isIdentifier(rhs) && name !== stateName && name !== returnName && !cleanupRegs.has(name) && hasOnlyDeadCopyUses(index, name);
         const isKnownUpvalueRead = rhs?.type === "IndexExpression" && isIdentifier(rhs.base, "upvalueValues") && isIdentifier(rhs.index) && typeof upvalueCells.get(rhs.index.name) === "string";
+        const isStableGlobalLoad = pendingPacks.size > 0 && isVmRegisterName(name) && rhs?.type === "IndexExpression" && isIdentifier(rhs.base, "_env") && isIdentifier(rhs.index) && typeof expr.get(rhs.index.name) === "string" && !rhsDependsOnPendingPack(rhs.index);
         const isUpvalueAllocation = rhs?.type === "CallExpression" && isIdentifier(rhs.base, "allocUpvalue") && (rhs.arguments || []).length === 0 && name !== stateName && name !== returnName && !upvalueCells.has(name);
         const releaseArgs = rhs?.type === "CallExpression" && isIdentifier(rhs.base, "releaseUpvalue") ? (rhs.arguments || []) : null;
         const isKnownUpvalueRelease = releaseArgs?.length === 1 && isIdentifier(releaseArgs[0], name) && name !== stateName && name !== returnName && upvalueCells.has(name);
@@ -729,22 +839,48 @@ function matchLocalRegisterProgram(source, leaf, stateName, returnName, options 
         const callResultIsDiscarded = isCallExpression && hasOnlyDeadCopyUses(index, name);
         const callPackBarrier = isCallExpression && pendingPacks.size ? Math.max(...[...pendingPacks.values()].map(pack => pack.order)) : 0;
         const hasTrackedPackBarrier = callPackBarrier > 0;
-        const isDeferredClosureCreation = isClosureCreation && (!!callFutureLocal || !!upvalueClosureFutureCell) && hasTrackedPackBarrier;
+        const isClosureTableOperand = isClosureCreation && isUniqueFutureTableOperand(index, name);
+        const isDeferredClosureCreation = isClosureCreation && (!!callFutureLocal || !!upvalueClosureFutureCell || isClosureTableOperand) && hasTrackedPackBarrier;
         const isDeferredOrdinaryCall = isCallExpression && !isClosureCreation && hasTrackedPackBarrier && (!!callFutureLocal || callResultIsDiscarded);
         const isDeadPureTemp = pendingPacks.size > 0 && isDeadPurePendingTemp(index, name, rhs);
+        const isStablePrimitiveTemp = pendingPacks.size > 0 && isPrimitiveLiteral(rhs) && name !== stateName && !cleanupRegs.has(name);
+        const isDeadPlainTableRead = pendingPacks.size > 0 && isDeadPlainTableIndexRead(index, name, rhs);
+        const isPlainTableNamecallLoad = pendingPacks.size > 0 && isPlainTableMethodLoad(index, name, rhs);
+        const liveTableFutureLocal = pendingPacks.size > 0 && !isDeadPureTemp ? findFutureLiveTableCopy(index, name, rhs) : null;
+        const liveTablePackBarrier = liveTableFutureLocal ? Math.max(...[...pendingPacks.values()].map(pack => pack.order)) : 0;
+        const isDeferredLiveTable = !!liveTableFutureLocal && liveTablePackBarrier > 0;
+        const isDeferredLiveTableCopy = isIdentifier(rhs) && deferredLiveTableCopies.get(name) === rhs.name;
         const isPendingNeutralBookkeeping =
             (isIdentifier(rhs, "args") && name !== stateName && name !== returnName) ||
             (rhs?.type === "NilLiteral" && cleanupRegs.has(name)) ||
             isKnownUpvalueRead ||
+            isStableGlobalLoad ||
             isUpvalueAllocation ||
             isKnownUpvalueRelease ||
             isDeferredClosureCreation ||
             isDeferredOrdinaryCall ||
             isDeadPureTemp ||
+            isStablePrimitiveTemp ||
+            isDeadPlainTableRead ||
+            isPlainTableNamecallLoad ||
+            isDeferredLiveTable ||
+            isDeferredLiveTableCopy ||
             isDeadRegisterCopy ||
             isDeferredStorageCopy ||
             isDeferredTerminalClosureCopy;
         if (pendingPacks.size && !isPackIndex && !isPackSlotCopy && !isReturnPackCreation && !isPendingNeutralBookkeeping && !flushPendingPacks()) return null;
+
+        if (isDeadPlainTableRead) {
+            expr.delete(name); exprKinds.delete(name); exprMeta.delete(name);
+            continue;
+        }
+
+        if (isDeferredLiveTableCopy) {
+            deferredLiveTableCopies.delete(name);
+            expr.set(name, localName(name));
+            exprKinds.set(name, "table");
+            continue;
+        }
 
         if (isDeferredStorageCopy || isDeferredTerminalClosureCopy) {
             if (isDeferredStorageCopy) deferredStorageCopies.delete(name);
@@ -768,6 +904,22 @@ function matchLocalRegisterProgram(source, leaf, stateName, returnName, options 
         }
         if (isIdentifier(rhs, "args") && name !== stateName && name !== returnName && !locals.has(name)) {
             expr.set(name, "args"); exprKinds.set(name, "value"); continue;
+        }
+        if (name === returnName && rhs?.type === "TableConstructorExpression" && (rhs.fields || []).length > 0) {
+            const next = leaf[index + 1];
+            if (index === leaf.length - 1 || (isSingleAssignment(next, stateName) && next.init[0]?.type === "NilLiteral")) {
+                const values = [];
+                for (const field of rhs.fields || []) {
+                    if (field?.type !== "TableValue") return null;
+                    const value = renderRhs(field.value);
+                    if (typeof value !== "string") return null;
+                    values.push(value);
+                }
+                terminalReturnLine = values.length ? `return ${values.join(", ")}` : "return";
+                sawReturnReset = true;
+                if (index === leaf.length - 1) sawStop = true;
+                continue;
+            }
         }
         if (name === returnName && isEmptyTable(rhs) && !valueUsedBeforeOverwrite(index, returnName)) { sawReturnReset = true; continue; }
         if (name === stateName && rhs?.type === "NilLiteral") {
@@ -798,6 +950,17 @@ function matchLocalRegisterProgram(source, leaf, stateName, returnName, options 
                 }
                 const displayName = allocateLocal(name, "value");
                 out.push(`local ${displayName}`);
+                if ((nonNilDefinitionCount.get(name) || 0) === 0 && !hasLaterNilAssignment(index, name)) {
+                    let futureReads = 0;
+                    for (let probe = index + 1; probe < leaf.length; probe++) {
+                        const later = leaf[probe];
+                        futureReads += countIdentifierUses(later?.init, name);
+                        const laterDest = isSingleAssignment(later) ? later.variables[0] : null;
+                        if (laterDest?.type === "IndexExpression") futureReads += countIdentifierUses(laterDest, name);
+                        if (isIdentifier(laterDest, name)) break;
+                    }
+                    if (futureReads >= 2) terminalNilLocals.add(name);
+                }
                 continue;
             }
             if (predeclaredNilLocals.has(name) && hasLaterNilAssignment(index, name)) continue;
@@ -816,7 +979,7 @@ function matchLocalRegisterProgram(source, leaf, stateName, returnName, options 
             }
             if (pendingPack.call !== rendered.call) { if (options.diagnostics) options.diagnostics.reason = `pack ${rendered.packReg} call provenance changed`; return null; }
             if (pendingPack.slots.has(rendered.slot)) { if (options.diagnostics) options.diagnostics.reason = `pack ${rendered.packReg} slot ${rendered.slot} was extracted twice`; return null; }
-            const slotInfo = { tempReg: name, localReg: null, displayName: null };
+            const slotInfo = { tempReg: name, localReg: null, displayName: null, extractionIndex: index };
             pendingPack.slots.set(rendered.slot, slotInfo);
             expr.set(name, rendered.call); exprKinds.set(name, "pack-slot"); exprMeta.set(name, { packReg: rendered.packReg, slot: rendered.slot });
             if (cleanupRegs.has(name)) {
@@ -870,8 +1033,24 @@ function matchLocalRegisterProgram(source, leaf, stateName, returnName, options 
         if (locals.has(name)) {
             const value = renderRhs(rhs);
             if (typeof value !== "string") return null;
-            out.push(`${localName(name)} = ${value}`); expr.set(name, localName(name));
+            emitSourceLine(`${localName(name)} = ${value}`, [name]); expr.set(name, localName(name));
             exprKinds.set(name, rhs?.type === "TableConstructorExpression" ? "table" : "value"); continue;
+        }
+
+        if (isDeferredLiveTable) {
+            const value = renderRhs(rhs);
+            if (typeof value !== "string") return null;
+            const wasLocal = locals.has(liveTableFutureLocal);
+            const displayName = wasLocal ? localName(liveTableFutureLocal) : allocateLocal(liveTableFutureLocal, "table");
+            const sourceLine = wasLocal ? `${displayName} = ${value}` : `local ${displayName} = ${value}`;
+            if (!wasLocal) terminalTableLocals.add(liveTableFutureLocal);
+            plainTableLocals.add(liveTableFutureLocal);
+            if (!wasLocal) deferredLocalBarriers.set(liveTableFutureLocal, liveTablePackBarrier);
+            deferredSourceLines.push({ line: sourceLine, afterPackOrder: liveTablePackBarrier, declaresReg: wasLocal ? null : liveTableFutureLocal });
+            deferredLiveTableCopies.set(liveTableFutureLocal, name);
+            expr.set(name, displayName);
+            exprKinds.set(name, "table");
+            continue;
         }
 
         if (rhs?.type === "CallExpression") {
@@ -925,8 +1104,12 @@ function matchLocalRegisterProgram(source, leaf, stateName, returnName, options 
     if (options.allowNoLocals === true && (!sawReturnReset || !sawStop)) { if (options.diagnostics) options.diagnostics.reason = `terminal bookkeeping incomplete: return=${sawReturnReset}, stop=${sawStop}`; return null; }
     if (deferredTerminalClosureCopies.size !== 0) { if (options.diagnostics) options.diagnostics.reason = "terminal closure handoff copy was not consumed"; return null; }
     if (deferredUpvalueClosureStores.size !== 0) { if (options.diagnostics) options.diagnostics.reason = "upvalue closure handoff store was not consumed"; return null; }
+    if (deferredLiveTableCopies.size !== 0) { if (options.diagnostics) options.diagnostics.reason = "live table handoff copy was not consumed"; return null; }
     for (const reg of terminalClosureLocals) locals.delete(reg);
+    for (const reg of terminalTableLocals) locals.delete(reg);
+    for (const reg of terminalNilLocals) locals.delete(reg);
     if (locals.size !== 0) { if (options.diagnostics) options.diagnostics.reason = `recovered locals still live at terminal: ${[...locals].join(",")}`; return null; }
+    if (terminalReturnLine !== null) out.push(terminalReturnLine);
     if (out.length === 0) { if (options.diagnostics) options.diagnostics.reason = "recovered program emitted no source statements"; return null; }
     const canonicalOut = canonicalizeInitialSimpleLocals(out);
     return { source: canonicalOut.join("\n") + "\n", statementCount: canonicalOut.length, localCount: declaredCount };

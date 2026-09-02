@@ -1331,4 +1331,34 @@ function vmStatesSource(states) {
     const result = solveBetaControlFlow(source, parse(source));
     assert.strictEqual(result.applied, false, "effectful index TEMP crossed a pending multi-return pack");
 }
-console.log("fresh beta direct-global-call regression: ok");
+{
+    const source = vmStatesSource({
+        1: [
+            'state = {}', 'r5 = state',
+            'r1 = "f"', 'r2 = _env[r1]', 'r3 = { r2() }',
+            'ReturnVal = r3[2]', 'r4 = ReturnVal',
+            'r6 = { 1, 2 }', 'r5 = r6',
+            'ReturnVal = r3[1]', 'r3 = ReturnVal',
+            'r3 = nil', 'r4 = nil', 'r5 = nil',
+            'ReturnVal = {}', 'state = nil',
+        ],
+    });
+    const result = solveBetaControlFlow(source, parse(source));
+    assert.strictEqual(result.applied, true, "live table constructor interrupted a pending multi-return pack");
+    assert.ok(/t\d+ = \{ 1, 2 \}/.test(result.source), result.source);
+}
+{
+    const source = vmStatesSource({
+        1: [
+            'r1 = "f"', 'r2 = _env[r1]', 'r3 = { r2() }',
+            'ReturnVal = r3[2]', 'r4 = ReturnVal',
+            'ReturnVal = r3[1]', 'r3 = ReturnVal',
+            'r3 = nil', 'r4 = nil',
+            'r5 = 321', 'ReturnVal = { r5 }', 'state = nil',
+        ],
+    });
+    const result = solveBetaControlFlow(source, parse(source));
+    assert.strictEqual(result.applied, true, "terminal return did not survive pending-pack flush");
+    assert.ok(result.source.indexOf('f()') < result.source.indexOf('return 321'), result.source);
+    assert.ok(result.source.trimEnd().endsWith('return 321'), result.source);
+}console.log("fresh beta direct-global-call regression: ok");
