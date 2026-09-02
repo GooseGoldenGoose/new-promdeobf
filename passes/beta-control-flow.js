@@ -156,6 +156,213 @@ function matchDirectGlobalCallLeaf(source, leaf, stateName, returnName) {
     };
 }
 
+
+function isEmptyTable(node) {
+    return node?.type === "TableConstructorExpression" && (node.fields || []).length === 0;
+}
+
+function renderTableFields(fields, resolve) {
+    const parts = [];
+    for (const field of fields || []) {
+        if (field?.type === "TableValue") {
+            const value = resolve(field.value);
+            if (typeof value !== "string") return null;
+            parts.push(value);
+            continue;
+        }
+        if (field?.type === "TableKey") {
+            const key = resolve(field.key);
+            const value = resolve(field.value);
+            if (typeof key !== "string" || typeof value !== "string") return null;
+            const member = /^"[A-Za-z_][A-Za-z0-9_]*"$/.test(key) ? key.slice(1, -1) : null;
+            parts.push(member && isLuaIdentifier(member) ? member + " = " + value : "[" + key + "] = " + value);
+            continue;
+        }
+        return null;
+    }
+    return "{ " + parts.join(", ") + " }";
+}
+
+function extractNormalizedStateLeaves(stateWhile, stateName) {
+    const leaves = new Map();
+    function walk(node) {
+        if (!node || node.type !== "IfStatement") return true;
+        for (const clause of node.clauses || []) {
+            if (clause?.type === "IfClause" || clause?.type === "ElseifClause") {
+                const c = clause.condition;
+                const left = isIdentifier(c?.left, stateName) && c?.right?.type === "NumericLiteral";
+                const right = isIdentifier(c?.right, stateName) && c?.left?.type === "NumericLiteral";
+                if (c?.type === "BinaryExpression" && c.operator === "==" && (left || right)) {
+                    const id = Number(left ? c.right.value : c.left.value);
+                    if (!Number.isInteger(id) || leaves.has(id)) return false;
+                    leaves.set(id, significant(clause.body));
+                    continue;
+                }
+            }
+            for (const statement of significant(clause?.body)) {
+                if (statement?.type === "IfStatement" && !walk(statement)) return false;
+            }
+        }
+        return true;
+    }
+    for (const statement of significant(stateWhile?.body)) {
+        if (statement?.type === "IfStatement" && !walk(statement)) return null;
+    }
+    return leaves.size ? leaves : null;
+}
+
+function matchOwnedLocalTableProgram(source, stateWhile, stateName, returnName) {
+    const leaves = extractNormalizedStateLeaves(stateWhile, stateName);
+    if (!leaves || !leaves.has(1)) return null;
+
+    const root = leaves.get(1);
+    const cleanupRegs = new Set();
+    for (const statement of root) {
+        if (!isSingleAssignment(statement)) continue;
+        const dest = statement.variables[0];
+        const rhs = statement.init[0];
+        if (isIdentifier(dest) && dest.name !== stateName && dest.name !== returnName && rhs?.type === "NilLiteral") cleanupRegs.add(dest.name);
+    }
+    if (cleanupRegs.size !== 1) return null;
+    const localReg = [...cleanupRegs][0];
+
+    let firstLocalWrite = -1;
+    for (let i = 0; i < root.length; i++) {
+        if (isSingleAssignment(root[i], localReg) && root[i].init[0]?.type !== "NilLiteral") { firstLocalWrite = i; break; }
+    }
+    if (firstLocalWrite < 0) return null;
+    for (let i = 0; i < firstLocalWrite; i++) if (isSingleAssignment(root[i], localReg)) return null;
+
+    const firstRhs = root[firstLocalWrite].init[0];
+    const copiedTransport = isIdentifier(firstRhs, stateName) || isIdentifier(firstRhs, returnName);
+    const directPromotion = firstRhs?.type === "TableConstructorExpression" || isPrimitiveLiteral(firstRhs);
+    if (!copiedTransport && !directPromotion) return null;
+
+    const temps = new Map();
+    const tempMeta = new Map();
+    const out = [];
+    let localDeclared = false;
+    const localName = "t1";
+    let sawCleanup = false, sawReturnReset = false, sawStop = false;
+    const consumedClosures = new Set([1]);
+
+    function renderClosureCall(call) {
+        if (call?.type !== "CallExpression" || !isIdentifier(call.base) || !/^createClosure\d*$/.test(call.base.name)) return null;
+        const args = call.arguments || [];
+        if (args.length !== 2 || args[0]?.type !== "NumericLiteral" || !isEmptyTable(args[1])) return null;
+        const entryId = Number(args[0].value);
+        if (!Number.isInteger(entryId) || consumedClosures.has(entryId)) return null;
+        const child = leaves.get(entryId);
+        if (!child) return null;
+        let childReset = false, childStop = false;
+        for (const statement of child) {
+            if (!isSingleAssignment(statement)) return null;
+            const dest = statement.variables[0], rhs = statement.init[0];
+            if (isIdentifier(dest, returnName) && isEmptyTable(rhs) && !childReset) { childReset = true; continue; }
+            if (isIdentifier(dest, stateName) && rhs?.type === "NilLiteral" && childReset && !childStop) { childStop = true; continue; }
+            return null;
+        }
+        if (!childReset || !childStop) return null;
+        consumedClosures.add(entryId);
+        return "function() end";
+    }
+
+    function resolve(node) {
+        if (isPrimitiveLiteral(node) || isEmptyTable(node)) return sourceOf(source, node);
+        if (node?.type === "TableConstructorExpression") return renderTableFields(node.fields || [], resolve);
+        if (isIdentifier(node)) {
+            if (node.name === localReg) return localDeclared ? localName : null;
+            return temps.get(node.name) ?? null;
+        }
+        if (node?.type === "CallExpression") {
+            const closure = renderClosureCall(node);
+            if (closure) return closure;
+        }
+        return null;
+    }
+
+    function establishOrAssign(value) {
+        if (typeof value !== "string") return false;
+        if (!localDeclared) {
+            localDeclared = true;
+            out.push("local " + localName + " = " + value);
+        } else out.push(localName + " = " + value);
+        temps.set(localReg, localName);
+        return true;
+    }
+
+    for (let i = 0; i < root.length; i++) {
+        const statement = root[i];
+        if (!isSingleAssignment(statement)) return null;
+        const dest = statement.variables[0], rhs = statement.init[0];
+        if (!isIdentifier(dest)) return null;
+        const name = dest.name;
+
+        if (name === localReg && rhs?.type === "NilLiteral") {
+            if (!localDeclared || sawCleanup) return null;
+            sawCleanup = true;
+            temps.delete(localReg);
+            continue;
+        }
+        if (name === returnName && isEmptyTable(rhs)) { sawReturnReset = true; continue; }
+        if (name === stateName && rhs?.type === "NilLiteral") { sawStop = true; continue; }
+        if (isIdentifier(rhs, "args") && name !== stateName && name !== returnName) continue;
+
+        if (name === localReg) {
+            const tableOwnedValue = rhs?.type === "TableConstructorExpression" ||
+                (isIdentifier(rhs) && tempMeta.get(rhs.name)?.kind === "table");
+            if (!tableOwnedValue) return null;
+            let value = resolve(rhs);
+            if (value == null && isIdentifier(rhs, stateName)) value = temps.get(stateName) ?? null;
+            if (value == null && isIdentifier(rhs, returnName)) value = temps.get(returnName) ?? null;
+            if (!establishOrAssign(value)) return null;
+            tempMeta.set(localReg, { kind: "table" });
+            continue;
+        }
+
+        if (rhs?.type === "CallExpression") {
+            const closure = renderClosureCall(rhs);
+            if (closure) { temps.set(name, closure); tempMeta.set(name, { kind: "closure" }); continue; }
+        }
+        if (rhs?.type === "IndexExpression" && isIdentifier(rhs.base) && isIdentifier(rhs.index)) {
+            const base = rhs.base.name === localReg ? localName : temps.get(rhs.base.name);
+            const key = temps.get(rhs.index.name);
+            if (typeof base !== "string" || typeof key !== "string") return null;
+            const member = /^"[A-Za-z_][A-Za-z0-9_]*"$/.test(key) ? key.slice(1, -1) : null;
+            const value = member && isLuaIdentifier(member) ? base + "." + member : base + "[" + key + "]";
+            temps.set(name, value);
+            tempMeta.set(name, member ? { kind: "member", base, member } : null);
+            continue;
+        }
+        if (rhs?.type === "CallExpression" && isIdentifier(rhs.base)) {
+            const base = temps.get(rhs.base.name);
+            if (typeof base !== "string") return null;
+            const args = [];
+            for (const arg of rhs.arguments || []) {
+                const value = isIdentifier(arg, localReg) ? localName : resolve(arg);
+                if (typeof value !== "string") return null;
+                args.push(value);
+            }
+            const meta = tempMeta.get(rhs.base.name);
+            if (meta?.kind === "member" && args[0] === meta.base) {
+                out.push(meta.base + ":" + meta.member + "(" + args.slice(1).join(", ") + ")");
+                temps.set(name, "nil");
+                continue;
+            }
+            return null;
+        }
+        const value = resolve(rhs);
+        if (typeof value !== "string") return null;
+        temps.set(name, value);
+        if (rhs?.type === "TableConstructorExpression") tempMeta.set(name, { kind: "table" });
+        else tempMeta.delete(name);
+    }
+
+    if (!localDeclared || !sawCleanup || !sawReturnReset || !sawStop) return null;
+    if (consumedClosures.size !== leaves.size) return null;
+    return { source: out.join("\n") + "\n", stateCount: leaves.size, statementCount: out.length, localCount: 1, closureCount: leaves.size - 1 };
+}
+
 function solveFreshSource(source, ast) {
     if (typeof source !== "string" || !ast) return { applied: false, reason: "Fresh beta CF requires normal output source and AST", mode: "fresh" };
     const vm = findVmFunction(ast);
@@ -166,6 +373,9 @@ function solveFreshSource(source, ast) {
     const returnName = findVmReturnRegister(vm.functionNode)?.name || null;
     const stateWhile = findStateWhile(vm.functionNode, stateName);
     if (!stateWhile) return { applied: false, reason: "Fresh beta CF: no while <state> dispatcher", mode: "fresh" };
+    const ownedLocalProgram = matchOwnedLocalTableProgram(source, stateWhile, stateName, returnName);
+    if (ownedLocalProgram) return { applied: true, mode: "fresh-owned-local-table", ...ownedLocalProgram, branchCount: 0 };
+
     const leaf = unwrapSingleStateLeaf(stateWhile, stateName);
     if (!leaf) return { applied: false, reason: "Fresh beta CF: direct-call solver requires exactly one VM state", mode: "fresh" };
 
@@ -199,6 +409,7 @@ function solveBetaControlFlow(sourceOrAst, astOrBeta) {
 module.exports = {
     solveBetaControlFlow,
     matchDirectGlobalCallLeaf,
+    matchOwnedLocalTableProgram,
     displayEnvironmentProvider: unsupported("displayEnvironmentProvider"),
     sinkTerminalReturnPayload: unsupported("sinkTerminalReturnPayload"),
     lowerTerminalReturn: unsupported("lowerTerminalReturn"),

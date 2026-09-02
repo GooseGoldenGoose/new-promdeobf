@@ -93,4 +93,45 @@ function vmSource(leaf) {
     assert.strictEqual(result.applied, false, "source-local VAR lifetime was mistaken for a plain call TEMP");
 }
 
+{
+    const source = [
+        "vm = function(state, args, upvalues, gcProxy)",
+        "    local r1, r2, r3, r4, ReturnVal",
+        "    while state do",
+        "        if state <= 1 then",
+        "            if state == 1 then",
+        "                state = {}",
+        "                r1 = createClosure1(2, {})",
+        "                r3 = state",
+        "                ReturnVal = 1",
+        "                r4 = 2",
+        "                state = { ReturnVal, r4 }",
+        "                r3 = state",
+        "                r4 = \"se\"",
+        "                ReturnVal = { [r4] = r1 }",
+        "                r3 = ReturnVal",
+        "                ReturnVal = {}",
+        "                r4 = \"se\"",
+        "                r4 = r3[r4]",
+        "                r4 = r4(r3)",
+        "                r3 = nil",
+        "                r2 = args",
+        "                state = nil",
+        "            end",
+        "        else",
+        "            if state == 2 then",
+        "                ReturnVal = {}",
+        "                state = nil",
+        "            end",
+        "        end",
+        "    end",
+        "    state = #gcProxy",
+        "    return unpack(ReturnVal)",
+        "end",
+    ].join("\n");
+    const result = solveBetaControlFlow(source, parse(source));
+    assert.strictEqual(result.applied, true, "cleanup-backed table VAR with reassignment/namecall was not recovered");
+    assert.strictEqual(result.mode, "fresh-owned-local-table");
+    assert.strictEqual(result.source, "local t1 = {}\nt1 = { 1, 2 }\nt1 = { se = function() end }\nt1:se()\n");
+}
 console.log("fresh beta direct-global-call regression: ok");

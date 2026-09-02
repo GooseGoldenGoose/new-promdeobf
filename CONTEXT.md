@@ -9,7 +9,7 @@ Use caveman mode for project work:
 - no filler, unnecessary questions, or repeated project history
 - compact final unless explanation is requested
 - end every project-related turn exactly:
-  `Done for this turn — you can prompt now.`
+  `Done for this turn ï¿½ you can prompt now.`
 
 ## Workspace / Git
 
@@ -310,3 +310,15 @@ Never hardcode a fixture pattern just to clean output later.
 
 ## Latest test rule
 Always validate user fixtures through the full canonical `main.js` pipeline with formatter enabled before fresh CF; proof runners that bypass formatting are not authoritative.
+
+## Fresh CF owned table local rebuild
+
+Updated 2026-09-02:
+- first post-reset feature rebuilt from compiler register ownership, not old heuristic local promotion
+- compiler proof: source VAR is cleanup-backed and may be established by POS/Return transport copy or direct TEMP promotion; ordinary TEMP has no scope-end cleanup
+- fresh CF now has a narrow table-local matcher that requires exactly one cleanup-backed root VAR, proves its first ownership handoff, requires every recovered assignment on that VAR to remain table-valued, and fails closed otherwise
+- supports table constructor reassignment on the same source local plus an empty child closure used as a keyed table field and Prometheus SELF lowering (`base[key]` then call with `base` as arg1)
+- exact source `local a = {}; a = {1,2}; a = {se=function()end}; a:se()` recovers as `local t1 = {}; t1 = { 1, 2 }; t1 = { se = function() end }; t1:se()`
+- verified through canonical formatter/normal pipeline and 3 independent randomized Prometheus Medium obfuscations; all recovered identically
+- permanent regression covers the owned table VAR + reassignment + empty closure + namecall shape
+- minimal `print(1)` direct-call solver remains intact; unsupported shapes still fail closed
