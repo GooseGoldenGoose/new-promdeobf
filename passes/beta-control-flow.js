@@ -439,6 +439,29 @@ function matchLocalRegisterProgram(source, leaf, stateName, returnName, options 
         return null;
     }
 
+    function isPurePendingTempRhs(rhs) {
+        if (!rhs || typeof rhs !== "object") return false;
+        if (rhs.type === "CallExpression" || rhs.type === "IndexExpression" || rhs.type === "FunctionDeclaration" || rhs.type === "FunctionExpression") return false;
+        if (isPrimitiveLiteral(rhs) || isEmptyTable(rhs) || isIdentifier(rhs)) return true;
+        if (rhs.type === "UnaryExpression") return isPurePendingTempRhs(rhs.argument);
+        if (rhs.type === "BinaryExpression" || rhs.type === "LogicalExpression") return isPurePendingTempRhs(rhs.left) && isPurePendingTempRhs(rhs.right);
+        if (rhs.type === "TableConstructorExpression") {
+            for (const field of rhs.fields || []) {
+                if (field?.type === "TableValue") { if (!isPurePendingTempRhs(field.value)) return false; continue; }
+                if (field?.type === "TableKey") { if (!isPurePendingTempRhs(field.key) || !isPurePendingTempRhs(field.value)) return false; continue; }
+                if (field?.type === "TableKeyString") { if (!isPurePendingTempRhs(field.value)) return false; continue; }
+                return false;
+            }
+            return true;
+        }
+        return false;
+    }
+    function isDeadPurePendingTemp(index, name, rhs) {
+        if (!isPurePendingTempRhs(rhs)) return false;
+        for (const packReg of pendingPacks.keys()) if (nodeUsesIdentifier(rhs, packReg)) return false;
+        return hasOnlyDeadCopyUses(index, name);
+    }
+
     function findFutureCleanupCopy(startIndex, tempReg) {
         for (let cursor = startIndex + 1; cursor < leaf.length; cursor++) {
             const statement = leaf[cursor];
@@ -708,6 +731,7 @@ function matchLocalRegisterProgram(source, leaf, stateName, returnName, options 
         const hasTrackedPackBarrier = callPackBarrier > 0;
         const isDeferredClosureCreation = isClosureCreation && (!!callFutureLocal || !!upvalueClosureFutureCell) && hasTrackedPackBarrier;
         const isDeferredOrdinaryCall = isCallExpression && !isClosureCreation && hasTrackedPackBarrier && (!!callFutureLocal || callResultIsDiscarded);
+        const isDeadPureTemp = pendingPacks.size > 0 && isDeadPurePendingTemp(index, name, rhs);
         const isPendingNeutralBookkeeping =
             (isIdentifier(rhs, "args") && name !== stateName && name !== returnName) ||
             (rhs?.type === "NilLiteral" && cleanupRegs.has(name)) ||
@@ -716,6 +740,7 @@ function matchLocalRegisterProgram(source, leaf, stateName, returnName, options 
             isKnownUpvalueRelease ||
             isDeferredClosureCreation ||
             isDeferredOrdinaryCall ||
+            isDeadPureTemp ||
             isDeadRegisterCopy ||
             isDeferredStorageCopy ||
             isDeferredTerminalClosureCopy;

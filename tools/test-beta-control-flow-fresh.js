@@ -1301,4 +1301,34 @@ function vmStatesSource(states) {
     const closureMatch = result.source.match(/local (v\d+) = function\(\)/);
     assert.ok(closureMatch && result.source.includes(`${closureMatch[1]}()`), result.source);
 }
+
+{
+    const source = vmStatesSource({
+        1: [
+            'r1 = "f"', 'r2 = _env[r1]',
+            'r3 = { r2() }', 'ReturnVal = r3[2]', 'r4 = ReturnVal',
+            'ReturnVal = {}', 'r8 = ReturnVal',
+            'ReturnVal = r3[1]', 'r3 = ReturnVal',
+            'r3 = nil', 'r4 = nil',
+            'ReturnVal = {}', 'state = nil',
+        ],
+    });
+    const result = solveBetaControlFlow(source, parse(source));
+    assert.strictEqual(result.applied, true, "dead pure TEMP interrupted a pending multi-return pack");
+    assert.strictEqual(result.source, "local v1, v2 = f()\n");
+}
+{
+    const source = vmStatesSource({
+        1: [
+            'r1 = "f"', 'r2 = _env[r1]', 'r5 = {}', 'r6 = "x"',
+            'r3 = { r2() }', 'ReturnVal = r3[2]', 'r4 = ReturnVal',
+            'ReturnVal = r5[r6]', 'r8 = ReturnVal',
+            'ReturnVal = r3[1]', 'r3 = ReturnVal',
+            'r3 = nil', 'r4 = nil',
+            'ReturnVal = {}', 'state = nil',
+        ],
+    });
+    const result = solveBetaControlFlow(source, parse(source));
+    assert.strictEqual(result.applied, false, "effectful index TEMP crossed a pending multi-return pack");
+}
 console.log("fresh beta direct-global-call regression: ok");
