@@ -339,6 +339,7 @@ function matchLocalRegisterProgram(source, leaf, stateName, returnName, options 
     const predeclaredNilLocals = new Set();
     const deferredStorageCopies = new Map();
     const deferredTerminalClosureCopies = new Map();
+    const deferredUpvalueClosureStores = new Map();
     const terminalClosureLocals = new Set();
     const deferredSourceLines = [];
 
@@ -413,6 +414,24 @@ function matchLocalRegisterProgram(source, leaf, stateName, returnName, options 
                     if (isIdentifier(laterDest, dest.name)) return null;
                 }
                 return sawUse ? dest.name : null;
+            }
+            if (nodeUsesIdentifier(rhs, tempReg) || (dest?.type === "IndexExpression" && nodeUsesIdentifier(dest, tempReg))) return null;
+            if (isIdentifier(dest, tempReg)) return null;
+        }
+        return null;
+    }
+
+    function findFutureUpvalueClosureStore(startIndex, tempReg) {
+        for (let cursor = startIndex + 1; cursor < leaf.length; cursor++) {
+            const statement = leaf[cursor];
+            if (!isSingleAssignment(statement)) {
+                if (nodeUsesIdentifier(statement?.init, tempReg)) return null;
+                continue;
+            }
+            const dest = statement.variables[0];
+            const rhs = statement.init[0];
+            if (dest?.type === "IndexExpression" && isIdentifier(dest.base, "upvalueValues") && isIdentifier(dest.index) && isIdentifier(rhs, tempReg)) {
+                return upvalueCells.has(dest.index.name) && upvalueCells.get(dest.index.name) === null ? dest.index.name : null;
             }
             if (nodeUsesIdentifier(rhs, tempReg) || (dest?.type === "IndexExpression" && nodeUsesIdentifier(dest, tempReg))) return null;
             if (isIdentifier(dest, tempReg)) return null;
@@ -633,6 +652,12 @@ function matchLocalRegisterProgram(source, leaf, stateName, returnName, options 
         predeclareNilReads(rhs, index);
         if (dest?.type === "IndexExpression" && isIdentifier(dest.base, "upvalueValues") && isIdentifier(dest.index)) {
             if (!upvalueCells.has(dest.index.name)) return null;
+            const deferredTemp = deferredUpvalueClosureStores.get(dest.index.name);
+            if (deferredTemp != null) {
+                if (!isIdentifier(rhs, deferredTemp) || typeof upvalueCells.get(dest.index.name) !== "string") return null;
+                deferredUpvalueClosureStores.delete(dest.index.name);
+                continue;
+            }
             const value = renderRhs(rhs);
             if (typeof value !== "string" || typeof upvalueCells.get(dest.index.name) === "string") return null;
             const displayName = `v${++valueLocalCount}`;
@@ -676,11 +701,12 @@ function matchLocalRegisterProgram(source, leaf, stateName, returnName, options 
         const isClosureCreation = isCallExpression && isIdentifier(rhs.base) && /^createClosure\d*$/.test(rhs.base.name);
         const cleanupFutureLocal = isCallExpression ? findFutureCleanupCopy(index, name) : null;
         const terminalClosureFutureLocal = isClosureCreation && !cleanupFutureLocal ? findFutureTerminalClosureCopy(index, name) : null;
+        const upvalueClosureFutureCell = isClosureCreation && !cleanupFutureLocal && !terminalClosureFutureLocal ? findFutureUpvalueClosureStore(index, name) : null;
         const callFutureLocal = cleanupFutureLocal || terminalClosureFutureLocal;
         const callResultIsDiscarded = isCallExpression && hasOnlyDeadCopyUses(index, name);
         const callPackBarrier = isCallExpression && pendingPacks.size ? Math.max(...[...pendingPacks.values()].map(pack => pack.order)) : 0;
         const hasTrackedPackBarrier = callPackBarrier > 0;
-        const isDeferredClosureCreation = isClosureCreation && !!callFutureLocal && hasTrackedPackBarrier;
+        const isDeferredClosureCreation = isClosureCreation && (!!callFutureLocal || !!upvalueClosureFutureCell) && hasTrackedPackBarrier;
         const isDeferredOrdinaryCall = isCallExpression && !isClosureCreation && hasTrackedPackBarrier && (!!callFutureLocal || callResultIsDiscarded);
         const isPendingNeutralBookkeeping =
             (isIdentifier(rhs, "args") && name !== stateName && name !== returnName) ||
@@ -827,7 +853,16 @@ function matchLocalRegisterProgram(source, leaf, stateName, returnName, options 
             const value = renderRhs(rhs);
             if (typeof value !== "string") return null;
             const futureLocal = callFutureLocal;
-            if (futureLocal) {
+            if (upvalueClosureFutureCell) {
+                if (upvalueCells.get(upvalueClosureFutureCell) !== null) return null;
+                const displayName = `v${++valueLocalCount}`;
+                upvalueCells.set(upvalueClosureFutureCell, displayName);
+                const sourceLine = `local ${displayName} = ${value}`;
+                if (isDeferredClosureCreation && pendingPacks.size) deferredSourceLines.push({ line: sourceLine, afterPackOrder: callPackBarrier });
+                else out.push(sourceLine);
+                deferredUpvalueClosureStores.set(upvalueClosureFutureCell, name);
+                declaredCount++;
+            } else if (futureLocal) {
                 const sourceLine = locals.has(futureLocal)
                     ? `${allocateLocal(futureLocal, "value")} = ${value}`
                     : `local ${allocateLocal(futureLocal, "value")} = ${value}`;
@@ -864,6 +899,7 @@ function matchLocalRegisterProgram(source, leaf, stateName, returnName, options 
     if (options.allowNoLocals !== true && declaredCount === 0) { if (options.diagnostics) options.diagnostics.reason = "no proven source locals were recovered"; return null; }
     if (options.allowNoLocals === true && (!sawReturnReset || !sawStop)) { if (options.diagnostics) options.diagnostics.reason = `terminal bookkeeping incomplete: return=${sawReturnReset}, stop=${sawStop}`; return null; }
     if (deferredTerminalClosureCopies.size !== 0) { if (options.diagnostics) options.diagnostics.reason = "terminal closure handoff copy was not consumed"; return null; }
+    if (deferredUpvalueClosureStores.size !== 0) { if (options.diagnostics) options.diagnostics.reason = "upvalue closure handoff store was not consumed"; return null; }
     for (const reg of terminalClosureLocals) locals.delete(reg);
     if (locals.size !== 0) { if (options.diagnostics) options.diagnostics.reason = `recovered locals still live at terminal: ${[...locals].join(",")}`; return null; }
     if (out.length === 0) { if (options.diagnostics) options.diagnostics.reason = "recovered program emitted no source statements"; return null; }
