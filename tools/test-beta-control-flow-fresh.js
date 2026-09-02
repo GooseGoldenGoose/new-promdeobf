@@ -1264,4 +1264,22 @@ function vmStatesSource(states) {
     assert.strictEqual(result.applied, true, "dead call-result copy interrupted a pending multi-return pack");
     assert.strictEqual(result.source, "local v1, v2 = f()\ng()\n");
 }
+{
+    const source = vmStatesSource({
+        1: [
+            'r1 = "f"', 'r2 = _env[r1]', 'r5 = "print"', 'r5 = _env[r5]', 'r6 = 1', 'ReturnVal = r5(r6)',
+            'r3 = { r2() }', 'ReturnVal = r3[2]', 'r4 = ReturnVal',
+            'ReturnVal = createClosure0(2, {})', 'r5 = ReturnVal',
+            'ReturnVal = r3[1]', 'r3 = ReturnVal',
+            'ReturnVal = r5()',
+            'r3 = nil', 'r4 = nil',
+            'ReturnVal = {}', 'state = nil',
+        ],
+        2: ['ReturnVal = "n"', 'state = _env[ReturnVal]', 'ReturnVal = { state }', 'state = nil'],
+    });
+    const result = solveBetaControlFlow(source, parse(source));
+    assert.strictEqual(result.applied, true, "reused physical register blocked terminal closure handoff");
+    const closureMatch = result.source.match(/local (v\d+) = function\(\)/);
+    assert.ok(closureMatch && result.source.includes(`${closureMatch[1]}()`), result.source);
+}
 console.log("fresh beta direct-global-call regression: ok");

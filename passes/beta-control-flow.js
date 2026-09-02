@@ -338,6 +338,8 @@ function matchLocalRegisterProgram(source, leaf, stateName, returnName, options 
     const upvalueCells = new Map();
     const predeclaredNilLocals = new Set();
     const deferredStorageCopies = new Map();
+    const deferredTerminalClosureCopies = new Map();
+    const terminalClosureLocals = new Set();
     const deferredSourceLines = [];
 
     function localName(name) { return localNames.get(name) || name; }
@@ -388,6 +390,36 @@ function matchLocalRegisterProgram(source, leaf, stateName, returnName, options 
         }
         return true;
     }
+    function findFutureTerminalClosureCopy(startIndex, tempReg) {
+        for (let cursor = startIndex + 1; cursor < leaf.length; cursor++) {
+            const statement = leaf[cursor];
+            if (!isSingleAssignment(statement)) {
+                if (nodeUsesIdentifier(statement?.init, tempReg)) return null;
+                continue;
+            }
+            const dest = statement.variables[0];
+            const rhs = statement.init[0];
+            if (isIdentifier(dest) && isIdentifier(rhs, tempReg) && dest.name !== stateName && dest.name !== returnName && !cleanupRegs.has(dest.name)) {
+                let sawUse = false;
+                for (let probe = cursor + 1; probe < leaf.length; probe++) {
+                    const later = leaf[probe];
+                    if (!isSingleAssignment(later)) {
+                        if (nodeUsesIdentifier(later?.init, dest.name)) sawUse = true;
+                        continue;
+                    }
+                    const laterDest = later.variables[0];
+                    const laterRhs = later.init[0];
+                    if (nodeUsesIdentifier(laterRhs, dest.name) || (laterDest?.type === "IndexExpression" && nodeUsesIdentifier(laterDest, dest.name))) sawUse = true;
+                    if (isIdentifier(laterDest, dest.name)) return null;
+                }
+                return sawUse ? dest.name : null;
+            }
+            if (nodeUsesIdentifier(rhs, tempReg) || (dest?.type === "IndexExpression" && nodeUsesIdentifier(dest, tempReg))) return null;
+            if (isIdentifier(dest, tempReg)) return null;
+        }
+        return null;
+    }
+
     function findFutureCleanupCopy(startIndex, tempReg) {
         for (let cursor = startIndex + 1; cursor < leaf.length; cursor++) {
             const statement = leaf[cursor];
@@ -634,6 +666,7 @@ function matchLocalRegisterProgram(source, leaf, stateName, returnName, options 
         const returnPackFields = rhs?.type === "TableConstructorExpression" ? (rhs.fields || []) : [];
         const isReturnPackCreation = returnPackFields.length === 1 && returnPackFields[0]?.type === "TableValue" && returnPackFields[0].value?.type === "CallExpression";
         const isDeferredStorageCopy = isIdentifier(rhs) && deferredStorageCopies.get(name) === rhs.name;
+        const isDeferredTerminalClosureCopy = isIdentifier(rhs) && deferredTerminalClosureCopies.get(name) === rhs.name;
         const isDeadRegisterCopy = isIdentifier(rhs) && name !== stateName && name !== returnName && !cleanupRegs.has(name) && hasOnlyDeadCopyUses(index, name);
         const isKnownUpvalueRead = rhs?.type === "IndexExpression" && isIdentifier(rhs.base, "upvalueValues") && isIdentifier(rhs.index) && typeof upvalueCells.get(rhs.index.name) === "string";
         const isUpvalueAllocation = rhs?.type === "CallExpression" && isIdentifier(rhs.base, "allocUpvalue") && (rhs.arguments || []).length === 0 && name !== stateName && name !== returnName && !upvalueCells.has(name);
@@ -641,7 +674,9 @@ function matchLocalRegisterProgram(source, leaf, stateName, returnName, options 
         const isKnownUpvalueRelease = releaseArgs?.length === 1 && isIdentifier(releaseArgs[0], name) && name !== stateName && name !== returnName && upvalueCells.has(name);
         const isCallExpression = rhs?.type === "CallExpression";
         const isClosureCreation = isCallExpression && isIdentifier(rhs.base) && /^createClosure\d*$/.test(rhs.base.name);
-        const callFutureLocal = isCallExpression ? findFutureCleanupCopy(index, name) : null;
+        const cleanupFutureLocal = isCallExpression ? findFutureCleanupCopy(index, name) : null;
+        const terminalClosureFutureLocal = isClosureCreation && !cleanupFutureLocal ? findFutureTerminalClosureCopy(index, name) : null;
+        const callFutureLocal = cleanupFutureLocal || terminalClosureFutureLocal;
         const callResultIsDiscarded = isCallExpression && hasOnlyDeadCopyUses(index, name);
         const callPackBarrier = isCallExpression && pendingPacks.size ? Math.max(...[...pendingPacks.values()].map(pack => pack.order)) : 0;
         const hasTrackedPackBarrier = callPackBarrier > 0;
@@ -656,11 +691,13 @@ function matchLocalRegisterProgram(source, leaf, stateName, returnName, options 
             isDeferredClosureCreation ||
             isDeferredOrdinaryCall ||
             isDeadRegisterCopy ||
-            isDeferredStorageCopy;
+            isDeferredStorageCopy ||
+            isDeferredTerminalClosureCopy;
         if (pendingPacks.size && !isPackIndex && !isPackSlotCopy && !isReturnPackCreation && !isPendingNeutralBookkeeping && !flushPendingPacks()) return null;
 
-        if (isDeferredStorageCopy) {
-            deferredStorageCopies.delete(name);
+        if (isDeferredStorageCopy || isDeferredTerminalClosureCopy) {
+            if (isDeferredStorageCopy) deferredStorageCopies.delete(name);
+            else deferredTerminalClosureCopies.delete(name);
             if (!locals.has(name)) return null;
             expr.set(name, localName(name));
             exprKinds.set(name, "value");
@@ -796,7 +833,8 @@ function matchLocalRegisterProgram(source, leaf, stateName, returnName, options 
                     : `local ${allocateLocal(futureLocal, "value")} = ${value}`;
                 if ((isDeferredClosureCreation || isDeferredOrdinaryCall) && pendingPacks.size) deferredSourceLines.push({ line: sourceLine, afterPackOrder: callPackBarrier });
                 else out.push(sourceLine);
-                deferredStorageCopies.set(futureLocal, name);
+                if (cleanupRegs.has(futureLocal)) deferredStorageCopies.set(futureLocal, name);
+                else if (terminalClosureFutureLocal === futureLocal) { deferredTerminalClosureCopies.set(futureLocal, name); terminalClosureLocals.add(futureLocal); }
             } else if (callResultIsDiscarded) {
                 if (isDeferredOrdinaryCall && pendingPacks.size) deferredSourceLines.push({ line: value, afterPackOrder: callPackBarrier });
                 else out.push(value);
@@ -825,6 +863,8 @@ function matchLocalRegisterProgram(source, leaf, stateName, returnName, options 
     if (!flushPendingPacks()) { if (options.diagnostics) options.diagnostics.reason = "final pending multi-return pack flush failed"; return null; }
     if (options.allowNoLocals !== true && declaredCount === 0) { if (options.diagnostics) options.diagnostics.reason = "no proven source locals were recovered"; return null; }
     if (options.allowNoLocals === true && (!sawReturnReset || !sawStop)) { if (options.diagnostics) options.diagnostics.reason = `terminal bookkeeping incomplete: return=${sawReturnReset}, stop=${sawStop}`; return null; }
+    if (deferredTerminalClosureCopies.size !== 0) { if (options.diagnostics) options.diagnostics.reason = "terminal closure handoff copy was not consumed"; return null; }
+    for (const reg of terminalClosureLocals) locals.delete(reg);
     if (locals.size !== 0) { if (options.diagnostics) options.diagnostics.reason = `recovered locals still live at terminal: ${[...locals].join(",")}`; return null; }
     if (out.length === 0) { if (options.diagnostics) options.diagnostics.reason = "recovered program emitted no source statements"; return null; }
     const canonicalOut = canonicalizeInitialSimpleLocals(out);
