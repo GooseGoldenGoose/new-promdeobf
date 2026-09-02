@@ -1600,4 +1600,27 @@ function vmStatesSource(states) {
     assert.match(result.source, new RegExp(`local v\\d+ = \\(\\(not ${first[1]}\\) or ${first[2]}\\)`));
 }
 
+{
+    const source = vmStatesSource({
+        1: [
+            'r1 = "a"', 'r2 = _env[r1]',
+            'r3 = "b"', 'r4 = _env[r3]',
+            'r5 = "c"', 'r6 = _env[r5]',
+            'r8 = "d"', 'r9 = _env[r8]',
+            'r10 = "e"', 'r11 = _env[r10]',
+            'r12 = "f"', 'r13 = _env[r12]',
+            'ReturnVal = r2', 'state = r2 and 2 or 4',
+        ],
+        2: ['ReturnVal = r4', 'state = r4 and 3 or 4'],
+        3: ['ReturnVal = r6', 'state = 4'],
+        4: ['r7 = ReturnVal', 'ReturnVal = r9', 'state = r9 and 7 or 5'],
+        5: ['ReturnVal = r11', 'state = r11 and 7 or 6'],
+        6: ['ReturnVal = r13', 'state = 7'],
+        7: ['r14 = ReturnVal', 'r7 = nil', 'r14 = nil', 'ReturnVal = {}', 'state = nil'],
+    });
+    const result = solveBetaControlFlow(source, parse(source));
+    assert.strictEqual(result.applied, true, "chained logical CFG with fused join was not recovered");
+    assert.strictEqual(result.mode, "fresh-multistate-logical");
+    assert.strictEqual(result.source, 'local v1 = (a and (b and c))\nlocal v2 = (d or (e or f))\n');
+}
 console.log("fresh beta direct-global-call regression: ok");

@@ -801,6 +801,12 @@ function matchLocalRegisterProgram(source, leaf, stateName, returnName, options 
             if (typeof left !== "string" || typeof right !== "string") return null;
             return `(${left} ${rhs.operator} ${right})`;
         }
+        if (rhs?.type === "LogicalExpression" && rhs.freshCompilerLogical === true && typeof rhs.operator === "string") {
+            const left = renderRhs(rhs.left);
+            const right = renderRhs(rhs.right);
+            if (typeof left !== "string" || typeof right !== "string") return null;
+            return `(${left} ${rhs.operator} ${right})`;
+        }
         if (rhs?.type === "LogicalExpression" && isIdentifier(rhs.left)) {
             const rightIsIdentifier = isIdentifier(rhs.right);
             const rightIsCompilerUpvalueRead = rhs.right?.type === "IndexExpression" &&
@@ -1590,13 +1596,13 @@ function renderSimpleClosureLeaf(source, leaf, stateName, returnName, options = 
 }
 
 function flattenLogicalRootLeaf(leaves, entryId, stateName, returnName, diagnostics = null) {
-    function fail(reason, state = current) {
+    let currentForDiagnostics = entryId;
+    function fail(reason, state = currentForDiagnostics) {
         if (diagnostics && !diagnostics.reason) { diagnostics.reason = reason; diagnostics.state = state; }
         return null;
     }
     const consumed = new Set();
     const out = [];
-    let current = entryId;
 
     function findTransition(body) {
         for (let i = body.length - 1; i >= 0; i--) {
@@ -1612,103 +1618,243 @@ function flattenLogicalRootLeaf(leaves, entryId, stateName, returnName, diagnost
         return null;
     }
 
-    while (true) {
-        if (consumed.has(current)) return fail("root revisits an already-consumed state");
-        const body = leaves.get(current);
-        if (!body) return fail("root references a missing state leaf");
+    function successorsOf(id) {
+        const body = leaves.get(id);
+        if (!body) return [];
         const transition = findTransition(body);
-        if (!transition) return fail("root state has no recognized terminal state transition");
-        consumed.add(current);
-
-        if (transition.kind === "branch") {
-            const trueBody = leaves.get(transition.onTrue);
-            const falseBody = leaves.get(transition.onFalse);
-            if (!trueBody || !falseBody) return null;
-            const trueTransition = findTransition(trueBody);
-            const falseTransition = findTransition(falseBody);
-
-            let joinId = null;
-            let alternateId = null;
-            let alternateBody = null;
-            let primaryOnTrue = false;
-            if (falseTransition?.kind === "jump" && falseTransition.target === transition.onTrue) {
-                joinId = transition.onTrue;
-                alternateId = transition.onFalse;
-                alternateBody = falseBody;
-                primaryOnTrue = true;
-            } else if (trueTransition?.kind === "jump" && trueTransition.target === transition.onFalse) {
-                joinId = transition.onFalse;
-                alternateId = transition.onTrue;
-                alternateBody = trueBody;
-                primaryOnTrue = false;
-            } else {
-                return null;
-            }
-            if (consumed.has(alternateId)) return null;
-
-            const alternateTransition = findTransition(alternateBody);
-            const alternateStatements = alternateBody.filter((_, index) => index !== alternateTransition.index);
-            let fallback = null;
-            if (alternateStatements.length === 1 && isSingleAssignment(alternateStatements[0], returnName)) {
-                fallback = alternateStatements[0].init[0];
-                if (!(isIdentifier(fallback) || isPrimitiveLiteral(fallback))) return null;
-            } else if (alternateStatements.length === 2) {
-                const loadStatement = alternateStatements[0];
-                const returnStatement = alternateStatements[1];
-                if (!isSingleAssignment(loadStatement) || !isSingleAssignment(returnStatement, returnName)) return null;
-                const loadDest = loadStatement.variables[0];
-                const loadRhs = loadStatement.init[0];
-                const returnRhs = returnStatement.init[0];
-                const isCompilerUpvalueRead = isIdentifier(loadDest) && loadRhs?.type === "IndexExpression" &&
-                    isIdentifier(loadRhs.base, "upvalueValues") && isIdentifier(loadRhs.index) &&
-                    isIdentifier(returnRhs, loadDest.name);
-                if (!isCompilerUpvalueRead) return null;
-                fallback = loadRhs;
-            } else {
-                return null;
-            }
-
-            let primaryAssignmentIndex = -1;
-            for (let i = body.length - 1; i >= 0; i--) {
-                if (i === transition.index || !isSingleAssignment(body[i], returnName)) continue;
-                const rhs = body[i].init[0];
-                if (isIdentifier(rhs, transition.conditionRegister)) {
-                    primaryAssignmentIndex = i;
-                    break;
-                }
-            }
-            if (primaryAssignmentIndex < 0) return null;
-
-            for (let i = 0; i < body.length; i++) {
-                if (i === transition.index) continue;
-                if (i === primaryAssignmentIndex) {
-                    const statement = body[i];
-                    out.push({
-                        ...statement,
-                        init: [{
-                            type: "LogicalExpression",
-                            operator: primaryOnTrue ? "or" : "and",
-                            left: statement.init[0],
-                            right: fallback,
-                        }],
-                    });
-                } else {
-                    out.push(body[i]);
-                }
-            }
-            consumed.add(alternateId);
-            current = joinId;
-            continue;
-        }
-
-        for (let i = 0; i < body.length; i++) {
-            if (i !== transition.index) out.push(body[i]);
-        }
-        if (transition.kind === "stop") return { leaf: out, consumed };
-        current = transition.target;
+        if (!transition) return [];
+        if (transition.kind === "jump") return [transition.target];
+        if (transition.kind === "branch") return [transition.onTrue, transition.onFalse];
+        return [];
     }
-}
 
+    function canReach(start, target) {
+        if (start === target) return true;
+        const seen = new Set();
+        const queue = [start];
+        while (queue.length) {
+            const id = queue.shift();
+            if (seen.has(id)) continue;
+            seen.add(id);
+            for (const next of successorsOf(id)) {
+                if (next === target) return true;
+                if (!seen.has(next)) queue.push(next);
+            }
+        }
+        return false;
+    }
+
+    function findPrimaryResultAssignment(body, transition) {
+        for (let i = body.length - 1; i >= 0; i--) {
+            if (i === transition.index || !isSingleAssignment(body[i])) continue;
+            const dest = body[i].variables[0];
+            const rhs = body[i].init[0];
+            if (!isIdentifier(dest) || dest.name === stateName) continue;
+            if (isIdentifier(rhs, transition.conditionRegister)) return { index: i, resultReg: dest.name };
+        }
+        return null;
+    }
+
+    function mergeDeps(into, from) {
+        for (const dep of from || []) into.add(dep);
+    }
+
+    function resolvePathNode(node, env) {
+        if (!node || typeof node !== "object") return null;
+        if (isIdentifier(node)) {
+            const known = env.get(node.name);
+            return known ? { node: known.node, deps: new Set(known.deps) } : { node, deps: new Set() };
+        }
+        if (isPrimitiveLiteral(node)) return { node, deps: new Set() };
+        if (node.type === "UnaryExpression") {
+            const argument = resolvePathNode(node.argument, env);
+            if (!argument) return null;
+            return { node: { ...node, argument: argument.node }, deps: argument.deps };
+        }
+        if (node.type === "BinaryExpression" || node.type === "LogicalExpression") {
+            const left = resolvePathNode(node.left, env);
+            const right = resolvePathNode(node.right, env);
+            if (!left || !right) return null;
+            const deps = new Set(left.deps); mergeDeps(deps, right.deps);
+            return { node: { ...node, left: left.node, right: right.node }, deps };
+        }
+        if (node.type === "IndexExpression") {
+            const base = resolvePathNode(node.base, env);
+            const index = resolvePathNode(node.index, env);
+            if (!base || !index) return null;
+            const deps = new Set(base.deps); mergeDeps(deps, index.deps);
+            return { node: { ...node, base: base.node, index: index.node }, deps };
+        }
+        if (node.type === "CallExpression") {
+            const base = resolvePathNode(node.base, env);
+            if (!base) return null;
+            const args = [];
+            const deps = new Set(base.deps);
+            for (const arg of node.arguments || []) {
+                const resolved = resolvePathNode(arg, env);
+                if (!resolved) return null;
+                args.push(resolved.node);
+                mergeDeps(deps, resolved.deps);
+            }
+            return { node: { ...node, base: base.node, arguments: args }, deps };
+        }
+        if (node.type === "TableConstructorExpression") {
+            const fields = [];
+            const deps = new Set();
+            for (const field of node.fields || []) {
+                if (field?.type === "TableValue") {
+                    const value = resolvePathNode(field.value, env);
+                    if (!value) return null;
+                    fields.push({ ...field, value: value.node }); mergeDeps(deps, value.deps); continue;
+                }
+                if (field?.type === "TableKey") {
+                    const key = resolvePathNode(field.key, env);
+                    const value = resolvePathNode(field.value, env);
+                    if (!key || !value) return null;
+                    fields.push({ ...field, key: key.node, value: value.node });
+                    mergeDeps(deps, key.deps); mergeDeps(deps, value.deps); continue;
+                }
+                if (field?.type === "TableKeyString") {
+                    const value = resolvePathNode(field.value, env);
+                    if (!value) return null;
+                    fields.push({ ...field, value: value.node }); mergeDeps(deps, value.deps); continue;
+                }
+                return null;
+            }
+            return { node: { ...node, fields }, deps };
+        }
+        return null;
+    }
+
+    function resolvePathResult(statements, resultReg) {
+        const env = new Map();
+        const defs = [];
+        for (let i = 0; i < statements.length; i++) {
+            const statement = statements[i];
+            if (!isSingleAssignment(statement)) return null;
+            const dest = statement.variables[0];
+            const rhs = statement.init[0];
+            if (!isIdentifier(dest)) return null;
+            const resolved = resolvePathNode(rhs, env);
+            if (!resolved) return null;
+            const deps = new Set(resolved.deps);
+            deps.add(i);
+            env.set(dest.name, { node: resolved.node, deps });
+            defs.push({ index: i, dest: dest.name, rhs });
+        }
+        const result = env.get(resultReg);
+        if (!result) return null;
+        for (const def of defs) {
+            if (result.deps.has(def.index)) continue;
+            if (def.dest === stateName || isIdentifier(def.rhs, stateName)) continue;
+            return null;
+        }
+        return result.node;
+    }
+
+    function nodeReadsName(node, name) {
+        if (!node || typeof node !== "object") return false;
+        if (isIdentifier(node, name)) return true;
+        for (const [key, value] of Object.entries(node)) {
+            if (key === "range" || key === "loc" || key === "variables") continue;
+            if (Array.isArray(value)) {
+                if (value.some(item => nodeReadsName(item, name))) return true;
+            } else if (value && typeof value === "object" && nodeReadsName(value, name)) return true;
+        }
+        return false;
+    }
+
+    function valueReadBeforeOverwriteInBody(body, name) {
+        for (const statement of body || []) {
+            if (!isSingleAssignment(statement)) return true;
+            const dest = statement.variables[0];
+            const rhs = statement.init[0];
+            if (nodeReadsName(rhs, name) || (dest?.type === "IndexExpression" && nodeReadsName(dest, name))) return true;
+            if (isIdentifier(dest, name)) return false;
+        }
+        return false;
+    }
+    function flattenPath(startId, stopId, targetOut) {
+        let current = startId;
+        while (stopId == null || current !== stopId) {
+            currentForDiagnostics = current;
+            if (consumed.has(current)) return fail("root revisits an already-consumed state", current);
+            const body = leaves.get(current);
+            if (!body) return fail("root references a missing state leaf", current);
+            const transition = findTransition(body);
+            if (!transition) return fail("root state has no recognized terminal state transition", current);
+
+            if (transition.kind === "branch") {
+                const primary = findPrimaryResultAssignment(body, transition);
+                if (!primary) return fail("logical branch has no compiler result copy", current);
+                const trueReachesFalse = canReach(transition.onTrue, transition.onFalse);
+                const falseReachesTrue = canReach(transition.onFalse, transition.onTrue);
+                if (trueReachesFalse === falseReachesTrue) return fail("logical branch successors do not form a proven lazy-RHS/join pair", current);
+
+                const operator = trueReachesFalse ? "and" : "or";
+                const rhsStart = trueReachesFalse ? transition.onTrue : transition.onFalse;
+                const joinId = trueReachesFalse ? transition.onFalse : transition.onTrue;
+                if (stopId != null && joinId !== stopId && !canReach(joinId, stopId)) {
+                    return fail("nested logical join escapes its enclosing lazy path", current);
+                }
+
+                const rhsStatements = [];
+                if (!flattenPath(rhsStart, joinId, rhsStatements)) return null;
+                const fallback = resolvePathResult(rhsStatements, primary.resultReg);
+                if (!fallback) return fail("logical lazy RHS does not reduce to the compiler result register", current);
+                const joinBody = leaves.get(joinId);
+                const rhsWritten = new Set();
+                for (const statement of rhsStatements) {
+                    if (!isSingleAssignment(statement)) return fail("logical lazy RHS contains a non-assignment statement", current);
+                    const dest = statement.variables[0];
+                    if (isIdentifier(dest)) rhsWritten.add(dest.name);
+                }
+                for (const name of rhsWritten) {
+                    if (name === primary.resultReg || name === stateName) continue;
+                    if (valueReadBeforeOverwriteInBody(joinBody, name)) {
+                        return fail("logical lazy RHS leaves a path-dependent temporary live at the join", current);
+                    }
+                }
+
+                consumed.add(current);
+                for (let i = 0; i < body.length; i++) {
+                    if (i === transition.index) continue;
+                    if (i === primary.index) {
+                        const statement = body[i];
+                        targetOut.push({
+                            ...statement,
+                            init: [{
+                                type: "LogicalExpression",
+                                freshCompilerLogical: true,
+                                operator,
+                                left: statement.init[0],
+                                right: fallback,
+                            }],
+                        });
+                    } else {
+                        targetOut.push(body[i]);
+                    }
+                }
+                current = joinId;
+                continue;
+            }
+
+            consumed.add(current);
+            for (let i = 0; i < body.length; i++) {
+                if (i !== transition.index) targetOut.push(body[i]);
+            }
+            if (transition.kind === "stop") {
+                if (stopId != null) return fail("logical lazy RHS stopped before its proven join", current);
+                return true;
+            }
+            current = transition.target;
+        }
+        return true;
+    }
+
+    if (!flattenPath(entryId, null, out)) return null;
+    return { leaf: out, consumed };
+}
 function matchClosureEntryProgram(source, stateWhile, stateName, returnName, diagnostics = null) {
     const leaves = extractNormalizedStateLeaves(stateWhile, stateName);
     if (!leaves || leaves.size < 2 || !leaves.has(1)) return null;
