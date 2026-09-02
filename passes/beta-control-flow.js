@@ -349,6 +349,7 @@ function matchLocalRegisterProgram(source, leaf, stateName, returnName, options 
     const deferredLiveTableCopies = new Map();
     const terminalClosureLocals = new Set();
     const terminalUnusedLocals = new Set();
+    const terminalAliasLocals = new Set();
     const terminalTableLocals = new Set();
     const terminalNilLocals = new Set();
     const plainTableLocals = new Set();
@@ -422,6 +423,47 @@ function matchLocalRegisterProgram(source, leaf, stateName, returnName, options 
             if (isIdentifier(dest, name)) return false;
         }
         return true;
+    }
+    function nodeUsesAsCallBase(node, name) {
+        if (!node || typeof node !== "object") return false;
+        if (node.type === "CallExpression" && isIdentifier(node.base, name)) return true;
+        for (const [key, value] of Object.entries(node)) {
+            if (key === "range" || key === "loc" || key === "variables") continue;
+            if (Array.isArray(value)) {
+                if (value.some(item => nodeUsesAsCallBase(item, name))) return true;
+            } else if (value && typeof value === "object" && nodeUsesAsCallBase(value, name)) return true;
+        }
+        return false;
+    }
+    function isTerminalStableUsedEpoch(startIndex, name) {
+        let useCount = 0;
+        let firstUseIndex = -1;
+        let soleUseIsCallBase = false;
+        for (let cursor = startIndex + 1; cursor < leaf.length; cursor++) {
+            const statement = leaf[cursor];
+            if (!isSingleAssignment(statement)) {
+                if (nodeUsesIdentifier(statement?.init, name)) {
+                    useCount++;
+                    if (firstUseIndex < 0) firstUseIndex = cursor;
+                }
+                continue;
+            }
+            const dest = statement.variables[0];
+            const rhs = statement.init[0];
+            if (isIdentifier(dest, name)) return false;
+            if (isIdentifier(dest, stateName) && isIdentifier(rhs, name)) return false;
+            if (rhs?.type === "LogicalExpression" && nodeUsesIdentifier(rhs, name)) return false;
+            if (nodeUsesIdentifier(rhs, name) || (dest?.type === "IndexExpression" && nodeUsesIdentifier(dest, name))) {
+                useCount++;
+                if (firstUseIndex < 0) {
+                    firstUseIndex = cursor;
+                    soleUseIsCallBase = nodeUsesAsCallBase(rhs, name);
+                }
+            }
+        }
+        // One-use callables and immediately-consumed operands are compiler TEMP shapes too.
+        // A terminal source alias needs either repeated use, or one delayed non-call use.
+        return useCount > 1 || (useCount === 1 && firstUseIndex > startIndex + 1 && !soleUseIsCallBase);
     }
     function findFutureTerminalUnusedCopy(startIndex, tempReg) {
         for (let cursor = startIndex + 1; cursor < leaf.length; cursor++) {
@@ -892,6 +934,10 @@ function matchLocalRegisterProgram(source, leaf, stateName, returnName, options 
         const callFutureLocal = cleanupFutureLocal || terminalClosureFutureLocal || terminalUnusedFutureLocal;
         const terminalUnusedValueFutureLocal = !isCallExpression && !isPackIndex && !isPackSlotCopy && isPurePendingTempRhs(rhs) && !isReturnPackCreation ? findFutureTerminalUnusedCopy(index, name) : null;
         const directTerminalUnusedValue = !isCallExpression && !isPackIndex && !isPackSlotCopy && !terminalUnusedValueFutureLocal && isVmRegisterName(name) && !cleanupRegs.has(name) && isPurePendingTempRhs(rhs) && !isReturnPackCreation && isTerminalUnreadEpoch(index, name);
+        const isTerminalUsedTransportAlias = isVmRegisterName(name) && !cleanupRegs.has(name) && !locals.has(name) && isIdentifier(rhs) &&
+            (rhs.name === stateName || rhs.name === returnName) && !isPackSlotCopy && isTerminalStableUsedEpoch(index, name);
+        const terminalUsedAliasPackBarrier = isTerminalUsedTransportAlias && pendingPacks.size ? Math.max(...[...pendingPacks.values()].map(pack => pack.order)) : 0;
+        const isDeferredTerminalUsedAlias = isTerminalUsedTransportAlias && terminalUsedAliasPackBarrier > 0;
         const callResultIsDiscarded = isCallExpression && hasOnlyDeadCopyUses(index, name);
         const callPackBarrier = isCallExpression && pendingPacks.size ? Math.max(...[...pendingPacks.values()].map(pack => pack.order)) : 0;
         const hasTrackedPackBarrier = callPackBarrier > 0;
@@ -923,6 +969,7 @@ function matchLocalRegisterProgram(source, leaf, stateName, returnName, options 
             isDeferredOrdinaryCall ||
             isDeferredTerminalUnusedValue ||
             directTerminalUnusedValue ||
+            isTerminalUsedTransportAlias ||
             isDeadPureTemp ||
             isStablePrimitiveTemp ||
             isUnusedPlainTableReadLocal ||
@@ -1129,6 +1176,18 @@ function matchLocalRegisterProgram(source, leaf, stateName, returnName, options 
             exprKinds.set(name, rhs?.type === "TableConstructorExpression" ? "table" : "value"); continue;
         }
 
+        if (isTerminalUsedTransportAlias) {
+            const value = renderRhs(rhs);
+            if (typeof value !== "string") return null;
+            const kind = exprKinds.get(rhs.name) === "table" ? "table" : "value";
+            const displayName = allocateLocal(name, kind);
+            const sourceLine = value === "nil" ? `local ${displayName}` : `local ${displayName} = ${value}`;
+            if (isDeferredTerminalUsedAlias) deferredSourceLines.push({ line: sourceLine, afterPackOrder: terminalUsedAliasPackBarrier });
+            else out.push(sourceLine);
+            terminalAliasLocals.add(name);
+            continue;
+        }
+
         if (terminalUnusedValueFutureLocal || directTerminalUnusedValue) {
             const futureLocal = terminalUnusedValueFutureLocal || name;
             const value = renderRhs(rhs);
@@ -1221,6 +1280,7 @@ function matchLocalRegisterProgram(source, leaf, stateName, returnName, options 
     if (deferredLiveTableCopies.size !== 0) { if (options.diagnostics) options.diagnostics.reason = "live table handoff copy was not consumed"; return null; }
     for (const reg of terminalClosureLocals) locals.delete(reg);
     for (const reg of terminalUnusedLocals) locals.delete(reg);
+    for (const reg of terminalAliasLocals) locals.delete(reg);
     for (const reg of terminalTableLocals) locals.delete(reg);
     for (const reg of terminalNilLocals) locals.delete(reg);
     if (locals.size !== 0) { if (options.diagnostics) options.diagnostics.reason = `recovered locals still live at terminal: ${[...locals].join(",")}`; return null; }

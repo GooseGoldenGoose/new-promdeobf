@@ -1471,4 +1471,62 @@ function vmStatesSource(states) {
     assert.strictEqual(result.source, 'f()\n');
 }
 
+
+{
+    const source = vmStatesSource({
+        1: [
+            'ReturnVal = "math"', 'state = _env[ReturnVal]', 'r1 = state',
+            'ReturnVal = "floor"', 'state = r1[ReturnVal]', 'r2 = state',
+            'ReturnVal = "pi"', 'state = r1[ReturnVal]', 'r3 = state',
+            'state = false', 'r4 = state',
+            'ReturnVal = "newproxy"', 'state = _env[ReturnVal]', 'r5 = state',
+            'ReturnVal = r3 + r3', 'r6 = ReturnVal',
+            'ReturnVal = not r4', 'r7 = ReturnVal',
+            'ReturnVal = r2(r3)',
+            'ReturnVal = r2(r3)',
+            'ReturnVal = r5()',
+            'ReturnVal = r5()',
+            'ReturnVal = {}', 'state = nil',
+        ],
+    });
+    const result = solveBetaControlFlow(source, parse(source));
+    assert.strictEqual(result.applied, true, "used terminal source aliases were inlined");
+    const mathLocal = result.source.match(/local (v\d+) = math\n/);
+    assert.ok(mathLocal, result.source);
+    assert.match(result.source, new RegExp(`local v\\d+ = ${mathLocal[1]}\\.floor\\n`));
+    assert.match(result.source, new RegExp(`local v\\d+ = ${mathLocal[1]}\\.pi\\n`));
+    assert.match(result.source, /local v\d+ = false\n/);
+    assert.match(result.source, /local v\d+ = newproxy\n/);
+    assert.doesNotMatch(result.source, /math\.floor\(math\.pi\)/);
+}
+{
+    const source = vmStatesSource({
+        1: [
+            'ReturnVal = "math"', 'state = _env[ReturnVal]', 'RegisterOverflow[25] = state',
+            'ReturnVal = "pi"', 'state = RegisterOverflow[25][ReturnVal]', 'RegisterOverflow[26] = state',
+            'ReturnVal = RegisterOverflow[26] + RegisterOverflow[26]', 'RegisterOverflow[27] = ReturnVal',
+            'ReturnVal = RegisterOverflow[26] - RegisterOverflow[26]', 'RegisterOverflow[28] = ReturnVal',
+            'ReturnVal = {}', 'state = nil',
+        ],
+    });
+    const result = solveBetaControlFlow(source, parse(source));
+    assert.strictEqual(result.applied, true, "overflow terminal source aliases were inlined");
+    const mathLocal = result.source.match(/local (v\d+) = math\n/);
+    assert.ok(mathLocal, result.source);
+    assert.match(result.source, new RegExp(`local v\\d+ = ${mathLocal[1]}\\.pi\\n`));
+}
+{
+    const source = vmStatesSource({
+        1: [
+            'r1 = "print"', 'r2 = _env[r1]',
+            'r3 = "math"', 'r4 = _env[r3]',
+            'ReturnVal = r2(r4)',
+            'ReturnVal = {}', 'state = nil',
+        ],
+    });
+    const result = solveBetaControlFlow(source, parse(source));
+    assert.strictEqual(result.applied, true, "ordinary call argument TEMP stopped recovering");
+    assert.strictEqual(result.source, 'print(math)\n');
+}
+
 console.log("fresh beta direct-global-call regression: ok");

@@ -36,7 +36,7 @@ Do not depend on hidden chat context for any durable project fact. When a new du
 Current intended baseline:
 - branch: `main`
 - fresh-CF behavior is the current tracked solver on `main`; it extends the restored nil-lifetime baseline with unified scalar/overflow register handling, pending-pack interleaving recovery, source-statement preservation, and persistent terminal source-storage proof
-- source recovery is intentionally not a source dead-code optimizer: proven source declarations/assignments remain even when unused or overwritten
+- source recovery is intentionally not a source optimizer: proven source declarations/assignments/aliases remain even when unused, overwritten, or safely inlineable
 - unrelated tracked user edits in `main.js` and `formater/input.txt` must be preserved unless explicitly requested otherwise
 
 ## 1. Communication Rules - Caveman Mode
@@ -1233,6 +1233,8 @@ Source-storage lifetime is distinct from value liveness. A source local may own 
 
 Persistent table-storage ownership is proven structurally from TEMP/POS/RETURN/table-value handoffs into one VM storage register plus compatible later reassignment/mutation/read behavior. This proof is independent of pending multi-return packs: pending packs affect only when a recovered source line can be emitted. After overflow scalarization the same rule applies to `rN` and `oN`; the storage bank is irrelevant.
 
+Terminal source aliases are also preserved instead of inlined when a special compiler transport (`state`/`ReturnVal`) is copied into stable ordinary VM storage and the later lifetime proves persistent source ownership. This covers source such as `local math = math`, `local newproxy = newproxy`, `local floor = math.floor`, `local pi = math.pi`, and stable primitive aliases such as `local f = false`. The recovered names remain generated presentation names (`vN`), but later source expressions use those bindings rather than substituting the original global/member/literal. The proof is deliberately narrower than "special register copied to ordinary register": it rejects POS save/restore, logical short-circuit transport, immediately consumed one-use operands, and one-use callable stabilization (including calls nested inside compiler return-pack tables). Repeated stable use or a delayed non-call use can prove the terminal source binding when no later redefinition occurs. The same rule applies to scalar `rN` and scalarized overflow `oN`.
+
 At terminal, cleanup-backed locals must have ended normally, while specifically proven terminal-live storage bindings are retired at root terminal. Any other still-live recovered local is a proof failure, not silently dropped.
 
 ## 14. Multi-Return Recovery
@@ -1726,6 +1728,8 @@ A full opcode-style fixture containing globals, nil/boolean/constants, arithmeti
 
 A six-line call fixture (`floor(pi)`, one result, two results, three results) was also randomized 20 times; all 20 layouts passed, including 10 layouts that previously failed because result packs and delayed source-storage copies were interleaved.
 
+The full 15-state opcode/call/closure/table fixture was recompiled with Medium and now preserves terminal source aliases as generated locals: a `math` binding, `newproxy` binding, `math.floor` member binding, `math.pi` member binding, and `false` binding are emitted separately and reused by later expressions/calls. The recovered output contains no direct `math.pi` or `math.floor` substitutions in those later operations, still completes all 15 states, and parses successfully. Focused negatives verify that ordinary one-use call arguments, short-circuit transports, table-constructor operand temps, and interleaved return-pack callables are not falsely promoted to source aliases.
+
 ## 31. Current Baseline / History That Matters
 
 Important semantic baseline commit:
@@ -1738,6 +1742,7 @@ Current branch extends that historical baseline with:
 - closure/upvalue/table terminal handoff recovery
 - preservation of proven unused/overwritten source statements instead of source-level DCE
 - persistent table source-storage lifetime proof that is independent of whether a pending pack exists
+- preservation of proven terminal source aliases instead of source-level alias/constant/member inlining, with fail-closed exclusions for compiler transport temps
 
 Do not reintroduce discarded experimental CF changes just because they exist in Git history. Read current files, current tests, and this context first.
 
