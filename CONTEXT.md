@@ -58,6 +58,23 @@ Every project-related turn MUST end exactly with:
 
 `Done for this turn - you can prompt now.`
 
+### 1.1 Strict Task Confirmation / Scope Lock
+
+Before doing any user-requested project task that would inspect, test, modify, or run project code:
+- first state exactly what you are going to do in this turn
+- include the concrete files/areas/actions that are in scope when known
+- explicitly state what you will NOT do if there is a meaningful nearby risk of scope expansion
+- do not begin implementation/testing beyond harmless context/status reading until that scope statement has been shown to the user
+
+Once the scope is stated, it is locked for that turn:
+- do ONLY the requested work inside that stated scope
+- do not opportunistically fix, refactor, optimize, clean up, rename, or change anything outside it
+- if you discover another bug, unsupported case, regression, architectural issue, or cleanup opportunity outside the locked scope, STOP expanding work and report it to the user
+- do not fix the newly discovered issue unless the user explicitly asks for it in a later prompt
+- if the requested task itself cannot be completed without expanding scope, stop at that boundary, explain exactly what blocks it, and wait for a new user instruction
+- tests may reveal unrelated failures; report them, but do not repair them unless they are part of the locked task
+
+This rule overrides the normal tendency to continue fixing newly discovered related issues. Scope discipline is mandatory.
 ## 2. Mandatory Turn Workflow
 
 At the beginning of every project turn:
