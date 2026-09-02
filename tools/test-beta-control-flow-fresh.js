@@ -1100,4 +1100,106 @@ function vmStatesSource(states) {
     assert.match(result.reason, /root statement/);
 }
 
+
+{
+    const source = vmStatesSource({
+        1: [
+            'ReturnVal = "f"', 'state = _env[ReturnVal]', 'r1 = state',
+            'ReturnVal = r1()',
+            'r2 = { r1() }', 'r3 = r2[2]',
+            'r4 = ReturnVal', 'ReturnVal = r2[1]',
+            'r4 = nil', 'r3 = nil', 'ReturnVal = {}', 'state = nil',
+        ],
+    });
+    const result = solveBetaControlFlow(source, parse(source));
+    assert.strictEqual(result.applied, true, "previous ReturnVal copy could not cross an incomplete multi-return pack");
+    assert.ok(result.source.indexOf(' = f()') >= 0, result.source);
+}
+
+{
+    const source = vmStatesSource({
+        1: [
+            'ReturnVal = "f"', 'state = _env[ReturnVal]', 'r1 = state',
+            'r2 = { r1() }', 'r3 = r2[2]',
+            'r4 = allocUpvalue()', 'ReturnVal = r2[1]', 'r4 = releaseUpvalue(r4)',
+            'r3 = nil', 'ReturnVal = {}', 'state = nil',
+        ],
+    });
+    const result = solveBetaControlFlow(source, parse(source));
+    assert.strictEqual(result.applied, true, "upvalue bookkeeping could not cross an incomplete multi-return pack");
+}
+
+{
+    const source = vmStatesSource({
+        1: [
+            'r1 = { 1, 2 }', 'r2 = r1', 'r3 = "x"', 'r4 = 9',
+            'r2[r3] = r4',
+            'r5 = 1', 'r5 = nil', 'ReturnVal = {}', 'state = nil',
+        ],
+    });
+    const result = solveBetaControlFlow(source, parse(source));
+    assert.strictEqual(result.applied, true, "copied table identity was not materialized for a field write");
+    assert.ok(result.source.includes('local t1 = { 1, 2 }'), result.source);
+    assert.ok(result.source.includes('t1.x = 9'), result.source);
+}
+
+{
+    const source = vmStatesSource({
+        1: [
+            'r1 = createClosure0(2, {})', 'ReturnVal = r1()',
+            'r3 = 1', 'r3 = nil', 'ReturnVal = {}', 'state = nil',
+        ],
+        2: ['ReturnVal = { 1 }', 'state = nil'],
+    });
+    const result = solveBetaControlFlow(source, parse(source));
+    assert.strictEqual(result.applied, true, "immediate recovered closure call was not recovered");
+    parse(result.source);
+    assert.ok(result.source.includes('(function()'), result.source);
+}
+
+{
+    const source = vmStatesSource({
+        1: [
+            'r7 = nil', 'r1 = "b"', 'r2 = _env[r1]', 'ReturnVal = r2',
+            'state = r2 and 2 or 3',
+        ],
+        2: [
+            'r6 = ReturnVal', 'state = createClosure0(4, {})', 'r5 = state',
+            'r6 = nil', 'r5 = nil', 'ReturnVal = {}', 'state = nil',
+        ],
+        3: ['ReturnVal = r7', 'state = 2'],
+        4: ['ReturnVal = { 1 }', 'state = nil'],
+    });
+    const result = solveBetaControlFlow(source, parse(source));
+    assert.strictEqual(result.applied, true, "logical primitive fallback temp was promoted as a live source local");
+    assert.strictEqual(result.mode, "fresh-closure-entry");
+    assert.strictEqual(result.source, 'local v1 = (b or nil)\nlocal v2 = function()\n    return 1\nend\n');
+}
+
+{
+    const source = vmStatesSource({
+        1: [
+            'ReturnVal = "f"', 'state = _env[ReturnVal]', 'r1 = state',
+            'r2 = { r1() }', 'r3 = r2[1]', 'r4 = r2[2]',
+            'ReturnVal = {}', 'state = nil',
+        ],
+    });
+    const result = solveBetaControlFlow(source, parse(source));
+    assert.strictEqual(result.applied, true, "fully dead multi-return slots dropped the source call");
+    assert.strictEqual(result.source, 'f()\n');
+}
+
+{
+    const source = vmStatesSource({
+        1: [
+            'ReturnVal = "f"', 'state = _env[ReturnVal]', 'r1 = state',
+            'r2 = { r1() }', 'r3 = r2[1]', 'r4 = r2[2]',
+            'r4 = nil', 'ReturnVal = {}', 'state = nil',
+        ],
+    });
+    const result = solveBetaControlFlow(source, parse(source));
+    assert.strictEqual(result.applied, true, "dead leading multi-return slot did not preserve live later-slot position");
+    assert.strictEqual(result.source, 'local v1, v2 = f()\n');
+}
+
 console.log("fresh beta direct-global-call regression: ok");

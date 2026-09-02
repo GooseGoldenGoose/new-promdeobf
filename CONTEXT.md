@@ -467,5 +467,21 @@ Updated 2026-09-02:
 - failing reduced opcode fixture now reports: 11 normalized states; state 1; root statement 57: `r16 = ReturnVal` instead of only `unsupported multi-state control flow`
 - permanent regression verifies multi-state diagnostic includes state count/state/root statement context
 
+## Full opcode matrix fresh-CF recovery
+
+Updated 2026-09-02:
+- exact canonical normal fixture `output/_tmp_opcode_matrix_full2.normal.lua` now recovers through fresh CF: 15 normalized states, 32 statements
+- reduced fixture remains PASS: 11 states, 32 statements
+- fixed scheduler-interleaved multi-return packs where a previous `ReturnVal` copy or upvalue bookkeeping crosses an incomplete pack
+- dead trailing multi-return slots no longer force fake locals; dead slots before a live later slot synthesize positional locals so Lua multi-return indexing stays exact
+- copied table-reference metadata now survives identifier copies and materializes one stable table local for later mutation/method use
+- immediate anonymous recovered closures are parenthesized before calls
+- pending-pack failures report pack/slot details
+- final `r46` blocker was proven to be a logical-fallback TEMP: in the flattened root its nil definition fed synthesized `or` fallbacks after branch-state bridge reads were consumed
+- logical flattening now substitutes only a proven reaching primitive fallback definition; the original assignment remains for normal lifetime analysis, so real cleanup-backed locals are still preserved
+- logical renderer accepts proven identifier/primitive operands, enabling literal `nil` fallback without weakening arbitrary expression support
+- permanent regressions cover previous-ReturnVal crossing, upvalue bookkeeping crossing, copied table identity, immediate closure calls, fully dead return packs, dead-leading/live-later pack slots, and primitive logical fallback temps
+- generated full-matrix CF parses successfully and contains `print("PASSED")`; runtime parity was not used because the fixture depends on external globals/runtime behavior
+
 ## Latest test rule
 Always validate user fixtures through the full canonical `main.js` pipeline with formatter enabled before fresh CF; proof runners that bypass formatting are not authoritative.
