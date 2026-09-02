@@ -5,7 +5,7 @@ const { solveBetaControlFlow } = require("../passes/beta-control-flow");
 
 function parseLuaStructural(source, filename = "<input>") {
     try {
-        return luaparse.parse(source, { luaVersion: "luau", comments: true, scope: true, locations: true, ranges: true });
+        return luaparse.parse(source, { luaVersion: "luau", comments: false, scope: false, locations: false, ranges: true });
     } catch (error) {
         error.message = `${filename}: ${error.message}`;
         throw error;

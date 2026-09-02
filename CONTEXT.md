@@ -1190,6 +1190,12 @@ Current modes include:
 - `fresh-call-results`
 - `fresh-direct-global-call`
 
+Fresh-CF performance rules:
+- build immutable per-register future-event indexes once for each flattened leaf instead of rescanning the remaining leaf for every candidate value
+- index initializer reads, indexed-destination reads, ordinary writes, and nil writes separately so each proof query preserves its original read/write ordering and exact stop condition
+- resolve the next relevant event by binary search; do not replace semantic proof with a looser global use count
+- direct `tools/beta-control-flow.js` parsing uses range-only structural ASTs because fresh CF does not require comment, lexical-scope, or source-location metadata at that point
+
 Fresh CF explicitly has no fallback to retired old beta register-version/CF recovery.
 
 ## 12. Fresh CF Expression / Value Recovery
@@ -1259,6 +1265,8 @@ Current rules include:
 Fresh CF can establish a source local by:
 - copy from a proven expression/temp into cleanup-backed storage
 - direct first meaningful definition when exactly one non-nil definition proves TEMP->VAR promotion shape
+
+Future-copy/lifetime queries use the leaf event index documented above. `valueUsedBeforeOverwrite`, later-cleanup detection, terminal-unread proof, future cleanup-backed copies, terminal closure copies, terminal unused copies, and deferred upvalue closure stores all retain their prior proof conditions while avoiding repeated whole-leaf scans. AST identifier walks used outside those indexed queries remain uncached to limit retained-memory growth; on the 2,000-local solver-only comparison the index added about 1.1 MB heap, while the complete direct command still used less memory because its structural parser removed larger unused AST metadata.
 
 Once local is active:
 - writes become source assignments
@@ -1873,8 +1881,12 @@ Current performance baseline after the 2026-09-02 pipeline optimization:
 - `sample/spacial5.txt` post-run memory: RSS 460.0 MB before versus 367.3 MB after; heap used 329.6 MB before versus 246.2 MB after
 - full Medium obfuscation -> normal -> fresh-CF on the shadowing vararg/`pcall` regression: 0.824 s before versus 0.407 s after in one paired run; normal and fresh-CF hashes identical; source, obfuscated, and recovered runtime output identical
 - profiling authority: repeated parsing was 30-40% of CPU before the change; scheduler reached 31%; formatter was 9-13%; remaining whole-tree passes were individually lower impact
+- fresh-CF one-state stress fixture with 2,000 locals and 4,000 recovered source statements: solver-only median 7,413.9 ms before versus 94.2 ms after, 78.7x faster; direct CF command median 9.913 s before versus 0.219 s after, 45.2x faster; recovered SHA-256 identical
+- the same fresh-CF stress run reduced direct-command RSS from 149.6 MB to 138.1 MB and heap use from 53.2 MB to 51.5 MB
+- a runnable 150-local real Medium fixture produced byte-identical old/new fresh-CF output and exact source/obfuscated/recovered runtime parity across 150 output lines
+- a real 401-state logical stress fixture remained byte-identical and improved from 0.14 s to 0.13 s median; its separate pre-existing source-preservation gap is documented below and was not changed during performance work
 
-There is no known blocker in the currently supported straight-line/local/call/table/closure/upvalue/multi-return/limited-logical feature set represented by those fixtures.
+There is no known blocker in the currently supported straight-line/local/call/table/closure/upvalue/multi-return feature set represented by the established regression fixtures. The aggregate logical stress gap below is an explicit exception and must not be described as supported until fixed.
 
 ### Still intentionally unsupported / fail-closed
 
@@ -1888,6 +1900,11 @@ Do not claim full source reconstruction for:
 - arbitrary `break` / `continue` reconstruction
 
 Those remain separate future features. Limited compiler-generated short-circuit logical CFGs are supported; that must not be generalized into arbitrary CFG guessing.
+
+Known correctness gap discovered during 2026-09-02 performance validation, intentionally not fixed in that scope:
+- a real Medium fixture containing 100 sequential effectful `conditionN() and yesN() or noN()` locals, each followed by `print(local)`, normalizes to 401 states and fresh CF reports success, but both the pre-optimization and optimized solvers emit the 100 local declarations without the 100 print calls
+- old/new recovered output hashes are identical, proving the performance change did not cause the gap
+- treat this aggregate shape as unsupported/fail-open until a separate correctness task adds structural proof and runtime regression coverage
 
 ### What a new chat should do next
 

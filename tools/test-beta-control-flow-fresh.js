@@ -1287,6 +1287,26 @@ function vmStatesSource(states) {
     assert.match(result.source, /^local v\d+, v\d+ = f\(\)\nlocal v\d+ = g\(\)\n$/);
 }
 {
+    const leaf = [];
+    for (let index = 0; index < 200; index++) {
+        const register = 100 + index * 3;
+        leaf.push(
+            `r${register} = "stressCall${index}"`,
+            `r${register + 1} = _env[r${register}]`,
+            `ReturnVal = r${register + 1}()`,
+            `r${register + 2} = ReturnVal`,
+        );
+    }
+    leaf.push('ReturnVal = {}', 'state = nil');
+    const source = vmStatesSource({ 1: leaf });
+    const result = solveBetaControlFlow(source, parse(source));
+    assert.strictEqual(result.applied, true, "large terminal-unused call sequence was not recovered");
+    const lines = result.source.trimEnd().split("\n");
+    assert.strictEqual(lines.length, 200);
+    assert.match(lines[0], /^local v\d+ = stressCall0\(\)$/);
+    assert.match(lines[199], /^local v\d+ = stressCall199\(\)$/);
+}
+{
     const source = vmStatesSource({
         1: [
             'r1 = "f"', 'r2 = _env[r1]', 'r5 = "print"', 'r5 = _env[r5]', 'r6 = 1', 'ReturnVal = r5(r6)',

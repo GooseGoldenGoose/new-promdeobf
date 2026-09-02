@@ -313,15 +313,76 @@ function matchOneDirectGlobalCall(source, leaf, index, stateName, returnName) {
 }
 
 function matchLocalRegisterProgram(source, leaf, stateName, returnName, options = {}) {
+    const INIT_READ = 1;
+    const INDEX_DEST_READ = 2;
+    const WRITE = 4;
+    const NIL_WRITE = 8;
+    function collectIdentifierUses(node, out) {
+        if (!node || typeof node !== "object") return;
+        if (isIdentifier(node)) {
+            out.add(node.name);
+            return;
+        }
+        for (const [key, value] of Object.entries(node)) {
+            if (key === "range" || key === "loc" || key === "variables") continue;
+            if (Array.isArray(value)) {
+                for (const item of value) collectIdentifierUses(item, out);
+            } else if (value && typeof value === "object") collectIdentifierUses(value, out);
+        }
+    }
+    function nodeUsesIdentifier(node, name) {
+        if (!node || typeof node !== "object") return false;
+        if (isIdentifier(node, name)) return true;
+        for (const [key, value] of Object.entries(node)) {
+            if (key === "range" || key === "loc" || key === "variables") continue;
+            if (Array.isArray(value)) {
+                if (value.some(item => nodeUsesIdentifier(item, name))) return true;
+            } else if (value && typeof value === "object" && nodeUsesIdentifier(value, name)) return true;
+        }
+        return false;
+    }
+
+    const futureEvents = new Map();
+    function addFutureEvent(name, index, flags) {
+        let events = futureEvents.get(name);
+        if (!events) futureEvents.set(name, events = []);
+        const last = events[events.length - 1];
+        if (last?.index === index) last.flags |= flags;
+        else events.push({ index, flags });
+    }
+    function findNextFutureEvent(name, startIndex, mask) {
+        const events = futureEvents.get(name);
+        if (!events) return null;
+        let low = 0, high = events.length;
+        while (low < high) {
+            const middle = (low + high) >>> 1;
+            if (events[middle].index <= startIndex) low = middle + 1;
+            else high = middle;
+        }
+        for (let index = low; index < events.length; index++) {
+            if ((events[index].flags & mask) !== 0) return events[index];
+        }
+        return null;
+    }
+
     const cleanupRegs = new Set();
     const nonNilDefinitionCount = new Map();
     const nilDefinitionCount = new Map();
     const firstNilDefinitionIndex = new Map();
     for (let scanIndex = 0; scanIndex < leaf.length; scanIndex++) {
         const statement = leaf[scanIndex];
+        const initUses = new Set();
+        collectIdentifierUses(statement?.init, initUses);
+        for (const name of initUses) addFutureEvent(name, scanIndex, INIT_READ);
         if (!isSingleAssignment(statement)) continue;
         const dest = statement.variables[0];
         const rhs = statement.init[0];
+        if (dest?.type === "IndexExpression") {
+            const destinationUses = new Set();
+            collectIdentifierUses(dest, destinationUses);
+            for (const name of destinationUses) addFutureEvent(name, scanIndex, INDEX_DEST_READ);
+        }
+        if (isIdentifier(dest)) addFutureEvent(dest.name, scanIndex, WRITE | (rhs?.type === "NilLiteral" ? NIL_WRITE : 0));
         if (!isIdentifier(dest) || dest.name === stateName || dest.name === returnName) continue;
         if (rhs?.type === "NilLiteral") {
             cleanupRegs.add(dest.name);
@@ -363,31 +424,12 @@ function matchLocalRegisterProgram(source, leaf, stateName, returnName, options 
         if (barrier > 0) deferredSourceLines.push({ line, afterPackOrder: barrier });
         else out.push(line);
     }
-    function nodeUsesIdentifier(node, name) {
-        if (!node || typeof node !== "object") return false;
-        if (isIdentifier(node, name)) return true;
-        for (const [key, value] of Object.entries(node)) {
-            if (key === "range" || key === "loc" || key === "variables") continue;
-            if (Array.isArray(value)) {
-                if (value.some(item => nodeUsesIdentifier(item, name))) return true;
-            } else if (value && typeof value === "object" && nodeUsesIdentifier(value, name)) return true;
-        }
-        return false;
-    }
     function valueUsedBeforeOverwrite(startIndex, name) {
-        for (let cursor = startIndex + 1; cursor < leaf.length; cursor++) {
-            const statement = leaf[cursor];
-            if (nodeUsesIdentifier(statement?.init, name)) return true;
-            if (isSingleAssignment(statement, name)) return false;
-        }
-        return false;
+        const event = findNextFutureEvent(name, startIndex, INIT_READ | WRITE);
+        return event !== null && (event.flags & INIT_READ) !== 0;
     }
     function hasLaterNilAssignment(startIndex, name) {
-        for (let cursor = startIndex + 1; cursor < leaf.length; cursor++) {
-            const statement = leaf[cursor];
-            if (isSingleAssignment(statement, name) && statement.init[0]?.type === "NilLiteral") return true;
-        }
-        return false;
+        return findNextFutureEvent(name, startIndex, NIL_WRITE) !== null;
     }
     function hasOnlyDeadCopyUses(startIndex, name, seen = new Set()) {
         if (seen.has(name)) return false;
@@ -411,18 +453,7 @@ function matchLocalRegisterProgram(source, leaf, stateName, returnName, options 
         return true;
     }
     function isTerminalUnreadEpoch(startIndex, name) {
-        for (let cursor = startIndex + 1; cursor < leaf.length; cursor++) {
-            const statement = leaf[cursor];
-            if (!isSingleAssignment(statement)) {
-                if (nodeUsesIdentifier(statement?.init, name)) return false;
-                continue;
-            }
-            const dest = statement.variables[0];
-            const rhs = statement.init[0];
-            if (nodeUsesIdentifier(rhs, name) || (dest?.type === "IndexExpression" && nodeUsesIdentifier(dest, name))) return false;
-            if (isIdentifier(dest, name)) return false;
-        }
-        return true;
+        return findNextFutureEvent(name, startIndex, INIT_READ | INDEX_DEST_READ | WRITE) === null;
     }
     function nodeUsesAsCallBase(node, name) {
         if (!node || typeof node !== "object") return false;
@@ -467,69 +498,43 @@ function matchLocalRegisterProgram(source, leaf, stateName, returnName, options 
         return useCount > 1 || (useCount === 1 && firstUseIndex > startIndex + 1 && !soleUseIsCallBase && !soleUseIsLogical);
     }
     function findFutureTerminalUnusedCopy(startIndex, tempReg) {
-        for (let cursor = startIndex + 1; cursor < leaf.length; cursor++) {
-            const statement = leaf[cursor];
-            if (!isSingleAssignment(statement)) {
-                if (nodeUsesIdentifier(statement?.init, tempReg)) return null;
-                continue;
-            }
-            const dest = statement.variables[0];
-            const rhs = statement.init[0];
-            if (isIdentifier(dest) && isIdentifier(rhs, tempReg) && isVmRegisterName(dest.name) && !cleanupRegs.has(dest.name)) {
-                return isTerminalUnreadEpoch(cursor, dest.name) ? dest.name : null;
-            }
-            if (nodeUsesIdentifier(rhs, tempReg) || (dest?.type === "IndexExpression" && nodeUsesIdentifier(dest, tempReg))) return null;
-            if (isIdentifier(dest, tempReg)) return null;
-        }
-        return null;
+        const event = findNextFutureEvent(tempReg, startIndex, INIT_READ | INDEX_DEST_READ | WRITE);
+        if (!event) return null;
+        const statement = leaf[event.index];
+        if (!isSingleAssignment(statement)) return null;
+        const dest = statement.variables[0];
+        const rhs = statement.init[0];
+        if (!isIdentifier(dest) || !isIdentifier(rhs, tempReg) || !isVmRegisterName(dest.name) || cleanupRegs.has(dest.name)) return null;
+        return isTerminalUnreadEpoch(event.index, dest.name) ? dest.name : null;
     }
 
     function findFutureTerminalClosureCopy(startIndex, tempReg) {
-        for (let cursor = startIndex + 1; cursor < leaf.length; cursor++) {
-            const statement = leaf[cursor];
-            if (!isSingleAssignment(statement)) {
-                if (nodeUsesIdentifier(statement?.init, tempReg)) return null;
-                continue;
-            }
-            const dest = statement.variables[0];
-            const rhs = statement.init[0];
-            if (isIdentifier(dest) && isIdentifier(rhs, tempReg) && dest.name !== stateName && dest.name !== returnName && !cleanupRegs.has(dest.name)) {
-                let sawUse = false;
-                for (let probe = cursor + 1; probe < leaf.length; probe++) {
-                    const later = leaf[probe];
-                    if (!isSingleAssignment(later)) {
-                        if (nodeUsesIdentifier(later?.init, dest.name)) sawUse = true;
-                        continue;
-                    }
-                    const laterDest = later.variables[0];
-                    const laterRhs = later.init[0];
-                    if (nodeUsesIdentifier(laterRhs, dest.name) || (laterDest?.type === "IndexExpression" && nodeUsesIdentifier(laterDest, dest.name))) sawUse = true;
-                    if (isIdentifier(laterDest, dest.name)) return null;
-                }
-                return sawUse ? dest.name : null;
-            }
-            if (nodeUsesIdentifier(rhs, tempReg) || (dest?.type === "IndexExpression" && nodeUsesIdentifier(dest, tempReg))) return null;
-            if (isIdentifier(dest, tempReg)) return null;
+        const event = findNextFutureEvent(tempReg, startIndex, INIT_READ | INDEX_DEST_READ | WRITE);
+        if (!event) return null;
+        const statement = leaf[event.index];
+        if (!isSingleAssignment(statement)) return null;
+        const dest = statement.variables[0];
+        const rhs = statement.init[0];
+        if (!isIdentifier(dest) || !isIdentifier(rhs, tempReg) || dest.name === stateName || dest.name === returnName || cleanupRegs.has(dest.name)) return null;
+        const laterEvents = futureEvents.get(dest.name) || [];
+        let sawUse = false;
+        for (const later of laterEvents) {
+            if (later.index <= event.index) continue;
+            if ((later.flags & (INIT_READ | INDEX_DEST_READ)) !== 0) sawUse = true;
+            if ((later.flags & WRITE) !== 0) return null;
         }
-        return null;
+        return sawUse ? dest.name : null;
     }
 
     function findFutureUpvalueClosureStore(startIndex, tempReg) {
-        for (let cursor = startIndex + 1; cursor < leaf.length; cursor++) {
-            const statement = leaf[cursor];
-            if (!isSingleAssignment(statement)) {
-                if (nodeUsesIdentifier(statement?.init, tempReg)) return null;
-                continue;
-            }
-            const dest = statement.variables[0];
-            const rhs = statement.init[0];
-            if (dest?.type === "IndexExpression" && isIdentifier(dest.base, "upvalueValues") && isIdentifier(dest.index) && isIdentifier(rhs, tempReg)) {
-                return upvalueCells.has(dest.index.name) && upvalueCells.get(dest.index.name) === null ? dest.index.name : null;
-            }
-            if (nodeUsesIdentifier(rhs, tempReg) || (dest?.type === "IndexExpression" && nodeUsesIdentifier(dest, tempReg))) return null;
-            if (isIdentifier(dest, tempReg)) return null;
-        }
-        return null;
+        const event = findNextFutureEvent(tempReg, startIndex, INIT_READ | INDEX_DEST_READ | WRITE);
+        if (!event) return null;
+        const statement = leaf[event.index];
+        if (!isSingleAssignment(statement)) return null;
+        const dest = statement.variables[0];
+        const rhs = statement.init[0];
+        if (dest?.type !== "IndexExpression" || !isIdentifier(dest.base, "upvalueValues") || !isIdentifier(dest.index) || !isIdentifier(rhs, tempReg)) return null;
+        return upvalueCells.has(dest.index.name) && upvalueCells.get(dest.index.name) === null ? dest.index.name : null;
     }
 
     function isPurePendingTempRhs(rhs) {
@@ -684,19 +689,13 @@ function matchLocalRegisterProgram(source, leaf, stateName, returnName, options 
     }
 
     function findFutureCleanupCopy(startIndex, tempReg) {
-        for (let cursor = startIndex + 1; cursor < leaf.length; cursor++) {
-            const statement = leaf[cursor];
-            if (!isSingleAssignment(statement)) {
-                if (nodeUsesIdentifier(statement?.init, tempReg)) return null;
-                continue;
-            }
-            const dest = statement.variables[0];
-            const rhs = statement.init[0];
-            if (isIdentifier(dest) && cleanupRegs.has(dest.name) && isIdentifier(rhs, tempReg)) return dest.name;
-            if (nodeUsesIdentifier(rhs, tempReg) || (dest?.type === "IndexExpression" && nodeUsesIdentifier(dest, tempReg))) return null;
-            if (isIdentifier(dest, tempReg)) return null;
-        }
-        return null;
+        const event = findNextFutureEvent(tempReg, startIndex, INIT_READ | INDEX_DEST_READ | WRITE);
+        if (!event) return null;
+        const statement = leaf[event.index];
+        if (!isSingleAssignment(statement)) return null;
+        const dest = statement.variables[0];
+        const rhs = statement.init[0];
+        return isIdentifier(dest) && cleanupRegs.has(dest.name) && isIdentifier(rhs, tempReg) ? dest.name : null;
     }
     function isPosPreservationCopy(startIndex, destReg, rhs) {
         if (!isIdentifier(rhs, stateName) || (nonNilDefinitionCount.get(destReg) || 0) <= 1) return false;
