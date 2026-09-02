@@ -1494,6 +1494,15 @@ It:
 - drops path-local temps at join only if they are proven unread afterward
 - fails on ambiguous live values
 
+It also preserves compiler-lowered source calls whose return value is
+discarded. A path-aware liveness query proves whether a call result is read
+before overwrite; an unconditional continuation call is emitted exactly once,
+and a cleanup-backed value used as its argument is promoted before that call
+when the terminal cleanup would otherwise reorder the declaration. A discarded
+call on a path-dependent branch is rejected because this matcher cannot emit a
+bare conditional statement safely. The eventual compiler cleanup is consumed
+for every early-promoted value so it cannot create a duplicate declaration.
+
 It is intentionally conservative.
 
 ## 20. Direct Global Call Recovery
@@ -1884,9 +1893,10 @@ Current performance baseline after the 2026-09-02 pipeline optimization:
 - fresh-CF one-state stress fixture with 2,000 locals and 4,000 recovered source statements: solver-only median 7,413.9 ms before versus 94.2 ms after, 78.7x faster; direct CF command median 9.913 s before versus 0.219 s after, 45.2x faster; recovered SHA-256 identical
 - the same fresh-CF stress run reduced direct-command RSS from 149.6 MB to 138.1 MB and heap use from 53.2 MB to 51.5 MB
 - a runnable 150-local real Medium fixture produced byte-identical old/new fresh-CF output and exact source/obfuscated/recovered runtime parity across 150 output lines
-- a real 401-state logical stress fixture remained byte-identical and improved from 0.14 s to 0.13 s median; its separate pre-existing source-preservation gap is documented below and was not changed during performance work
+- the real 401-state logical stress fixture now recovers all 100 source locals and all 100 following `print` calls in source order; the recovered output has 200 statements and exact seeded runtime parity with the source and obfuscated programs
+- the same 401-state Fresh-CF solver remains fast after call-preservation support (7-run solver median 105.9 ms with the lean structural AST)
 
-There is no known blocker in the currently supported straight-line/local/call/table/closure/upvalue/multi-return feature set represented by the established regression fixtures. The aggregate logical stress gap below is an explicit exception and must not be described as supported until fixed.
+There is no known blocker in the currently supported straight-line/local/call/table/closure/upvalue/multi-return feature set represented by the established regression fixtures.
 
 ### Still intentionally unsupported / fail-closed
 
@@ -1901,10 +1911,11 @@ Do not claim full source reconstruction for:
 
 Those remain separate future features. Limited compiler-generated short-circuit logical CFGs are supported; that must not be generalized into arbitrary CFG guessing.
 
-Known correctness gap discovered during 2026-09-02 performance validation, intentionally not fixed in that scope:
-- a real Medium fixture containing 100 sequential effectful `conditionN() and yesN() or noN()` locals, each followed by `print(local)`, normalizes to 401 states and fresh CF reports success, but both the pre-optimization and optimized solvers emit the 100 local declarations without the 100 print calls
-- old/new recovered output hashes are identical, proving the performance change did not cause the gap
-- treat this aggregate shape as unsupported/fail-open until a separate correctness task adds structural proof and runtime regression coverage
+Correctness fix completed during 2026-09-02 Fresh-CF follow-up:
+- the 401-state Medium fixture previously dropped every post-logical `print` call because `matchMultiStateLogicalLocals` stored discarded call results in its environment and later overwrote them without emitting the side effect
+- Fresh-CF now emits proven unconditional discarded calls once, promotes their last-use cleanup-backed arguments before the call, consumes the later cleanup, and rejects path-dependent discarded calls instead of guessing
+- focused regression coverage verifies 25 sequential logical/call pairs, conditional-call fail-closed behavior, exact ordering, and no duplicate calls
+- the real 100-pair Medium run produced 100 locals plus 100 prints and matched source/obfuscated/recovered runtime output exactly with a fixed random seed
 
 ### What a new chat should do next
 

@@ -2117,6 +2117,11 @@ function matchMultiStateLogicalLocals(source, stateWhile, stateName, returnName)
     const processed = new Set();
     const locals = new Set();
     const localNames = new Map();
+    // A source value may be held in a register until one terminal cleanup,
+    // even though its last real use is an earlier call.  Remember those
+    // already-emitted epochs so the eventual compiler nil write does not
+    // append a duplicate declaration or reorder it after the call.
+    const earlyCleanupPending = new Set();
     const out = [];
     let valueCount = 0;
     let tableCount = 0;
@@ -2201,6 +2206,53 @@ function matchMultiStateLogicalLocals(source, stateWhile, stateName, returnName)
         return false;
     }
 
+    // A call-result temporary can be overwritten on the same block or on a
+    // later CFG path.  Unlike pure compiler copies, the call itself is a
+    // source-level side effect and must not disappear merely because its
+    // return value is dead.  Keep this query path-aware so a call is emitted
+    // only when every path discards the value before any read.
+    const valueReadAfterCache = new Map();
+    function valueMayBeReadAfter(blockId, statementIndex, name, visiting = new Set()) {
+        const visitKey = `${blockId}:${statementIndex}`;
+        if (visiting.has(visitKey)) return true;
+        const cacheKey = `${blockId}:${statementIndex}:${name}`;
+        if (valueReadAfterCache.has(cacheKey)) return valueReadAfterCache.get(cacheKey);
+        const block = blocks.get(blockId);
+        if (!block) return true;
+        const nextVisiting = new Set(visiting);
+        nextVisiting.add(visitKey);
+        for (let i = statementIndex + 1; i < block.body.length; i++) {
+            if (i === block.transitionIndex) continue;
+            const statement = block.body[i];
+            if (!isSingleAssignment(statement)) {
+                valueReadAfterCache.set(cacheKey, true);
+                return true;
+            }
+            const dest = statement.variables[0];
+            const rhs = statement.init[0];
+            if (nodeReadsIdentifier(rhs, name) || (dest?.type === "IndexExpression" && nodeReadsIdentifier(dest, name))) {
+                valueReadAfterCache.set(cacheKey, true);
+                return true;
+            }
+            if (isIdentifier(dest, name)) {
+                valueReadAfterCache.set(cacheKey, false);
+                return false;
+            }
+        }
+        if (block.transition.kind === "branch" && block.transition.conditionRegister === name) {
+            valueReadAfterCache.set(cacheKey, true);
+            return true;
+        }
+        for (const next of successors.get(blockId) || []) {
+            if (valueMayBeReadAfter(next, -1, name, nextVisiting)) {
+                valueReadAfterCache.set(cacheKey, true);
+                return true;
+            }
+        }
+        valueReadAfterCache.set(cacheKey, false);
+        return false;
+    }
+
     function mergeCandidates(candidates, joinId) {
         if (candidates.length === 1) return { env: new Map(candidates[0].env), markers: [...(candidates[0].markers || [])] };
         if (candidates.length !== 2) return null;
@@ -2260,12 +2312,24 @@ function matchMultiStateLogicalLocals(source, stateWhile, stateName, returnName)
             if (!isIdentifier(dest)) return null;
             const name = dest.name;
 
+            // A physical register can be reused after an early source epoch
+            // was emitted.  The later definition owns the next cleanup epoch;
+            // do not let the old marker suppress that new value.
+            if (rhs?.type !== "NilLiteral" && !locals.has(name)) earlyCleanupPending.delete(name);
+
             if (isIdentifier(rhs, "args") && name !== stateName && name !== returnName) {
                 env.set(name, "args");
                 continue;
             }
-            if (name === returnName && isEmptyTable(rhs)) { sawReturnReset = true; continue; }
+            if (name === returnName && isEmptyTable(rhs)) continue;
             if (cleanupRegs.has(name) && rhs?.type === "NilLiteral") {
+                if (earlyCleanupPending.has(name)) {
+                    earlyCleanupPending.delete(name);
+                    locals.delete(name);
+                    localNames.delete(name);
+                    env.delete(name);
+                    continue;
+                }
                 if (accumulatorRegs.has(name)) {
                     const value = env.get(name);
                     if (value == null) return null;
@@ -2278,6 +2342,45 @@ function matchMultiStateLogicalLocals(source, stateWhile, stateName, returnName)
                 locals.delete(name);
                 localNames.delete(name);
                 env.delete(name);
+                continue;
+            }
+
+            // Function-call statements are represented by a write to a VM
+            // temporary (often ReturnVal).  If that result is overwritten
+            // without a read, preserve the call itself.  A path-dependent
+            // call cannot be represented as a bare source statement here, so
+            // fail closed instead of moving it out of its branch.
+            if (rhs?.type === "CallExpression" && !cleanupRegs.has(name)) {
+                const promotedArguments = [];
+                if (markers.length === 0) {
+                    for (const argument of rhs.arguments || []) {
+                        if (!isIdentifier(argument) || !cleanupRegs.has(argument.name) || locals.has(argument.name) || earlyCleanupPending.has(argument.name)) continue;
+                        if (valueMayBeReadAfter(id, i, argument.name)) continue;
+                        const argumentValue = env.get(argument.name);
+                        if (typeof argumentValue !== "string") return null;
+                        const display = `v${++valueCount}`;
+                        localNames.set(argument.name, display);
+                        locals.add(argument.name);
+                        out.push(`local ${display} = ${argumentValue}`);
+                        env.set(argument.name, display);
+                        earlyCleanupPending.add(argument.name);
+                        promotedArguments.push(argument.name);
+                    }
+                }
+                const value = render(rhs, env);
+                if (value == null) return null;
+                if (!valueMayBeReadAfter(id, i, name)) {
+                    if (markers.length !== 0) return null;
+                    out.push(value);
+                    env.delete(name);
+                } else {
+                    env.set(name, value);
+                }
+                for (const argumentName of promotedArguments) {
+                    locals.delete(argumentName);
+                    localNames.delete(argumentName);
+                    env.delete(argumentName);
+                }
                 continue;
             }
 

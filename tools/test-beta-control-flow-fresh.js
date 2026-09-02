@@ -48,6 +48,34 @@ function vmStatesSource(states) {
     return lines.join("\n");
 }
 
+function sequentialLogicalCallStates(count) {
+    const states = {};
+    for (let i = 0; i < count; i++) {
+        const root = 1 + i * 4;
+        const trueState = root + 1;
+        const falseState = root + 2;
+        const join = root + 3;
+        const nextRoot = i + 1 < count ? root + 4 : null;
+        states[root] = [
+            `r1 = "cond${i}"`, `r2 = _env[r1]`,
+            `r3 = "yes${i}"`, `r4 = _env[r3]`,
+            `state = r2 and ${trueState} or ${falseState}`,
+            "ReturnVal = r2",
+        ];
+        states[trueState] = [`ReturnVal = r4`, `state = ${join}`];
+        states[falseState] = [`state = ${join}`];
+        states[join] = [
+            "r7 = ReturnVal",
+            'ReturnVal = "print"',
+            "state = _env[ReturnVal]",
+            "ReturnVal = state(r7)",
+            ...(nextRoot === null ? ["r7 = nil", "ReturnVal = {}"] : []),
+            `state = ${nextRoot === null ? "nil" : nextRoot}`,
+        ];
+    }
+    return states;
+}
+
 {
     const source = vmSource([
         'ReturnVal = "print"',
@@ -411,6 +439,30 @@ function vmStatesSource(states) {
     });
     const result = solveBetaControlFlow(source, parse(source));
     assert.strictEqual(result.applied, false, "live differing path temporary was dropped at a logical join");
+}
+
+{
+    const source = vmStatesSource(sequentialLogicalCallStates(25));
+    const result = solveBetaControlFlow(source, parse(source));
+    assert.strictEqual(result.applied, true, "multi-state logical continuation calls were not recovered");
+    assert.strictEqual(result.mode, "fresh-multistate-logical");
+    const lines = result.source.trimEnd().split("\n");
+    assert.strictEqual(lines.length, 50, result.source);
+    for (let i = 0; i < 25; i++) {
+        assert.match(lines[i * 2], /^local v\d+ = \(cond\d+ and yes\d+\)$/);
+        assert.match(lines[i * 2 + 1], new RegExp(`^print\\(v\\d+\\)$`));
+    }
+}
+
+{
+    const source = vmStatesSource({
+        1: ['r1 = "b"', 'r2 = _env[r1]', 'state = r2 and 2 or 3', 'ReturnVal = r2'],
+        2: ['ReturnVal = "print"', 'state = _env[ReturnVal]', 'ReturnVal = state(1)', 'ReturnVal = {}', 'state = 4'],
+        3: ['state = 4'],
+        4: ['r7 = ReturnVal', 'r7 = nil', 'ReturnVal = {}', 'state = nil'],
+    });
+    const result = solveBetaControlFlow(source, parse(source));
+    assert.strictEqual(result.applied, false, "conditional discarded call escaped its branch");
 }
 
 
