@@ -1145,4 +1145,22 @@ function vmStatesSource(states) {
     assert.strictEqual(result.source, 'NEW_GLOBAL = gbl\nlocal v1\nlocal v2\nlocal v3 = (v1 or v2)\nlocal v4 = ((not v1) or v2)\n');
 }
 
+{
+    const source = vmStatesSource({
+        1: [
+            'r1 = allocUpvalue()', 'state = nil', 'upvalueValues[r1] = state',
+            'r2 = "f"', 'r3 = _env[r2]', 'r4 = { r3() }',
+            'ReturnVal = r4[2]', 'r6 = ReturnVal',
+            'r5 = upvalueValues[r1]',
+            'state = r4[1]', 'r7 = state', 'r4 = state',
+            'r6 = nil', 'r7 = nil',
+            'r1 = releaseUpvalue(r1)',
+            'ReturnVal = {}', 'state = nil',
+        ],
+    });
+    const result = solveBetaControlFlow(source, parse(source));
+    assert.strictEqual(result.applied, true, "proven root upvalue read interrupted a pending multi-return pack");
+    assert.ok(result.source.includes('local v1'), result.source);
+    assert.ok(result.source.includes(' = f()'), result.source);
+}
 console.log("fresh beta direct-global-call regression: ok");
