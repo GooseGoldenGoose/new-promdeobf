@@ -311,13 +311,21 @@ function matchOneDirectGlobalCall(source, leaf, index, stateName, returnName) {
 function matchLocalRegisterProgram(source, leaf, stateName, returnName, options = {}) {
     const cleanupRegs = new Set();
     const nonNilDefinitionCount = new Map();
-    for (const statement of leaf) {
+    const nilDefinitionCount = new Map();
+    const firstNilDefinitionIndex = new Map();
+    for (let scanIndex = 0; scanIndex < leaf.length; scanIndex++) {
+        const statement = leaf[scanIndex];
         if (!isSingleAssignment(statement)) continue;
         const dest = statement.variables[0];
         const rhs = statement.init[0];
         if (!isIdentifier(dest) || dest.name === stateName || dest.name === returnName) continue;
-        if (rhs?.type === "NilLiteral") cleanupRegs.add(dest.name);
-        else nonNilDefinitionCount.set(dest.name, (nonNilDefinitionCount.get(dest.name) || 0) + 1);
+        if (rhs?.type === "NilLiteral") {
+            cleanupRegs.add(dest.name);
+            nilDefinitionCount.set(dest.name, (nilDefinitionCount.get(dest.name) || 0) + 1);
+            if (!firstNilDefinitionIndex.has(dest.name)) firstNilDefinitionIndex.set(dest.name, scanIndex);
+        } else {
+            nonNilDefinitionCount.set(dest.name, (nonNilDefinitionCount.get(dest.name) || 0) + 1);
+        }
     }
     if (cleanupRegs.size === 0 && options.allowNoLocals !== true) return null;
 
@@ -328,6 +336,8 @@ function matchLocalRegisterProgram(source, leaf, stateName, returnName, options 
     let sawReturnReset = false, sawStop = false;
     const consumedPackRegs = new Set();
     const upvalueCells = new Map();
+    const predeclaredNilLocals = new Set();
+    const deferredStorageCopies = new Map();
 
     function localName(name) { return localNames.get(name) || name; }
     function nodeUsesIdentifier(node, name) {
@@ -356,15 +366,73 @@ function matchLocalRegisterProgram(source, leaf, stateName, returnName, options 
         }
         return false;
     }
+    function findFutureCleanupCopy(startIndex, tempReg) {
+        for (let cursor = startIndex + 1; cursor < leaf.length; cursor++) {
+            const statement = leaf[cursor];
+            if (!isSingleAssignment(statement)) {
+                if (nodeUsesIdentifier(statement?.init, tempReg)) return null;
+                continue;
+            }
+            const dest = statement.variables[0];
+            const rhs = statement.init[0];
+            if (isIdentifier(dest) && cleanupRegs.has(dest.name) && isIdentifier(rhs, tempReg)) return dest.name;
+            if (nodeUsesIdentifier(rhs, tempReg) || (dest?.type === "IndexExpression" && nodeUsesIdentifier(dest, tempReg))) return null;
+            if (isIdentifier(dest, tempReg)) return null;
+        }
+        return null;
+    }
+    function isPosPreservationCopy(startIndex, destReg, rhs) {
+        if (!isIdentifier(rhs, stateName) || (nonNilDefinitionCount.get(destReg) || 0) <= 1) return false;
+        for (let cursor = startIndex + 1; cursor < leaf.length; cursor++) {
+            const statement = leaf[cursor];
+            if (!isSingleAssignment(statement)) {
+                if (nodeUsesIdentifier(statement?.init, destReg)) return false;
+                continue;
+            }
+            const dest = statement.variables[0];
+            const value = statement.init[0];
+            if (isIdentifier(dest, destReg)) return false;
+            if (nodeUsesIdentifier(value, destReg) || (dest?.type === "IndexExpression" && nodeUsesIdentifier(dest, destReg))) {
+                return isIdentifier(dest, stateName) && isIdentifier(value, destReg);
+            }
+        }
+        return false;
+    }
     function allocateLocal(reg, kind = "value") {
         if (localNames.has(reg)) return localName(reg);
         const displayName = kind === "table" ? `t${++tableLocalCount}` : `v${++valueLocalCount}`;
         localNames.set(reg, displayName); locals.add(reg); expr.set(reg, displayName); exprKinds.set(reg, kind); declaredCount++;
         return displayName;
     }
-    function reserveLocal(reg) {
+    function reserveLocal(reg, preserveExpression = false) {
         locals.add(reg);
-        exprKinds.set(reg, "value");
+        if (!preserveExpression) exprKinds.set(reg, "value");
+    }
+    function canPredeclareNilLocal(name, index) {
+        return cleanupRegs.has(name) &&
+            (nonNilDefinitionCount.get(name) || 0) === 0 &&
+            (nilDefinitionCount.get(name) || 0) >= 2 &&
+            (firstNilDefinitionIndex.get(name) ?? -1) > index &&
+            !locals.has(name) && !expr.has(name);
+    }
+    function predeclareNilReads(node, index) {
+        if (!node || typeof node !== "object") return;
+        if (Array.isArray(node)) {
+            for (const item of node) predeclareNilReads(item, index);
+            return;
+        }
+        if (isIdentifier(node)) {
+            if (canPredeclareNilLocal(node.name, index)) {
+                const displayName = allocateLocal(node.name, "value");
+                out.push(`local ${displayName}`);
+                predeclaredNilLocals.add(node.name);
+            }
+            return;
+        }
+        for (const [key, value] of Object.entries(node)) {
+            if (key === "range" || key === "loc" || key === "variables") continue;
+            predeclareNilReads(value, index);
+        }
     }
     function flushPendingPacks() {
         if (!pendingPacks.size) return true;
@@ -502,6 +570,7 @@ function matchLocalRegisterProgram(source, leaf, stateName, returnName, options 
         if (options.diagnostics) { options.diagnostics.statementIndex = index; options.diagnostics.statement = sourceOf(source, statement) || statement?.type || "unknown"; }
         if (!isSingleAssignment(statement)) return null;
         const dest = statement.variables[0], rhs = statement.init[0];
+        predeclareNilReads(rhs, index);
         if (dest?.type === "IndexExpression" && isIdentifier(dest.base, "upvalueValues") && isIdentifier(dest.index)) {
             if (!upvalueCells.has(dest.index.name)) return null;
             const value = renderRhs(rhs);
@@ -536,10 +605,20 @@ function matchLocalRegisterProgram(source, leaf, stateName, returnName, options 
         const isPackSlotCopy = isIdentifier(rhs) && exprKinds.get(rhs.name) === "pack-slot";
         const returnPackFields = rhs?.type === "TableConstructorExpression" ? (rhs.fields || []) : [];
         const isReturnPackCreation = returnPackFields.length === 1 && returnPackFields[0]?.type === "TableValue" && returnPackFields[0].value?.type === "CallExpression";
+        const isDeferredStorageCopy = isIdentifier(rhs) && deferredStorageCopies.get(name) === rhs.name;
         const isPendingNeutralBookkeeping =
             (isIdentifier(rhs, "args") && name !== stateName && name !== returnName) ||
-            (rhs?.type === "NilLiteral" && cleanupRegs.has(name));
+            (rhs?.type === "NilLiteral" && cleanupRegs.has(name)) ||
+            isDeferredStorageCopy;
         if (pendingPacks.size && !isPackIndex && !isPackSlotCopy && !isReturnPackCreation && !isPendingNeutralBookkeeping && !flushPendingPacks()) return null;
+
+        if (isDeferredStorageCopy) {
+            deferredStorageCopies.delete(name);
+            if (!locals.has(name)) return null;
+            expr.set(name, localName(name));
+            exprKinds.set(name, "value");
+            continue;
+        }
 
         if (rhs?.type === "CallExpression" && isIdentifier(rhs.base, "allocUpvalue") && (rhs.arguments || []).length === 0) {
             if (name === stateName || name === returnName || upvalueCells.has(name)) return null;
@@ -586,22 +665,36 @@ function matchLocalRegisterProgram(source, leaf, stateName, returnName, options 
                 out.push(`local ${displayName}`);
                 continue;
             }
+            if (predeclaredNilLocals.has(name) && hasLaterNilAssignment(index, name)) continue;
+            predeclaredNilLocals.delete(name);
             locals.delete(name); expr.delete(name); exprKinds.delete(name); exprMeta.delete(name); localNames.delete(name); continue;
         }
 
         if (isPackIndex) {
             const rendered = renderRhs(rhs);
-            if (!rendered?.packSlot || consumedPackRegs.has(rendered.packReg)) return null;
+            if (!rendered?.packSlot) { if (options.diagnostics) options.diagnostics.reason = `pack index lost provenance at statement ${index}`; return null; }
+            if (consumedPackRegs.has(rendered.packReg)) { if (options.diagnostics) options.diagnostics.reason = `pack ${rendered.packReg} was already consumed before slot ${rendered.slot}`; return null; }
             let pendingPack = pendingPacks.get(rendered.packReg);
             if (!pendingPack) {
                 pendingPack = { packReg: rendered.packReg, call: rendered.call, slots: new Map(), order: packCreationOrder.get(rendered.packReg) ?? ++nextPackOrder };
                 pendingPacks.set(rendered.packReg, pendingPack);
             }
-            if (pendingPack.call !== rendered.call || pendingPack.slots.has(rendered.slot)) return null;
+            if (pendingPack.call !== rendered.call) { if (options.diagnostics) options.diagnostics.reason = `pack ${rendered.packReg} call provenance changed`; return null; }
+            if (pendingPack.slots.has(rendered.slot)) { if (options.diagnostics) options.diagnostics.reason = `pack ${rendered.packReg} slot ${rendered.slot} was extracted twice`; return null; }
             const slotInfo = { tempReg: name, localReg: null, displayName: null };
             pendingPack.slots.set(rendered.slot, slotInfo);
             expr.set(name, rendered.call); exprKinds.set(name, "pack-slot"); exprMeta.set(name, { packReg: rendered.packReg, slot: rendered.slot });
-            if (cleanupRegs.has(name)) { reserveLocal(name); slotInfo.localReg = name; }
+            if (cleanupRegs.has(name)) {
+                reserveLocal(name, name === rendered.packReg);
+                slotInfo.localReg = name;
+            } else {
+                const futureLocal = findFutureCleanupCopy(index, name);
+                if (futureLocal) {
+                    reserveLocal(futureLocal, futureLocal === rendered.packReg);
+                    slotInfo.localReg = futureLocal;
+                    deferredStorageCopies.set(futureLocal, name);
+                }
+            }
             continue;
         }
 
@@ -612,6 +705,14 @@ function matchLocalRegisterProgram(source, leaf, stateName, returnName, options 
             const slotInfo = pendingPack.slots.get(meta.slot);
             if (!slotInfo || slotInfo.localReg) return null;
             reserveLocal(name); slotInfo.localReg = name; continue;
+        }
+
+        if (cleanupRegs.has(name) && !locals.has(name) && isPosPreservationCopy(index, name, rhs)) {
+            const value = expr.get(stateName);
+            if (typeof value !== "string") return null;
+            expr.set(name, value);
+            exprKinds.set(name, "value");
+            continue;
         }
 
         if (cleanupRegs.has(name) && !locals.has(name) && isIdentifier(rhs) && rhs.name !== name) {
@@ -641,7 +742,20 @@ function matchLocalRegisterProgram(source, leaf, stateName, returnName, options 
         if (rhs?.type === "CallExpression") {
             const value = renderRhs(rhs);
             if (typeof value !== "string") return null;
-            if (!valueUsedBeforeOverwrite(index, name)) out.push(value);
+            const futureLocal = findFutureCleanupCopy(index, name);
+            if (futureLocal) {
+                let displayName;
+                if (locals.has(futureLocal)) {
+                    displayName = allocateLocal(futureLocal, "value");
+                    out.push(`${displayName} = ${value}`);
+                } else {
+                    displayName = allocateLocal(futureLocal, "value");
+                    out.push(`local ${displayName} = ${value}`);
+                }
+                deferredStorageCopies.set(futureLocal, name);
+            } else if (!valueUsedBeforeOverwrite(index, name)) {
+                out.push(value);
+            }
             expr.set(name, value); exprKinds.set(name, "value"); continue;
         }
 
@@ -1584,6 +1698,25 @@ function solveFreshSource(source, ast) {
             localCount: closureProgram.localCount,
             closureCount: closureProgram.closureCount,
         };
+    }
+
+    const logicalLeaves = extractNormalizedStateLeaves(stateWhile, stateName);
+    if (logicalLeaves && logicalLeaves.size > 1 && logicalLeaves.has(1)) {
+        const flattenedLogical = flattenLogicalRootLeaf(logicalLeaves, 1, stateName, returnName);
+        if (flattenedLogical && flattenedLogical.consumed.size === logicalLeaves.size) {
+            const flattenedProgram = matchLocalRegisterProgram(source, flattenedLogical.leaf, stateName, returnName);
+            if (flattenedProgram) {
+                return {
+                    applied: true,
+                    mode: "fresh-multistate-logical",
+                    source: flattenedProgram.source,
+                    stateCount: logicalLeaves.size,
+                    statementCount: flattenedProgram.statementCount,
+                    branchCount: logicalLeaves.size - 1,
+                    localCount: flattenedProgram.localCount,
+                };
+            }
+        }
     }
 
     const multiLogical = matchMultiStateLogicalLocals(source, stateWhile, stateName, returnName);

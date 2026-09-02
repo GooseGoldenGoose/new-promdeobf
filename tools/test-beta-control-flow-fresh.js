@@ -30,7 +30,7 @@ function vmSource(leaf) {
 function vmStatesSource(states) {
     const lines = [
         "vm = function(state, args, upvalues, gcProxy)",
-        "    local r1, r2, r3, r4, r5, r6, r7, ReturnVal",
+        "    local r1, r2, r3, r4, r5, r6, r7, r8, ReturnVal",
         "    while state do",
     ];
     const ids = Object.keys(states).map(Number).sort((a, b) => a - b);
@@ -1098,6 +1098,51 @@ function vmStatesSource(states) {
     assert.match(result.reason, /unsupported multi-state control flow \(2 normalized states\)/);
     assert.match(result.reason, /state 1/);
     assert.match(result.reason, /root statement/);
+}
+
+
+{
+    const source = vmStatesSource({
+        1: [
+            'r1 = "f"', 'r2 = _env[r1]',
+            'state = r2()', 'state = r2()',
+            'r4 = { r2() }', 'r5 = { r2() }',
+            'ReturnVal = r4[2]', 'r6 = r5[3]',
+            'r3 = state', 'state = r4[1]', 'r4 = state',
+            'state = r5[1]', 'r7 = ReturnVal', 'ReturnVal = r5[2]', 'r8 = ReturnVal', 'r5 = state',
+            'r6 = nil', 'r7 = nil', 'r8 = nil', 'r3 = nil', 'r4 = nil', 'r5 = nil',
+            'ReturnVal = {}', 'state = nil',
+        ],
+    });
+    const result = solveBetaControlFlow(source, parse(source));
+    assert.strictEqual(result.applied, true, "interleaved call results and multi-return packs were not recovered");
+    assert.strictEqual(result.mode, "fresh-register-locals");
+    assert.strictEqual(result.source, 'f()\nlocal v1 = f()\nlocal v2, v3 = f()\nlocal v4, v5, v6 = f()\n');
+}
+
+{
+    const source = vmStatesSource({
+        1: [
+            'ReturnVal = "gbl"', 'state = _env[ReturnVal]',
+            'ReturnVal = "NEW_GLOBAL"', '_env[ReturnVal] = state',
+            'r4 = state', 'ReturnVal = r2', 'state = r2 and 2 or 3', 'r2 = nil',
+        ],
+        2: [
+            'state = r4', 'r5 = state', 'r3 = not r2', 'r4 = ReturnVal',
+            'state = r3 and 4 or 5', 'ReturnVal = r3',
+        ],
+        3: ['ReturnVal = r1', 'state = 2'],
+        4: [
+            'state = r5', 'r5 = ReturnVal',
+            'r1 = nil', 'r2 = nil', 'r1 = nil', 'r4 = nil', 'r5 = nil',
+            'ReturnVal = {}', 'state = nil',
+        ],
+        5: ['ReturnVal = r1', 'state = 4'],
+    });
+    const result = solveBetaControlFlow(source, parse(source));
+    assert.strictEqual(result.applied, true, "logical flattening with POS preservation and shuffled nil initialization was not recovered");
+    assert.strictEqual(result.mode, "fresh-multistate-logical");
+    assert.strictEqual(result.source, 'NEW_GLOBAL = gbl\nlocal v1\nlocal v2\nlocal v3 = (v1 or v2)\nlocal v4 = ((not v1) or v2)\n');
 }
 
 console.log("fresh beta direct-global-call regression: ok");

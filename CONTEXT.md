@@ -1187,6 +1187,8 @@ Original source identifier names are generally unrecoverable.
 Current rules include:
 - if exact nil definition is read before overwrite, preserve it semantically
 - if register has no meaningful non-nil definitions and has later nil cleanup, it can prove nil-only local lifetime
+- a nil-only source VAR may be read before its explicit VM `= nil` initializer when Prometheus shuffles that redundant write; fresh CF may predeclare it at first read only when the register has zero non-nil definitions, at least two nil definitions, and the first explicit nil write occurs later
+- for such predeclared nil-only lifetimes, redundant/intermediate nil writes are ignored until the final cleanup ends the local
 - one unobserved nil before one meaningful value can be dead TEMP bookkeeping
 - multiple meaningful definitions before ownership is established can be ambiguous and fail closed
 
@@ -1233,6 +1235,14 @@ Then it emits:
 ```lua
 local v1, v2 = f()
 ```
+
+Prometheus can interleave independent storage handoffs after calls. Fresh CF now also handles proven forms where:
+- a call result lives temporarily in `state`, `ReturnVal`, or another TEMP and is copied later into cleanup-backed source storage
+- multiple return packs are created/interleaved before all slot-to-local copies occur
+- a pack slot is extracted into `state`/`ReturnVal` and its final cleanup-backed destination appears later
+- the physical pack register itself is reused as the first source-result local
+
+For a unique future TEMP -> cleanup-backed storage handoff, the source call/declaration is emitted at the actual call-evaluation point and the later VM copy is treated as storage bookkeeping. This preserves call order while allowing compiler shuffling. Pack provenance is preserved until all needed slots are recovered; reserving the pack register as source storage must not erase its still-live `return-pack` identity. Ambiguous/multiple handoffs still fail closed.
 
 RETURN_ALL packs and `unpack(pack)` are also recognized so source call expansion semantics are preserved.
 
@@ -1379,7 +1389,9 @@ Fresh CF currently has two limited mechanisms for compiler-generated logical con
 - alternate branch contains the expected result assignment and then joins
 - relevant result register relationship is proven
 
-It reconstructs an `and`/`or` expression and continues flattening.
+It reconstructs an `and`/`or` expression and continues flattening. When strict flattening consumes every normalized root state, the resulting straight-line leaf is now handed to the full `matchLocalRegisterProgram` recovery path before the narrower DAG matcher. This lets proven short-circuit regions compose with large post-join programs containing arithmetic, comparisons, calls, multi-return packs, globals, and normal local lifetimes.
+
+Logical flattening must also distinguish compiler POS preservation from source-local ownership. A cleanup-backed register assignment such as `R = state` is treated as temporary POS preservation rather than a source-local declaration when the same value is uniquely used only by the compiler restore `state = R` before `R` is redefined. A later proven definition can then establish the real source lifetime.
 
 This is NOT a general CFG structurer.
 
@@ -1676,6 +1688,12 @@ t1:se()
 ```
 
 These examples are regression anchors, not permission to hardcode their names/register layouts.
+
+### Logical + opcode/call composition
+
+A full opcode-style fixture containing globals, nil/boolean/constants, arithmetic, concat/unary, two sequential short-circuit `or` regions, comparisons, zero/one/multi-result calls, and two-argument calls now recovers through fresh CF as a 5-state logical program. The saved failing matrix and three fresh randomized Medium obfuscations passed after the logical/POS/nil/pack-handoff fixes.
+
+A six-line call fixture (`floor(pi)`, one result, two results, three results) was also randomized 20 times; all 20 layouts passed, including 10 layouts that previously failed because result packs and delayed source-storage copies were interleaved.
 
 ## 31. Current Baseline / History That Matters
 
