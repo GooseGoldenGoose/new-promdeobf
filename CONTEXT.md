@@ -734,7 +734,7 @@ Any future recovery must preserve these scope cleanups semantically even if comp
 
 Fresh CF now treats a proven root read `upvalueValues[cell]` as neutral bookkeeping while a compiler multi-return pack is pending, but only when `cell` is already mapped to a proven root source binding by `allocUpvalue` + `upvalueValues[cell] = value`. This preserves call order while allowing compiler-shuffled captured-local reads to occur between pack slot extractions.
 
-Verified on the user opcode/closure/TCO fixture: the previous blocker `r7 = upvalueValues[r27]` is fixed. The fixture now advances to a separate unsupported blocker at `r53 = allocUpvalue()`. Do not conflate these; the latter was not fixed in that turn due scope lock.
+Verified on the user opcode/closure/TCO fixture: proven root `upvalueValues[cell]` reads and bare `cell = allocUpvalue()` allocations can both cross pending compiler multi-return pack bookkeeping without forcing an early flush. `allocUpvalue()` is accepted only for a fresh ordinary destination, zero arguments, and never `state`/`ReturnVal`; arbitrary calls remain barriers. The previous `r53 = allocUpvalue()` blocker is fixed. The fixture now reaches source emission but exposes a separate formatting/statement-join bug (`local v45 = (-v20)local v49 = ...`); that later bug was not fixed due scope lock.
 ## 8. Deobfuscator File Structure
 
 Important active files:

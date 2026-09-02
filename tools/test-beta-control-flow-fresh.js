@@ -1163,4 +1163,20 @@ function vmStatesSource(states) {
     assert.ok(result.source.includes('local v1'), result.source);
     assert.ok(result.source.includes(' = f()'), result.source);
 }
+{
+    const source = vmStatesSource({
+        1: [
+            'r1 = "f"', 'r2 = _env[r1]', 'r3 = { r2() }',
+            'ReturnVal = r3[2]', 'r4 = ReturnVal',
+            'r5 = allocUpvalue()',
+            'state = r3[1]', 'r6 = state', 'r3 = state',
+            'upvalueValues[r5] = r6',
+            'r4 = nil', 'r6 = nil', 'r5 = releaseUpvalue(r5)',
+            'ReturnVal = {}', 'state = nil',
+        ],
+    });
+    const result = solveBetaControlFlow(source, parse(source));
+    assert.strictEqual(result.applied, true, "upvalue allocation interrupted a pending multi-return pack");
+    assert.ok(result.source.includes(' = f()'), result.source);
+}
 console.log("fresh beta direct-global-call regression: ok");
