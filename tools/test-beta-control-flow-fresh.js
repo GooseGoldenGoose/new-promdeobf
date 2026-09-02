@@ -1179,4 +1179,20 @@ function vmStatesSource(states) {
     assert.strictEqual(result.applied, true, "upvalue allocation interrupted a pending multi-return pack");
     assert.ok(result.source.includes(' = f()'), result.source);
 }
+{
+    const source = vmStatesSource({
+        1: [
+            'r1 = allocUpvalue()', 'state = nil', 'upvalueValues[r1] = state',
+            'r2 = "f"', 'r3 = _env[r2]', 'r4 = { r3() }',
+            'ReturnVal = r4[2]', 'r5 = ReturnVal',
+            'r1 = releaseUpvalue(r1)',
+            'state = r4[1]', 'r6 = state', 'r4 = state',
+            'r5 = nil', 'r6 = nil',
+            'ReturnVal = {}', 'state = nil',
+        ],
+    });
+    const result = solveBetaControlFlow(source, parse(source));
+    assert.strictEqual(result.applied, true, "proven upvalue release interrupted a pending multi-return pack");
+    assert.ok(result.source.includes(' = f()'), result.source);
+}
 console.log("fresh beta direct-global-call regression: ok");
