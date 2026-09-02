@@ -448,15 +448,21 @@ function sinkUnreadPureAssignmentsToStateTail(statements, stateName, overflowNam
 
 function findDirectProducerStatements(statements, index, overflowName = null) {
     const reads = statementReads(statements[index], overflowName);
+    if (reads.size === 0) return new Set();
+
+    const unresolved = new Set(reads);
     const producers = new Set();
 
-    for (const name of reads) {
-        for (let i = index - 1; i >= 0; i--) {
-            if (statementWrites(statements[i], overflowName).has(name)) {
-                producers.add(statements[i]);
-                break;
-            }
+    // Find every nearest reaching producer in one reverse scan. Scanning once
+    // avoids repeating the same walk for each register read by the consumer.
+    for (let i = index - 1; i >= 0 && unresolved.size > 0; i--) {
+        const writes = statementWrites(statements[i], overflowName);
+        let matched = false;
+        for (const name of writes) {
+            if (!unresolved.delete(name)) continue;
+            matched = true;
         }
+        if (matched) producers.add(statements[i]);
     }
 
     return producers;
@@ -537,16 +543,39 @@ function validateScheduledOrder(original, scheduled, stateName, overflowName = n
         if (originalAnchors[i] !== scheduledAnchors[i]) return false;
     }
 
-    // Any inverted pair must be reproducible by moving at least one pure
-    // delayable assignment across the other statement, with no RAW, WAR, or
-    // WAW dependency. Two non-movable/effectful statements may never invert.
-    for (let i = 0; i < original.length; i++) {
-        for (let j = i + 1; j < original.length; j++) {
-            const left = original[i];
-            const right = original[j];
-            if (finalIndex.get(left) < finalIndex.get(right)) continue;
-            if (!isDelayableAssignment(left, stateName, overflowName) && !isDelayableAssignment(right, stateName, overflowName)) return false;
-            if (hasRegisterHazard(left, right, overflowName)) return false;
+    // Preserve every RAW, WAR, and WAW relation without comparing every pair.
+    // Per register, writes must stay ordered and each read must remain between
+    // the same surrounding writes. Read/read reordering remains legal.
+    const originalWrites = new Map();
+    const originalWriteCounts = new Map();
+    const readEpochs = new WeakMap();
+    for (const statement of original) {
+        const reads = statementReads(statement, overflowName);
+        if (reads.size > 0) {
+            const epochs = new Map();
+            for (const name of reads) epochs.set(name, originalWriteCounts.get(name) || 0);
+            readEpochs.set(statement, epochs);
+        }
+        for (const name of statementWrites(statement, overflowName)) {
+            let writes = originalWrites.get(name);
+            if (!writes) originalWrites.set(name, writes = []);
+            writes.push(statement);
+            originalWriteCounts.set(name, (originalWriteCounts.get(name) || 0) + 1);
+        }
+    }
+
+    const scheduledWriteCounts = new Map();
+    for (const statement of scheduled) {
+        const epochs = readEpochs.get(statement);
+        if (epochs) {
+            for (const [name, expectedCount] of epochs) {
+                if ((scheduledWriteCounts.get(name) || 0) !== expectedCount) return false;
+            }
+        }
+        for (const name of statementWrites(statement, overflowName)) {
+            const index = scheduledWriteCounts.get(name) || 0;
+            if (originalWrites.get(name)?.[index] !== statement) return false;
+            scheduledWriteCounts.set(name, index + 1);
         }
     }
     return true;
@@ -911,9 +940,8 @@ function hasOnlyWhitespaceBetween(source, statements) {
     return true;
 }
 
-function renderScheduledBody(source, original, scheduled) {
+function renderScheduledBody(source, original, scheduled, newline) {
     const indent = lineIndentAt(source, original[0].range[0]);
-    const newline = source.includes("\r\n") ? "\r\n" : "\n";
     return scheduled.map(statement => sourceOf(source, statement)).join(newline + indent);
 }
 
@@ -943,6 +971,7 @@ function scheduleVmRegisterUses(source, ast) {
     }
 
     const leaves = collectDispatcherLeaves(stateWhile.body || [], stateName);
+    const newline = source.includes("\r\n") ? "\r\n" : "\n";
     const edits = [];
     let blocksChanged = 0;
     let swaps = 0;
@@ -985,7 +1014,7 @@ function scheduleVmRegisterUses(source, ast) {
             edits.push({
                 start: statements[0].range[0],
                 end: statements[statements.length - 1].range[1],
-                text: renderScheduledBody(source, statements, scheduled.statements),
+                text: renderScheduledBody(source, statements, scheduled.statements, newline),
             });
             blocksChanged++;
             swaps += scheduled.swaps;

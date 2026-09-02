@@ -20,7 +20,11 @@ function generateDeobfuscatedControlFlow(inputPath, normalOutputPath = null, con
     // VM binding recovery is diagnostic-only for normal output. The beta pipeline
     // rebuilds its own register/lifetime/capture proof, so skip that duplicate
     // analysis when normal output is immediately handed to beta-CF in-process.
-    const normal = runDeobfuscator(inputPath, normalPath, { analyzeBindings: false });
+    const normal = runDeobfuscator(inputPath, normalPath, {
+        analyzeBindings: false,
+        structuralIntermediateAsts: true,
+        structuralOutputAst: true,
+    });
     const generated = generateBetaControlFlowFromSource(
         normal.outputSource,
         normal.outputAst,

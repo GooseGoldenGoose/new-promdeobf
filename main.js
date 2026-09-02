@@ -50,6 +50,21 @@ function parseLuaStructural(source, filename = "<input>") {
     }
 }
 
+function parseLuaScopedStructural(source, filename = "<input>") {
+    try {
+        return luaparse.parse(source, {
+            luaVersion: "luau",
+            comments: true,
+            scope: true,
+            locations: false,
+            ranges: true,
+        });
+    } catch (error) {
+        error.message = `Failed to parse ${filename}: ${error.message}`;
+        throw error;
+    }
+}
+
 function loadAst(inputPath = DEFAULT_INPUT, options = {}) {
     const formattedInput = options.formatInput === false
         ? {
@@ -62,7 +77,9 @@ function loadAst(inputPath = DEFAULT_INPUT, options = {}) {
             formatterSkipped: true,
         }
         : formatInputBeforeParse(inputPath, options.formatter || {});
-    const ast = parseLua(formattedInput.source, formattedInput.inputPath);
+    const ast = options.structuralIntermediateAsts === true
+        ? parseLuaScopedStructural(formattedInput.source, formattedInput.inputPath)
+        : parseLua(formattedInput.source, formattedInput.inputPath);
     return { ...formattedInput, ast };
 }
 
@@ -82,10 +99,15 @@ function writeSource(source, outputPath = DEFAULT_OUTPUT) {
 
 function runDeobfuscator(inputPath = DEFAULT_INPUT, outputPath = DEFAULT_OUTPUT, options = {}) {
     const loaded = loadAst(inputPath, options);
+    const scopedIntermediateParse = options.structuralIntermediateAsts === true
+        ? parseLuaScopedStructural
+        : parseLua;
 
     const constantArray = inlinePrometheusConstantArray(loaded.source, loaded.ast);
     const stage1Source = constantArray.found ? constantArray.source : loaded.source;
-    const stage1Ast = parseLua(stage1Source, `${inputPath} <after ConstantArray>`);
+    const stage1Ast = stage1Source === loaded.source
+        ? loaded.ast
+        : scopedIntermediateParse(stage1Source, `${inputPath} <after ConstantArray>`);
 
     const environment = renameEnvironmentBinding(stage1Source, stage1Ast, "_env");
     if (environment.collision) throw new Error(environment.reason);
@@ -97,7 +119,7 @@ function runDeobfuscator(inputPath = DEFAULT_INPUT, outputPath = DEFAULT_OUTPUT,
     let createClosure;
     let vmHelpers;
     const parallelCreateClosure = renameCreateClosureBinding(stage1Source, stage1Ast, "createClosure");
-    const parallelVmHelpers = renameVmHelperBindings(stage1Source, stage1Ast, parseLua, { deferParse: true });
+    const parallelVmHelpers = renameVmHelperBindings(stage1Source, stage1Ast, scopedIntermediateParse, { deferParse: true });
     const canBatchWrapperRenames =
         !parallelCreateClosure.collision &&
         !parallelCreateClosure.ambiguous &&
@@ -114,7 +136,7 @@ function runDeobfuscator(inputPath = DEFAULT_INPUT, outputPath = DEFAULT_OUTPUT,
             const combinedEdits = [...coreEdits, ...parallelVmHelpers.edits];
             const createClosureSource = applyTextEdits(stage1Source, coreEdits);
             const helperSource = applyTextEdits(stage1Source, combinedEdits);
-            const helperAst = parseLua(helperSource, `${inputPath} <after wrapper/helper rename batch>`);
+            const helperAst = scopedIntermediateParse(helperSource, `${inputPath} <after wrapper/helper rename batch>`);
             createClosure = { ...parallelCreateClosure, source: createClosureSource };
             vmHelpers = { ...parallelVmHelpers, source: helperSource, ast: helperAst, parseDeferred: false };
         } catch {
@@ -126,25 +148,27 @@ function runDeobfuscator(inputPath = DEFAULT_INPUT, outputPath = DEFAULT_OUTPUT,
     if (!vmHelpers) {
         const environmentAst = environment.source === stage1Source
             ? stage1Ast
-            : parseLua(environment.source, `${inputPath} <after environment rename>`);
+            : scopedIntermediateParse(environment.source, `${inputPath} <after environment rename>`);
         createClosure = renameCreateClosureBinding(environment.source, environmentAst, "createClosure");
         if (createClosure.collision || createClosure.ambiguous) throw new Error(createClosure.reason);
         const createClosureAst = createClosure.source === environment.source
             ? environmentAst
-            : parseLua(createClosure.source, `${inputPath} <after createClosure rename>`);
-        vmHelpers = renameVmHelperBindings(createClosure.source, createClosureAst, parseLua);
+            : scopedIntermediateParse(createClosure.source, `${inputPath} <after createClosure rename>`);
+        vmHelpers = renameVmHelperBindings(createClosure.source, createClosureAst, scopedIntermediateParse);
     }
+    const downstreamParse = options.structuralIntermediateAsts === true ? parseLuaStructural : parseLua;
+
     const semanticNames = vmHelpers.found
-        ? renameSemanticBindings(vmHelpers.source, vmHelpers.ast || parseLua(vmHelpers.source, `${inputPath} <before semantic naming>`), parseLua)
+        ? renameSemanticBindings(vmHelpers.source, vmHelpers.ast || scopedIntermediateParse(vmHelpers.source, `${inputPath} <before semantic naming>`), scopedIntermediateParse)
         : { source: vmHelpers.source, found: false, applied: false, mapping: [], skipped: [] };
     const semanticNamedSource = semanticNames.applied ? semanticNames.source : vmHelpers.source;
     const semanticNamedAst = semanticNames.applied
-        ? parseLua(semanticNamedSource, `${inputPath} <after semantic naming>`)
+        ? downstreamParse(semanticNamedSource, `${inputPath} <after semantic naming>`)
         : (vmHelpers.ast || null);
 
-    const splitAssignments = splitSafeParallelAssignmentsFully(semanticNamedSource, parseLua, 8, semanticNamedAst);
+    const splitAssignments = splitSafeParallelAssignmentsFully(semanticNamedSource, downstreamParse, 8, semanticNamedAst);
 
-    const vmStateAst = splitAssignments.ast || parseLua(splitAssignments.source, `${inputPath} <before VM state recovery>`);
+    const vmStateAst = splitAssignments.ast || downstreamParse(splitAssignments.source, `${inputPath} <before VM state recovery>`);
     const vmState = recoverVmStateGraph(splitAssignments.source, vmStateAst);
     const analyzeBindings = options.analyzeBindings !== false;
     const vmBindings = analyzeBindings
@@ -152,23 +176,33 @@ function runDeobfuscator(inputPath = DEFAULT_INPUT, outputPath = DEFAULT_OUTPUT,
         : { found: false, skipped: true, reason: "VM binding diagnostics disabled for fast pipeline handoff" };
     const vmStateApplied = vmState.found && vmState.normalized;
     const normalizedSource = vmStateApplied ? vmState.source : splitAssignments.source;
-    const normalizedAst = parseLua(normalizedSource, `${inputPath} <before VM register naming>`);
+    const normalizedAst = normalizedSource === splitAssignments.source
+        ? vmStateAst
+        : downstreamParse(normalizedSource, `${inputPath} <before VM register naming>`);
     const registerNames = vmStateApplied
         ? renameVmRegisterBindings(normalizedSource, normalizedAst)
         : { source: normalizedSource, found: false, applied: false, mapping: [] };
     const registerNamedSource = registerNames.applied ? registerNames.source : normalizedSource;
-    const registerNamedAst = parseLua(registerNamedSource, `${inputPath} <before VM overflow scalarization>`);
+    const registerNamedAst = registerNamedSource === normalizedSource
+        ? normalizedAst
+        : downstreamParse(registerNamedSource, `${inputPath} <before VM overflow scalarization>`);
     const registerOverflow = vmStateApplied
         ? normalizeVmRegisterOverflow(registerNamedSource, registerNamedAst)
         : { source: registerNamedSource, found: false, applied: false, slots: 0, references: 0 };
     const overflowSource = registerOverflow.applied ? registerOverflow.source : registerNamedSource;
-    const overflowAst = parseLua(overflowSource, `${inputPath} <before VM register scheduling>`);
+    const overflowAst = overflowSource === registerNamedSource
+        ? registerNamedAst
+        : downstreamParse(overflowSource, `${inputPath} <before VM register scheduling>`);
     const registerSchedule = vmStateApplied
         ? scheduleVmRegisterUses(overflowSource, overflowAst)
         : { source: overflowSource, found: false, applied: false, blocksChanged: 0, swaps: 0 };
     const finalSource = registerSchedule.applied ? registerSchedule.source : overflowSource;
 
-    const outputAst = parseLua(finalSource, outputPath);
+    const outputAst = finalSource === overflowSource
+        ? overflowAst
+        : options.structuralOutputAst === true
+            ? parseLuaStructural(finalSource, outputPath)
+            : parseLua(finalSource, outputPath);
     const resolvedOutput = writeSource(finalSource, outputPath);
 
     return {
@@ -319,6 +353,7 @@ if (require.main === module) main();
 module.exports = {
     parseLua,
     parseLuaStructural,
+    parseLuaScopedStructural,
     loadAst,
     writeAst,
     writeSource,

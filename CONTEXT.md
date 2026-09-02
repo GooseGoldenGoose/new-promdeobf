@@ -91,6 +91,8 @@ During work:
 - inspect the actual Prometheus compiler/obfuscator whenever a compiler pattern is uncertain
 - do not guess compiler behavior from one output when compiler source can prove it
 - test tiny readable source fixtures through the real compiler and real deobfuscator when a pattern matters
+- treat performance as a standing requirement for every new pipeline feature: avoid unnecessary full-source parses/tree walks, reuse an AST when its source text is unchanged, prefer cached/indexed dataflow over repeated scans, and do not retain large intermediate objects longer than required
+- profile before performance edits and optimize measured hot paths first; keep representative before/after timing, memory, and byte-identical output evidence
 
 After meaningful tracked changes:
 1. run focused tests
@@ -797,7 +799,15 @@ Old/retired beta files may exist for reference. Do not silently fall back to the
 
 The parser runs in Luau mode with ranges; ranges are critical because most passes preserve source by applying targeted text edits from AST positions.
 
-`main.js` also has a structural/light parse mode used by current user-local changes. Preserve those user changes unless explicitly asked to modify them.
+The active beta pipeline uses lean AST modes to reduce parser time and retained memory without changing generated source:
+- early lexical-analysis stages keep scope and comments but omit unused source-location objects
+- later structural stages keep ranges but omit scope, comments, and locations once lexical binding recovery is complete
+- the public/default normal pipeline still returns the full final AST unless its caller explicitly requests the lean structural result
+- when a stage returns unchanged source text, the prior AST is reused instead of parsing the identical text again
+
+The external formatter still runs once before parsing. Its temporary output is removed in a `finally` path on success or failure, so repeated runs no longer accumulate formatter files in the system temp directory.
+
+`main.js` exposes these lean parse modes as explicit options. Keep the full parser for callers that need complete AST metadata; use the lean modes for internal source recovery after the required lexical facts are already established.
 
 ### 9.2 Constant-array recovery - `passes/constant-array.js`
 
@@ -1104,6 +1114,13 @@ After generic scheduling it may also:
 - move a proven return payload immediately before final `state = nil` across only pure compiler bookkeeping
 
 Validation step reconstructs whether every inversion is legal. If validation fails, original segment order is kept.
+
+Scheduler performance rules:
+- nearest direct producers are found with one reverse scan per consumer rather than one reverse scan per read register
+- final RAW/WAR/WAW validation projects accesses per register in linear time: writes must retain order and every read must remain between the same surrounding writes; read/read reordering remains allowed
+- the output newline convention is detected once per source instead of rescanning the complete source for every changed dispatcher leaf
+
+These are proof-equivalent changes. They do not weaken the dependency validator or alter scheduling output.
 
 ### 9.13 Normal output
 
@@ -1669,6 +1686,13 @@ For any structural feature or bug fix:
 14. update `CONTEXT.md`
 15. focused commit + push
 
+For every future pipeline addition or performance change:
+1. benchmark an existing small/medium fixture and at least one large representative input before editing
+2. use CPU profiling to rank parser, formatter, scheduler, and recovery costs instead of guessing
+3. compare SHA-256 hashes of normal and fresh-CF outputs before/after; required result is byte-identical unless the task explicitly changes output
+4. measure process memory on a representative large input when AST retention/allocation behavior changes
+5. reject speedups that weaken semantic proof, diagnostics, or fail-closed behavior
+
 Core regression commands currently include:
 
 ```text
@@ -1841,6 +1865,14 @@ As of 2026-09-02:
   - `node tools/test-vm-state-reachability.js`
   - `node tools/test-vm-register-names.js`
   - `node tools/test-vm-register-overflow.js`
+
+Current performance baseline after the 2026-09-02 pipeline optimization:
+- `sample/63.txt` normal pipeline, 5 interleaved process runs: median 1.27 s before, 1.02 s after, 19.2% faster; SHA-256 output identical
+- `sample/spacial5.txt`, 3 interleaved process runs: median 3.74 s before, 2.66 s after, 28.8% faster; SHA-256 output identical
+- `sample/spacial6.txt`, one large 6.65 MB run: 14.30 s before, 12.51 s after, 12.5% faster; 8,685,928-byte output and SHA-256 identical
+- `sample/spacial5.txt` post-run memory: RSS 460.0 MB before versus 367.3 MB after; heap used 329.6 MB before versus 246.2 MB after
+- full Medium obfuscation -> normal -> fresh-CF on the shadowing vararg/`pcall` regression: 0.824 s before versus 0.407 s after in one paired run; normal and fresh-CF hashes identical; source, obfuscated, and recovered runtime output identical
+- profiling authority: repeated parsing was 30-40% of CPU before the change; scheduler reached 31%; formatter was 9-13%; remaining whole-tree passes were individually lower impact
 
 There is no known blocker in the currently supported straight-line/local/call/table/closure/upvalue/multi-return/limited-logical feature set represented by those fixtures.
 
