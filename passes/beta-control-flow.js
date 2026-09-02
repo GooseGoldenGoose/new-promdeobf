@@ -439,6 +439,7 @@ function matchLocalRegisterProgram(source, leaf, stateName, returnName, options 
         let useCount = 0;
         let firstUseIndex = -1;
         let soleUseIsCallBase = false;
+        let soleUseIsLogical = false;
         for (let cursor = startIndex + 1; cursor < leaf.length; cursor++) {
             const statement = leaf[cursor];
             if (!isSingleAssignment(statement)) {
@@ -452,18 +453,18 @@ function matchLocalRegisterProgram(source, leaf, stateName, returnName, options 
             const rhs = statement.init[0];
             if (isIdentifier(dest, name)) return false;
             if (isIdentifier(dest, stateName) && isIdentifier(rhs, name)) return false;
-            if (rhs?.type === "LogicalExpression" && nodeUsesIdentifier(rhs, name)) return false;
             if (nodeUsesIdentifier(rhs, name) || (dest?.type === "IndexExpression" && nodeUsesIdentifier(dest, name))) {
                 useCount++;
                 if (firstUseIndex < 0) {
                     firstUseIndex = cursor;
                     soleUseIsCallBase = nodeUsesAsCallBase(rhs, name);
+                    soleUseIsLogical = rhs?.type === "LogicalExpression" && nodeUsesIdentifier(rhs, name);
                 }
             }
         }
         // One-use callables and immediately-consumed operands are compiler TEMP shapes too.
         // A terminal source alias needs either repeated use, or one delayed non-call use.
-        return useCount > 1 || (useCount === 1 && firstUseIndex > startIndex + 1 && !soleUseIsCallBase);
+        return useCount > 1 || (useCount === 1 && firstUseIndex > startIndex + 1 && !soleUseIsCallBase && !soleUseIsLogical);
     }
     function findFutureTerminalUnusedCopy(startIndex, tempReg) {
         for (let cursor = startIndex + 1; cursor < leaf.length; cursor++) {

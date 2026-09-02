@@ -1573,4 +1573,31 @@ function vmStatesSource(states) {
     assert.match(result.source, /local v\d+ = \(v\d+ or v\d+\)/);
 }
 
+{
+    const source = vmStatesSource({
+        1: [
+            'ReturnVal = nil', 'r1 = ReturnVal', 'r2 = nil',
+            'state = r1 and 2 or 3', 'ReturnVal = r1',
+        ],
+        2: [
+            'r3 = ReturnVal', 'r4 = not r1',
+            'state = r4 and 4 or 5', 'ReturnVal = r4',
+        ],
+        3: ['ReturnVal = r2', 'state = 2'],
+        4: [
+            'r5 = ReturnVal', 'state = createClosure0(6, {})', 'r6 = state',
+            'r3 = nil', 'r5 = nil', 'r6 = nil', 'ReturnVal = {}', 'state = nil',
+        ],
+        5: ['ReturnVal = r2', 'state = 4'],
+        6: ['ReturnVal = {}', 'state = nil'],
+    });
+    const result = solveBetaControlFlow(source, parse(source));
+    assert.strictEqual(result.applied, true, "terminal nil source local was inlined inside flattened TESTSET logic");
+    assert.strictEqual(result.mode, "fresh-closure-entry");
+    assert.doesNotMatch(result.source, /\(nil or |\(\(not nil\) or /);
+    const first = result.source.match(/local v\d+ = \((v\d+) or (v\d+)\)/);
+    assert.ok(first, result.source);
+    assert.match(result.source, new RegExp(`local v\\d+ = \\(\\(not ${first[1]}\\) or ${first[2]}\\)`));
+}
+
 console.log("fresh beta direct-global-call regression: ok");
