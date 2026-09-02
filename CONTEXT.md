@@ -129,7 +129,7 @@ Important current unrelated tracked user changes - preserve unless user explicit
 - `formater/input.txt`
 - `main.js`
 
-There are many untracked generated/probe files in the repo. Never mass-clean them blindly.
+As of the 2026-09-02 handoff cleanup, clearly generated/test/temp artifacts were removed. Ambiguous untracked work such as `opt/`, `opti/`, `sample/input.txt`, and non-generated source fixtures must still be preserved unless the user explicitly scopes them for deletion. Never use a blind `git clean -fd`.
 
 ## 4. Project Goal and Correctness Rules
 
@@ -168,6 +168,21 @@ Core correctness requirements:
 - fail closed when proof is incomplete
 
 A pretty output that changes semantics is a bug. Do not use cosmetic cleanup as a substitute for understanding the compiler pattern.
+
+### 4.1 Source-Preservation / No-Optimizer Rule
+
+This is a hard project rule unless the user explicitly asks for a separate optimizer:
+
+```text
+recover source semantics first
+DO NOT dead-code eliminate proven source locals
+DO NOT collapse unused multi-return declarations into bare calls
+DO NOT remove proven source assignments merely because later unused/overwritten
+DO NOT inline proven source aliases
+DO NOT constant-propagate proven source aliases into later expressions
+```
+
+Only remove proven compiler bookkeeping such as register cleanup, state transport, ReturnVal transport, return-pack slot transport, compiler-only TEMP copies, and upvalue machinery. If a source declaration is proven, preserve it even when unused. If a source local shadows an earlier local, preserve the new binding and all later references to that binding.
 
 ## 5. High-Level Architecture
 
@@ -1742,22 +1757,116 @@ The full 15-state opcode/call/closure/table fixture was recompiled with Medium a
 
 A minimal captured-upvalue short-circuit fixture (`local x = a and b` where `a`/`b` are captured by a child closure) passes Medium -> normal -> fresh CF, with focused regression coverage for both `and` and `or` branch polarity. The previously failing alternate state `temp = upvalueValues[cell]; ReturnVal = temp; state = join` is folded into the logical RHS without exposing the compiler TEMP. Chained/fused logical CFGs are now also supported: a real 9-state Medium fixture containing `a and b and c` immediately followed by `d or e or f` recovers both logical locals, and 5/5 randomized Medium recompiles passed. The larger 130-state stress fixture now flattens all 119 root logical states. Scheduler canonicalization of proven compiler return-pack slots + `ReturnVal` source handoffs gets past the former `local r1, r2 = getTwo()` multi-return blocker, and `solveBetaControlFlow` applies across all 130 states. Nested mutable captured locals are now preserved as bindings instead of inlined values: the `nestedUpvalue` source shape recovers `local v1 = 5`, mutates `v1` inside the returned child closure, and returns that same binding. The complete recovered 130-state output parses and matches the original fixture at runtime. A minimal real Medium nested-mutable-upvalue fixture also passed 5/5 randomized recompiles with runtime parity.
 
-## 31. Current Baseline / History That Matters
+The exact shadowing/vararg fixture below is also a current regression anchor:
 
-Important semantic baseline commit:
-`7375421 Refine nil register lifetimes`
+```lua
+print("HI")
+local a = function(...)
+    print(...)
+    return 1, 2, 3, 4, function()
+        return GLOBAL
+    end
+end
+local a, b = pcall(a, "asdsa")
+print(pcall(a, "WWWW"))
+```
 
-Current branch extends that historical baseline with:
-- RegisterOverflow scalarization/integration and unified `rN`/`oN` semantic handling
-- improved fresh-CF error diagnostics
-- pending multi-return interleaving support
-- closure/upvalue/table terminal handoff recovery
-- preservation of proven unused/overwritten source statements instead of source-level DCE
-- persistent table source-storage lifetime proof that is independent of whether a pending pack exists
-- preservation of proven terminal source aliases instead of source-level alias/constant/member inlining, with fail-closed exclusions for compiler transport temps
+Fresh CF must recover the second `a` as the first result of `pcall`, preserve unused `b`, and make the later `pcall(a, "WWWW")` call the newly shadowing boolean binding. Current implementation passed 10/10 randomized Medium recompiles with exact runtime parity. The recovered presentation shape is `local v2, v3 = pcall(v1, "asdsa")` followed by `print(pcall(v2, "WWWW"))`.
 
-Do not reintroduce discarded experimental CF changes just because they exist in Git history. Read current files, current tests, and this context first.
+## 31. Current Baseline / Next-Chat Snapshot
 
+This section is the shortest current-state handoff. Read the detailed sections above for implementation rules.
+
+### Current branch / Git truth
+
+- branch: `main`
+- remote: `origin/main`
+- latest feature commit before this handoff cleanup: `63a43c7 Preserve shadowed multi-return locals`
+- preceding current feature commits:
+  - `f5d015a Preserve nested captured local bindings`
+  - `93d2b72 Canonicalize shuffled return packs`
+  - `54fd6b7 Recover chained logical CFGs`
+  - `cf9b5bc Preserve nil locals in TESTSET logic`
+  - `bf83687 Recover upvalue logical fallbacks`
+  - `a43b388 Preserve terminal source aliases`
+  - `593c428 Preserve terminal source storage lifetimes`
+  - `6719ce6 Unify overflow register CF interleaving`
+- important historical semantic baseline: `7375421 Refine nil register lifetimes`
+- do not reintroduce discarded experimental CF changes merely because they exist in Git history
+
+### Current unrelated user work to preserve
+
+Tracked user edits that are intentionally unrelated to fresh-CF work:
+- `main.js`
+- `formater/input.txt`
+
+Do not stage, revert, overwrite, or clean those unless the user explicitly asks.
+
+Ambiguous untracked work such as `opt/`, `opti/`, `sample/input.txt`, and non-generated source fixtures is also not disposable by default.
+
+### Workspace cleanup state
+
+The 2026-09-02 handoff cleanup intentionally removed generated material so future chats should not depend on stale probes:
+- removed 5,222 clearly generated/untracked temp/probe/output files (over 807 MB)
+- removed the entire tracked/ignored `output/` tree; output is generated material and should be recreated as needed, not used as authority
+- removed 41 tracked `sample/*.source.obfuscated.lua` generated compiler outputs that had matching `sample/*.source.lua` fixtures and no tracked references
+- preserved all tracked `sample/*.source.lua` and `sample/*.txt` fixture/source material
+- preserved unrelated tracked user edits `main.js` and `formater/input.txt`
+- preserved ambiguous untracked work `opt/`, `opti/`, and `sample/input.txt`
+
+Do not assume a missing old `_tmp_*`, `.normal.lua`, `.beta.cf.lua`, `.obfuscated.lua`, debug graph, profile, or output file is a lost project dependency. Recreate probes from source/compiler when needed. Do not commit regenerated output unless explicitly requested.
+
+### Current known-good functional state
+
+As of 2026-09-02:
+
+- the complex logic/upvalue stress fixture has 130 normalized states total, with 119 root logical states plus closure states
+- chained/fused `and`/`or` flattening works across that root graph
+- scheduler canonicalization handles shuffled compiler return packs and `ReturnVal` source snapshots used by that fixture
+- nested mutable captured locals are preserved as real bindings, not initializer literals
+- the complete recovered 130-state output parses and matches the original source at runtime
+- captured-upvalue `and`/`or` fallback fixtures pass
+- terminal nil locals used in TESTSET-style logic remain source bindings instead of being substituted with `nil`
+- source aliases such as `local math = math`, member aliases, booleans, and proven nil aliases are preserved rather than inlined
+- persistent table source storage survives reassignment/mutation/read without requiring a pending return pack
+- scalar `rN` and scalarized overflow `oN` use the same fresh-CF semantic register rules
+- multi-return packs survive compiler interleaving, including unused slots, cleanup-before-flush, shadowing, and borrowed-POS global loads between proven slot extractions
+- exact shadowing vararg/pcall fixture passed 10/10 randomized Medium builds with exact runtime parity
+- non-shadowing vararg/pcall variant passes
+- minimal nested mutable-upvalue fixture passed 5/5 randomized Medium builds with runtime parity
+- chained logical real Medium fixture passed 5/5 randomized builds
+- current core suites pass:
+  - `node tools/test-beta-control-flow-fresh.js`
+  - `node tools/test-vm-register-scheduler.js`
+  - `node tools/test-vm-state-reachability.js`
+  - `node tools/test-vm-register-names.js`
+  - `node tools/test-vm-register-overflow.js`
+
+There is no known blocker in the currently supported straight-line/local/call/table/closure/upvalue/multi-return/limited-logical feature set represented by those fixtures.
+
+### Still intentionally unsupported / fail-closed
+
+Do not claim full source reconstruction for:
+- general `if`
+- general `while`
+- general `repeat`
+- numeric `for`
+- generic `for`
+- arbitrary nested CFG structuring
+- arbitrary `break` / `continue` reconstruction
+
+Those remain separate future features. Limited compiler-generated short-circuit logical CFGs are supported; that must not be generalized into arbitrary CFG guessing.
+
+### What a new chat should do next
+
+1. Read this entire `CONTEXT.md`.
+2. Run `git status --short --branch` and `git log -5 --oneline`.
+3. Inspect the actual current implementation related to the user's next request.
+4. Treat current code + tests + this file as authority; do not rely on old chat memory.
+5. Keep scope locked to the user's exact request.
+6. Use compiler source and tiny real Medium fixtures when a VM pattern is uncertain.
+7. Preserve source statements; do not optimize them away.
+8. After a real change, update this context, run focused + core tests, `git diff --check`, focused commit, and push `origin/main`.
 ## 32. Context Maintenance Rule
 
 This file should contain current durable truth, not a chronological diary.
