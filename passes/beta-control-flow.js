@@ -344,9 +344,11 @@ function matchLocalRegisterProgram(source, leaf, stateName, returnName, options 
     const predeclaredNilLocals = new Set();
     const deferredStorageCopies = new Map();
     const deferredTerminalClosureCopies = new Map();
+    const deferredTerminalUnusedCopies = new Map();
     const deferredUpvalueClosureStores = new Map();
     const deferredLiveTableCopies = new Map();
     const terminalClosureLocals = new Set();
+    const terminalUnusedLocals = new Set();
     const terminalTableLocals = new Set();
     const terminalNilLocals = new Set();
     const plainTableLocals = new Set();
@@ -407,6 +409,38 @@ function matchLocalRegisterProgram(source, leaf, stateName, returnName, options 
         }
         return true;
     }
+    function isTerminalUnreadEpoch(startIndex, name) {
+        for (let cursor = startIndex + 1; cursor < leaf.length; cursor++) {
+            const statement = leaf[cursor];
+            if (!isSingleAssignment(statement)) {
+                if (nodeUsesIdentifier(statement?.init, name)) return false;
+                continue;
+            }
+            const dest = statement.variables[0];
+            const rhs = statement.init[0];
+            if (nodeUsesIdentifier(rhs, name) || (dest?.type === "IndexExpression" && nodeUsesIdentifier(dest, name))) return false;
+            if (isIdentifier(dest, name)) return false;
+        }
+        return true;
+    }
+    function findFutureTerminalUnusedCopy(startIndex, tempReg) {
+        for (let cursor = startIndex + 1; cursor < leaf.length; cursor++) {
+            const statement = leaf[cursor];
+            if (!isSingleAssignment(statement)) {
+                if (nodeUsesIdentifier(statement?.init, tempReg)) return null;
+                continue;
+            }
+            const dest = statement.variables[0];
+            const rhs = statement.init[0];
+            if (isIdentifier(dest) && isIdentifier(rhs, tempReg) && isVmRegisterName(dest.name) && !cleanupRegs.has(dest.name)) {
+                return isTerminalUnreadEpoch(cursor, dest.name) ? dest.name : null;
+            }
+            if (nodeUsesIdentifier(rhs, tempReg) || (dest?.type === "IndexExpression" && nodeUsesIdentifier(dest, tempReg))) return null;
+            if (isIdentifier(dest, tempReg)) return null;
+        }
+        return null;
+    }
+
     function findFutureTerminalClosureCopy(startIndex, tempReg) {
         for (let cursor = startIndex + 1; cursor < leaf.length; cursor++) {
             const statement = leaf[cursor];
@@ -497,6 +531,23 @@ function matchLocalRegisterProgram(source, leaf, stateName, returnName, options 
         return hasOnlyDeadCopyUses(index, name);
     }
 
+    function hasFutureReassignedLocalUse(startIndex, name) {
+        for (let cursor = startIndex + 1; cursor < leaf.length; cursor++) {
+            const statement = leaf[cursor];
+            if (!isSingleAssignment(statement)) {
+                if (nodeUsesIdentifier(statement?.init, name)) return true;
+                continue;
+            }
+            const dest = statement.variables[0];
+            const value = statement.init[0];
+            if (nodeUsesIdentifier(value, name) || (dest?.type === "IndexExpression" && nodeUsesIdentifier(dest, name))) return true;
+            if (isIdentifier(dest, name)) {
+                if (!isIdentifier(value) || value.name === name) return false;
+            }
+        }
+        return false;
+    }
+
     function findFutureLiveTableCopy(startIndex, tempReg, rhs) {
         if (rhs?.type !== "TableConstructorExpression" || !isPurePendingTempRhs(rhs)) return null;
         if (rhsDependsOnPendingPack(rhs)) return null;
@@ -516,7 +567,8 @@ function matchLocalRegisterProgram(source, leaf, stateName, returnName, options 
                     if (betweenDest?.type === "IndexExpression" && nodeUsesIdentifier(betweenDest, dest.name)) return null;
                 }
                 if (locals.has(dest.name)) return dest.name;
-                if (dest.name !== stateName && dest.name !== returnName && !cleanupRegs.has(dest.name) && valueUsedBeforeOverwrite(cursor, dest.name)) return dest.name;
+                if (dest.name !== stateName && dest.name !== returnName && !cleanupRegs.has(dest.name) &&
+                    (valueUsedBeforeOverwrite(cursor, dest.name) || hasFutureReassignedLocalUse(cursor, dest.name))) return dest.name;
                 return null;
             }
             if (nodeUsesIdentifier(value, tempReg) || (dest?.type === "IndexExpression" && nodeUsesIdentifier(dest, tempReg))) return null;
@@ -824,6 +876,7 @@ function matchLocalRegisterProgram(source, leaf, stateName, returnName, options 
         const isReturnPackCreation = returnPackFields.length === 1 && returnPackFields[0]?.type === "TableValue" && returnPackFields[0].value?.type === "CallExpression";
         const isDeferredStorageCopy = isIdentifier(rhs) && deferredStorageCopies.get(name) === rhs.name;
         const isDeferredTerminalClosureCopy = isIdentifier(rhs) && deferredTerminalClosureCopies.get(name) === rhs.name;
+        const isDeferredTerminalUnusedCopy = isIdentifier(rhs) && deferredTerminalUnusedCopies.get(name) === rhs.name;
         const isDeadRegisterCopy = isIdentifier(rhs) && name !== stateName && name !== returnName && !cleanupRegs.has(name) && hasOnlyDeadCopyUses(index, name);
         const isKnownUpvalueRead = rhs?.type === "IndexExpression" && isIdentifier(rhs.base, "upvalueValues") && isIdentifier(rhs.index) && typeof upvalueCells.get(rhs.index.name) === "string";
         const isStableGlobalLoad = pendingPacks.size > 0 && isVmRegisterName(name) && rhs?.type === "IndexExpression" && isIdentifier(rhs.base, "_env") && isIdentifier(rhs.index) && typeof expr.get(rhs.index.name) === "string" && !rhsDependsOnPendingPack(rhs.index);
@@ -835,21 +888,30 @@ function matchLocalRegisterProgram(source, leaf, stateName, returnName, options 
         const cleanupFutureLocal = isCallExpression ? findFutureCleanupCopy(index, name) : null;
         const terminalClosureFutureLocal = isClosureCreation && !cleanupFutureLocal ? findFutureTerminalClosureCopy(index, name) : null;
         const upvalueClosureFutureCell = isClosureCreation && !cleanupFutureLocal && !terminalClosureFutureLocal ? findFutureUpvalueClosureStore(index, name) : null;
-        const callFutureLocal = cleanupFutureLocal || terminalClosureFutureLocal;
+        const terminalUnusedFutureLocal = !cleanupFutureLocal && !terminalClosureFutureLocal && !upvalueClosureFutureCell ? findFutureTerminalUnusedCopy(index, name) : null;
+        const callFutureLocal = cleanupFutureLocal || terminalClosureFutureLocal || terminalUnusedFutureLocal;
+        const terminalUnusedValueFutureLocal = !isCallExpression && !isPackIndex && !isPackSlotCopy && isPurePendingTempRhs(rhs) && !isReturnPackCreation ? findFutureTerminalUnusedCopy(index, name) : null;
+        const directTerminalUnusedValue = !isCallExpression && !isPackIndex && !isPackSlotCopy && !terminalUnusedValueFutureLocal && isVmRegisterName(name) && !cleanupRegs.has(name) && isPurePendingTempRhs(rhs) && !isReturnPackCreation && isTerminalUnreadEpoch(index, name);
         const callResultIsDiscarded = isCallExpression && hasOnlyDeadCopyUses(index, name);
         const callPackBarrier = isCallExpression && pendingPacks.size ? Math.max(...[...pendingPacks.values()].map(pack => pack.order)) : 0;
         const hasTrackedPackBarrier = callPackBarrier > 0;
         const isClosureTableOperand = isClosureCreation && isUniqueFutureTableOperand(index, name);
         const isDeferredClosureCreation = isClosureCreation && (!!callFutureLocal || !!upvalueClosureFutureCell || isClosureTableOperand) && hasTrackedPackBarrier;
         const isDeferredOrdinaryCall = isCallExpression && !isClosureCreation && hasTrackedPackBarrier && (!!callFutureLocal || callResultIsDiscarded);
-        const isDeadPureTemp = pendingPacks.size > 0 && isDeadPurePendingTemp(index, name, rhs);
+        const terminalUnusedValuePackBarrier = terminalUnusedValueFutureLocal && pendingPacks.size ? Math.max(...[...pendingPacks.values()].map(pack => pack.order)) : 0;
+        const isDeferredTerminalUnusedValue = !!terminalUnusedValueFutureLocal && terminalUnusedValuePackBarrier > 0;
+        // Table source-storage ownership is independent of pending return packs.
+        // A pending pack only changes when the recovered source line may be emitted.
+        const liveTableFutureLocal = findFutureLiveTableCopy(index, name, rhs);
+        const isLiveTableHandoff = !!liveTableFutureLocal;
+        const isDeadPureTemp = pendingPacks.size > 0 && !isLiveTableHandoff && isDeadPurePendingTemp(index, name, rhs);
         const isStablePrimitiveTemp = pendingPacks.size > 0 && isPrimitiveLiteral(rhs) && name !== stateName && !cleanupRegs.has(name);
-        const isDeadPlainTableRead = pendingPacks.size > 0 && isDeadPlainTableIndexRead(index, name, rhs);
+        const isUnusedPlainTableReadLocal = rhs?.type === "IndexExpression" && isIdentifier(rhs.base) && plainTableLocals.has(rhs.base.name) && isVmRegisterName(name) && !cleanupRegs.has(name) && isTerminalUnreadEpoch(index, name) && !rhsDependsOnPendingPack(rhs);
+        const isDeadPlainTableRead = pendingPacks.size > 0 && !isUnusedPlainTableReadLocal && isDeadPlainTableIndexRead(index, name, rhs);
         const isPlainTableNamecallLoad = pendingPacks.size > 0 && isPlainTableMethodLoad(index, name, rhs);
-        const liveTableFutureLocal = pendingPacks.size > 0 && !isDeadPureTemp ? findFutureLiveTableCopy(index, name, rhs) : null;
-        const liveTablePackBarrier = liveTableFutureLocal ? Math.max(...[...pendingPacks.values()].map(pack => pack.order)) : 0;
-        const isDeferredLiveTable = !!liveTableFutureLocal && liveTablePackBarrier > 0;
-        const isDeferredLiveTableCopy = isIdentifier(rhs) && deferredLiveTableCopies.get(name) === rhs.name;
+        const liveTablePackBarrier = isLiveTableHandoff && pendingPacks.size > 0 ? Math.max(...[...pendingPacks.values()].map(pack => pack.order)) : 0;
+        const isDeferredLiveTable = isLiveTableHandoff && liveTablePackBarrier > 0;
+        const isDeferredLiveTableCopy = isIdentifier(rhs) && deferredLiveTableCopies.get(rhs.name) === name;
         const isPendingNeutralBookkeeping =
             (isIdentifier(rhs, "args") && name !== stateName && name !== returnName) ||
             (rhs?.type === "NilLiteral" && cleanupRegs.has(name)) ||
@@ -859,16 +921,29 @@ function matchLocalRegisterProgram(source, leaf, stateName, returnName, options 
             isKnownUpvalueRelease ||
             isDeferredClosureCreation ||
             isDeferredOrdinaryCall ||
+            isDeferredTerminalUnusedValue ||
+            directTerminalUnusedValue ||
             isDeadPureTemp ||
             isStablePrimitiveTemp ||
+            isUnusedPlainTableReadLocal ||
             isDeadPlainTableRead ||
             isPlainTableNamecallLoad ||
             isDeferredLiveTable ||
             isDeferredLiveTableCopy ||
             isDeadRegisterCopy ||
             isDeferredStorageCopy ||
-            isDeferredTerminalClosureCopy;
+            isDeferredTerminalClosureCopy ||
+            isDeferredTerminalUnusedCopy;
         if (pendingPacks.size && !isPackIndex && !isPackSlotCopy && !isReturnPackCreation && !isPendingNeutralBookkeeping && !flushPendingPacks()) return null;
+
+        if (isUnusedPlainTableReadLocal) {
+            const value = renderRhs(rhs);
+            if (typeof value !== "string") return null;
+            const displayName = allocateLocal(name, "value");
+            emitSourceLine(`local ${displayName} = ${value}`, [rhs.base.name]);
+            terminalUnusedLocals.add(name);
+            continue;
+        }
 
         if (isDeadPlainTableRead) {
             expr.delete(name); exprKinds.delete(name); exprMeta.delete(name);
@@ -876,15 +951,16 @@ function matchLocalRegisterProgram(source, leaf, stateName, returnName, options 
         }
 
         if (isDeferredLiveTableCopy) {
-            deferredLiveTableCopies.delete(name);
+            deferredLiveTableCopies.delete(rhs.name);
             expr.set(name, localName(name));
             exprKinds.set(name, "table");
             continue;
         }
 
-        if (isDeferredStorageCopy || isDeferredTerminalClosureCopy) {
+        if (isDeferredStorageCopy || isDeferredTerminalClosureCopy || isDeferredTerminalUnusedCopy) {
             if (isDeferredStorageCopy) deferredStorageCopies.delete(name);
-            else deferredTerminalClosureCopies.delete(name);
+            else if (isDeferredTerminalClosureCopy) deferredTerminalClosureCopies.delete(name);
+            else deferredTerminalUnusedCopies.delete(name);
             if (!locals.has(name)) return null;
             expr.set(name, localName(name));
             exprKinds.set(name, "value");
@@ -943,9 +1019,15 @@ function matchLocalRegisterProgram(source, leaf, stateName, returnName, options 
                         out.push(`local ${displayName}`);
                         continue;
                     }
+                    if (nonNilDefs === 0 && (nilDefinitionCount.get(name) || 0) === 1 && isVmRegisterName(name) && isTerminalUnreadEpoch(index, name)) {
+                        const displayName = allocateLocal(name, "value");
+                        out.push(`local ${displayName}`);
+                        terminalUnusedLocals.add(name);
+                        continue;
+                    }
                     // Multiple meaningful definitions before cleanup cannot prove where VAR ownership began.
                     if (nonNilDefs > 1) return null;
-                    // Single unobserved nil (or nil overwritten by one meaningful definition) is dead.
+                    // Unowned nil bookkeeping remains removable only when it cannot prove a source lifetime.
                     continue;
                 }
                 const displayName = allocateLocal(name, "value");
@@ -987,10 +1069,20 @@ function matchLocalRegisterProgram(source, leaf, stateName, returnName, options 
                 slotInfo.localReg = name;
             } else {
                 const futureLocal = findFutureCleanupCopy(index, name);
+                const terminalFutureLocal = !futureLocal ? findFutureTerminalUnusedCopy(index, name) : null;
                 if (futureLocal) {
                     reserveLocal(futureLocal, futureLocal === rendered.packReg);
                     slotInfo.localReg = futureLocal;
                     deferredStorageCopies.set(futureLocal, name);
+                } else if (terminalFutureLocal) {
+                    reserveLocal(terminalFutureLocal, terminalFutureLocal === rendered.packReg);
+                    terminalUnusedLocals.add(terminalFutureLocal);
+                    slotInfo.localReg = terminalFutureLocal;
+                    deferredTerminalUnusedCopies.set(terminalFutureLocal, name);
+                } else if (isVmRegisterName(name) && isTerminalUnreadEpoch(index, name)) {
+                    reserveLocal(name, name === rendered.packReg);
+                    terminalUnusedLocals.add(name);
+                    slotInfo.localReg = name;
                 }
             }
             continue;
@@ -1037,7 +1129,23 @@ function matchLocalRegisterProgram(source, leaf, stateName, returnName, options 
             exprKinds.set(name, rhs?.type === "TableConstructorExpression" ? "table" : "value"); continue;
         }
 
-        if (isDeferredLiveTable) {
+        if (terminalUnusedValueFutureLocal || directTerminalUnusedValue) {
+            const futureLocal = terminalUnusedValueFutureLocal || name;
+            const value = renderRhs(rhs);
+            if (typeof value !== "string") return null;
+            const kind = rhs?.type === "TableConstructorExpression" ? "table" : "value";
+            const displayName = allocateLocal(futureLocal, kind);
+            const sourceLine = value === "nil" ? `local ${displayName}` : `local ${displayName} = ${value}`;
+            if (isDeferredTerminalUnusedValue) deferredSourceLines.push({ line: sourceLine, afterPackOrder: terminalUnusedValuePackBarrier });
+            else out.push(sourceLine);
+            terminalUnusedLocals.add(futureLocal);
+            if (terminalUnusedValueFutureLocal) deferredTerminalUnusedCopies.set(futureLocal, name);
+            expr.set(name, displayName);
+            exprKinds.set(name, kind);
+            continue;
+        }
+
+        if (isLiveTableHandoff) {
             const value = renderRhs(rhs);
             if (typeof value !== "string") return null;
             const wasLocal = locals.has(liveTableFutureLocal);
@@ -1045,9 +1153,13 @@ function matchLocalRegisterProgram(source, leaf, stateName, returnName, options 
             const sourceLine = wasLocal ? `${displayName} = ${value}` : `local ${displayName} = ${value}`;
             if (!wasLocal) terminalTableLocals.add(liveTableFutureLocal);
             plainTableLocals.add(liveTableFutureLocal);
-            if (!wasLocal) deferredLocalBarriers.set(liveTableFutureLocal, liveTablePackBarrier);
-            deferredSourceLines.push({ line: sourceLine, afterPackOrder: liveTablePackBarrier, declaresReg: wasLocal ? null : liveTableFutureLocal });
-            deferredLiveTableCopies.set(liveTableFutureLocal, name);
+            if (isDeferredLiveTable) {
+                if (!wasLocal) deferredLocalBarriers.set(liveTableFutureLocal, liveTablePackBarrier);
+                deferredSourceLines.push({ line: sourceLine, afterPackOrder: liveTablePackBarrier, declaresReg: wasLocal ? null : liveTableFutureLocal });
+            } else {
+                out.push(sourceLine);
+            }
+            deferredLiveTableCopies.set(name, liveTableFutureLocal);
             expr.set(name, displayName);
             exprKinds.set(name, "table");
             continue;
@@ -1074,6 +1186,7 @@ function matchLocalRegisterProgram(source, leaf, stateName, returnName, options 
                 else out.push(sourceLine);
                 if (cleanupRegs.has(futureLocal)) deferredStorageCopies.set(futureLocal, name);
                 else if (terminalClosureFutureLocal === futureLocal) { deferredTerminalClosureCopies.set(futureLocal, name); terminalClosureLocals.add(futureLocal); }
+                else if (terminalUnusedFutureLocal === futureLocal) { deferredTerminalUnusedCopies.set(futureLocal, name); terminalUnusedLocals.add(futureLocal); }
             } else if (callResultIsDiscarded) {
                 if (isDeferredOrdinaryCall && pendingPacks.size) deferredSourceLines.push({ line: value, afterPackOrder: callPackBarrier });
                 else out.push(value);
@@ -1103,9 +1216,11 @@ function matchLocalRegisterProgram(source, leaf, stateName, returnName, options 
     if (options.allowNoLocals !== true && declaredCount === 0) { if (options.diagnostics) options.diagnostics.reason = "no proven source locals were recovered"; return null; }
     if (options.allowNoLocals === true && (!sawReturnReset || !sawStop)) { if (options.diagnostics) options.diagnostics.reason = `terminal bookkeeping incomplete: return=${sawReturnReset}, stop=${sawStop}`; return null; }
     if (deferredTerminalClosureCopies.size !== 0) { if (options.diagnostics) options.diagnostics.reason = "terminal closure handoff copy was not consumed"; return null; }
+    if (deferredTerminalUnusedCopies.size !== 0) { if (options.diagnostics) options.diagnostics.reason = "terminal unused-local handoff copy was not consumed"; return null; }
     if (deferredUpvalueClosureStores.size !== 0) { if (options.diagnostics) options.diagnostics.reason = "upvalue closure handoff store was not consumed"; return null; }
     if (deferredLiveTableCopies.size !== 0) { if (options.diagnostics) options.diagnostics.reason = "live table handoff copy was not consumed"; return null; }
     for (const reg of terminalClosureLocals) locals.delete(reg);
+    for (const reg of terminalUnusedLocals) locals.delete(reg);
     for (const reg of terminalTableLocals) locals.delete(reg);
     for (const reg of terminalNilLocals) locals.delete(reg);
     if (locals.size !== 0) { if (options.diagnostics) options.diagnostics.reason = `recovered locals still live at terminal: ${[...locals].join(",")}`; return null; }

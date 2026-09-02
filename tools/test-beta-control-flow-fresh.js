@@ -1071,8 +1071,8 @@ function vmStatesSource(states) {
         ],
     });
     const result = solveBetaControlFlow(source, parse(source));
-    assert.strictEqual(result.applied, true, "dead single nil register state should be ignored");
-    assert.strictEqual(result.source, 'local v1 = 1\n');
+    assert.strictEqual(result.applied, true, "unused nil source local should be preserved");
+    assert.match(result.source, /^local v\d+ = 1\nlocal v\d+\n$/);
 }
 
 {
@@ -1261,8 +1261,8 @@ function vmStatesSource(states) {
         ],
     });
     const result = solveBetaControlFlow(source, parse(source));
-    assert.strictEqual(result.applied, true, "dead call-result copy interrupted a pending multi-return pack");
-    assert.strictEqual(result.source, "local v1, v2 = f()\ng()\n");
+    assert.strictEqual(result.applied, true, "unused single-result local interrupted a pending multi-return pack");
+    assert.match(result.source, /^local v\d+, v\d+ = f\(\)\nlocal v\d+ = g\(\)\n$/);
 }
 {
     const source = vmStatesSource({
@@ -1314,8 +1314,8 @@ function vmStatesSource(states) {
         ],
     });
     const result = solveBetaControlFlow(source, parse(source));
-    assert.strictEqual(result.applied, true, "dead pure TEMP interrupted a pending multi-return pack");
-    assert.strictEqual(result.source, "local v1, v2 = f()\n");
+    assert.strictEqual(result.applied, true, "unused pure local interrupted a pending multi-return pack");
+    assert.match(result.source, /^local v\d+, v\d+ = f\(\)\nlocal t\d+ = \{\}\n$/);
 }
 {
     const source = vmStatesSource({
@@ -1361,4 +1361,114 @@ function vmStatesSource(states) {
     assert.strictEqual(result.applied, true, "terminal return did not survive pending-pack flush");
     assert.ok(result.source.indexOf('f()') < result.source.indexOf('return 321'), result.source);
     assert.ok(result.source.trimEnd().endsWith('return 321'), result.source);
-}console.log("fresh beta direct-global-call regression: ok");
+}
+{
+    const source = vmStatesSource({
+        1: [
+            'r1 = "f"', 'r2 = _env[r1]',
+            'r3 = { r2() }',
+            'ReturnVal = r3[2]', 'r4 = ReturnVal',
+            'ReturnVal = r3[1]', 'r5 = ReturnVal',
+            'ReturnVal = {}', 'state = nil',
+        ],
+    });
+    const result = solveBetaControlFlow(source, parse(source));
+    assert.strictEqual(result.applied, true, "unused multi-return source declaration was not preserved");
+    assert.match(result.source, /^local v\d+, v\d+ = f\(\)\n$/);
+}
+{
+    const source = vmStatesSource({
+        1: [
+            'r1 = "f"', 'r2 = _env[r1]',
+            'r3 = { r2() }', 'ReturnVal = r3[2]', 'r4 = ReturnVal',
+            'ReturnVal = {}', 'r5 = ReturnVal',
+            'r6 = { 1 }', 'r5 = r6',
+            'r7 = { 2 }', 'r5 = r7',
+            'r8 = "x"', 'r9 = 3', 'r5[r8] = r9',
+            'r10 = r5[r8]',
+            'ReturnVal = r3[1]', 'r3 = ReturnVal',
+            'r3 = nil', 'r4 = nil',
+            'ReturnVal = {}', 'state = nil',
+        ],
+    });
+    const result = solveBetaControlFlow(source, parse(source));
+    assert.strictEqual(result.applied, true, "overwritten table source statements were eliminated");
+    const tableDecl = result.source.indexOf('local t1 = {}');
+    const firstAssign = result.source.indexOf('t1 = { 1 }');
+    const secondAssign = result.source.indexOf('t1 = { 2 }');
+    const fieldWrite = result.source.indexOf('t1.x = 3');
+    assert.ok(tableDecl >= 0 && firstAssign > tableDecl && secondAssign > firstAssign && fieldWrite > secondAssign, result.source);
+    assert.match(result.source, /local v\d+ = t1\.x/);
+}
+
+{
+    const source = vmStatesSource({
+        1: [
+            'r1 = 42',
+            'ReturnVal = {}', 'state = nil',
+        ],
+    });
+    const result = solveBetaControlFlow(source, parse(source));
+    assert.strictEqual(result.applied, true, "unused promoted primitive local was eliminated");
+    assert.match(result.source, /^local v\d+ = 42\n$/);
+}
+{
+    const source = vmStatesSource({
+        1: [
+            'RegisterOverflow[25] = 42',
+            'ReturnVal = {}', 'state = nil',
+        ],
+    });
+    const result = solveBetaControlFlow(source, parse(source));
+    assert.strictEqual(result.applied, true, "unused overflow primitive local was eliminated");
+    assert.match(result.source, /^local v\d+ = 42\n$/);
+}
+{
+    const source = vmStatesSource({
+        1: [
+            'r1 = "f"', 'r2 = _env[r1]',
+            'RegisterOverflow[25] = { r2() }',
+            'ReturnVal = RegisterOverflow[25][2]', 'RegisterOverflow[26] = ReturnVal',
+            'ReturnVal = RegisterOverflow[25][1]', 'RegisterOverflow[27] = ReturnVal',
+            'ReturnVal = {}', 'state = nil',
+        ],
+    });
+    const result = solveBetaControlFlow(source, parse(source));
+    assert.strictEqual(result.applied, true, "unused overflow multi-return declaration was not preserved");
+    assert.match(result.source, /^local v\d+, v\d+ = f\(\)\n$/);
+}
+{
+    const source = vmStatesSource({
+        1: [
+            'ReturnVal = {}', 'RegisterOverflow[25] = ReturnVal',
+            'RegisterOverflow[26] = { 1 }', 'RegisterOverflow[25] = RegisterOverflow[26]',
+            'RegisterOverflow[27] = { 2 }', 'RegisterOverflow[25] = RegisterOverflow[27]',
+            'RegisterOverflow[28] = "x"', 'RegisterOverflow[29] = 3',
+            'RegisterOverflow[25][RegisterOverflow[28]] = RegisterOverflow[29]',
+            'RegisterOverflow[30] = RegisterOverflow[25][RegisterOverflow[28]]',
+            'ReturnVal = {}', 'state = nil',
+        ],
+    });
+    const result = solveBetaControlFlow(source, parse(source));
+    assert.strictEqual(result.applied, true, "overflow table source statements were eliminated");
+    const tableDecl = result.source.indexOf('local t1 = {}');
+    const firstAssign = result.source.indexOf('t1 = { 1 }');
+    const secondAssign = result.source.indexOf('t1 = { 2 }');
+    const fieldWrite = result.source.indexOf('t1.x = 3');
+    assert.ok(tableDecl >= 0 && firstAssign > tableDecl && secondAssign > firstAssign && fieldWrite > secondAssign, result.source);
+    assert.match(result.source, /local v\d+ = t1\.x/);
+}
+{
+    const source = vmStatesSource({
+        1: [
+            'r1 = "f"', 'r2 = _env[r1]',
+            'ReturnVal = r2()',
+            'ReturnVal = {}', 'state = nil',
+        ],
+    });
+    const result = solveBetaControlFlow(source, parse(source));
+    assert.strictEqual(result.applied, true, "bare source call should still recover");
+    assert.strictEqual(result.source, 'f()\n');
+}
+
+console.log("fresh beta direct-global-call regression: ok");
