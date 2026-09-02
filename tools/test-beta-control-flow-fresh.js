@@ -1529,4 +1529,48 @@ function vmStatesSource(states) {
     assert.strictEqual(result.source, 'print(math)\n');
 }
 
+
+{
+    const source = vmStatesSource({
+        1: [
+            'r4 = allocUpvalue()', 'r5 = allocUpvalue()',
+            'state = 1', 'upvalueValues[r4] = state',
+            'state = 2', 'upvalueValues[r5] = state',
+            'r2 = upvalueValues[r4]',
+            'state = r2 and 2 or 3', 'ReturnVal = r2',
+        ],
+        2: [
+            'r2 = upvalueValues[r5]', 'ReturnVal = r2', 'state = 3',
+        ],
+        3: [
+            'r3 = ReturnVal', 'r4 = releaseUpvalue(r4)', 'r5 = releaseUpvalue(r5)',
+            'r3 = nil', 'ReturnVal = {}', 'state = nil',
+        ],
+    });
+    const result = solveBetaControlFlow(source, parse(source));
+    assert.strictEqual(result.applied, true, "short-circuit RHS upvalue TEMP was not flattened");
+    assert.match(result.source, /local v\d+ = \(v\d+ and v\d+\)/);
+}
+{
+    const source = vmStatesSource({
+        1: [
+            'r4 = allocUpvalue()', 'r5 = allocUpvalue()',
+            'state = 1', 'upvalueValues[r4] = state',
+            'state = 2', 'upvalueValues[r5] = state',
+            'r2 = upvalueValues[r4]',
+            'state = r2 and 3 or 2', 'ReturnVal = r2',
+        ],
+        2: [
+            'r2 = upvalueValues[r5]', 'ReturnVal = r2', 'state = 3',
+        ],
+        3: [
+            'r3 = ReturnVal', 'r4 = releaseUpvalue(r4)', 'r5 = releaseUpvalue(r5)',
+            'r3 = nil', 'ReturnVal = {}', 'state = nil',
+        ],
+    });
+    const result = solveBetaControlFlow(source, parse(source));
+    assert.strictEqual(result.applied, true, "short-circuit OR RHS upvalue TEMP was not flattened");
+    assert.match(result.source, /local v\d+ = \(v\d+ or v\d+\)/);
+}
+
 console.log("fresh beta direct-global-call regression: ok");

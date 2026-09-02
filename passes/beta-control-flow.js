@@ -800,9 +800,13 @@ function matchLocalRegisterProgram(source, leaf, stateName, returnName, options 
             if (typeof left !== "string" || typeof right !== "string") return null;
             return `(${left} ${rhs.operator} ${right})`;
         }
-        if (rhs?.type === "LogicalExpression" && isIdentifier(rhs.left) && isIdentifier(rhs.right)) {
+        if (rhs?.type === "LogicalExpression" && isIdentifier(rhs.left)) {
+            const rightIsIdentifier = isIdentifier(rhs.right);
+            const rightIsCompilerUpvalueRead = rhs.right?.type === "IndexExpression" &&
+                isIdentifier(rhs.right.base, "upvalueValues") && isIdentifier(rhs.right.index);
+            if (!rightIsIdentifier && !rightIsCompilerUpvalueRead) return null;
             const left = expr.get(rhs.left.name) ?? (locals.has(rhs.left.name) ? localName(rhs.left.name) : null);
-            const right = expr.get(rhs.right.name) ?? (locals.has(rhs.right.name) ? localName(rhs.right.name) : null);
+            const right = renderRhs(rhs.right);
             if (left == null || right == null || typeof rhs.operator !== "string") return null;
             return `(${left} ${rhs.operator} ${right})`;
         }
@@ -1643,9 +1647,25 @@ function flattenLogicalRootLeaf(leaves, entryId, stateName, returnName, diagnost
 
             const alternateTransition = findTransition(alternateBody);
             const alternateStatements = alternateBody.filter((_, index) => index !== alternateTransition.index);
-            if (alternateStatements.length !== 1 || !isSingleAssignment(alternateStatements[0], returnName)) return null;
-            const fallback = alternateStatements[0].init[0];
-            if (!(isIdentifier(fallback) || isPrimitiveLiteral(fallback))) return null;
+            let fallback = null;
+            if (alternateStatements.length === 1 && isSingleAssignment(alternateStatements[0], returnName)) {
+                fallback = alternateStatements[0].init[0];
+                if (!(isIdentifier(fallback) || isPrimitiveLiteral(fallback))) return null;
+            } else if (alternateStatements.length === 2) {
+                const loadStatement = alternateStatements[0];
+                const returnStatement = alternateStatements[1];
+                if (!isSingleAssignment(loadStatement) || !isSingleAssignment(returnStatement, returnName)) return null;
+                const loadDest = loadStatement.variables[0];
+                const loadRhs = loadStatement.init[0];
+                const returnRhs = returnStatement.init[0];
+                const isCompilerUpvalueRead = isIdentifier(loadDest) && loadRhs?.type === "IndexExpression" &&
+                    isIdentifier(loadRhs.base, "upvalueValues") && isIdentifier(loadRhs.index) &&
+                    isIdentifier(returnRhs, loadDest.name);
+                if (!isCompilerUpvalueRead) return null;
+                fallback = loadRhs;
+            } else {
+                return null;
+            }
 
             let primaryAssignmentIndex = -1;
             for (let i = body.length - 1; i >= 0; i--) {

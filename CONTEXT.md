@@ -1424,6 +1424,8 @@ Fresh CF currently has two limited mechanisms for compiler-generated logical con
 
 It reconstructs an `and`/`or` expression and continues flattening. When strict flattening consumes every normalized root state, the resulting straight-line leaf is now handed to the full `matchLocalRegisterProgram` recovery path before the narrower DAG matcher. This lets proven short-circuit regions compose with large post-join programs containing arithmetic, comparisons, calls, multi-return packs, globals, and normal local lifetimes.
 
+A short-circuit alternate branch may also contain the compiler-only captured-local transport `temp = upvalueValues[cell]; ReturnVal = temp` before its jump to the join. Fresh CF proves this exact two-statement shape structurally, embeds the upvalue read as the lazy logical RHS, and later resolves it through the already-proven upvalue cell binding. Arbitrary extra branch statements are not accepted by this rule. A real Medium fixture for captured `a and b` now recovers as `(v1 and v2)`, and focused synthetic coverage verifies the symmetric captured `a or b` polarity as well; plain-local logical expressions and non-logical captured reads remain unchanged.
+
 Logical flattening must also distinguish compiler POS preservation from source-local ownership. A cleanup-backed register assignment such as `R = state` is treated as temporary POS preservation rather than a source-local declaration when the same value is uniquely used only by the compiler restore `state = R` before `R` is redefined. A later proven definition can then establish the real source lifetime.
 
 This is NOT a general CFG structurer.
@@ -1729,6 +1731,8 @@ A full opcode-style fixture containing globals, nil/boolean/constants, arithmeti
 A six-line call fixture (`floor(pi)`, one result, two results, three results) was also randomized 20 times; all 20 layouts passed, including 10 layouts that previously failed because result packs and delayed source-storage copies were interleaved.
 
 The full 15-state opcode/call/closure/table fixture was recompiled with Medium and now preserves terminal source aliases as generated locals: a `math` binding, `newproxy` binding, `math.floor` member binding, `math.pi` member binding, and `false` binding are emitted separately and reused by later expressions/calls. The recovered output contains no direct `math.pi` or `math.floor` substitutions in those later operations, still completes all 15 states, and parses successfully. Focused negatives verify that ordinary one-use call arguments, short-circuit transports, table-constructor operand temps, and interleaved return-pack callables are not falsely promoted to source aliases.
+
+A minimal captured-upvalue short-circuit fixture (`local x = a and b` where `a`/`b` are captured by a child closure) now passes Medium -> normal -> fresh CF, with focused regression coverage for both `and` and `or` branch polarity. The previously failing alternate state `temp = upvalueValues[cell]; ReturnVal = temp; state = join` is folded into the logical RHS without exposing the compiler TEMP. A larger 130-state stress fixture advances past this shape but still fails later at root state 16 where both branch successors are themselves branches; that nested/chained logical CFG is a separate unsupported shape and was not changed by this fix.
 
 ## 31. Current Baseline / History That Matters
 
