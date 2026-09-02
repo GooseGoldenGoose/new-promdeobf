@@ -2,6 +2,43 @@
 
 This file is the authoritative handoff for this project. Read it completely before project work. Keep it current. Replace stale facts instead of appending contradictory history.
 
+## 0. New Chat Bootstrap - Read This First
+
+This file MUST be sufficient for a brand-new chat with no useful prior conversation memory. A new chat should be able to read this file once and continue the project without asking the user to repeat project history, architecture, compiler behavior, workflow, or current decisions.
+
+On a new chat:
+1. Read ALL of `CONTEXT.md` before changing project files.
+2. Treat this file as authoritative over remembered/guessed prior-chat details.
+3. Run `git status --short --branch` and `git log -5 --oneline`.
+4. Inspect the actual current implementation before editing.
+5. If this file and code disagree, do NOT silently choose one: inspect Git history/compiler source/tests, determine the current truth, then update this file.
+6. Do not ask the user to re-explain facts already recorded here.
+7. Do not assume old experimental branches/features still exist just because a prior chat discussed them. Current tracked code + this handoff define reality.
+
+A new chat should understand from this file alone:
+- user communication/workflow rules
+- repository and compiler-material paths
+- exact project goal and semantic safety requirements
+- how the Prometheus compiler turns source into VM states/register operations
+- TEMP vs VAR vs POS vs RETURN vs overflow storage
+- source-local promotion, reassignment, cleanup, and captured-local behavior
+- globals, calls, method calls, tables, indexing, multi-return, varargs, closures and upvalues
+- compiler control-flow templates for if/and/or/loops/break/continue/return
+- every active normal-deobfuscation stage and why it exists
+- how normalized state recovery and register scheduling work
+- how fresh CF performs structural pattern reversal + semantic proof
+- what fresh CF currently supports and what remains fail-closed
+- how to build tiny compiler fixtures and verify new theories
+- current Git/context maintenance rules and known unrelated dirty files
+
+Do not depend on hidden chat context for any durable project fact. When a new durable fact is learned, write it here in the appropriate existing section and remove/update stale contradictory text.
+
+Current intended baseline:
+- branch: `main`
+- fresh-CF behavior is the restored nil-lifetime baseline from commit `51e9f5b`, with RegisterOverflow support retained and improved diagnostics retained
+- later context-only commits do not change solver behavior
+- unrelated tracked user edits in `main.js` and `formater/input.txt` must be preserved unless explicitly requested otherwise
+
 ## 1. Communication Rules - Caveman Mode
 
 For project work:
@@ -313,6 +350,117 @@ Compiler behavior:
 7. force-free VAR
 
 Therefore source-local recovery is a lifetime/ownership problem, not just a name problem.
+
+### 7.2.1 Concrete source-local VM examples
+
+These examples are important because future work must recognize the compiler's ownership pattern, not invent a new rule from one random register number. Physical register names and state IDs vary between obfuscations.
+
+Source:
+
+```lua
+local a = 1
+print(a)
+```
+
+One observed normalized Prometheus shape was conceptually:
+
+```lua
+state = 1
+r2 = state              -- r2 is source VAR storage for a
+ReturnVal = "print"
+state = _env[ReturnVal]
+ReturnVal = state(r2)
+r2 = nil                -- lexical lifetime cleanup for a
+```
+
+Important interpretation:
+- `state`/`ReturnVal` may be borrowed TEMP transport
+- `r2` is persistent source-local storage in this shape
+- the final `r2 = nil` is compiler lifetime cleanup, not necessarily source code `a = nil`
+- other randomized compilations may promote a normal expression register directly to VAR and omit an explicit copy
+
+Source:
+
+```lua
+local a = {}
+a = {1, 2}
+a = {se = function() end}
+a:se()
+```
+
+Observed normalized root-state shape, simplified:
+
+```lua
+state = {}
+r3 = state
+
+state = { ReturnVal, r4 }
+r3 = state
+
+ReturnVal = { [r4] = r1 }
+r3 = ReturnVal
+
+r4 = "se"
+r4 = r3[r4]
+r4 = r4(r3)
+
+r3 = nil
+```
+
+Interpretation:
+- `r3` is the SAME source local `a` across all three assignments
+- reassigning the local does not create a new source variable
+- temporary RHS values may travel through POS/RETURN or ordinary TEMP storage before copying into `r3`
+- `r4 = "se"; r4 = r3[r4]; r4 = r4(r3)` is the compiler's SELF/namecall-style lowering of `a:se()`
+- final `r3 = nil` ends the direct local lifetime
+
+Source:
+
+```lua
+local a = function(x)
+    return x
+end
+print(a)
+```
+
+Conceptual normalized shape:
+
+```lua
+state = createClosureN(CHILD_ENTRY, {})
+r2 = state
+ReturnVal = "print"
+state = _env[ReturnVal]
+ReturnVal = state(r2)
+r2 = nil
+
+-- child entry
+r1 = args[1]
+ReturnVal = { r1 }
+state = nil
+```
+
+This proves both:
+- outer `r2` is source-local closure storage
+- fixed function arguments are loaded from `args[index]` in the child VM function
+
+Source:
+
+```lua
+local a = function(...)
+    return ...
+end
+print(a)
+```
+
+Conceptual child shape uses the compiler vararg storage and RETURN_ALL packing, commonly normalized around:
+
+```lua
+r2 = { select(1, unpack(args)) }
+ReturnVal = { unpack(r2) }
+state = nil
+```
+
+Do not hardcode these exact register IDs. These examples document semantic roles/templates only.
 
 ### 7.3 Nil-only locals
 
