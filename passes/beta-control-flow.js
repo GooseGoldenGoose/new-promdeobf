@@ -567,6 +567,28 @@ function matchLocalRegisterProgram(source, leaf, stateName, returnName, options 
         }
         return false;
     }
+    function hasFuturePendingPackSlotBeforeStateTouch(startIndex) {
+        if (pendingPacks.size !== 1) return false;
+        const pendingPack = [...pendingPacks.values()][0];
+        for (let cursor = startIndex + 1; cursor < leaf.length; cursor++) {
+            const statement = leaf[cursor];
+            if (!isSingleAssignment(statement)) {
+                if (nodeUsesIdentifier(statement?.init, stateName)) return false;
+                continue;
+            }
+            const dest = statement.variables[0];
+            const rhs = statement.init[0];
+            if (isIdentifier(dest, stateName) || nodeUsesIdentifier(rhs, stateName) ||
+                (dest?.type === "IndexExpression" && nodeUsesIdentifier(dest, stateName))) return false;
+            if (rhs?.type === "IndexExpression" && isIdentifier(rhs.base, pendingPack.packReg) &&
+                rhs.index?.type === "NumericLiteral") {
+                const slot = Number(rhs.index.value);
+                return Number.isInteger(slot) && slot > 0 && !pendingPack.slots.has(slot);
+            }
+            if (isIdentifier(dest, pendingPack.packReg)) return false;
+        }
+        return false;
+    }
 
     function isDeadPurePendingTemp(index, name, rhs) {
         if (!isPurePendingTempRhs(rhs)) return false;
@@ -729,6 +751,24 @@ function matchLocalRegisterProgram(source, leaf, stateName, returnName, options 
             predeclareNilReads(value, index);
         }
     }
+    function reservePendingPackDisplayNamesThrough(targetPack, targetSlot) {
+        const packs = [...pendingPacks.values()].sort((a, b) => a.order - b.order);
+        for (const pendingPack of packs) {
+            if (pendingPack.order > targetPack.order) break;
+            const slots = [...pendingPack.slots.keys()].sort((a, b) => a - b);
+            for (const slotNumber of slots) {
+                if (pendingPack.order === targetPack.order && slotNumber > targetSlot) break;
+                const slotInfo = pendingPack.slots.get(slotNumber);
+                if (!slotInfo?.localReg || typeof slotInfo.displayName === "string") continue;
+                if (localNames.has(slotInfo.localReg)) slotInfo.displayName = localName(slotInfo.localReg);
+                else {
+                    slotInfo.displayName = `v${++valueLocalCount}`;
+                    declaredCount++;
+                }
+            }
+        }
+        return targetPack.slots.get(targetSlot)?.displayName ?? null;
+    }
     function flushPendingPacks() {
         if (!pendingPacks.size) return true;
         const packs = [...pendingPacks.values()].sort((a, b) => a.order - b.order);
@@ -751,6 +791,13 @@ function matchLocalRegisterProgram(source, leaf, stateName, returnName, options 
                     }
                 }
                 const names = slotInfos.map(slot => slot.displayName);
+                for (const slot of slotInfos) {
+                    if (!locals.has(slot.localReg)) continue;
+                    localNames.set(slot.localReg, slot.displayName);
+                    expr.set(slot.localReg, slot.displayName);
+                    exprKinds.set(slot.localReg, "value");
+                    exprMeta.delete(slot.localReg);
+                }
                 out.push(`local ${names.join(", ")} = ${pendingPack.call}`);
                 consumedPackRegs.add(pendingPack.packReg);
             }
@@ -933,6 +980,7 @@ function matchLocalRegisterProgram(source, leaf, stateName, returnName, options 
         const isDeadRegisterCopy = isIdentifier(rhs) && name !== stateName && name !== returnName && !cleanupRegs.has(name) && hasOnlyDeadCopyUses(index, name);
         const isKnownUpvalueRead = rhs?.type === "IndexExpression" && isIdentifier(rhs.base, "upvalueValues") && isIdentifier(rhs.index) && typeof upvalueCells.get(rhs.index.name) === "string";
         const isStableGlobalLoad = pendingPacks.size > 0 && isVmRegisterName(name) && rhs?.type === "IndexExpression" && isIdentifier(rhs.base, "_env") && isIdentifier(rhs.index) && typeof expr.get(rhs.index.name) === "string" && !rhsDependsOnPendingPack(rhs.index);
+        const isBorrowedStateGlobalLoadBeforePackSlot = pendingPacks.size > 0 && name === stateName && rhs?.type === "IndexExpression" && isIdentifier(rhs.base, "_env") && isIdentifier(rhs.index) && typeof expr.get(rhs.index.name) === "string" && !rhsDependsOnPendingPack(rhs.index) && hasFuturePendingPackSlotBeforeStateTouch(index);
         const isUpvalueAllocation = rhs?.type === "CallExpression" && isIdentifier(rhs.base, "allocUpvalue") && (rhs.arguments || []).length === 0 && name !== stateName && name !== returnName && !upvalueCells.has(name);
         const releaseArgs = rhs?.type === "CallExpression" && isIdentifier(rhs.base, "releaseUpvalue") ? (rhs.arguments || []) : null;
         const isKnownUpvalueRelease = releaseArgs?.length === 1 && isIdentifier(releaseArgs[0], name) && name !== stateName && name !== returnName && upvalueCells.has(name);
@@ -974,6 +1022,7 @@ function matchLocalRegisterProgram(source, leaf, stateName, returnName, options 
             (rhs?.type === "NilLiteral" && cleanupRegs.has(name)) ||
             isKnownUpvalueRead ||
             isStableGlobalLoad ||
+            isBorrowedStateGlobalLoadBeforePackSlot ||
             isUpvalueAllocation ||
             isKnownUpvalueRelease ||
             isDeferredClosureCreation ||
@@ -1020,7 +1069,21 @@ function matchLocalRegisterProgram(source, leaf, stateName, returnName, options 
             else if (isDeferredTerminalClosureCopy) deferredTerminalClosureCopies.delete(name);
             else deferredTerminalUnusedCopies.delete(name);
             if (!locals.has(name)) return null;
-            expr.set(name, localName(name));
+            let displayName = localName(name);
+            if (isDeferredStorageCopy && isPackSlotCopy) {
+                const meta = exprMeta.get(rhs.name);
+                const pendingPack = meta ? pendingPacks.get(meta.packReg) : null;
+                if (pendingPack && meta) {
+                    const slotInfo = pendingPack.slots.get(meta.slot);
+                    if (!slotInfo || slotInfo.localReg !== name) return null;
+                    if (meta.slot === 1) {
+                        displayName = reservePendingPackDisplayNamesThrough(pendingPack, meta.slot);
+                        if (typeof displayName !== "string") return null;
+                        localNames.set(name, displayName);
+                    }
+                }
+            }
+            expr.set(name, displayName);
             exprKinds.set(name, "value");
             continue;
         }

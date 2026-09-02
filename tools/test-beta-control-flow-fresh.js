@@ -1645,4 +1645,22 @@ function vmStatesSource(states) {
     assert.strictEqual(result.mode, "fresh-multistate-logical");
     assert.strictEqual(result.source, 'local v1 = (a and (b and c))\nlocal v2 = (d or (e or f))\n');
 }
+{
+    const source = vmStatesSource({
+        1: [
+            'r1 = "f"', 'r2 = _env[r1]', 'r3 = "x"',
+            'r4 = { r2(r3) }',
+            'ReturnVal = r4[1]', 'r5 = ReturnVal',
+            'ReturnVal = "print"', 'state = _env[ReturnVal]',
+            'r6 = r4[2]', 'r6 = nil',
+            'r7 = "y"', 'r8 = { r5(r7) }',
+            'ReturnVal = state(unpack(r8))',
+            'r5 = nil', 'ReturnVal = {}', 'state = nil',
+        ],
+    });
+    const result = solveBetaControlFlow(source, parse(source));
+    assert.strictEqual(result.applied, true, "borrowed state global load split a pending multi-return declaration");
+    assert.strictEqual(result.mode, "fresh-register-locals");
+    assert.strictEqual(result.source, 'local v1, v2 = f("x")\nprint(v1("y"))\n');
+}
 console.log("fresh beta direct-global-call regression: ok");
