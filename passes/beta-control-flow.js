@@ -338,6 +338,7 @@ function matchLocalRegisterProgram(source, leaf, stateName, returnName, options 
     const upvalueCells = new Map();
     const predeclaredNilLocals = new Set();
     const deferredStorageCopies = new Map();
+    const deferredSourceLines = [];
 
     function localName(name) { return localNames.get(name) || name; }
     function nodeUsesIdentifier(node, name) {
@@ -456,9 +457,15 @@ function matchLocalRegisterProgram(source, leaf, stateName, returnName, options 
             const names = slots.map(i => pendingPack.slots.get(i).displayName);
             out.push(`local ${names.join(", ")} = ${pendingPack.call}`);
             consumedPackRegs.add(pendingPack.packReg);
+            for (let i = 0; i < deferredSourceLines.length;) {
+                if (deferredSourceLines[i].afterPackOrder <= pendingPack.order) {
+                    out.push(deferredSourceLines[i].line);
+                    deferredSourceLines.splice(i, 1);
+                } else i++;
+            }
         }
         pendingPacks.clear();
-        return true;
+        return deferredSourceLines.length === 0;
     }
     function memberMeta(rhs) {
         if (rhs?.type !== "IndexExpression" || !isIdentifier(rhs.base) || !isIdentifier(rhs.index) || rhs.base.name === "_env") return null;
@@ -610,12 +617,18 @@ function matchLocalRegisterProgram(source, leaf, stateName, returnName, options 
         const isUpvalueAllocation = rhs?.type === "CallExpression" && isIdentifier(rhs.base, "allocUpvalue") && (rhs.arguments || []).length === 0 && name !== stateName && name !== returnName && !upvalueCells.has(name);
         const releaseArgs = rhs?.type === "CallExpression" && isIdentifier(rhs.base, "releaseUpvalue") ? (rhs.arguments || []) : null;
         const isKnownUpvalueRelease = releaseArgs?.length === 1 && isIdentifier(releaseArgs[0], name) && name !== stateName && name !== returnName && upvalueCells.has(name);
+        const isClosureCreation = rhs?.type === "CallExpression" && isIdentifier(rhs.base) && /^createClosure\d*$/.test(rhs.base.name);
+        const closureFutureLocal = isClosureCreation ? findFutureCleanupCopy(index, name) : null;
+        const outstandingPackRegs = [...exprKinds.entries()].filter(([reg, kind]) => kind === "return-pack" && !consumedPackRegs.has(reg)).map(([reg]) => reg);
+        const closurePackBarrier = isClosureCreation && outstandingPackRegs.length ? Math.max(...outstandingPackRegs.map(reg => packCreationOrder.get(reg) || 0)) : 0;
+        const isDeferredClosureCreation = !!closureFutureLocal && closurePackBarrier > 0 && outstandingPackRegs.every(reg => pendingPacks.has(reg));
         const isPendingNeutralBookkeeping =
             (isIdentifier(rhs, "args") && name !== stateName && name !== returnName) ||
             (rhs?.type === "NilLiteral" && cleanupRegs.has(name)) ||
             isKnownUpvalueRead ||
             isUpvalueAllocation ||
             isKnownUpvalueRelease ||
+            isDeferredClosureCreation ||
             isDeferredStorageCopy;
         if (pendingPacks.size && !isPackIndex && !isPackSlotCopy && !isReturnPackCreation && !isPendingNeutralBookkeeping && !flushPendingPacks()) return null;
 
@@ -752,13 +765,11 @@ function matchLocalRegisterProgram(source, leaf, stateName, returnName, options 
             const futureLocal = findFutureCleanupCopy(index, name);
             if (futureLocal) {
                 let displayName;
-                if (locals.has(futureLocal)) {
-                    displayName = allocateLocal(futureLocal, "value");
-                    out.push(`${displayName} = ${value}`);
-                } else {
-                    displayName = allocateLocal(futureLocal, "value");
-                    out.push(`local ${displayName} = ${value}`);
-                }
+                const sourceLine = locals.has(futureLocal)
+                    ? `${allocateLocal(futureLocal, "value")} = ${value}`
+                    : `local ${allocateLocal(futureLocal, "value")} = ${value}`;
+                if (isClosureCreation && pendingPacks.size) deferredSourceLines.push({ line: sourceLine, afterPackOrder: closurePackBarrier });
+                else out.push(sourceLine);
                 deferredStorageCopies.set(futureLocal, name);
             } else if (!valueUsedBeforeOverwrite(index, name)) {
                 out.push(value);

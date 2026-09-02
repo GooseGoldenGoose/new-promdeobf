@@ -1195,4 +1195,43 @@ function vmStatesSource(states) {
     assert.strictEqual(result.applied, true, "proven upvalue release interrupted a pending multi-return pack");
     assert.ok(result.source.includes(' = f()'), result.source);
 }
+{
+    const source = vmStatesSource({
+        1: [
+            'r1 = "f"', 'r2 = _env[r1]', 'r3 = { r2() }',
+            'ReturnVal = r3[2]', 'r4 = ReturnVal',
+            'ReturnVal = createClosure4(2, {})', 'r5 = ReturnVal',
+            'state = r3[1]', 'r6 = state', 'r3 = state',
+            'r4 = nil', 'r6 = nil', 'r5 = nil',
+            'ReturnVal = {}', 'state = nil',
+        ],
+        2: ['state = 123', 'ReturnVal = { state }', 'state = nil'],
+    });
+    const result = solveBetaControlFlow(source, parse(source));
+    assert.strictEqual(result.applied, true, "closure creation interrupted a pending multi-return pack");
+    const callIndex = result.source.indexOf('= f()');
+    const closureIndex = result.source.indexOf('function()');
+    assert.ok(callIndex >= 0 && closureIndex > callIndex, result.source);
+}
+{
+    const source = vmStatesSource({
+        1: [
+            'r1 = "f"', 'r2 = _env[r1]', 'r7 = "g"', 'r8 = _env[r7]',
+            'r3 = { r2() }', 'ReturnVal = r3[2]', 'r4 = ReturnVal',
+            'ReturnVal = createClosure4(2, {})', 'r5 = ReturnVal',
+            'r9 = { r8() }', 'ReturnVal = r9[2]', 'r10 = ReturnVal',
+            'state = r3[1]', 'r6 = state', 'r3 = state',
+            'state = r9[1]', 'r11 = state', 'r9 = state',
+            'r4 = nil', 'r6 = nil', 'r10 = nil', 'r11 = nil', 'r5 = nil',
+            'ReturnVal = {}', 'state = nil',
+        ],
+        2: ['state = 123', 'ReturnVal = { state }', 'state = nil'],
+    });
+    const result = solveBetaControlFlow(source, parse(source));
+    assert.strictEqual(result.applied, true, "later pack crossed deferred closure barrier");
+    const firstCall = result.source.indexOf('= f()');
+    const closure = result.source.indexOf('function()');
+    const secondCall = result.source.indexOf('= g()');
+    assert.ok(firstCall >= 0 && closure > firstCall && secondCall > closure, result.source);
+}
 console.log("fresh beta direct-global-call regression: ok");
