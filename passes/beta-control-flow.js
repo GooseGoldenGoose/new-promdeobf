@@ -2032,7 +2032,8 @@ function decodeLogicalStateTransition(rhs) {
     return { conditionRegister: left.left.name, onTrue, onFalse };
 }
 
-function matchMultiStateLogicalLocals(source, stateWhile, stateName, returnName) {
+function matchMultiStateLogicalLocals(source, stateWhile, stateName, returnName, options = {}) {
+    const allowConditionalIf = options.allowConditionalIf === true;
     const leaves = extractNormalizedStateLeaves(stateWhile, stateName);
     if (!leaves || leaves.size < 2 || !leaves.has(1)) return null;
 
@@ -2045,7 +2046,7 @@ function matchMultiStateLogicalLocals(source, stateWhile, stateName, returnName)
             if (isIdentifier(dest) && dest.name !== stateName && dest.name !== returnName && rhs?.type === "NilLiteral") cleanupRegs.add(dest.name);
         }
     }
-    if (!cleanupRegs.size) return null;
+    if (!cleanupRegs.size && !allowConditionalIf) return null;
 
     const nonNilDefinitionCount = new Map([...cleanupRegs].map(name => [name, 0]));
     for (const body of leaves.values()) {
@@ -2113,7 +2114,7 @@ function matchMultiStateLogicalLocals(source, stateWhile, stateName, returnName)
     const indegree = new Map();
     for (const id of reachable) indegree.set(id, (predecessors.get(id) || []).filter(p => reachable.has(p)).length);
     const ready = [1];
-    const incoming = new Map([[1, [{ env: new Map(), markers: [] }]]]);
+    const incoming = new Map([[1, [{ env: new Map(), markers: [], effects: [] }]]]);
     const processed = new Set();
     const locals = new Set();
     const localNames = new Map();
@@ -2125,6 +2126,7 @@ function matchMultiStateLogicalLocals(source, stateWhile, stateName, returnName)
     const out = [];
     let valueCount = 0;
     let tableCount = 0;
+    let conditionalIfCount = 0;
 
     function displayLocal(reg) { return localNames.get(reg) || reg; }
     function resolveId(name, env) {
@@ -2254,7 +2256,11 @@ function matchMultiStateLogicalLocals(source, stateWhile, stateName, returnName)
     }
 
     function mergeCandidates(candidates, joinId) {
-        if (candidates.length === 1) return { env: new Map(candidates[0].env), markers: [...(candidates[0].markers || [])] };
+        if (candidates.length === 1) return {
+            env: new Map(candidates[0].env),
+            markers: [...(candidates[0].markers || [])],
+            effects: [...(candidates[0].effects || [])],
+        };
         if (candidates.length !== 2) return null;
         const a = candidates[0], b = candidates[1];
         const am = a.markers || [], bm = b.markers || [];
@@ -2266,6 +2272,15 @@ function matchMultiStateLogicalLocals(source, stateWhile, stateName, returnName)
         const t = al.truth ? a : b;
         const f = al.truth ? b : a;
         const cond = al.condition;
+        const te = t.effects || [], fe = f.effects || [];
+        let effectPrefix = 0;
+        while (effectPrefix < te.length && effectPrefix < fe.length && te[effectPrefix] === fe[effectPrefix]) effectPrefix++;
+        const trueEffects = te.slice(effectPrefix), falseEffects = fe.slice(effectPrefix);
+        const hasConditionalEffects = trueEffects.length > 0 || falseEffects.length > 0;
+        if (hasConditionalEffects) {
+            if (!allowConditionalIf || prefix !== 0) return null;
+            if (trueEffects.length > 0 && falseEffects.length > 0) return null;
+        }
         const keys = new Set([...t.env.keys(), ...f.env.keys()]);
         keys.delete(stateName);
         const env = new Map();
@@ -2281,12 +2296,25 @@ function matchMultiStateLogicalLocals(source, stateWhile, stateName, returnName)
                 // before redefinition will still fail closed.
                 continue;
             }
-            if (fv === cond && tv != null) env.set(key, `(${cond} and ${tv})`);
-            else if (tv === cond && fv != null) env.set(key, `(${cond} or ${fv})`);
+            if (fv === cond && tv != null) {
+                if (hasConditionalEffects) return null;
+                env.set(key, `(${cond} and ${tv})`);
+            }
+            else if (tv === cond && fv != null) {
+                if (hasConditionalEffects) return null;
+                env.set(key, `(${cond} or ${fv})`);
+            }
             else if (!valueMayBeReadFrom(joinId, key)) continue;
             else return null;
         }
-        return { env, markers: am.slice(0, prefix) };
+        if (hasConditionalEffects) {
+            const bodyEffects = trueEffects.length > 0 ? trueEffects : falseEffects;
+            const condition = trueEffects.length > 0 ? cond : `(not ${cond})`;
+            const body = bodyEffects.map(line => `    ${line}`).join("\n");
+            out.push(`if ${condition} then\n${body}\nend`);
+            conditionalIfCount++;
+        }
+        return { env, markers: am.slice(0, prefix), effects: te.slice(0, effectPrefix) };
     }
 
     while (ready.length) {
@@ -2297,6 +2325,7 @@ function matchMultiStateLogicalLocals(source, stateWhile, stateName, returnName)
         if (!merged) return null;
         let env = merged.env;
         let markers = merged.markers;
+        let effects = merged.effects || [];
         const block = blocks.get(id);
         // Normalized dispatcher invariant: entering this leaf proves state == id.
         // The compiler may borrow/copy POS as an ordinary temporary before the
@@ -2370,8 +2399,12 @@ function matchMultiStateLogicalLocals(source, stateWhile, stateName, returnName)
                 const value = render(rhs, env);
                 if (value == null) return null;
                 if (!valueMayBeReadAfter(id, i, name)) {
-                    if (markers.length !== 0) return null;
-                    out.push(value);
+                    if (markers.length !== 0) {
+                        if (!allowConditionalIf || markers.length !== 1) return null;
+                        effects = [...effects, value];
+                    } else {
+                        out.push(value);
+                    }
                     env.delete(name);
                 } else {
                     env.set(name, value);
@@ -2393,6 +2426,9 @@ function matchMultiStateLogicalLocals(source, stateWhile, stateName, returnName)
                 return null;
             }
 
+            const conditionalIfLocalHandoff = allowConditionalIf && cleanupRegs.has(name) && !locals.has(name) &&
+                isIdentifier(rhs, stateName) && block.transition.kind === "branch" && block.transition.conditionRegister === name;
+            if (conditionalIfLocalHandoff) accumulatorRegs.delete(name);
             if (cleanupRegs.has(name) && !accumulatorRegs.has(name) && !locals.has(name) && isIdentifier(rhs) && rhs.name !== name) {
                 const display = rhs?.type === "TableConstructorExpression" ? `t${++tableCount}` : `v${++valueCount}`;
                 localNames.set(name, display);
@@ -2410,23 +2446,34 @@ function matchMultiStateLogicalLocals(source, stateWhile, stateName, returnName)
         processed.add(id);
         const tr = block.transition;
         const sends = [];
-        if (tr.kind === "jump") sends.push({ target: tr.target, env, markers });
+        if (tr.kind === "jump") sends.push({ target: tr.target, env, markers, effects });
         else if (tr.kind === "branch") {
             const condition = resolveId(tr.conditionRegister, env);
             if (condition == null) return null;
-            sends.push({ target: tr.onTrue, env, markers: [...markers, { condition, truth: true }] });
-            sends.push({ target: tr.onFalse, env, markers: [...markers, { condition, truth: false }] });
+            sends.push({ target: tr.onTrue, env, markers: [...markers, { condition, truth: true }], effects });
+            sends.push({ target: tr.onFalse, env, markers: [...markers, { condition, truth: false }], effects });
         }
         for (const send of sends) {
             if (!incoming.has(send.target)) incoming.set(send.target, []);
-            incoming.get(send.target).push({ env: new Map(send.env), markers: [...(send.markers || [])] });
+            incoming.get(send.target).push({
+                env: new Map(send.env),
+                markers: [...(send.markers || [])],
+                effects: [...(send.effects || [])],
+            });
             indegree.set(send.target, indegree.get(send.target) - 1);
             if (indegree.get(send.target) === 0) ready.push(send.target);
         }
     }
 
     if (processed.size !== reachable.size || locals.size !== 0 || out.length === 0) return null;
-    return { source: out.join("\n") + "\n", statementCount: out.length, localCount: valueCount + tableCount, stateCount: leaves.size };
+    if (allowConditionalIf && conditionalIfCount !== 1) return null;
+    return {
+        source: out.join("\n") + "\n",
+        statementCount: out.length,
+        localCount: valueCount + tableCount,
+        stateCount: leaves.size,
+        conditionalIfCount,
+    };
 }
 
 function matchTerminalBookkeeping(leaf, index, stateName, returnName) {
@@ -2584,6 +2631,19 @@ function solveFreshSource(source, ast) {
             statementCount: multiLogical.statementCount,
             branchCount: multiLogical.stateCount - 1,
             localCount: multiLogical.localCount,
+        };
+    }
+
+    const simpleIf = matchMultiStateLogicalLocals(source, stateWhile, stateName, returnName, { allowConditionalIf: true });
+    if (simpleIf) {
+        return {
+            applied: true,
+            mode: "fresh-simple-if",
+            source: simpleIf.source,
+            stateCount: simpleIf.stateCount,
+            statementCount: simpleIf.statementCount,
+            branchCount: 1,
+            localCount: simpleIf.localCount,
         };
     }
 

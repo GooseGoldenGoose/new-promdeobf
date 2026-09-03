@@ -687,7 +687,7 @@ state = condition and innerState or nextState
 
 Each completed branch jumps to final state.
 
-General source-level `if` reconstruction is NOT currently fully implemented in fresh CF.
+Fresh CF now supports the proven simple no-`else` shape where one branch contains statement-level discarded-call effects and the other skips directly to the same join. Both direct conditions and cleanup-backed source-local conditions are supported. The matcher runs only after existing logical/TESTSET recovery and rejects logical result-carrier merges, effects on both paths, nested conditional-effect markers, and other ambiguous shapes. General `if`/`elseif`/`else` and nested statement-region reconstruction remain fail-closed.
 
 ### 7.15 `while`
 
@@ -1171,15 +1171,17 @@ Random register/state IDs and random constants must not matter.
 6. find `while state` dispatcher
 7. try closure-entry program recovery
 8. try limited multi-state logical/local recovery
-9. if neither applies, require one-state leaf
-10. try register/local program recovery
-11. try direct global-call recovery
-12. if direct call path fails, retry register program allowing zero source locals for call-result statements
-13. otherwise fail closed with detailed diagnostic reason
+9. try proven simple no-`else` `if` recovery
+10. if neither applies, require one-state leaf
+11. try register/local program recovery
+12. try direct global-call recovery
+13. if direct call path fails, retry register program allowing zero source locals for call-result statements
+14. otherwise fail closed with detailed diagnostic reason
 
 Current modes include:
 - `fresh-closure-entry`
 - `fresh-multistate-logical`
+- `fresh-simple-if`
 - `fresh-register-locals`
 - `fresh-call-results`
 - `fresh-direct-global-call`
@@ -1568,7 +1570,7 @@ The following exported helpers are currently intentionally unsupported/stubs:
 - `removeCompilerPosPreservationOperations`
 
 Therefore do NOT claim full support for:
-- general `if`
+- general `if`/`elseif`/`else` and nested `if` regions beyond the proven simple no-`else` shape
 - general `while`
 - general `repeat`
 - numeric `for`
@@ -1576,7 +1578,7 @@ Therefore do NOT claim full support for:
 - arbitrary nested control flow
 - arbitrary break/continue structuring
 
-Limited compiler short-circuit multi-state logic is supported separately, as documented above.
+Limited compiler short-circuit multi-state logic and the proven simple no-`else` `if` shape are supported separately, as documented above.
 
 ## 24. What "Dynamic / Structural" Means in Practice
 
@@ -1889,13 +1891,14 @@ Current performance baseline after the 2026-09-02 pipeline optimization:
 - a runnable 150-local real Medium fixture produced byte-identical old/new fresh-CF output and exact source/obfuscated/recovered runtime parity across 150 output lines
 - the real 401-state logical stress fixture now recovers all 100 source locals and all 100 following `print` calls in source order; the recovered output has 200 statements and exact seeded runtime parity with the source and obfuscated programs
 - the same 401-state Fresh-CF solver remains fast after call-preservation support (7-run solver median 105.9 ms with the lean structural AST)
+- simple no-`else` `if` recovery now supports both direct conditions and cleanup-backed local conditions; the two user fixtures plus the existing `or`/TESTSET fixture passed 5/5 randomized Medium recompiles, focused tests keep TESTSET in `fresh-multistate-logical`, and `if/else` remains fail-closed
 
 There is no known blocker in the currently supported straight-line/local/call/table/closure/upvalue/multi-return feature set represented by the established regression fixtures.
 
 ### Still intentionally unsupported / fail-closed
 
 Do not claim full source reconstruction for:
-- general `if`
+- general `if`/`elseif`/`else` and nested `if` regions beyond the proven simple no-`else` shape
 - general `while`
 - general `repeat`
 - numeric `for`
@@ -1903,7 +1906,7 @@ Do not claim full source reconstruction for:
 - arbitrary nested CFG structuring
 - arbitrary `break` / `continue` reconstruction
 
-Those remain separate future features. Limited compiler-generated short-circuit logical CFGs are supported; that must not be generalized into arbitrary CFG guessing.
+Those remain separate future features. Limited compiler-generated short-circuit logical CFGs and the proven simple no-`else` `if` shape are supported; neither may be generalized into arbitrary CFG guessing.
 
 Correctness fix completed during 2026-09-02 Fresh-CF follow-up:
 - the 401-state Medium fixture previously dropped every post-logical `print` call because `matchMultiStateLogicalLocals` stored discarded call results in its environment and later overwrote them without emitting the side effect
