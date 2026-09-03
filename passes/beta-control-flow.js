@@ -2257,30 +2257,44 @@ function matchMultiStateLogicalLocals(source, stateWhile, stateName, returnName,
 
     function mergeElseIfCandidates(candidates, joinId) {
         if (!allowConditionalIf || candidates.length < 3) return null;
+        const markerLists = candidates.map(candidate => candidate.markers || []);
+        let sharedPrefix = 0;
+        while (true) {
+            const first = markerLists[0][sharedPrefix];
+            if (!first) break;
+            if (!markerLists.every(markers => {
+                const marker = markers[sharedPrefix];
+                return marker && marker.condition === first.condition && marker.truth === first.truth && marker.effectCount === first.effectCount;
+            })) break;
+            sharedPrefix++;
+        }
+
         const chainLength = candidates.length - 1;
         const branchByDepth = new Map();
         let finalElse = null;
         let baseEffectCount = null;
 
-        for (const candidate of candidates) {
-            const markers = candidate.markers || [];
-            if (markers.length < 1 || markers.length > chainLength) return null;
-            for (let depth = 0; depth < markers.length - 1; depth++) {
-                if (markers[depth].truth !== false) return null;
+        for (let candidateIndex = 0; candidateIndex < candidates.length; candidateIndex++) {
+            const candidate = candidates[candidateIndex];
+            const markers = markerLists[candidateIndex];
+            const suffix = markers.slice(sharedPrefix);
+            if (suffix.length < 1 || suffix.length > chainLength) return null;
+            for (let depth = 0; depth < suffix.length - 1; depth++) {
+                if (suffix[depth].truth !== false) return null;
             }
-            const leaf = markers[markers.length - 1];
+            const leaf = suffix[suffix.length - 1];
             if (!leaf || !Number.isInteger(leaf.effectCount)) return null;
             if (baseEffectCount === null) baseEffectCount = leaf.effectCount;
             if (leaf.effectCount !== baseEffectCount) return null;
-            for (const marker of markers) {
+            for (const marker of suffix) {
                 if (!Number.isInteger(marker.effectCount) || marker.effectCount !== baseEffectCount) return null;
             }
             if (leaf.truth === true) {
-                const depth = markers.length;
+                const depth = suffix.length;
                 if (branchByDepth.has(depth)) return null;
                 branchByDepth.set(depth, candidate);
             } else {
-                if (markers.length !== chainLength || finalElse) return null;
+                if (suffix.length !== chainLength || finalElse) return null;
                 finalElse = candidate;
             }
         }
@@ -2290,17 +2304,17 @@ function matchMultiStateLogicalLocals(source, stateWhile, stateName, returnName,
         const conditions = [];
         for (let depth = 1; depth <= chainLength; depth++) {
             const candidate = branchByDepth.get(depth);
-            const markers = candidate.markers || [];
+            const suffix = (candidate.markers || []).slice(sharedPrefix);
             for (let i = 0; i < depth - 1; i++) {
-                if (markers[i].condition !== conditions[i] || markers[i].truth !== false) return null;
+                if (suffix[i].condition !== conditions[i] || suffix[i].truth !== false) return null;
             }
-            const marker = markers[depth - 1];
+            const marker = suffix[depth - 1];
             if (!marker || marker.truth !== true) return null;
             conditions.push(marker.condition);
         }
-        const elseMarkers = finalElse.markers || [];
+        const elseSuffix = (finalElse.markers || []).slice(sharedPrefix);
         for (let i = 0; i < chainLength; i++) {
-            if (elseMarkers[i].condition !== conditions[i] || elseMarkers[i].truth !== false) return null;
+            if (elseSuffix[i].condition !== conditions[i] || elseSuffix[i].truth !== false) return null;
         }
 
         const ordered = [];
@@ -2321,19 +2335,35 @@ function matchMultiStateLogicalLocals(source, stateWhile, stateName, returnName,
             return null;
         }
 
+        const commonEffects = (ordered[0].effects || []).slice(0, baseEffectCount);
+        for (const candidate of ordered) {
+            const effects = candidate.effects || [];
+            if (effects.length < baseEffectCount) return null;
+            for (let i = 0; i < baseEffectCount; i++) if (effects[i] !== commonEffects[i]) return null;
+        }
         const bodies = ordered.map(candidate => (candidate.effects || []).slice(baseEffectCount));
-        if (bodies.some(body => body.length === 0)) return null;
+        if (bodies.slice(0, chainLength).some(body => body.length === 0)) return null;
         const lines = [];
         for (let depth = 0; depth < chainLength; depth++) {
             lines.push(`${depth === 0 ? "if" : "elseif"} ${conditions[depth]} then`);
             for (const effect of bodies[depth]) lines.push(indentConditionalEffect(effect));
         }
-        lines.push("else");
-        for (const effect of bodies[chainLength]) lines.push(indentConditionalEffect(effect));
+        if (bodies[chainLength].length > 0) {
+            lines.push("else");
+            for (const effect of bodies[chainLength]) lines.push(indentConditionalEffect(effect));
+        }
         lines.push("end");
-        out.push(lines.join("\n"));
-        conditionalIfCount++;
-        return { env, markers: [], effects: (ordered[0].effects || []).slice(0, baseEffectCount) };
+        const structured = lines.join("\n");
+        if (sharedPrefix === 0) {
+            out.push(structured);
+            conditionalIfCount++;
+            return { env, markers: [], effects: commonEffects };
+        }
+        return {
+            env,
+            markers: markerLists[0].slice(0, sharedPrefix),
+            effects: [...commonEffects, structured],
+        };
     }
 
     function indentConditionalEffect(text, prefix = "    ") {

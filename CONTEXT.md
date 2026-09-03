@@ -687,7 +687,7 @@ state = condition and innerState or nextState
 
 Each completed branch jumps to final state.
 
-Fresh CF supports proven simple `if`, `if/else`, same-join `elseif` chains, and recursively nested two-way `if` / `if-else` regions with distinct inner joins. `elseif` is recognized structurally when the outer true body and every later condition body/final else body jump directly to the same outer join. An explicit nested `else { if ... }` is preserved as nesting when its inner true/false paths merge at a distinct inner join before reaching the outer join; the inner merge is carried as a structured branch effect and is never flattened into `elseif`. This recursive nested proof currently covers two-way inner joins, including one-sided inner `if` and inner `if/else`; nested same-join `elseif` chains inside another branch and arbitrary branch-local declarations/assignments remain fail-closed. Direct/call conditions and cleanup-backed source-local conditions are supported. Existing logical/TESTSET recovery still runs first. The matcher records branch effect depth, rejects logical result-carrier merges, live path-dependent values, empty/ambiguous branch effects, and non-canonical join shapes.
+Fresh CF supports proven simple `if`, `if/else`, same-join `elseif` chains, and recursively nested conditional regions. N-way `elseif` recovery is depth-independent: at a join it computes the longest shared outer marker prefix, proves that only the remaining suffix is a canonical false-edge `elseif` chain whose branch bodies converge to that same join, and either emits it at the root or returns it as one structured branch effect when the shared prefix is non-empty. The final false path may carry a normal `else` body or be effect-free, in which case the recovered chain ends with `end` and no invented `else`. This lets `elseif` chains appear dynamically inside outer true/false branches and compose recursively with distinct-inner-join `if` / `if-else` regions. Explicit nesting is preserved because a distinct inner join is recovered before its enclosing join; same-join chains remain `elseif`. Direct/call conditions and cleanup-backed source-local conditions are supported. Common effects that occur inside the outer branch before the nested chain are preserved as a proven effect prefix. Existing logical/TESTSET recovery still runs first. The matcher rejects logical result-carrier merges, live path-dependent values, empty/ambiguous true or `elseif` bodies, inconsistent marker/effect depths, and non-canonical join shapes. Arbitrary branch-local declarations/assignments remain fail-closed.
 
 ### 7.15 `while`
 
@@ -1570,7 +1570,7 @@ The following exported helpers are currently intentionally unsupported/stubs:
 - `removeCompilerPosPreservationOperations`
 
 Therefore do NOT claim full support for:
-- nested same-join `elseif` chains inside another branch and arbitrary `if` regions beyond proven recursive two-way joins
+- arbitrary `if` regions beyond proven recursive same-join `elseif` chains and distinct two-way joins, especially branch-local declaration/assignment shapes without a proven storage merge
 - general `while`
 - general `repeat`
 - numeric `for`
@@ -1891,14 +1891,14 @@ Current performance baseline after the 2026-09-02 pipeline optimization:
 - a runnable 150-local real Medium fixture produced byte-identical old/new fresh-CF output and exact source/obfuscated/recovered runtime parity across 150 output lines
 - the real 401-state logical stress fixture now recovers all 100 source locals and all 100 following `print` calls in source order; the recovered output has 200 statements and exact seeded runtime parity with the source and obfuscated programs
 - the same 401-state Fresh-CF solver remains fast after call-preservation support (7-run solver median 105.9 ms with the lean structural AST)
-- simple `if`, `if/else`, and same-join `elseif` recovery supports direct/call conditions and cleanup-backed local conditions. `elseif` uses N-way marker-depth recovery at one shared outer join, including multiple top-level `elseif` clauses. Distinct inner joins now recover recursively as nested two-way `if` / `if-else` effects instead of being flattened: the user 8-state `if true / elseif print(...) / else { if print(...) }` fixture recovers with the explicit nested `if`, and a 9-state nested `if/else` fixture executes the inner branch with exact source/obfuscated/recovered runtime parity. Both fixtures passed 5/5 fresh Medium recompiles; focused regressions preserve the structural difference between same-join `elseif` and distinct-inner-join nesting. Existing `or`/TESTSET fixtures remain in `fresh-multistate-logical`.
+- conditional recovery supports direct/call conditions, cleanup-backed local conditions, top-level and nested same-join `elseif` chains, and recursively nested distinct-join `if` / `if-else`. Nested `elseif` is recovered by stripping a proven common outer marker prefix and solving the remaining N-way chain structurally, so the rule is independent of nesting depth and outer branch polarity. The previously failing 14-state real fixture containing `else { if N1 ... elseif N2 ... elseif N3 ... else { if DEEP ... } }` now recovers exactly and has source/obfuscated/recovered runtime parity. Focused tests cover nested chains on both outer false and true branches, recursive composition with a deeper inner `if/else`, and top-level/nested chains without a final `else`. Real Medium validation also covers a statement before the nested chain, proving common branch-effect prefixes are preserved. The 14-state nested-elseif fixture, 18-state deep two-way fixture, 9-state prefix fixture, and 8-state no-final-else fixture all passed 5/5 fresh randomized Medium recompiles with exact runtime parity. Existing `or`/TESTSET fixtures remain in `fresh-multistate-logical`.
 
 There is no known blocker in the currently supported straight-line/local/call/table/closure/upvalue/multi-return feature set represented by the established regression fixtures.
 
 ### Still intentionally unsupported / fail-closed
 
 Do not claim full source reconstruction for:
-- nested same-join `elseif` chains inside another branch and arbitrary `if` regions beyond proven recursive two-way joins
+- arbitrary `if` regions beyond proven recursive same-join `elseif` chains and distinct two-way joins, especially branch-local declaration/assignment shapes without a proven storage merge
 - general `while`
 - general `repeat`
 - numeric `for`

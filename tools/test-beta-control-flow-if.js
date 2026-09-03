@@ -195,4 +195,104 @@ function vmStatesSource(states) {
     assert.strictEqual(result.source, 'if true then\n    print("E")\nelseif print("ASDAS") then\n    print("W")\nelse\n    if print("ADS") then\n        print("GG")\n    end\nend\n');
 }
 
+
+{
+    // Nested elseif chain: all inner chain leaves share the outer false marker
+    // and converge at their own inner join before the outer join.
+    const source = vmStatesSource({
+        1: ['r1 = "root"', 'state = _env[r1]', 'state = state and 2 or 3'],
+        2: ['ReturnVal = "print"', 'state = _env[ReturnVal]', 'r1 = "ROOT"', 'ReturnVal = state(r1)', 'state = 4'],
+        3: ['r1 = "a"', 'state = _env[r1]', 'state = state and 5 or 6'],
+        4: ['ReturnVal = {}', 'state = nil'],
+        5: ['ReturnVal = "print"', 'state = _env[ReturnVal]', 'r1 = "A"', 'ReturnVal = state(r1)', 'state = 7'],
+        6: ['r1 = "b"', 'state = _env[r1]', 'state = state and 8 or 9'],
+        7: ['state = 4'],
+        8: ['ReturnVal = "print"', 'state = _env[ReturnVal]', 'r1 = "B"', 'ReturnVal = state(r1)', 'state = 7'],
+        9: ['ReturnVal = "print"', 'state = _env[ReturnVal]', 'r1 = "C"', 'ReturnVal = state(r1)', 'state = 7'],
+    });
+    const result = solveBetaControlFlow(source, parse(source));
+    assert.strictEqual(result.applied, true);
+    assert.strictEqual(result.mode, "fresh-simple-if");
+    assert.strictEqual(result.source, 'if root then\n    print("ROOT")\nelse\n    if a then\n        print("A")\n    elseif b then\n        print("B")\n    else\n        print("C")\n    end\nend\n');
+}
+
+{
+    // Nested elseif whose final else contains another distinct-join if/else.
+    // This proves recursive composition rather than one fixed nesting depth.
+    const source = vmStatesSource({
+        1: ['r1 = "root"', 'state = _env[r1]', 'state = state and 2 or 3'],
+        2: ['ReturnVal = "print"', 'state = _env[ReturnVal]', 'r1 = "ROOT"', 'ReturnVal = state(r1)', 'state = 4'],
+        3: ['r1 = "a"', 'state = _env[r1]', 'state = state and 5 or 6'],
+        4: ['ReturnVal = {}', 'state = nil'],
+        5: ['ReturnVal = "print"', 'state = _env[ReturnVal]', 'r1 = "A"', 'ReturnVal = state(r1)', 'state = 7'],
+        6: ['r1 = "b"', 'state = _env[r1]', 'state = state and 8 or 9'],
+        7: ['state = 4'],
+        8: ['ReturnVal = "print"', 'state = _env[ReturnVal]', 'r1 = "B"', 'ReturnVal = state(r1)', 'state = 7'],
+        9: ['r1 = "deep"', 'state = _env[r1]', 'state = state and 10 or 11'],
+        10: ['ReturnVal = "print"', 'state = _env[ReturnVal]', 'r1 = "D1"', 'ReturnVal = state(r1)', 'state = 12'],
+        11: ['ReturnVal = "print"', 'state = _env[ReturnVal]', 'r1 = "D2"', 'ReturnVal = state(r1)', 'state = 12'],
+        12: ['state = 7'],
+    });
+    const result = solveBetaControlFlow(source, parse(source));
+    assert.strictEqual(result.applied, true);
+    assert.strictEqual(result.mode, "fresh-simple-if");
+    assert.strictEqual(result.source, 'if root then\n    print("ROOT")\nelse\n    if a then\n        print("A")\n    elseif b then\n        print("B")\n    else\n        if deep then\n            print("D1")\n        else\n            print("D2")\n        end\n    end\nend\n');
+}
+
+
+{
+    // Same generalized nested-elseif proof on the outer true branch. The
+    // shared marker prefix polarity must not matter.
+    const source = vmStatesSource({
+        1: ['r1 = "root"', 'state = _env[r1]', 'state = state and 3 or 2'],
+        2: ['ReturnVal = "print"', 'state = _env[ReturnVal]', 'r1 = "ROOT-FALSE"', 'ReturnVal = state(r1)', 'state = 4'],
+        3: ['r1 = "a"', 'state = _env[r1]', 'state = state and 5 or 6'],
+        4: ['ReturnVal = {}', 'state = nil'],
+        5: ['ReturnVal = "print"', 'state = _env[ReturnVal]', 'r1 = "A"', 'ReturnVal = state(r1)', 'state = 7'],
+        6: ['r1 = "b"', 'state = _env[r1]', 'state = state and 8 or 9'],
+        7: ['state = 4'],
+        8: ['ReturnVal = "print"', 'state = _env[ReturnVal]', 'r1 = "B"', 'ReturnVal = state(r1)', 'state = 7'],
+        9: ['ReturnVal = "print"', 'state = _env[ReturnVal]', 'r1 = "C"', 'ReturnVal = state(r1)', 'state = 7'],
+    });
+    const result = solveBetaControlFlow(source, parse(source));
+    assert.strictEqual(result.applied, true);
+    assert.strictEqual(result.mode, "fresh-simple-if");
+    assert.strictEqual(result.source, 'if root then\n    if a then\n        print("A")\n    elseif b then\n        print("B")\n    else\n        print("C")\n    end\nelse\n    print("ROOT-FALSE")\nend\n');
+}
+
+
+{
+    // Top-level elseif chain without a final else: the final false path reaches
+    // the join with no branch effects and should emit no else clause.
+    const source = vmStatesSource({
+        1: ['r1 = "a"', 'state = _env[r1]', 'state = state and 2 or 3'],
+        2: ['ReturnVal = "print"', 'state = _env[ReturnVal]', 'r1 = "A"', 'ReturnVal = state(r1)', 'state = 4'],
+        3: ['r1 = "b"', 'state = _env[r1]', 'state = state and 5 or 4'],
+        4: ['ReturnVal = {}', 'state = nil'],
+        5: ['ReturnVal = "print"', 'state = _env[ReturnVal]', 'r1 = "B"', 'ReturnVal = state(r1)', 'state = 4'],
+    });
+    const result = solveBetaControlFlow(source, parse(source));
+    assert.strictEqual(result.applied, true);
+    assert.strictEqual(result.mode, "fresh-simple-if");
+    assert.strictEqual(result.source, 'if a then\n    print("A")\nelseif b then\n    print("B")\nend\n');
+}
+
+{
+    // Same no-final-else chain nested under an outer false branch.
+    const source = vmStatesSource({
+        1: ['r1 = "root"', 'state = _env[r1]', 'state = state and 2 or 3'],
+        2: ['ReturnVal = "print"', 'state = _env[ReturnVal]', 'r1 = "ROOT"', 'ReturnVal = state(r1)', 'state = 4'],
+        3: ['r1 = "a"', 'state = _env[r1]', 'state = state and 5 or 6'],
+        4: ['ReturnVal = {}', 'state = nil'],
+        5: ['ReturnVal = "print"', 'state = _env[ReturnVal]', 'r1 = "A"', 'ReturnVal = state(r1)', 'state = 7'],
+        6: ['r1 = "b"', 'state = _env[r1]', 'state = state and 8 or 7'],
+        7: ['state = 4'],
+        8: ['ReturnVal = "print"', 'state = _env[ReturnVal]', 'r1 = "B"', 'ReturnVal = state(r1)', 'state = 7'],
+    });
+    const result = solveBetaControlFlow(source, parse(source));
+    assert.strictEqual(result.applied, true);
+    assert.strictEqual(result.mode, "fresh-simple-if");
+    assert.strictEqual(result.source, 'if root then\n    print("ROOT")\nelse\n    if a then\n        print("A")\n    elseif b then\n        print("B")\n    end\nend\n');
+}
+
 console.log("fresh beta simple-if regression: ok");
