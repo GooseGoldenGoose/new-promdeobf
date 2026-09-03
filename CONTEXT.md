@@ -97,6 +97,7 @@ Minimize tool-call latency without weakening correctness or verification:
 - avoid redundant rereads/rechecks when the underlying source/state has not changed; revalidate after writes, failures, external changes, or when correctness requires it
 - prefer direct known tools over broad discovery/context tools when the exact target and action are already known
 - for the standard fixture path, run `source -> Medium obfuscate -> normal deobf -> fresh CF -> runtime parity` in the shortest reliable command sequence; inspect intermediate artifacts only on failure or when the user asks to see them
+- for agent-side testing, prefer the tracked one-call runner `node tools/fast-obf-deobf.js <source.lua> --runtime`; it performs Medium obfuscation, in-process normal deobf + Fresh CF, exact runtime parity, and timing in one tool invocation. It also accepts multiple source files in one Node process.
 - combine related CLI operations into one invocation when safe and when later steps do not depend on inspecting earlier output
 - speed must never remove required semantic checks, fail-closed proof, scope discipline, or protection of unrelated user work
 
