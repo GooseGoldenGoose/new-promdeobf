@@ -2255,12 +2255,94 @@ function matchMultiStateLogicalLocals(source, stateWhile, stateName, returnName,
         return false;
     }
 
+    function mergeElseIfCandidates(candidates, joinId) {
+        if (!allowConditionalIf || candidates.length < 3) return null;
+        const chainLength = candidates.length - 1;
+        const branchByDepth = new Map();
+        let finalElse = null;
+        let baseEffectCount = null;
+
+        for (const candidate of candidates) {
+            const markers = candidate.markers || [];
+            if (markers.length < 1 || markers.length > chainLength) return null;
+            for (let depth = 0; depth < markers.length - 1; depth++) {
+                if (markers[depth].truth !== false) return null;
+            }
+            const leaf = markers[markers.length - 1];
+            if (!leaf || !Number.isInteger(leaf.effectCount)) return null;
+            if (baseEffectCount === null) baseEffectCount = leaf.effectCount;
+            if (leaf.effectCount !== baseEffectCount) return null;
+            for (const marker of markers) {
+                if (!Number.isInteger(marker.effectCount) || marker.effectCount !== baseEffectCount) return null;
+            }
+            if (leaf.truth === true) {
+                const depth = markers.length;
+                if (branchByDepth.has(depth)) return null;
+                branchByDepth.set(depth, candidate);
+            } else {
+                if (markers.length !== chainLength || finalElse) return null;
+                finalElse = candidate;
+            }
+        }
+        if (!finalElse || branchByDepth.size !== chainLength) return null;
+        for (let depth = 1; depth <= chainLength; depth++) if (!branchByDepth.has(depth)) return null;
+
+        const conditions = [];
+        for (let depth = 1; depth <= chainLength; depth++) {
+            const candidate = branchByDepth.get(depth);
+            const markers = candidate.markers || [];
+            for (let i = 0; i < depth - 1; i++) {
+                if (markers[i].condition !== conditions[i] || markers[i].truth !== false) return null;
+            }
+            const marker = markers[depth - 1];
+            if (!marker || marker.truth !== true) return null;
+            conditions.push(marker.condition);
+        }
+        const elseMarkers = finalElse.markers || [];
+        for (let i = 0; i < chainLength; i++) {
+            if (elseMarkers[i].condition !== conditions[i] || elseMarkers[i].truth !== false) return null;
+        }
+
+        const ordered = [];
+        for (let depth = 1; depth <= chainLength; depth++) ordered.push(branchByDepth.get(depth));
+        ordered.push(finalElse);
+        const env = new Map();
+        const keys = new Set();
+        for (const candidate of ordered) for (const key of candidate.env.keys()) keys.add(key);
+        keys.delete(stateName);
+        for (const key of keys) {
+            const values = ordered.map(candidate => candidate.env.get(key));
+            const first = values[0];
+            if (values.every(value => value === first)) {
+                if (first !== undefined) env.set(key, first);
+                continue;
+            }
+            if (!valueMayBeReadFrom(joinId, key)) continue;
+            return null;
+        }
+
+        const bodies = ordered.map(candidate => (candidate.effects || []).slice(baseEffectCount));
+        if (bodies.some(body => body.length === 0)) return null;
+        const lines = [];
+        for (let depth = 0; depth < chainLength; depth++) {
+            lines.push(`${depth === 0 ? "if" : "elseif"} ${conditions[depth]} then`);
+            for (const effect of bodies[depth]) lines.push(`    ${effect}`);
+        }
+        lines.push("else");
+        for (const effect of bodies[chainLength]) lines.push(`    ${effect}`);
+        lines.push("end");
+        out.push(lines.join("\n"));
+        conditionalIfCount++;
+        return { env, markers: [], effects: (ordered[0].effects || []).slice(0, baseEffectCount) };
+    }
+
     function mergeCandidates(candidates, joinId) {
         if (candidates.length === 1) return {
             env: new Map(candidates[0].env),
             markers: [...(candidates[0].markers || [])],
             effects: [...(candidates[0].effects || [])],
         };
+        if (candidates.length > 2) return mergeElseIfCandidates(candidates, joinId);
         if (candidates.length !== 2) return null;
         const a = candidates[0], b = candidates[1];
         const am = a.markers || [], bm = b.markers || [];
@@ -2407,7 +2489,7 @@ function matchMultiStateLogicalLocals(source, stateWhile, stateName, returnName,
                 if (value == null) return null;
                 if (!valueMayBeReadAfter(id, i, name)) {
                     if (markers.length !== 0) {
-                        if (!allowConditionalIf || markers.length !== 1) return null;
+                        if (!allowConditionalIf) return null;
                         effects = [...effects, value];
                     } else {
                         out.push(value);

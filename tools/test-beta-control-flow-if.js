@@ -121,4 +121,55 @@ function vmStatesSource(states) {
     assert.strictEqual(result.source, "if flag then\n    print(true)\nelse\n    print(true)\nend\n");
 }
 
+{
+    // `elseif` is the same-join chain shape: outer true body and both second
+    // condition leaves jump directly to the same final join.
+    const source = vmStatesSource({
+        1: ['r1 = "a"', 'state = _env[r1]', 'state = state and 2 or 3'],
+        2: ['ReturnVal = "print"', 'state = _env[ReturnVal]', 'r1 = "A"', 'ReturnVal = state(r1)', 'state = 4'],
+        3: ['r1 = "b"', 'state = _env[r1]', 'state = state and 5 or 6'],
+        4: ['ReturnVal = {}', 'state = nil'],
+        5: ['ReturnVal = "print"', 'state = _env[ReturnVal]', 'r1 = "B"', 'ReturnVal = state(r1)', 'state = 4'],
+        6: ['ReturnVal = "print"', 'state = _env[ReturnVal]', 'r1 = "C"', 'ReturnVal = state(r1)', 'state = 4'],
+    });
+    const result = solveBetaControlFlow(source, parse(source));
+    assert.strictEqual(result.applied, true);
+    assert.strictEqual(result.mode, "fresh-simple-if");
+    assert.strictEqual(result.source, 'if a then\n    print("A")\nelseif b then\n    print("B")\nelse\n    print("C")\nend\n');
+}
+
+{
+    // Multiple elseif clauses are recovered by marker depth, not a fixed state ID/count.
+    const source = vmStatesSource({
+        1: ['r1 = "a"', 'state = _env[r1]', 'state = state and 2 or 3'],
+        2: ['ReturnVal = "print"', 'state = _env[ReturnVal]', 'r1 = "A"', 'ReturnVal = state(r1)', 'state = 7'],
+        3: ['r1 = "b"', 'state = _env[r1]', 'state = state and 4 or 5'],
+        4: ['ReturnVal = "print"', 'state = _env[ReturnVal]', 'r1 = "B"', 'ReturnVal = state(r1)', 'state = 7'],
+        5: ['r1 = "c"', 'state = _env[r1]', 'state = state and 6 or 8'],
+        6: ['ReturnVal = "print"', 'state = _env[ReturnVal]', 'r1 = "C"', 'ReturnVal = state(r1)', 'state = 7'],
+        7: ['ReturnVal = {}', 'state = nil'],
+        8: ['ReturnVal = "print"', 'state = _env[ReturnVal]', 'r1 = "D"', 'ReturnVal = state(r1)', 'state = 7'],
+    });
+    const result = solveBetaControlFlow(source, parse(source));
+    assert.strictEqual(result.applied, true);
+    assert.strictEqual(result.mode, "fresh-simple-if");
+    assert.strictEqual(result.source, 'if a then\n    print("A")\nelseif b then\n    print("B")\nelseif c then\n    print("C")\nelse\n    print("D")\nend\n');
+}
+
+{
+    // Explicit `else { if ... }` has an inner join before the outer join and
+    // must not be flattened into elseif.
+    const source = vmStatesSource({
+        1: ['r1 = "a"', 'state = _env[r1]', 'state = state and 2 or 3'],
+        2: ['ReturnVal = "print"', 'state = _env[ReturnVal]', 'r1 = "A"', 'ReturnVal = state(r1)', 'state = 4'],
+        3: ['r1 = "b"', 'state = _env[r1]', 'state = state and 5 or 6'],
+        4: ['ReturnVal = {}', 'state = nil'],
+        5: ['ReturnVal = "print"', 'state = _env[ReturnVal]', 'r1 = "B"', 'ReturnVal = state(r1)', 'state = 7'],
+        6: ['ReturnVal = "print"', 'state = _env[ReturnVal]', 'r1 = "C"', 'ReturnVal = state(r1)', 'state = 7'],
+        7: ['state = 4'],
+    });
+    const result = solveBetaControlFlow(source, parse(source));
+    assert.strictEqual(result.applied, false, "nested else-if was flattened into elseif");
+}
+
 console.log("fresh beta simple-if regression: ok");
