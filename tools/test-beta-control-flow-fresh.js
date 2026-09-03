@@ -813,7 +813,9 @@ function sequentialLogicalCallStates(count) {
         ],
     });
     const result = solveBetaControlFlow(source, parse(source));
-    assert.strictEqual(result.applied, false, "ambiguous pre-lifetime TEMP reuse must fail closed");
+    assert.strictEqual(result.applied, true, "cleanup-proven in-place promotion after earlier TEMP reuse was not recovered");
+    assert.strictEqual(result.mode, "fresh-register-locals");
+    assert.strictEqual(result.source, 'local v1 = 3\nprint(v1)\n');
 }
 
 {
@@ -1735,4 +1737,45 @@ function sequentialLogicalCallStates(count) {
     assert.strictEqual(result.mode, "fresh-register-locals");
     assert.strictEqual(result.source, 'local v1, v2 = f("x")\nprint(v1("y"))\n');
 }
+{
+    // An ordinary TEMP register can be promoted in-place into VAR ownership.
+    // Earlier TEMP writes to the same physical register must not contaminate
+    // the cleanup-backed source lifetime when the next write is its nil cleanup.
+    const source = vmStatesSource({
+        1: [
+            'r1 = "math"', 'r2 = _env[r1]',
+            'r1 = "abs"', 'r2 = r2[r1]',
+            'r3 = -10', 'r1 = r2(r3)',
+            'ReturnVal = "print"', 'state = _env[ReturnVal]',
+            'ReturnVal = state(r1)',
+            'r1 = nil', 'ReturnVal = {}', 'state = nil',
+        ],
+    });
+    const result = solveBetaControlFlow(source, parse(source));
+    assert.strictEqual(result.applied, true, "direct TEMP-to-VAR promotion after physical-register reuse was not recovered");
+    assert.strictEqual(result.mode, "fresh-register-locals");
+    assert.strictEqual(result.source, 'local v1 = math.abs((-10))\nprint(v1)\n');
+}
+
+{
+    // Direct cleanup-backed pack-slot registers remain pack-slot values until
+    // the source multi-return declaration is flushed. A later call must render
+    // the recovered locals, never duplicate the original call expression.
+    const source = vmStatesSource({
+        1: [
+            'r1 = "f"', 'r2 = _env[r1]',
+            'r3 = { r2() }',
+            'r4 = r3[2]', 'r5 = r3[3]', 'r6 = r3[1]',
+            'ReturnVal = "print"', 'state = _env[ReturnVal]',
+            'ReturnVal = state(r6, r4, r5)',
+            'r6 = nil', 'r4 = nil', 'r5 = nil',
+            'ReturnVal = {}', 'state = nil',
+        ],
+    });
+    const result = solveBetaControlFlow(source, parse(source));
+    assert.strictEqual(result.applied, true, "pending pack source locals were rendered as duplicated call expressions");
+    assert.strictEqual(result.mode, "fresh-register-locals");
+    assert.strictEqual(result.source, 'local v1, v2, v3 = f()\nprint(v1, v2, v3)\n');
+}
+
 console.log("fresh beta direct-global-call regression: ok");

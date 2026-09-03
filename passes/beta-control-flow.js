@@ -392,6 +392,38 @@ function matchLocalRegisterProgram(source, leaf, stateName, returnName, options 
             nonNilDefinitionCount.set(dest.name, (nonNilDefinitionCount.get(dest.name) || 0) + 1);
         }
     }
+    // Prometheus may compile a local initializer into an ordinary TEMP register
+    // and then promote that exact physical register into VAR ownership. Its
+    // copyRegisters(varReg, exprReg) emits nothing when both ids are equal, so
+    // the VM contains no explicit TEMP -> VAR handoff. Recover only the
+    // unambiguous no-reassignment shape: a direct non-copy definition whose
+    // very next write to that physical register is its nil lifetime cleanup.
+    // A plain TEMP free never emits that cleanup, while an already-active VAR
+    // cannot be selected by allocRegister(false) for this direct definition.
+    const directPromotionStartIndices = new Set();
+    const directPromotionStartsByRegister = new Map();
+    for (let scanIndex = 0; scanIndex < leaf.length; scanIndex++) {
+        const statement = leaf[scanIndex];
+        if (!isSingleAssignment(statement)) continue;
+        const dest = statement.variables[0];
+        const rhs = statement.init[0];
+        if (!isIdentifier(dest) || !cleanupRegs.has(dest.name) || rhs?.type === "NilLiteral" || isIdentifier(rhs)) continue;
+        const nextWrite = findNextFutureEvent(dest.name, scanIndex, WRITE);
+        if (!nextWrite || (nextWrite.flags & NIL_WRITE) === 0) continue;
+        const cleanup = leaf[nextWrite.index];
+        if (!isSingleAssignment(cleanup, dest.name) || cleanup.init[0]?.type !== "NilLiteral") continue;
+        directPromotionStartIndices.add(scanIndex);
+        let starts = directPromotionStartsByRegister.get(dest.name);
+        if (!starts) directPromotionStartsByRegister.set(dest.name, starts = []);
+        starts.push(scanIndex);
+    }
+    function hasFutureDirectPromotionStart(startIndex, name) {
+        const starts = directPromotionStartsByRegister.get(name);
+        if (!starts) return false;
+        for (const index of starts) if (index > startIndex) return true;
+        return false;
+    }
+
     if (cleanupRegs.size === 0 && options.allowNoLocals !== true) return null;
 
     const expr = new Map(), exprKinds = new Map(), exprMeta = new Map();
@@ -572,6 +604,23 @@ function matchLocalRegisterProgram(source, leaf, stateName, returnName, options 
         }
         return false;
     }
+    function rhsUsesPendingPackSourceLocal(node) {
+        if (!node || typeof node !== "object") return false;
+        if (isIdentifier(node) && exprKinds.get(node.name) === "pack-slot") {
+            const meta = exprMeta.get(node.name);
+            const pendingPack = meta?.packReg ? pendingPacks.get(meta.packReg) : null;
+            const slotInfo = pendingPack && meta ? pendingPack.slots.get(meta.slot) : null;
+            return !!(slotInfo?.localReg && locals.has(slotInfo.localReg));
+        }
+        for (const [key, value] of Object.entries(node)) {
+            if (key === "range" || key === "loc" || key === "variables") continue;
+            if (Array.isArray(value)) {
+                if (value.some(item => rhsUsesPendingPackSourceLocal(item))) return true;
+            } else if (value && typeof value === "object" && rhsUsesPendingPackSourceLocal(value)) return true;
+        }
+        return false;
+    }
+
     function hasFuturePendingPackSlotBeforeStateTouch(startIndex) {
         if (pendingPacks.size !== 1) return false;
         const pendingPack = [...pendingPacks.values()][0];
@@ -1000,8 +1049,9 @@ function matchLocalRegisterProgram(source, leaf, stateName, returnName, options 
         const callPackBarrier = isCallExpression && pendingPacks.size ? Math.max(...[...pendingPacks.values()].map(pack => pack.order)) : 0;
         const hasTrackedPackBarrier = callPackBarrier > 0;
         const isClosureTableOperand = isClosureCreation && isUniqueFutureTableOperand(index, name);
-        const isDeferredClosureCreation = isClosureCreation && (!!callFutureLocal || !!upvalueClosureFutureCell || isClosureTableOperand) && hasTrackedPackBarrier;
-        const isDeferredOrdinaryCall = isCallExpression && !isClosureCreation && hasTrackedPackBarrier && (!!callFutureLocal || callResultIsDiscarded);
+        const callUsesPendingPackSourceLocal = isCallExpression && rhsUsesPendingPackSourceLocal(rhs);
+        const isDeferredClosureCreation = isClosureCreation && !callUsesPendingPackSourceLocal && (!!callFutureLocal || !!upvalueClosureFutureCell || isClosureTableOperand) && hasTrackedPackBarrier;
+        const isDeferredOrdinaryCall = isCallExpression && !isClosureCreation && !callUsesPendingPackSourceLocal && hasTrackedPackBarrier && (!!callFutureLocal || callResultIsDiscarded);
         const terminalUnusedValuePackBarrier = terminalUnusedValueFutureLocal && pendingPacks.size ? Math.max(...[...pendingPacks.values()].map(pack => pack.order)) : 0;
         const isDeferredTerminalUnusedValue = !!terminalUnusedValueFutureLocal && terminalUnusedValuePackBarrier > 0;
         // Table source-storage ownership is independent of pending return packs.
@@ -1041,6 +1091,16 @@ function matchLocalRegisterProgram(source, leaf, stateName, returnName, options 
             isDeferredTerminalClosureCopy ||
             isDeferredTerminalUnusedCopy;
         if (pendingPacks.size && !isPackIndex && !isPackSlotCopy && !isReturnPackCreation && !isPendingNeutralBookkeeping && !flushPendingPacks()) return null;
+
+        if (directPromotionStartIndices.has(index) && !locals.has(name) && !isPackIndex) {
+            const value = renderRhs(rhs);
+            if (typeof value !== "string") return null;
+            const kind = rhs?.type === "TableConstructorExpression" ? "table" : "value";
+            const displayName = allocateLocal(name, kind);
+            out.push(`local ${displayName} = ${value}`);
+            if (kind === "table") plainTableLocals.add(name);
+            continue;
+        }
 
         if (isUnusedPlainTableReadLocal) {
             const value = renderRhs(rhs);
@@ -1185,7 +1245,12 @@ function matchLocalRegisterProgram(source, leaf, stateName, returnName, options 
             pendingPack.slots.set(rendered.slot, slotInfo);
             expr.set(name, rendered.call); exprKinds.set(name, "pack-slot"); exprMeta.set(name, { packReg: rendered.packReg, slot: rendered.slot });
             if (cleanupRegs.has(name)) {
-                reserveLocal(name, name === rendered.packReg);
+                // The slot can already be the source VAR register. Reserve its
+                // local ownership without erasing pack-slot provenance; later
+                // consumers must still know this value depends on the pending
+                // compiler return pack until flushPendingPacks() maps the slot
+                // to its recovered local display name.
+                reserveLocal(name, true);
                 slotInfo.localReg = name;
             } else {
                 const futureLocal = findFutureCleanupCopy(index, name);
@@ -1200,7 +1265,7 @@ function matchLocalRegisterProgram(source, leaf, stateName, returnName, options 
                     slotInfo.localReg = terminalFutureLocal;
                     deferredTerminalUnusedCopies.set(terminalFutureLocal, name);
                 } else if (isVmRegisterName(name) && isTerminalUnreadEpoch(index, name)) {
-                    reserveLocal(name, name === rendered.packReg);
+                    reserveLocal(name, true);
                     terminalUnusedLocals.add(name);
                     slotInfo.localReg = name;
                 }
@@ -1208,7 +1273,7 @@ function matchLocalRegisterProgram(source, leaf, stateName, returnName, options 
             continue;
         }
 
-        if (cleanupRegs.has(name) && !locals.has(name) && isPackSlotCopy) {
+        if (cleanupRegs.has(name) && !hasFutureDirectPromotionStart(index, name) && !locals.has(name) && isPackSlotCopy) {
             const meta = exprMeta.get(rhs.name);
             const pendingPack = meta ? pendingPacks.get(meta.packReg) : null;
             if (!meta || !pendingPack) return null;
@@ -1217,7 +1282,7 @@ function matchLocalRegisterProgram(source, leaf, stateName, returnName, options 
             reserveLocal(name); slotInfo.localReg = name; continue;
         }
 
-        if (cleanupRegs.has(name) && !locals.has(name) && isPosPreservationCopy(index, name, rhs)) {
+        if (cleanupRegs.has(name) && !hasFutureDirectPromotionStart(index, name) && !locals.has(name) && isPosPreservationCopy(index, name, rhs)) {
             const value = expr.get(stateName);
             if (typeof value !== "string") return null;
             expr.set(name, value);
@@ -1225,7 +1290,7 @@ function matchLocalRegisterProgram(source, leaf, stateName, returnName, options 
             continue;
         }
 
-        if (cleanupRegs.has(name) && !locals.has(name) && isIdentifier(rhs) && rhs.name !== name) {
+        if (cleanupRegs.has(name) && !hasFutureDirectPromotionStart(index, name) && !locals.has(name) && isIdentifier(rhs) && rhs.name !== name) {
             const value = expr.get(rhs.name) ?? (locals.has(rhs.name) ? localName(rhs.name) : null);
             if (typeof value !== "string") return null;
             const kind = exprKinds.get(rhs.name) || "value";
@@ -1233,7 +1298,7 @@ function matchLocalRegisterProgram(source, leaf, stateName, returnName, options 
             out.push(value === "nil" ? `local ${displayName}` : `local ${displayName} = ${value}`); continue;
         }
 
-        if (cleanupRegs.has(name) && !locals.has(name) && nonNilDefinitionCount.get(name) === 1) {
+        if (cleanupRegs.has(name) && !hasFutureDirectPromotionStart(index, name) && !locals.has(name) && nonNilDefinitionCount.get(name) === 1) {
             const value = renderRhs(rhs);
             if (typeof value !== "string") return null;
             const kind = rhs?.type === "TableConstructorExpression" ? "table" : "value";

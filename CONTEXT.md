@@ -77,11 +77,12 @@ During work:
 After meaningful tracked changes:
 1. run focused tests
 2. run broader regressions relevant to the change
-3. run `git diff --check`
-4. update/compact `CONTEXT.md`
-5. stage ONLY files belonging to the current change
-6. make a focused commit
-7. push `origin/main`
+3. for Fresh-CF/register-lifetime/scheduling changes, keep a mixed control-flow gate: run the tracked Fresh CF + if suites and representative real-compiler fixtures covering supported short-circuit `and`/`or` (TESTSET-style CFG) plus `if/elseif/else`; when a newly added mixed fixture fails, compare the same normalized VM against the pre-change commit before classifying it as a regression
+4. run `git diff --check`
+5. update/compact `CONTEXT.md`
+6. stage ONLY files belonging to the current change
+7. make a focused commit
+8. push `origin/main`
 
 Git should be updated constantly: meaningful self-contained project changes should not accumulate uncommitted across many unrelated tasks. Context should also be updated constantly.
 
@@ -675,7 +676,7 @@ For nonconstant RHS, compiler may create extra states to preserve short-circuit 
 
 The result register is initialized from LHS, state chooses whether RHS executes, and RHS may overwrite the result before join.
 
-Therefore a multi-state region can represent one source logical expression rather than an `if` statement. Fresh CF currently handles only limited proven forms of this pattern.
+Therefore a multi-state region can represent one source logical expression rather than an `if` statement. Fresh CF currently handles only limited proven forms of this pattern. A 55-state real-compiler stress fixture combining side-effecting short-circuit calls, chained `and/or` values, and nested `if/elseif/else` still fails closed with `logical branch has no compiler result copy`; the same normalized VM was verified to fail identically at commit `5901341`, so this is a pre-existing unsupported logical shape rather than a regression from the later straight-line lifetime work. Keep this limitation separate from unrelated fixes.
 
 ### 7.14 `if`
 
@@ -1261,6 +1262,7 @@ Current rules include:
 Fresh CF can establish a source local by:
 - copy from a proven expression/temp into cleanup-backed storage
 - direct first meaningful definition when exactly one non-nil definition proves TEMP->VAR promotion shape
+- an erased in-place TEMP->VAR promotion when Prometheus reuses the expression TEMP as the source VAR: `getVarRegister(..., potentialId)` may mark that physical register VAR-owned and `copyRegisters(varReg, exprReg)` emits no statement when the ids are equal. Fresh CF proves the narrow no-reassignment form structurally: the candidate is a direct non-copy/non-nil definition of a cleanup-backed register and the very next write to that same physical register is its compiler nil cleanup. Earlier TEMP epochs on that physical register do not become source storage merely because the later VAR lifetime cleans up; when a later direct-promotion start is proven, earlier cleanup-backed promotion heuristics for that register are suppressed. Pack-slot extraction stays on its specialized multi-return path rather than being consumed by this generic proof.
 
 Future-copy/lifetime queries use the leaf event index documented above. `valueUsedBeforeOverwrite`, later-cleanup detection, terminal-unread proof, future cleanup-backed copies, terminal closure copies, terminal unused copies, and deferred upvalue closure stores all retain their prior proof conditions while avoiding repeated whole-leaf scans. AST identifier walks used outside those indexed queries remain uncached to limit retained-memory growth; on the 2,000-local solver-only comparison the index added about 1.1 MB heap, while the complete direct command still used less memory because its structural parser removed larger unused AST metadata.
 
@@ -1276,6 +1278,8 @@ Persistent table-storage ownership is proven structurally from TEMP/POS/RETURN/t
 Terminal source aliases are also preserved instead of inlined when a special compiler transport (`state`/`ReturnVal`) is copied into stable ordinary VM storage and the later lifetime proves persistent source ownership. This covers source such as `local math = math`, `local newproxy = newproxy`, `local floor = math.floor`, `local pi = math.pi`, stable primitive aliases such as `local f = false`, and terminal-live nil source storage copied from `ReturnVal`. The recovered names remain generated presentation names (`vN`), but later source expressions use those bindings rather than substituting the original global/member/literal. The proof is deliberately narrower than "special register copied to ordinary register": it rejects POS save/restore, immediately consumed one-use operands, one-use callable stabilization (including calls nested inside compiler return-pack tables), and a sole logical-expression use because that can be compiler short-circuit transport. Repeated stable use across distinct logical source expressions can prove the binding when no later redefinition occurs. This preserves source like `local b; local x = b or c; local y = not b or c` as one recovered `b` binding instead of substituting literal `nil`. The same rule applies to scalar `rN` and scalarized overflow `oN`.
 
 At terminal, cleanup-backed locals must have ended normally, while specifically proven terminal-live storage bindings are retired at root terminal. Any other still-live recovered local is a proof failure, not silently dropped.
+
+Latest randomized validation for the straight-line lifetime/pack change: 500 fresh Medium layouts passed with repeated exact runtime parity across the 2-state straight-line reuse/local-function/multi-return fixture, 65-state nested/sequential `if/elseif/else`, 28-state conditional storage, shadowing `pcall` multi-return, and direct call-local promotion. An additional supported 19-state TESTSET/short-circuit `and/or` fixture passed 100/100 fresh Medium layouts. This mixed gate is intentional so register-lifetime changes are checked against logical and conditional recovery immediately.
 
 ## 14. Multi-Return Recovery
 
@@ -1315,7 +1319,7 @@ Prometheus can interleave independent storage handoffs after calls. Fresh CF now
 - a pack slot is extracted into `state`/`ReturnVal` and its final cleanup-backed destination appears later
 - the physical pack register itself is reused as the first source-result local
 
-For a unique future TEMP -> cleanup-backed storage handoff, the source call/declaration is emitted at the actual call-evaluation point and the later VM copy is treated as storage bookkeeping. This preserves call order while allowing compiler shuffling. Pack provenance is preserved until all needed slots are recovered; reserving the pack register as source storage must not erase its still-live `return-pack` identity. Ambiguous/multiple handoffs still fail closed.
+For a unique future TEMP -> cleanup-backed storage handoff, the source call/declaration is emitted at the actual call-evaluation point and the later VM copy is treated as storage bookkeeping. This preserves call order while allowing compiler shuffling. Pack provenance is preserved until all needed slots are recovered; reserving the pack register as source storage must not erase its still-live `return-pack` identity. Direct cleanup-backed slot registers likewise retain `pack-slot` provenance until flush. If a later call reads a pending pack slot that is already proven to become a source local, that call may not render/defer across the pending-pack barrier: Fresh CF flushes/maps the multi-return declaration first so the call uses the recovered locals instead of duplicating the original call expression once per slot. Ambiguous/multiple handoffs still fail closed.
 
 A pending multi-return declaration may also survive a compiler-shuffled borrowed-POS global load between slot extractions. Fresh CF accepts `state = _env[key]` across exactly one active pending pack only when the key is already proven, the load does not depend on that pack, and another unextracted static slot from that same pack is reachable before any later `state` touch or pack-register overwrite. This fixes source shadowing such as `local a, b = pcall(a, "asdsa")` when slot 1 becomes the newly shadowing `a`, slot 2 is unused and immediately cleaned, and setup for the following call is shuffled between the two slot reads. If slot 1 must be referenced by deferred source before pack flush, its presentation binding is attached to the pending slot; pending display names are reserved in pack-creation/slot order, and flush explicitly rebinds every still-active slot local while leaving already-cleaned unused slots retired. The exact vararg/pcall shadowing fixture passed 10/10 randomized Medium recompiles with exact runtime parity; the non-shadowing variant and the 130-state stress fixture also retain runtime parity.
 
