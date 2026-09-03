@@ -76,8 +76,7 @@ function vmStatesSource(states) {
 }
 
 {
-    // First implementation is no-else only. Effects on both branch paths stay
-    // fail-closed rather than being guessed as an if/else.
+    // Both branch paths contain proven source effects and converge at state 4.
     const source = vmStatesSource({
         1: ['r1 = "flag"', 'state = _env[r1]', 'state = state and 2 or 3'],
         2: ['ReturnVal = "print"', 'state = _env[ReturnVal]', 'r1 = true', 'ReturnVal = state(r1)', 'state = 4'],
@@ -85,7 +84,41 @@ function vmStatesSource(states) {
         4: ['ReturnVal = {}', 'state = nil'],
     });
     const result = solveBetaControlFlow(source, parse(source));
-    assert.strictEqual(result.applied, false, "simple-if matcher accepted an if/else region");
+    assert.strictEqual(result.applied, true);
+    assert.strictEqual(result.mode, "fresh-simple-if");
+    assert.strictEqual(result.source, "if flag then\n    print(true)\nelse\n    print(false)\nend\n");
+}
+
+{
+    // Cleanup-backed local condition must remain before the if/else and clean at join.
+    const source = vmStatesSource({
+        1: [
+            'r2 = "flag"', 'r1 = _env[r2]', 'ReturnVal = true',
+            'state = r1 == ReturnVal', 'r1 = state', 'state = r1 and 2 or 3',
+        ],
+        2: ['ReturnVal = "print"', 'state = _env[ReturnVal]', 'r2 = true', 'ReturnVal = state(r2)', 'state = 4'],
+        3: ['ReturnVal = "print"', 'state = _env[ReturnVal]', 'r2 = false', 'ReturnVal = state(r2)', 'state = 4'],
+        4: ['r1 = nil', 'ReturnVal = {}', 'state = nil'],
+    });
+    const result = solveBetaControlFlow(source, parse(source));
+    assert.strictEqual(result.applied, true);
+    assert.strictEqual(result.mode, "fresh-simple-if");
+    assert.strictEqual(result.source, "local v1 = (flag == true)\nif v1 then\n    print(true)\nelse\n    print(false)\nend\n");
+}
+
+{
+    // Identical-looking effects on both sides still belong to their branches;
+    // they must not be mistaken for work that happened before the branch.
+    const source = vmStatesSource({
+        1: ['r1 = "flag"', 'state = _env[r1]', 'state = state and 2 or 3'],
+        2: ['ReturnVal = "print"', 'state = _env[ReturnVal]', 'r1 = true', 'ReturnVal = state(r1)', 'state = 4'],
+        3: ['ReturnVal = "print"', 'state = _env[ReturnVal]', 'r1 = true', 'ReturnVal = state(r1)', 'state = 4'],
+        4: ['ReturnVal = {}', 'state = nil'],
+    });
+    const result = solveBetaControlFlow(source, parse(source));
+    assert.strictEqual(result.applied, true);
+    assert.strictEqual(result.mode, "fresh-simple-if");
+    assert.strictEqual(result.source, "if flag then\n    print(true)\nelse\n    print(true)\nend\n");
 }
 
 console.log("fresh beta simple-if regression: ok");

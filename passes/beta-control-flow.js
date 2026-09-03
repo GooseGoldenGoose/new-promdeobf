@@ -2273,13 +2273,14 @@ function matchMultiStateLogicalLocals(source, stateWhile, stateName, returnName,
         const f = al.truth ? b : a;
         const cond = al.condition;
         const te = t.effects || [], fe = f.effects || [];
-        let effectPrefix = 0;
-        while (effectPrefix < te.length && effectPrefix < fe.length && te[effectPrefix] === fe[effectPrefix]) effectPrefix++;
+        if (!Number.isInteger(al.effectCount) || al.effectCount !== bl.effectCount) return null;
+        const effectPrefix = al.effectCount;
+        if (effectPrefix > te.length || effectPrefix > fe.length) return null;
+        for (let i = 0; i < effectPrefix; i++) if (te[i] !== fe[i]) return null;
         const trueEffects = te.slice(effectPrefix), falseEffects = fe.slice(effectPrefix);
         const hasConditionalEffects = trueEffects.length > 0 || falseEffects.length > 0;
         if (hasConditionalEffects) {
             if (!allowConditionalIf || prefix !== 0) return null;
-            if (trueEffects.length > 0 && falseEffects.length > 0) return null;
         }
         const keys = new Set([...t.env.keys(), ...f.env.keys()]);
         keys.delete(stateName);
@@ -2308,10 +2309,16 @@ function matchMultiStateLogicalLocals(source, stateWhile, stateName, returnName,
             else return null;
         }
         if (hasConditionalEffects) {
-            const bodyEffects = trueEffects.length > 0 ? trueEffects : falseEffects;
-            const condition = trueEffects.length > 0 ? cond : `(not ${cond})`;
-            const body = bodyEffects.map(line => `    ${line}`).join("\n");
-            out.push(`if ${condition} then\n${body}\nend`);
+            if (trueEffects.length > 0 && falseEffects.length > 0) {
+                const trueBody = trueEffects.map(line => `    ${line}`).join("\n");
+                const falseBody = falseEffects.map(line => `    ${line}`).join("\n");
+                out.push(`if ${cond} then\n${trueBody}\nelse\n${falseBody}\nend`);
+            } else {
+                const bodyEffects = trueEffects.length > 0 ? trueEffects : falseEffects;
+                const condition = trueEffects.length > 0 ? cond : `(not ${cond})`;
+                const body = bodyEffects.map(line => `    ${line}`).join("\n");
+                out.push(`if ${condition} then\n${body}\nend`);
+            }
             conditionalIfCount++;
         }
         return { env, markers: am.slice(0, prefix), effects: te.slice(0, effectPrefix) };
@@ -2450,8 +2457,9 @@ function matchMultiStateLogicalLocals(source, stateWhile, stateName, returnName,
         else if (tr.kind === "branch") {
             const condition = resolveId(tr.conditionRegister, env);
             if (condition == null) return null;
-            sends.push({ target: tr.onTrue, env, markers: [...markers, { condition, truth: true }], effects });
-            sends.push({ target: tr.onFalse, env, markers: [...markers, { condition, truth: false }], effects });
+            const effectCount = effects.length;
+            sends.push({ target: tr.onTrue, env, markers: [...markers, { condition, truth: true, effectCount }], effects });
+            sends.push({ target: tr.onFalse, env, markers: [...markers, { condition, truth: false, effectCount }], effects });
         }
         for (const send of sends) {
             if (!incoming.has(send.target)) incoming.set(send.target, []);
