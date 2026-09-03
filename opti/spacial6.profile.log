@@ -1,0 +1,110 @@
+PROFILE_SECTIONS round=1 dependency_keys=15.085 env_fold=1.835 loop_short=0.987 low_adjacent=21.717 low_generic_for=0.247 low_numeric_and_rest=0.259 low_risk=23.267 low_table_args=0.572 main_cleanup=364.300 main_dedicated=11.147 main_single_use=352.251 main_unused=0.615 multi_return=7.029 repeat_precheck=0.376 usage_index=55.140 value_short=12.308
+PROFILE_KINDS round=1 AdjacentInline=350 AssignmentValueInline=2940 BareReturn=472 CallArgumentInline=194 CopyChain=124 DeadCallResult=805 DeadLocal=105 DeferredLocal=1708 DirectNilCleanup=430 IndexBaseAlias=26 IndexKeyInline=12016 LiteralInline=9568 LocalAlias=16630 MultiReturnCollapse=384 MultiReturnForward=166 NumericForConstant=18 PackedReturn=24 RepeatTailInline=44
+PROFILE round=1 bytes=3624988 parse_ms=26.000 collect_ms=1306.868 apply_ms=4.038 edits=46004 total_ms=1339.567
+PROFILE_SECTIONS round=2 dependency_keys=7.265 env_fold=2.395 loop_short=0.177 low_adjacent=10.813 low_generic_for=0.269 low_numeric_and_rest=0.210 low_risk=12.087 low_table_args=0.371 main_cleanup=225.238 main_dedicated=7.824 main_single_use=216.879 main_unused=0.238 multi_return=2.679 repeat_precheck=0.275 usage_index=30.445 value_short=7.840
+PROFILE_KINDS round=2 AdjacentInline=370 AssignmentKeyInline=661 AssignmentValueInline=216 CallArgumentInline=330 CopyChain=104 DeadCallResult=303 DeadLocal=48 EnvFold=2212 GenericForTuple=76 IndexBaseAlias=2 IndexKeyInline=4530 LiteralInline=14746 LocalAlias=7388 MultiReturnCollapse=88 MultiReturnForward=64 MultiReturnSelfAssignment=2 MultiReturnUnusedTarget=9 Namecall=1716 NumericForConstant=22 NumericForDefaultStep=10 TableConstructorKeyInline=12 ValueShortCircuit=84
+PROFILE round=2 bytes=3149072 parse_ms=18.492 collect_ms=774.399 apply_ms=3.700 edits=32993 total_ms=798.428
+PROFILE_SECTIONS round=3 dependency_keys=3.369 env_fold=1.101 loop_short=0.139 low_adjacent=5.082 low_generic_for=0.195 low_numeric_and_rest=0.165 low_risk=6.139 low_table_args=0.315 main_cleanup=106.165 main_dedicated=3.760 main_single_use=101.923 main_unused=0.201 multi_return=0.821 repeat_precheck=0.193 usage_index=19.037 value_short=4.621
+PROFILE_KINDS round=3 AdjacentInline=188 AssignmentKeyInline=20 AssignmentValueInline=54 CallArgumentInline=696 CopyChain=4 DeadCallResult=88 DeadLocal=12 EnvFold=75 FunctionInline=32 GenericForTuple=36 GlobalAlias=954 IndexBaseAlias=24 IndexKeyInline=300 LiteralInline=10528 LocalAlias=5542 MultiReturnCollapse=8 MultiReturnForward=12 MultiReturnUnusedTarget=2 TableConstructorKeyInline=6 ValueShortCircuit=15
+PROFILE round=3 bytes=2893987 parse_ms=13.026 collect_ms=372.188 apply_ms=1.756 edits=18596 total_ms=388.083
+PROFILE_SECTIONS round=4 dependency_keys=2.338 env_fold=0.758 loop_short=0.117 low_adjacent=3.872 low_generic_for=0.132 low_numeric_and_rest=0.132 low_risk=4.748 low_table_args=0.269 main_cleanup=62.154 main_dedicated=1.986 main_single_use=59.728 main_unused=0.165 multi_return=0.318 repeat_precheck=0.141 usage_index=11.583 value_short=1.999
+PROFILE_KINDS round=4 AdjacentInline=52 AssignmentKeyInline=68 AssignmentValueInline=22 CallArgumentInline=390 DeadCallResult=23 DeadLocal=4 DeferredLocal=2 EnvFold=6 FunctionInline=236 GlobalAlias=106 IndexBaseAlias=2082 IndexKeyInline=2 LiteralInline=32 LocalAlias=56 ReturnedCallBaseInline=6 ValueShortCircuit=8
+PROFILE round=4 bytes=2850598 parse_ms=11.725 collect_ms=228.055 apply_ms=0.758 edits=3095 total_ms=240.777
+PROFILE_SECTIONS round=5 dependency_keys=2.875 env_fold=1.193 loop_short=0.119 low_adjacent=4.626 low_generic_for=0.128 low_numeric_and_rest=0.137 low_risk=5.649 low_table_args=0.422 main_cleanup=56.337 main_dedicated=2.111 main_single_use=53.787 main_unused=0.171 multi_return=0.374 repeat_precheck=0.150 usage_index=10.287 value_short=1.617
+PROFILE_KINDS round=5 AdjacentInline=4 AssignmentKeyInline=4 AssignmentValueInline=22 CallArgumentInline=116 CopyChain=2 DeadCallResult=10 DeadLocal=2 DeferredLocal=14 FunctionInline=262 GlobalAlias=54 IndexBaseAlias=10 IndexKeyInline=8 LocalAlias=4 ReturnedCallBaseInline=2 ValueShortCircuit=8
+PROFILE round=5 bytes=2841273 parse_ms=10.281 collect_ms=212.847 apply_ms=0.758 edits=522 total_ms=224.046
+PROFILE_SECTIONS round=6 dependency_keys=2.567 env_fold=0.101 loop_short=0.134 low_adjacent=3.357 low_generic_for=0.143 low_numeric_and_rest=0.149 low_risk=4.427 low_table_args=0.426 main_cleanup=31.207 main_dedicated=1.884 main_single_use=28.866 main_unused=0.172 multi_return=0.340 repeat_precheck=0.168 usage_index=17.911 value_short=2.085
+PROFILE_KINDS round=6 AdjacentInline=2 AssignmentValueInline=24 CallArgumentInline=24 CopyChain=2 DeadLocal=3 DeferredLocal=8 FunctionInline=106 GlobalAlias=24 ValueShortCircuit=2
+PROFILE round=6 bytes=2818695 parse_ms=16.308 collect_ms=202.063 apply_ms=1.162 edits=195 total_ms=219.626
+PROFILE_SECTIONS round=7 dependency_keys=2.541 env_fold=0.091 loop_short=0.127 low_adjacent=3.684 low_generic_for=0.145 low_numeric_and_rest=0.141 low_risk=4.781 low_table_args=0.441 main_cleanup=22.410 main_dedicated=1.867 main_single_use=20.088 main_unused=0.164 multi_return=0.340 repeat_precheck=0.148 usage_index=10.750 value_short=1.622
+PROFILE_KINDS round=7 AssignmentValueInline=26 CallArgumentInline=12 DeferredLocal=8 FunctionInline=22 GlobalAlias=2 ValueShortCircuit=2
+PROFILE round=7 bytes=2817223 parse_ms=10.802 collect_ms=183.727 apply_ms=0.731 edits=72 total_ms=195.333
+PROFILE_SECTIONS round=8 dependency_keys=2.470 env_fold=0.093 loop_short=0.129 low_adjacent=3.224 low_generic_for=0.142 low_numeric_and_rest=0.291 low_risk=4.409 low_table_args=0.408 main_cleanup=17.865 main_dedicated=1.752 main_single_use=15.667 main_unused=0.158 multi_return=0.342 repeat_precheck=0.144 usage_index=11.088 value_short=1.431
+PROFILE_KINDS round=8 AssignmentKeyInline=2 AssignmentValueInline=12 CallArgumentInline=6 FunctionInline=16 ValueShortCircuit=1
+PROFILE round=8 bytes=2816496 parse_ms=12.065 collect_ms=176.323 apply_ms=0.602 edits=37 total_ms=189.063
+PROFILE_SECTIONS round=9 dependency_keys=2.341 env_fold=0.137 loop_short=0.134 low_adjacent=3.599 low_generic_for=0.145 low_numeric_and_rest=0.157 low_risk=4.710 low_table_args=0.440 main_cleanup=18.893 main_dedicated=1.796 main_single_use=16.650 main_unused=0.174 multi_return=0.351 repeat_precheck=0.200 usage_index=11.482 value_short=1.662
+PROFILE_KINDS round=9 AssignmentValueInline=2 CallArgumentInline=6 FunctionInline=2 ValueShortCircuit=1
+PROFILE round=9 bytes=2816096 parse_ms=11.917 collect_ms=189.601 apply_ms=0.648 edits=11 total_ms=202.245
+PROFILE_SECTIONS round=10 dependency_keys=2.395 env_fold=0.094 loop_short=0.155 low_adjacent=3.155 low_generic_for=0.134 low_numeric_and_rest=0.178 low_risk=4.296 low_table_args=0.441 main_cleanup=15.761 main_dedicated=1.710 main_single_use=13.605 main_unused=0.151 multi_return=0.342 repeat_precheck=0.150 usage_index=10.505 value_short=1.759
+PROFILE_KINDS round=10 CallArgumentInline=2 FunctionInline=2 ValueShortCircuit=1
+PROFILE round=10 bytes=2815775 parse_ms=13.817 collect_ms=177.805 apply_ms=0.643 edits=5 total_ms=192.344
+PROFILE_SECTIONS round=11 dependency_keys=2.346 env_fold=0.095 loop_short=0.129 low_adjacent=3.095 low_generic_for=0.137 low_numeric_and_rest=0.138 low_risk=4.109 low_table_args=0.401 main_cleanup=15.606 main_dedicated=1.625 main_single_use=13.550 main_unused=0.155 multi_return=0.323 repeat_precheck=0.151 usage_index=11.699 value_short=1.586
+PROFILE_KINDS round=11 CallArgumentInline=2 FunctionInline=2 ValueShortCircuit=1
+PROFILE round=11 bytes=2815456 parse_ms=12.810 collect_ms=169.551 apply_ms=0.499 edits=5 total_ms=182.926
+PROFILE_SECTIONS round=12 dependency_keys=2.364 env_fold=0.090 loop_short=0.142 low_adjacent=2.984 low_generic_for=0.133 low_numeric_and_rest=0.141 low_risk=4.014 low_table_args=0.410 main_cleanup=16.957 main_dedicated=1.783 main_single_use=14.727 main_unused=0.167 multi_return=0.334 repeat_precheck=0.146 usage_index=11.367 value_short=1.713
+PROFILE_KINDS round=12 AssignmentValueInline=2 CallArgumentInline=2 ValueShortCircuit=1
+PROFILE round=12 bytes=2815137 parse_ms=11.689 collect_ms=172.227 apply_ms=0.776 edits=5 total_ms=184.760
+PROFILE_SECTIONS round=13 dependency_keys=2.483 env_fold=0.093 loop_short=0.134 low_adjacent=3.086 low_generic_for=0.137 low_numeric_and_rest=0.143 low_risk=4.116 low_table_args=0.403 main_cleanup=14.895 main_dedicated=1.595 main_single_use=12.858 main_unused=0.157 multi_return=0.321 repeat_precheck=0.143 usage_index=10.060 value_short=1.467
+PROFILE_KINDS round=13 CallArgumentInline=2 ValueShortCircuit=1
+PROFILE round=13 bytes=2814843 parse_ms=10.926 collect_ms=164.887 apply_ms=0.517 edits=3 total_ms=176.412
+PROFILE_SECTIONS round=14 dependency_keys=2.966 env_fold=0.098 loop_short=0.129 low_adjacent=4.023 low_generic_for=0.137 low_numeric_and_rest=0.145 low_risk=5.113 low_table_args=0.441 main_cleanup=19.209 main_dedicated=1.867 main_single_use=16.898 main_unused=0.155 multi_return=0.362 repeat_precheck=0.186 usage_index=11.327 value_short=1.668
+PROFILE_KINDS round=14 CallArgumentInline=2 ValueShortCircuit=1
+PROFILE round=14 bytes=2814549 parse_ms=10.769 collect_ms=181.132 apply_ms=0.626 edits=3 total_ms=192.613
+PROFILE_SECTIONS round=15 dependency_keys=2.418 env_fold=0.102 loop_short=0.130 low_adjacent=3.318 low_generic_for=0.149 low_numeric_and_rest=0.148 low_risk=4.403 low_table_args=0.424 main_cleanup=16.880 main_dedicated=1.875 main_single_use=14.538 main_unused=0.172 multi_return=0.361 repeat_precheck=0.155 usage_index=13.377 value_short=1.721
+PROFILE_KINDS round=15 CallArgumentInline=2 ValueShortCircuit=1
+PROFILE round=15 bytes=2814255 parse_ms=14.708 collect_ms=189.577 apply_ms=0.499 edits=3 total_ms=204.861
+PROFILE_SECTIONS round=16 dependency_keys=2.279 env_fold=0.094 loop_short=0.120 low_adjacent=3.477 low_generic_for=0.135 low_numeric_and_rest=0.137 low_risk=4.499 low_table_args=0.404 main_cleanup=15.302 main_dedicated=1.801 main_single_use=13.073 main_unused=0.152 multi_return=0.317 repeat_precheck=0.142 usage_index=10.334 value_short=1.468
+PROFILE_KINDS round=16 CallArgumentInline=2 ValueShortCircuit=1
+PROFILE round=16 bytes=2813961 parse_ms=10.659 collect_ms=165.175 apply_ms=0.538 edits=3 total_ms=176.433
+PROFILE_SECTIONS round=17 dependency_keys=2.416 env_fold=0.093 loop_short=0.129 low_adjacent=3.136 low_generic_for=0.137 low_numeric_and_rest=0.147 low_risk=4.194 low_table_args=0.428 main_cleanup=16.566 main_dedicated=1.669 main_single_use=14.465 main_unused=0.151 multi_return=0.365 repeat_precheck=0.141 usage_index=9.594 value_short=1.482
+PROFILE_KINDS round=17 CallArgumentInline=2 ValueShortCircuit=1
+PROFILE round=17 bytes=2813669 parse_ms=9.513 collect_ms=163.600 apply_ms=0.512 edits=3 total_ms=173.692
+PROFILE_SECTIONS round=18 dependency_keys=2.445 env_fold=0.096 loop_short=0.128 low_adjacent=2.932 low_generic_for=0.138 low_numeric_and_rest=0.139 low_risk=3.992 low_table_args=0.443 main_cleanup=15.173 main_dedicated=1.695 main_single_use=13.045 main_unused=0.148 multi_return=0.333 repeat_precheck=0.145 usage_index=10.584 value_short=1.584
+PROFILE_KINDS round=18 CallArgumentInline=2 ValueShortCircuit=1
+PROFILE round=18 bytes=2813377 parse_ms=11.788 collect_ms=167.018 apply_ms=0.525 edits=3 total_ms=179.406
+PROFILE_SECTIONS round=19 dependency_keys=2.354 env_fold=0.092 loop_short=0.142 low_adjacent=3.274 low_generic_for=0.146 low_numeric_and_rest=0.147 low_risk=4.330 low_table_args=0.420 main_cleanup=15.206 main_dedicated=1.594 main_single_use=13.177 main_unused=0.155 multi_return=0.349 repeat_precheck=0.144 usage_index=9.827 value_short=1.478
+PROFILE_KINDS round=19 ValueShortCircuit=1
+PROFILE round=19 bytes=2813112 parse_ms=9.355 collect_ms=165.384 apply_ms=0.450 edits=1 total_ms=175.258
+PROFILE_SECTIONS round=20 dependency_keys=2.626 env_fold=0.091 loop_short=0.136 low_adjacent=3.431 low_generic_for=0.137 low_numeric_and_rest=0.148 low_risk=4.510 low_table_args=0.436 main_cleanup=15.998 main_dedicated=1.775 main_single_use=13.773 main_unused=0.169 multi_return=0.352 repeat_precheck=0.160 usage_index=11.626 value_short=1.803
+PROFILE_KINDS round=20 ValueShortCircuit=1
+PROFILE round=20 bytes=2812847 parse_ms=10.690 collect_ms=173.746 apply_ms=0.498 edits=1 total_ms=184.999
+PROFILE_SECTIONS round=21 dependency_keys=2.307 env_fold=0.098 loop_short=0.127 low_adjacent=2.986 low_generic_for=0.133 low_numeric_and_rest=0.140 low_risk=4.027 low_table_args=0.425 main_cleanup=16.220 main_dedicated=1.603 main_single_use=14.178 main_unused=0.151 multi_return=0.345 repeat_precheck=0.149 usage_index=10.546 value_short=1.621
+PROFILE_KINDS round=21 ValueShortCircuit=1
+PROFILE round=21 bytes=2812582 parse_ms=10.070 collect_ms=165.094 apply_ms=0.454 edits=1 total_ms=175.694
+PROFILE_SECTIONS round=22 dependency_keys=2.537 env_fold=0.142 loop_short=0.126 low_adjacent=3.100 low_generic_for=0.141 low_numeric_and_rest=0.136 low_risk=4.160 low_table_args=0.426 main_cleanup=15.893 main_dedicated=1.712 main_single_use=13.749 main_unused=0.157 multi_return=0.339 repeat_precheck=0.142 usage_index=10.058 value_short=1.379
+PROFILE_KINDS round=22 ValueShortCircuit=1
+PROFILE round=22 bytes=2812317 parse_ms=8.803 collect_ms=164.339 apply_ms=0.473 edits=1 total_ms=173.686
+PROFILE_SECTIONS round=23 dependency_keys=2.352 env_fold=0.095 loop_short=0.131 low_adjacent=3.133 low_generic_for=0.141 low_numeric_and_rest=0.143 low_risk=4.195 low_table_args=0.430 main_cleanup=15.937 main_dedicated=1.601 main_single_use=13.890 main_unused=0.161 multi_return=0.338 repeat_precheck=0.149 usage_index=9.981 value_short=1.434
+PROFILE_KINDS round=23 ValueShortCircuit=1
+PROFILE round=23 bytes=2812052 parse_ms=9.767 collect_ms=167.304 apply_ms=0.565 edits=1 total_ms=177.735
+PROFILE_SECTIONS round=24 dependency_keys=2.470 env_fold=0.099 loop_short=0.127 low_adjacent=3.500 low_generic_for=0.140 low_numeric_and_rest=0.146 low_risk=4.778 low_table_args=0.641 main_cleanup=15.403 main_dedicated=1.695 main_single_use=13.279 main_unused=0.155 multi_return=0.362 repeat_precheck=0.163 usage_index=10.718 value_short=1.489
+PROFILE_KINDS round=24 ValueShortCircuit=1
+PROFILE round=24 bytes=2811787 parse_ms=12.072 collect_ms=172.870 apply_ms=0.516 edits=1 total_ms=185.526
+PROFILE_SECTIONS round=25 dependency_keys=2.358 env_fold=0.093 loop_short=0.126 low_adjacent=3.361 low_generic_for=0.150 low_numeric_and_rest=0.151 low_risk=4.468 low_table_args=0.442 main_cleanup=15.722 main_dedicated=1.700 main_single_use=13.566 main_unused=0.167 multi_return=0.353 repeat_precheck=0.156 usage_index=11.265 value_short=1.608
+PROFILE_KINDS round=25 ValueShortCircuit=1
+PROFILE round=25 bytes=2811522 parse_ms=9.054 collect_ms=172.901 apply_ms=0.463 edits=1 total_ms=182.487
+PROFILE_SECTIONS round=26 dependency_keys=2.499 env_fold=0.094 loop_short=0.124 low_adjacent=3.021 low_generic_for=0.146 low_numeric_and_rest=0.137 low_risk=4.087 low_table_args=0.414 main_cleanup=15.532 main_dedicated=1.676 main_single_use=13.405 main_unused=0.160 multi_return=0.329 repeat_precheck=0.151 usage_index=9.938 value_short=1.539
+PROFILE_KINDS round=26 ValueShortCircuit=1
+PROFILE round=26 bytes=2811257 parse_ms=8.871 collect_ms=167.181 apply_ms=0.514 edits=1 total_ms=176.635
+PROFILE_SECTIONS round=27 dependency_keys=2.451 env_fold=0.100 loop_short=0.125 low_adjacent=3.366 low_generic_for=0.142 low_numeric_and_rest=0.141 low_risk=4.442 low_table_args=0.440 main_cleanup=14.852 main_dedicated=1.606 main_single_use=12.813 main_unused=0.151 multi_return=0.344 repeat_precheck=0.145 usage_index=9.765 value_short=1.473
+PROFILE_KINDS round=27 ValueShortCircuit=1
+PROFILE round=27 bytes=2810992 parse_ms=9.187 collect_ms=165.719 apply_ms=0.504 edits=1 total_ms=175.492
+PROFILE_SECTIONS round=28 dependency_keys=2.656 env_fold=0.096 loop_short=0.124 low_adjacent=3.090 low_generic_for=0.138 low_numeric_and_rest=0.136 low_risk=4.150 low_table_args=0.446 main_cleanup=16.843 main_dedicated=1.619 main_single_use=14.748 main_unused=0.193 multi_return=0.337 repeat_precheck=0.148 usage_index=10.052 value_short=1.424
+PROFILE_KINDS round=28 ValueShortCircuit=1
+PROFILE round=28 bytes=2810727 parse_ms=10.091 collect_ms=168.224 apply_ms=0.430 edits=1 total_ms=178.813
+PROFILE_SECTIONS round=29 dependency_keys=2.390 env_fold=0.088 loop_short=0.131 low_adjacent=3.317 low_generic_for=0.142 low_numeric_and_rest=0.141 low_risk=4.353 low_table_args=0.407 main_cleanup=14.991 main_dedicated=1.704 main_single_use=12.857 main_unused=0.154 multi_return=0.321 repeat_precheck=0.141 usage_index=10.479 value_short=1.450
+PROFILE_KINDS round=29 ValueShortCircuit=1
+PROFILE round=29 bytes=2810462 parse_ms=9.648 collect_ms=162.940 apply_ms=0.446 edits=1 total_ms=173.166
+PROFILE_SECTIONS round=30 dependency_keys=2.413 env_fold=0.092 loop_short=0.126 low_adjacent=3.054 low_generic_for=0.141 low_numeric_and_rest=0.134 low_risk=4.092 low_table_args=0.411 main_cleanup=14.788 main_dedicated=1.587 main_single_use=12.774 main_unused=0.148 multi_return=0.322 repeat_precheck=0.148 usage_index=9.364 value_short=1.345
+PROFILE_KINDS round=30 ValueShortCircuit=1
+PROFILE round=30 bytes=2810197 parse_ms=8.810 collect_ms=166.282 apply_ms=0.505 edits=1 total_ms=175.672
+PROFILE_SECTIONS round=31 dependency_keys=2.533 env_fold=0.090 loop_short=0.128 low_adjacent=3.094 low_generic_for=0.133 low_numeric_and_rest=0.137 low_risk=4.116 low_table_args=0.421 main_cleanup=14.914 main_dedicated=1.593 main_single_use=12.892 main_unused=0.155 multi_return=0.335 repeat_precheck=0.143 usage_index=9.700 value_short=1.405
+PROFILE_KINDS round=31 ValueShortCircuit=1
+PROFILE round=31 bytes=2809914 parse_ms=9.220 collect_ms=162.291 apply_ms=0.473 edits=1 total_ms=172.055
+PROFILE_SECTIONS round=32 dependency_keys=2.738 env_fold=0.085 loop_short=0.119 low_adjacent=3.051 low_generic_for=0.137 low_numeric_and_rest=0.133 low_risk=4.125 low_table_args=0.445 main_cleanup=14.923 main_dedicated=1.717 main_single_use=12.774 main_unused=0.151 multi_return=0.338 repeat_precheck=0.147 usage_index=9.448 value_short=1.421
+PROFILE_KINDS round=32 ValueShortCircuit=1
+PROFILE round=32 bytes=2809649 parse_ms=9.094 collect_ms=161.627 apply_ms=0.449 edits=1 total_ms=171.231
+PROFILE_SECTIONS round=33 dependency_keys=2.341 env_fold=0.085 loop_short=0.127 low_adjacent=2.998 low_generic_for=0.135 low_numeric_and_rest=0.133 low_risk=4.004 low_table_args=0.406 main_cleanup=14.876 main_dedicated=1.594 main_single_use=12.852 main_unused=0.147 multi_return=0.313 repeat_precheck=0.143 usage_index=9.434 value_short=1.414
+PROFILE_KINDS round=33 ValueShortCircuit=1
+PROFILE round=33 bytes=2809384 parse_ms=10.065 collect_ms=158.815 apply_ms=0.447 edits=1 total_ms=169.393
+PROFILE_SECTIONS round=34 dependency_keys=2.489 env_fold=0.097 loop_short=0.123 low_adjacent=3.032 low_generic_for=0.138 low_numeric_and_rest=0.139 low_risk=4.082 low_table_args=0.433 main_cleanup=15.997 main_dedicated=1.726 main_single_use=13.836 main_unused=0.163 multi_return=0.339 repeat_precheck=0.147 usage_index=10.126 value_short=1.465
+PROFILE_KINDS round=34 ValueShortCircuit=1
+PROFILE round=34 bytes=2809119 parse_ms=10.773 collect_ms=168.084 apply_ms=0.487 edits=1 total_ms=179.411
+PROFILE_SECTIONS round=35 dependency_keys=2.497 env_fold=0.087 loop_short=0.132 low_adjacent=3.416 low_generic_for=0.140 low_numeric_and_rest=0.136 low_risk=4.493 low_table_args=0.449 main_cleanup=14.954 main_dedicated=1.618 main_single_use=12.901 main_unused=0.153 multi_return=0.338 repeat_precheck=0.145 usage_index=10.099 value_short=1.468
+PROFILE_KINDS round=35 ValueShortCircuit=1
+PROFILE round=35 bytes=2808854 parse_ms=8.823 collect_ms=166.821 apply_ms=0.550 edits=1 total_ms=176.266
+PROFILE_SECTIONS round=36 dependency_keys=2.338 env_fold=0.089 loop_short=0.123 low_adjacent=3.067 low_generic_for=0.146 low_numeric_and_rest=0.147 low_risk=4.103 low_table_args=0.407 main_cleanup=16.386 main_dedicated=1.644 main_single_use=14.294 main_unused=0.159 multi_return=0.321 repeat_precheck=0.146 usage_index=9.913 value_short=1.485
+PROFILE_KINDS round=36 AssignmentValueInline=2
+PROFILE round=36 bytes=2808827 parse_ms=8.997 collect_ms=166.511 apply_ms=0.484 edits=2 total_ms=176.063
+PROFILE_SECTIONS round=37 dependency_keys=2.410 env_fold=0.089 loop_short=0.126 low_adjacent=3.224 low_generic_for=0.140 low_numeric_and_rest=0.138 low_risk=4.240 low_table_args=0.400 main_cleanup=14.737 main_dedicated=1.608 main_single_use=12.689 main_unused=0.151 multi_return=0.319 repeat_precheck=0.145 usage_index=10.349 value_short=1.556
+PROFILE round=37 bytes=2808827 parse_ms=9.223 collect_ms=160.654 apply_ms=0 edits=0 total_ms=169.932

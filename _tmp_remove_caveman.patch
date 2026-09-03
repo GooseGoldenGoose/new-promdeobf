@@ -1,0 +1,40 @@
+diff --git a/CONTEXT.md b/CONTEXT.md
+--- a/CONTEXT.md
++++ b/CONTEXT.md
+@@ -16,8 +16,8 @@ On a new chat:
+ 7. Do not assume old experimental branches/features still exist just because a prior chat discussed them. Current tracked code + this handoff define reality.
+ 
+ A new chat should understand from this file alone:
+-- user communication/workflow rules
++- project workflow rules
+ - repository and compiler-material paths
+ - exact project goal and semantic safety requirements
+ - how the Prometheus compiler turns source into VM states/register operations
+@@ -39,27 +39,9 @@ Current intended baseline:
+ - source recovery is intentionally not a source optimizer: proven source declarations/assignments/aliases remain even when unused, overwritten, or safely inlineable
+ - unrelated tracked user edits in `main.js` and `formater/input.txt` must be preserved unless explicitly requested otherwise
+ 
+-## 1. Communication Rules - Caveman Mode
+-
+-For project work:
+-- talk as little as possible
+-- be direct and technical
+-- do the work instead of narrating obvious file/shell operations
+-- short progress updates only when useful
+-- preferred labels: `Found:`, `Fixed:`, `Tested:`, `Commit:`
+-- no filler
+-- no unnecessary questions when enough information exists
+-- do not repeat project history already written here
+-- if something is wrong, state exactly what is wrong
+-- if the user asks `why` or asks for explanation, then explain the technical reason in detail
+-- final summary should be compact unless the user asks for detail
+-
+-Every project-related turn MUST end exactly with:
+-
+-`Done for this turn - you can prompt now.`
+-
+-### 1.1 Strict Task Confirmation / Scope Lock
++## 1. Strict Task Confirmation / Scope Lock
+ 
+ Before doing any user-requested project task that would inspect, test, modify, or run project code:
+ - first state exactly what you are going to do in this turn
