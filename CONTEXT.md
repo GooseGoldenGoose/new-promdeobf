@@ -687,7 +687,7 @@ state = condition and innerState or nextState
 
 Each completed branch jumps to final state.
 
-Fresh CF supports proven simple `if`, `if/else`, and same-join `elseif` chains. `elseif` is recognized structurally when the outer true body and every later condition body/final else body jump directly to the same outer join; the false edge may carry another condition, producing N-way incoming paths at that join. This differs from explicit `else { if ... }`, where the inner branches first merge at a distinct inner join before reaching the outer join; that nested form remains fail-closed and must not be flattened to `elseif`. Direct conditions and cleanup-backed source-local conditions are supported. Existing logical/TESTSET recovery still runs first. The matcher records branch effect depth, rejects logical result-carrier merges, live path-dependent values, empty/ambiguous branch effects, and non-canonical join shapes. Arbitrary nested statement regions and branch-local declarations/assignments remain fail-closed.
+Fresh CF supports proven simple `if`, `if/else`, same-join `elseif` chains, and recursively nested two-way `if` / `if-else` regions with distinct inner joins. `elseif` is recognized structurally when the outer true body and every later condition body/final else body jump directly to the same outer join. An explicit nested `else { if ... }` is preserved as nesting when its inner true/false paths merge at a distinct inner join before reaching the outer join; the inner merge is carried as a structured branch effect and is never flattened into `elseif`. This recursive nested proof currently covers two-way inner joins, including one-sided inner `if` and inner `if/else`; nested same-join `elseif` chains inside another branch and arbitrary branch-local declarations/assignments remain fail-closed. Direct/call conditions and cleanup-backed source-local conditions are supported. Existing logical/TESTSET recovery still runs first. The matcher records branch effect depth, rejects logical result-carrier merges, live path-dependent values, empty/ambiguous branch effects, and non-canonical join shapes.
 
 ### 7.15 `while`
 
@@ -1171,7 +1171,7 @@ Random register/state IDs and random constants must not matter.
 6. find `while state` dispatcher
 7. try closure-entry program recovery
 8. try limited multi-state logical/local recovery
-9. try proven simple `if` / `if/else` / same-join `elseif` recovery
+9. try proven simple `if` / `if/else` / same-join `elseif` / recursive two-way nested-if recovery
 10. if neither applies, require one-state leaf
 11. try register/local program recovery
 12. try direct global-call recovery
@@ -1570,7 +1570,7 @@ The following exported helpers are currently intentionally unsupported/stubs:
 - `removeCompilerPosPreservationOperations`
 
 Therefore do NOT claim full support for:
-- explicit nested/arbitrary `if` regions beyond the proven simple `if` / `if/else` diamonds and same-join `elseif` chains
+- nested same-join `elseif` chains inside another branch and arbitrary `if` regions beyond proven recursive two-way joins
 - general `while`
 - general `repeat`
 - numeric `for`
@@ -1578,7 +1578,7 @@ Therefore do NOT claim full support for:
 - arbitrary nested control flow
 - arbitrary break/continue structuring
 
-Limited compiler short-circuit multi-state logic and the proven simple `if` / `if/else` / same-join `elseif` shapes are supported separately, as documented above.
+Limited compiler short-circuit multi-state logic and the proven simple `if` / `if/else` / same-join `elseif` / recursive two-way nested-if shapes are supported separately, as documented above.
 
 ## 24. What "Dynamic / Structural" Means in Practice
 
@@ -1891,14 +1891,14 @@ Current performance baseline after the 2026-09-02 pipeline optimization:
 - a runnable 150-local real Medium fixture produced byte-identical old/new fresh-CF output and exact source/obfuscated/recovered runtime parity across 150 output lines
 - the real 401-state logical stress fixture now recovers all 100 source locals and all 100 following `print` calls in source order; the recovered output has 200 statements and exact seeded runtime parity with the source and obfuscated programs
 - the same 401-state Fresh-CF solver remains fast after call-preservation support (7-run solver median 105.9 ms with the lean structural AST)
-- simple `if`, `if/else`, and same-join `elseif` recovery supports direct conditions and cleanup-backed local conditions. `elseif` uses N-way marker-depth recovery at one shared outer join, including multiple `elseif` clauses; explicit nested `else -> if` remains distinguishable because its inner branches merge at a separate state first. The exact user `elseif` fixture recovered the original chain, source/obfuscated/recovered runtime output matched exactly, 5/5 fresh Medium recompiles passed, and focused regressions cover multiple `elseif` clauses plus the nested negative case. Existing `or`/TESTSET fixtures remain in `fresh-multistate-logical`.
+- simple `if`, `if/else`, and same-join `elseif` recovery supports direct/call conditions and cleanup-backed local conditions. `elseif` uses N-way marker-depth recovery at one shared outer join, including multiple top-level `elseif` clauses. Distinct inner joins now recover recursively as nested two-way `if` / `if-else` effects instead of being flattened: the user 8-state `if true / elseif print(...) / else { if print(...) }` fixture recovers with the explicit nested `if`, and a 9-state nested `if/else` fixture executes the inner branch with exact source/obfuscated/recovered runtime parity. Both fixtures passed 5/5 fresh Medium recompiles; focused regressions preserve the structural difference between same-join `elseif` and distinct-inner-join nesting. Existing `or`/TESTSET fixtures remain in `fresh-multistate-logical`.
 
 There is no known blocker in the currently supported straight-line/local/call/table/closure/upvalue/multi-return feature set represented by the established regression fixtures.
 
 ### Still intentionally unsupported / fail-closed
 
 Do not claim full source reconstruction for:
-- explicit nested/arbitrary `if` regions beyond the proven simple `if` / `if/else` diamonds and same-join `elseif` chains
+- nested same-join `elseif` chains inside another branch and arbitrary `if` regions beyond proven recursive two-way joins
 - general `while`
 - general `repeat`
 - numeric `for`
@@ -1906,7 +1906,7 @@ Do not claim full source reconstruction for:
 - arbitrary nested CFG structuring
 - arbitrary `break` / `continue` reconstruction
 
-Those remain separate future features. Limited compiler-generated short-circuit logical CFGs and the proven simple `if` / `if/else` / same-join `elseif` shapes are supported; none may be generalized into arbitrary CFG guessing.
+Those remain separate future features. Limited compiler-generated short-circuit logical CFGs and the proven simple `if` / `if/else` / same-join `elseif` / recursive two-way nested-if shapes are supported; none may be generalized into arbitrary CFG guessing.
 
 Correctness fix completed during 2026-09-02 Fresh-CF follow-up:
 - the 401-state Medium fixture previously dropped every post-logical `print` call because `matchMultiStateLogicalLocals` stored discarded call results in its environment and later overwrote them without emitting the side effect

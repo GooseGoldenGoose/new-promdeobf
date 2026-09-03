@@ -157,8 +157,8 @@ function vmStatesSource(states) {
 }
 
 {
-    // Explicit `else { if ... }` has an inner join before the outer join and
-    // must not be flattened into elseif.
+    // Explicit `else { if ... }` has an inner join before the outer join.
+    // Recover the nested structure and do not flatten it into elseif.
     const source = vmStatesSource({
         1: ['r1 = "a"', 'state = _env[r1]', 'state = state and 2 or 3'],
         2: ['ReturnVal = "print"', 'state = _env[ReturnVal]', 'r1 = "A"', 'ReturnVal = state(r1)', 'state = 4'],
@@ -169,7 +169,30 @@ function vmStatesSource(states) {
         7: ['state = 4'],
     });
     const result = solveBetaControlFlow(source, parse(source));
-    assert.strictEqual(result.applied, false, "nested else-if was flattened into elseif");
+    assert.strictEqual(result.applied, true);
+    assert.strictEqual(result.mode, "fresh-simple-if");
+    assert.strictEqual(result.source, 'if a then\n    print("A")\nelse\n    if b then\n        print("B")\n    else\n        print("C")\n    end\nend\n');
+    assert.doesNotMatch(result.source, /elseif b/);
+}
+
+{
+    // User shape: top-level if/elseif with call conditions and an explicit
+    // nested one-sided if in the final else. The inner join (state 8) must
+    // survive as nested structure before reaching outer join state 4.
+    const source = vmStatesSource({
+        1: ['state = true', 'state = state and 2 or 3', 'r1 = args'],
+        2: ['ReturnVal = "print"', 'state = _env[ReturnVal]', 'r2 = "E"', 'ReturnVal = state(r2)', 'state = 4'],
+        3: ['ReturnVal = "print"', 'state = _env[ReturnVal]', 'r2 = "ASDAS"', 'ReturnVal = state(r2)', 'state = ReturnVal and 5 or 6'],
+        4: ['ReturnVal = {}', 'state = nil'],
+        5: ['ReturnVal = "print"', 'state = _env[ReturnVal]', 'r2 = "W"', 'ReturnVal = state(r2)', 'state = 4'],
+        6: ['ReturnVal = "print"', 'state = _env[ReturnVal]', 'r2 = "ADS"', 'ReturnVal = state(r2)', 'state = ReturnVal and 7 or 8'],
+        7: ['ReturnVal = "print"', 'state = _env[ReturnVal]', 'r2 = "GG"', 'ReturnVal = state(r2)', 'state = 8'],
+        8: ['state = 4'],
+    });
+    const result = solveBetaControlFlow(source, parse(source));
+    assert.strictEqual(result.applied, true);
+    assert.strictEqual(result.mode, "fresh-simple-if");
+    assert.strictEqual(result.source, 'if true then\n    print("E")\nelseif print("ASDAS") then\n    print("W")\nelse\n    if print("ADS") then\n        print("GG")\n    end\nend\n');
 }
 
 console.log("fresh beta simple-if regression: ok");

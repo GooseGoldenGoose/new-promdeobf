@@ -2326,14 +2326,18 @@ function matchMultiStateLogicalLocals(source, stateWhile, stateName, returnName,
         const lines = [];
         for (let depth = 0; depth < chainLength; depth++) {
             lines.push(`${depth === 0 ? "if" : "elseif"} ${conditions[depth]} then`);
-            for (const effect of bodies[depth]) lines.push(`    ${effect}`);
+            for (const effect of bodies[depth]) lines.push(indentConditionalEffect(effect));
         }
         lines.push("else");
-        for (const effect of bodies[chainLength]) lines.push(`    ${effect}`);
+        for (const effect of bodies[chainLength]) lines.push(indentConditionalEffect(effect));
         lines.push("end");
         out.push(lines.join("\n"));
         conditionalIfCount++;
         return { env, markers: [], effects: (ordered[0].effects || []).slice(0, baseEffectCount) };
+    }
+
+    function indentConditionalEffect(text, prefix = "    ") {
+        return String(text).split("\n").map(line => prefix + line).join("\n");
     }
 
     function mergeCandidates(candidates, joinId) {
@@ -2361,9 +2365,7 @@ function matchMultiStateLogicalLocals(source, stateWhile, stateName, returnName,
         for (let i = 0; i < effectPrefix; i++) if (te[i] !== fe[i]) return null;
         const trueEffects = te.slice(effectPrefix), falseEffects = fe.slice(effectPrefix);
         const hasConditionalEffects = trueEffects.length > 0 || falseEffects.length > 0;
-        if (hasConditionalEffects) {
-            if (!allowConditionalIf || prefix !== 0) return null;
-        }
+        if (hasConditionalEffects && !allowConditionalIf) return null;
         const keys = new Set([...t.env.keys(), ...f.env.keys()]);
         keys.delete(stateName);
         const env = new Map();
@@ -2391,17 +2393,27 @@ function matchMultiStateLogicalLocals(source, stateWhile, stateName, returnName,
             else return null;
         }
         if (hasConditionalEffects) {
+            let structured;
             if (trueEffects.length > 0 && falseEffects.length > 0) {
-                const trueBody = trueEffects.map(line => `    ${line}`).join("\n");
-                const falseBody = falseEffects.map(line => `    ${line}`).join("\n");
-                out.push(`if ${cond} then\n${trueBody}\nelse\n${falseBody}\nend`);
+                const trueBody = trueEffects.map(line => indentConditionalEffect(line)).join("\n");
+                const falseBody = falseEffects.map(line => indentConditionalEffect(line)).join("\n");
+                structured = `if ${cond} then\n${trueBody}\nelse\n${falseBody}\nend`;
             } else {
                 const bodyEffects = trueEffects.length > 0 ? trueEffects : falseEffects;
                 const condition = trueEffects.length > 0 ? cond : `(not ${cond})`;
-                const body = bodyEffects.map(line => `    ${line}`).join("\n");
-                out.push(`if ${condition} then\n${body}\nend`);
+                const body = bodyEffects.map(line => indentConditionalEffect(line)).join("\n");
+                structured = `if ${condition} then\n${body}\nend`;
             }
-            conditionalIfCount++;
+            if (prefix === 0) {
+                out.push(structured);
+                conditionalIfCount++;
+            } else {
+                return {
+                    env,
+                    markers: am.slice(0, prefix),
+                    effects: [...te.slice(0, effectPrefix), structured],
+                };
+            }
         }
         return { env, markers: am.slice(0, prefix), effects: te.slice(0, effectPrefix) };
     }
