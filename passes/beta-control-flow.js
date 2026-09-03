@@ -2118,19 +2118,39 @@ function matchMultiStateLogicalLocals(source, stateWhile, stateName, returnName,
     const processed = new Set();
     const locals = new Set();
     const localNames = new Map();
+    // Branch-local source bindings are path-scoped. Their generated source
+    // names live in the candidate environment instead of the global physical-
+    // register local map, so sibling CFG paths may safely reuse one VM register.
+    const pathLocalBindingNames = new Set();
     // A source value may be held in a register until one terminal cleanup,
     // even though its last real use is an earlier call.  Remember those
     // already-emitted epochs so the eventual compiler nil write does not
     // append a duplicate declaration or reorder it after the call.
     const earlyCleanupPending = new Set();
+    // In conditional recovery, some cleanup-backed registers are source
+    // storage rather than compiler value accumulators. They are proven below
+    // only when multiple definitions converge and the merged storage is read
+    // as an ordinary value after the join.
+    const persistentStorageRegs = new Set();
     const out = [];
     let valueCount = 0;
     let tableCount = 0;
     let conditionalIfCount = 0;
 
     function displayLocal(reg) { return localNames.get(reg) || reg; }
+    function activeLocalDisplay(name, env) {
+        const value = env.get(name);
+        if (typeof value === "string" && pathLocalBindingNames.has(value)) return value;
+        if (locals.has(name)) {
+            const display = displayLocal(name);
+            if (value === display) return display;
+        }
+        return null;
+    }
+    function hasActiveLocal(name, env) { return activeLocalDisplay(name, env) !== null; }
     function resolveId(name, env) {
-        if (locals.has(name)) return displayLocal(name);
+        const active = activeLocalDisplay(name, env);
+        if (active !== null) return active;
         return env.get(name) ?? null;
     }
     function render(rhs, env) {
@@ -2208,6 +2228,91 @@ function matchMultiStateLogicalLocals(source, stateWhile, stateName, returnName,
         return false;
     }
 
+    // Persistent source storage spans the whole recovered conditional region.
+    // Physical registers are reusable, so cleanup evidence on only one sibling
+    // path is insufficient: every reachable path from the root must eventually
+    // hit the register's nil cleanup. Intermediate non-nil writes are allowed
+    // because they are source assignments to the same storage binding.
+    const eventualCleanupCache = new Map();
+    function eventualCleanupOnAllPaths(blockId, statementIndex, name, visiting = new Set()) {
+        const cacheKey = blockId + ":" + statementIndex + ":" + name;
+        if (eventualCleanupCache.has(cacheKey)) return eventualCleanupCache.get(cacheKey);
+        const visitKey = blockId + ":" + statementIndex + ":" + name;
+        if (visiting.has(visitKey)) return false;
+        const block = blocks.get(blockId);
+        if (!block) return false;
+        const nextVisiting = new Set(visiting);
+        nextVisiting.add(visitKey);
+        for (let i = statementIndex + 1; i < block.body.length; i++) {
+            if (i === block.transitionIndex) continue;
+            const statement = block.body[i];
+            if (!isSingleAssignment(statement)) continue;
+            const dest = statement.variables[0];
+            if (!isIdentifier(dest, name)) continue;
+            if (statement.init[0]?.type === "NilLiteral") {
+                eventualCleanupCache.set(cacheKey, true);
+                return true;
+            }
+            // A non-nil write may be another source assignment to the same
+            // persistent binding; keep following this path to its cleanup.
+        }
+        const next = successors.get(blockId) || [];
+        if (next.length === 0) {
+            eventualCleanupCache.set(cacheKey, false);
+            return false;
+        }
+        const result = next.every(target => eventualCleanupOnAllPaths(target, -1, name, nextVisiting));
+        eventualCleanupCache.set(cacheKey, result);
+        return result;
+    }
+
+    if (allowConditionalIf && accumulatorRegs.size) {
+        for (const name of accumulatorRegs) {
+            const inDefs = new Map([...reachable].map(id => [id, new Set()]));
+            const outDefs = new Map([...reachable].map(id => [id, new Set()]));
+            let convergedRead = false;
+            let changed = true;
+            let rounds = 0;
+            while (changed && rounds++ <= reachable.size + 1) {
+                changed = false;
+                for (const id of reachable) {
+                    const incomingDefs = new Set();
+                    for (const pred of predecessors.get(id) || []) {
+                        if (!reachable.has(pred)) continue;
+                        for (const def of outDefs.get(pred) || []) incomingDefs.add(def);
+                    }
+                    const oldIn = inDefs.get(id);
+                    if (oldIn.size !== incomingDefs.size || [...oldIn].some(def => !incomingDefs.has(def))) {
+                        inDefs.set(id, incomingDefs);
+                        changed = true;
+                    }
+                    let current = new Set(incomingDefs);
+                    const block = blocks.get(id);
+                    for (let i = 0; i < block.body.length; i++) {
+                        if (i === block.transitionIndex) continue;
+                        const statement = block.body[i];
+                        if (!isSingleAssignment(statement)) continue;
+                        const dest = statement.variables[0];
+                        const rhs = statement.init[0];
+                        const ordinaryRead = nodeReadsIdentifier(rhs, name) ||
+                            (dest?.type === "IndexExpression" && nodeReadsIdentifier(dest, name));
+                        if (ordinaryRead && current.size >= 2) convergedRead = true;
+                        if (isIdentifier(dest, name)) {
+                            if (rhs?.type === "NilLiteral") current = new Set();
+                            else current = new Set([id + ":" + i]);
+                        }
+                    }
+                    const oldOut = outDefs.get(id);
+                    if (oldOut.size !== current.size || [...oldOut].some(def => !current.has(def))) {
+                        outDefs.set(id, current);
+                        changed = true;
+                    }
+                }
+            }
+            if (convergedRead && eventualCleanupOnAllPaths(1, -1, name)) persistentStorageRegs.add(name);
+        }
+    }
+
     // A call-result temporary can be overwritten on the same block or on a
     // later CFG path.  Unlike pure compiler copies, the call itself is a
     // source-level side effect and must not disappear merely because its
@@ -2253,6 +2358,67 @@ function matchMultiStateLogicalLocals(source, stateWhile, stateName, returnName,
         }
         valueReadAfterCache.set(cacheKey, false);
         return false;
+    }
+
+    const futureNonNilWriteCache = new Map();
+    function hasFutureNonNilWrite(blockId, statementIndex, name, visiting = new Set()) {
+        const cacheKey = blockId + ":" + statementIndex + ":" + name;
+        if (futureNonNilWriteCache.has(cacheKey)) return futureNonNilWriteCache.get(cacheKey);
+        const visitKey = blockId + ":" + statementIndex;
+        if (visiting.has(visitKey)) return true;
+        const block = blocks.get(blockId);
+        if (!block) return true;
+        const nextVisiting = new Set(visiting);
+        nextVisiting.add(visitKey);
+        for (let i = statementIndex + 1; i < block.body.length; i++) {
+            if (i === block.transitionIndex) continue;
+            const statement = block.body[i];
+            if (!isSingleAssignment(statement)) continue;
+            const dest = statement.variables[0];
+            const rhs = statement.init[0];
+            if (!isIdentifier(dest, name)) continue;
+            const result = rhs?.type !== "NilLiteral";
+            futureNonNilWriteCache.set(cacheKey, result);
+            return result;
+        }
+        for (const next of successors.get(blockId) || []) {
+            if (hasFutureNonNilWrite(next, -1, name, nextVisiting)) {
+                futureNonNilWriteCache.set(cacheKey, true);
+                return true;
+            }
+        }
+        futureNonNilWriteCache.set(cacheKey, false);
+        return false;
+    }
+
+    const cleanupPathCache = new Map();
+    function cleanupReachedOnAllPaths(blockId, statementIndex, name, visiting = new Set()) {
+        const cacheKey = blockId + ":" + statementIndex + ":" + name;
+        if (cleanupPathCache.has(cacheKey)) return cleanupPathCache.get(cacheKey);
+        const visitKey = blockId + ":" + statementIndex + ":" + name;
+        if (visiting.has(visitKey)) return false;
+        const block = blocks.get(blockId);
+        if (!block) return false;
+        const nextVisiting = new Set(visiting);
+        nextVisiting.add(visitKey);
+        for (let i = statementIndex + 1; i < block.body.length; i++) {
+            if (i === block.transitionIndex) continue;
+            const statement = block.body[i];
+            if (!isSingleAssignment(statement)) continue;
+            const dest = statement.variables[0];
+            if (!isIdentifier(dest, name)) continue;
+            const result = statement.init[0]?.type === "NilLiteral";
+            cleanupPathCache.set(cacheKey, result);
+            return result;
+        }
+        const next = successors.get(blockId) || [];
+        if (next.length === 0) {
+            cleanupPathCache.set(cacheKey, false);
+            return false;
+        }
+        const result = next.every(target => cleanupReachedOnAllPaths(target, -1, name, nextVisiting));
+        cleanupPathCache.set(cacheKey, result);
+        return result;
     }
 
     function mergeElseIfCandidates(candidates, joinId) {
@@ -2411,6 +2577,10 @@ function matchMultiStateLogicalLocals(source, stateWhile, stateName, returnName,
                 // before redefinition will still fail closed.
                 continue;
             }
+            // A path-dependent compiler TEMP that is overwritten before any
+            // later read does not participate in source semantics at this
+            // join. Drop it before considering logical result-carrier shapes.
+            if (!valueMayBeReadFrom(joinId, key)) continue;
             if (fv === cond && tv != null) {
                 if (hasConditionalEffects) return null;
                 env.set(key, `(${cond} and ${tv})`);
@@ -2419,7 +2589,6 @@ function matchMultiStateLogicalLocals(source, stateWhile, stateName, returnName,
                 if (hasConditionalEffects) return null;
                 env.set(key, `(${cond} or ${fv})`);
             }
-            else if (!valueMayBeReadFrom(joinId, key)) continue;
             else return null;
         }
         if (hasConditionalEffects) {
@@ -2469,13 +2638,32 @@ function matchMultiStateLogicalLocals(source, stateWhile, stateName, returnName,
             if (!isSingleAssignment(statement)) return null;
             const dest = statement.variables[0];
             const rhs = statement.init[0];
+
+            if (dest?.type === "IndexExpression") {
+                if (!isIdentifier(dest.base) || !hasActiveLocal(dest.base.name, env)) return null;
+                const base = resolveId(dest.base.name, env);
+                const key = isIdentifier(dest.index) ? resolveId(dest.index.name, env)
+                    : (isPrimitiveLiteral(dest.index) ? sourceOf(source, dest.index) : null);
+                const value = render(rhs, env);
+                if (base == null || key == null || value == null) return null;
+                const member = /^"[A-Za-z_][A-Za-z0-9_]*"$/.test(key) ? key.slice(1, -1) : null;
+                const target = member && isLuaIdentifier(member) ? base + "." + member : base + "[" + key + "]";
+                const line = target + " = " + value;
+                if (markers.length !== 0) {
+                    if (!allowConditionalIf) return null;
+                    effects = [...effects, line];
+                } else {
+                    out.push(line);
+                }
+                continue;
+            }
             if (!isIdentifier(dest)) return null;
             const name = dest.name;
 
             // A physical register can be reused after an early source epoch
             // was emitted.  The later definition owns the next cleanup epoch;
             // do not let the old marker suppress that new value.
-            if (rhs?.type !== "NilLiteral" && !locals.has(name)) earlyCleanupPending.delete(name);
+            if (rhs?.type !== "NilLiteral" && !hasActiveLocal(name, env)) earlyCleanupPending.delete(name);
 
             if (isIdentifier(rhs, "args") && name !== stateName && name !== returnName) {
                 env.set(name, "args");
@@ -2483,6 +2671,11 @@ function matchMultiStateLogicalLocals(source, stateWhile, stateName, returnName,
             }
             if (name === returnName && isEmptyTable(rhs)) continue;
             if (cleanupRegs.has(name) && rhs?.type === "NilLiteral") {
+                const activeDisplay = activeLocalDisplay(name, env);
+                if (activeDisplay !== null && pathLocalBindingNames.has(activeDisplay)) {
+                    env.delete(name);
+                    continue;
+                }
                 if (earlyCleanupPending.has(name)) {
                     earlyCleanupPending.delete(name);
                     locals.delete(name);
@@ -2491,6 +2684,12 @@ function matchMultiStateLogicalLocals(source, stateWhile, stateName, returnName,
                     continue;
                 }
                 if (accumulatorRegs.has(name)) {
+                    if (persistentStorageRegs.has(name) && locals.has(name)) {
+                        locals.delete(name);
+                        localNames.delete(name);
+                        env.delete(name);
+                        continue;
+                    }
                     const value = env.get(name);
                     if (value == null) return null;
                     const display = `v${++valueCount}`;
@@ -2510,7 +2709,7 @@ function matchMultiStateLogicalLocals(source, stateWhile, stateName, returnName,
             // without a read, preserve the call itself.  A path-dependent
             // call cannot be represented as a bare source statement here, so
             // fail closed instead of moving it out of its branch.
-            if (rhs?.type === "CallExpression" && !cleanupRegs.has(name)) {
+            if (rhs?.type === "CallExpression" && (!cleanupRegs.has(name) || !valueMayBeReadAfter(id, i, name))) {
                 const promotedArguments = [];
                 if (markers.length === 0) {
                     for (const argument of rhs.arguments || []) {
@@ -2553,22 +2752,48 @@ function matchMultiStateLogicalLocals(source, stateWhile, stateName, returnName,
                 // Borrowed state/temp writes may be dead before overwrite; only allow
                 // an immediate same-register overwrite inside this block.
                 const next = block.body[i + 1];
-                if (name !== stateName && !locals.has(name) && isSingleAssignment(next, name)) continue;
+                if (name !== stateName && !hasActiveLocal(name, env) && isSingleAssignment(next, name)) continue;
                 return null;
             }
 
-            const conditionalIfLocalHandoff = allowConditionalIf && cleanupRegs.has(name) && !locals.has(name) &&
+            const stableStorageEpoch = allowConditionalIf && cleanupRegs.has(name) && !locals.has(name) &&
+                valueMayBeReadAfter(id, i, name) && !hasFutureNonNilWrite(id, i, name) &&
+                cleanupReachedOnAllPaths(id, i, name);
+            if ((persistentStorageRegs.has(name) || stableStorageEpoch) && !hasActiveLocal(name, env)) {
+                if (persistentStorageRegs.has(name) && markers.length !== 0) return null;
+                const display = `v${++valueCount}`;
+                accumulatorRegs.delete(name);
+                const declaration = `local ${display} = ${value}`;
+                if (markers.length !== 0) {
+                    pathLocalBindingNames.add(display);
+                    effects = [...effects, declaration];
+                } else {
+                    localNames.set(name, display);
+                    locals.add(name);
+                    out.push(declaration);
+                }
+                env.set(name, display);
+                continue;
+            }
+
+            const conditionalIfLocalHandoff = allowConditionalIf && cleanupRegs.has(name) && !hasActiveLocal(name, env) &&
                 isIdentifier(rhs, stateName) && block.transition.kind === "branch" && block.transition.conditionRegister === name;
             if (conditionalIfLocalHandoff) accumulatorRegs.delete(name);
-            if (cleanupRegs.has(name) && !accumulatorRegs.has(name) && !locals.has(name) && isIdentifier(rhs) && rhs.name !== name) {
+            if (cleanupRegs.has(name) && !accumulatorRegs.has(name) && !hasActiveLocal(name, env) && isIdentifier(rhs) && rhs.name !== name) {
                 const display = rhs?.type === "TableConstructorExpression" ? `t${++tableCount}` : `v${++valueCount}`;
                 localNames.set(name, display);
                 locals.add(name);
                 out.push(`local ${display} = ${value}`);
                 env.set(name, display);
-            } else if (locals.has(name)) {
-                out.push(`${displayLocal(name)} = ${value}`);
-                env.set(name, displayLocal(name));
+            } else if (hasActiveLocal(name, env)) {
+                const line = `${activeLocalDisplay(name, env)} = ${value}`;
+                if (markers.length !== 0) {
+                    if (!allowConditionalIf) return null;
+                    effects = [...effects, line];
+                } else {
+                    out.push(line);
+                }
+                env.set(name, activeLocalDisplay(name, env));
             } else {
                 env.set(name, value);
             }

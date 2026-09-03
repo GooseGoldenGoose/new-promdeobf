@@ -295,4 +295,70 @@ function vmStatesSource(states) {
     assert.strictEqual(result.source, 'if root then\n    print("ROOT")\nelse\n    if a then\n        print("A")\n    elseif b then\n        print("B")\n    end\nend\n');
 }
 
+{
+    // A cleanup-backed register with multiple branch definitions is one
+    // persistent source binding when every path reaches its cleanup and the
+    // merged binding is read after the join.
+    const source = vmStatesSource({
+        1: ['r1 = 0', 'ReturnVal = "print"', 'state = _env[ReturnVal]', 'r2 = "COND"', 'ReturnVal = state(r2)', 'state = ReturnVal and 2 or 3', 'r3 = args'],
+        2: ['r1 = 1', 'state = 4'],
+        3: ['r1 = 2', 'state = 4'],
+        4: ['ReturnVal = "print"', 'state = _env[ReturnVal]', 'r2 = "X"', 'ReturnVal = state(r2, r1)', 'r1 = nil', 'ReturnVal = {}', 'state = nil'],
+    });
+    const result = solveBetaControlFlow(source, parse(source));
+    assert.strictEqual(result.applied, true);
+    assert.strictEqual(result.mode, "fresh-simple-if");
+    assert.strictEqual(result.source, 'local v1 = 0\nif print("COND") then\n    v1 = 1\nelse\n    v1 = 2\nend\nprint("X", v1)\n');
+}
+
+{
+    // Persistent table identity survives the join while each branch mutates a
+    // field. The table must not be versioned or duplicated per path.
+    const source = vmStatesSource({
+        1: ['r2 = 0', 'ReturnVal = "x"', 'state = { [ReturnVal] = r2 }', 'r1 = state', 'ReturnVal = "print"', 'state = _env[ReturnVal]', 'r3 = "COND"', 'ReturnVal = state(r3)', 'state = ReturnVal and 2 or 3', 'r4 = args'],
+        2: ['ReturnVal = 1', 'state = "x"', 'r1[state] = ReturnVal', 'state = 4'],
+        3: ['ReturnVal = 2', 'state = "x"', 'r1[state] = ReturnVal', 'state = 4'],
+        4: ['ReturnVal = "print"', 'state = _env[ReturnVal]', 'r2 = "x"', 'r3 = r1[r2]', 'r2 = "T"', 'ReturnVal = state(r2, r3)', 'r1 = nil', 'ReturnVal = {}', 'state = nil'],
+    });
+    const result = solveBetaControlFlow(source, parse(source));
+    assert.strictEqual(result.applied, true);
+    assert.strictEqual(result.mode, "fresh-simple-if");
+    assert.strictEqual(result.source, 'local v1 = { x = 0 }\nif print("COND") then\n    v1.x = 1\nelse\n    v1.x = 2\nend\nprint("T", v1.x)\n');
+}
+
+{
+    // A branch-local binding and a sibling condition reuse the same physical
+    // register. Source scope must live in the path environment, not in a
+    // process-global physical-register local set.
+    const source = vmStatesSource({
+        1: ['r2 = "root"', 'r3 = _env[r2]', 'state = r3 and 2 or 3', 'r4 = args'],
+        2: ['r1 = 10', 'ReturnVal = "print"', 'state = _env[ReturnVal]', 'r2 = "A"', 'ReturnVal = state(r2, r1)', 'state = 4'],
+        3: ['r2 = "b"', 'r1 = _env[r2]', 'state = r1 and 5 or 6'],
+        4: ['r1 = nil', 'state = 7'],
+        5: ['ReturnVal = "print"', 'state = _env[ReturnVal]', 'r2 = "B"', 'ReturnVal = state(r2)', 'state = 8'],
+        6: ['ReturnVal = "print"', 'state = _env[ReturnVal]', 'r2 = "C"', 'ReturnVal = state(r2)', 'state = 8'],
+        7: ['ReturnVal = {}', 'state = nil'],
+        8: ['state = 7'],
+    });
+    const result = solveBetaControlFlow(source, parse(source));
+    assert.strictEqual(result.applied, true);
+    assert.strictEqual(result.mode, "fresh-simple-if");
+    assert.strictEqual(result.source, 'if root then\n    local v1 = 10\n    print("A", v1)\nelse\n    if b then\n        print("B")\n    else\n        print("C")\n    end\nend\n');
+}
+
+{
+    // A cleanup-backed table created inside one branch remains one branch-local
+    // object across multiple member reads before its cleanup.
+    const source = vmStatesSource({
+        1: ['r2 = "root"', 'r3 = _env[r2]', 'state = r3 and 2 or 3', 'r4 = args'],
+        2: ['r1 = { 1, 2 }', 'r2 = 1', 'r3 = r1[r2]', 'r2 = 2', 'r4 = r1[r2]', 'ReturnVal = "print"', 'state = _env[ReturnVal]', 'ReturnVal = state(r3, r4)', 'r1 = nil', 'state = 4'],
+        3: ['ReturnVal = "print"', 'state = _env[ReturnVal]', 'r2 = "skip"', 'ReturnVal = state(r2)', 'state = 4'],
+        4: ['ReturnVal = {}', 'state = nil'],
+    });
+    const result = solveBetaControlFlow(source, parse(source));
+    assert.strictEqual(result.applied, true);
+    assert.strictEqual(result.mode, "fresh-simple-if");
+    assert.strictEqual(result.source, 'if root then\n    local v1 = { 1, 2 }\n    print(v1[1], v1[2])\nelse\n    print("skip")\nend\n');
+}
+
 console.log("fresh beta simple-if regression: ok");
