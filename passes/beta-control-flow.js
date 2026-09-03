@@ -2111,6 +2111,28 @@ function matchMultiStateLogicalLocals(source, stateWhile, stateName, returnName,
     }
     if (reachable.size !== blocks.size) return null;
 
+    function hasLinearRootContinuation(fromId, toId) {
+        if (!Number.isInteger(fromId) || !Number.isInteger(toId)) return false;
+        let current = fromId;
+        const seen = new Set();
+        while (true) {
+            if (current === toId) return true;
+            if (seen.has(current)) return false;
+            seen.add(current);
+            const next = successors.get(current) || [];
+            if (next.length !== 1) return false;
+            current = next[0];
+        }
+    }
+
+    function recordRootConditional(startId, joinId) {
+        const anchor = lastRootConditionalJoinId === null ? 1 : lastRootConditionalJoinId;
+        if (!hasLinearRootContinuation(anchor, startId)) return false;
+        lastRootConditionalJoinId = joinId;
+        conditionalIfCount++;
+        return true;
+    }
+
     const indegree = new Map();
     for (const id of reachable) indegree.set(id, (predecessors.get(id) || []).filter(p => reachable.has(p)).length);
     const ready = [1];
@@ -2136,6 +2158,7 @@ function matchMultiStateLogicalLocals(source, stateWhile, stateName, returnName,
     let valueCount = 0;
     let tableCount = 0;
     let conditionalIfCount = 0;
+    let lastRootConditionalJoinId = null;
 
     function displayLocal(reg) { return localNames.get(reg) || reg; }
     function activeLocalDisplay(name, env) {
@@ -2430,7 +2453,7 @@ function matchMultiStateLogicalLocals(source, stateWhile, stateName, returnName,
             if (!first) break;
             if (!markerLists.every(markers => {
                 const marker = markers[sharedPrefix];
-                return marker && marker.condition === first.condition && marker.truth === first.truth && marker.effectCount === first.effectCount;
+                return marker && marker.condition === first.condition && marker.truth === first.truth && marker.effectCount === first.effectCount && marker.branchId === first.branchId;
             })) break;
             sharedPrefix++;
         }
@@ -2468,19 +2491,21 @@ function matchMultiStateLogicalLocals(source, stateWhile, stateName, returnName,
         for (let depth = 1; depth <= chainLength; depth++) if (!branchByDepth.has(depth)) return null;
 
         const conditions = [];
+        const conditionBranchIds = [];
         for (let depth = 1; depth <= chainLength; depth++) {
             const candidate = branchByDepth.get(depth);
             const suffix = (candidate.markers || []).slice(sharedPrefix);
             for (let i = 0; i < depth - 1; i++) {
-                if (suffix[i].condition !== conditions[i] || suffix[i].truth !== false) return null;
+                if (suffix[i].condition !== conditions[i] || suffix[i].truth !== false || suffix[i].branchId !== conditionBranchIds[i]) return null;
             }
             const marker = suffix[depth - 1];
             if (!marker || marker.truth !== true) return null;
             conditions.push(marker.condition);
+            conditionBranchIds.push(marker.branchId);
         }
         const elseSuffix = (finalElse.markers || []).slice(sharedPrefix);
         for (let i = 0; i < chainLength; i++) {
-            if (elseSuffix[i].condition !== conditions[i] || elseSuffix[i].truth !== false) return null;
+            if (elseSuffix[i].condition !== conditions[i] || elseSuffix[i].truth !== false || elseSuffix[i].branchId !== conditionBranchIds[i]) return null;
         }
 
         const ordered = [];
@@ -2521,8 +2546,8 @@ function matchMultiStateLogicalLocals(source, stateWhile, stateName, returnName,
         lines.push("end");
         const structured = lines.join("\n");
         if (sharedPrefix === 0) {
+            if (!recordRootConditional(conditionBranchIds[0], joinId)) return null;
             out.push(structured);
-            conditionalIfCount++;
             return { env, markers: [], effects: commonEffects };
         }
         return {
@@ -2547,10 +2572,10 @@ function matchMultiStateLogicalLocals(source, stateWhile, stateName, returnName,
         const a = candidates[0], b = candidates[1];
         const am = a.markers || [], bm = b.markers || [];
         let prefix = 0;
-        while (prefix < am.length && prefix < bm.length && am[prefix].condition === bm[prefix].condition && am[prefix].truth === bm[prefix].truth) prefix++;
+        while (prefix < am.length && prefix < bm.length && am[prefix].condition === bm[prefix].condition && am[prefix].truth === bm[prefix].truth && am[prefix].branchId === bm[prefix].branchId) prefix++;
         if (am.length !== prefix + 1 || bm.length !== prefix + 1) return null;
         const al = am[prefix], bl = bm[prefix];
-        if (!al || !bl || al.condition !== bl.condition || al.truth === bl.truth) return null;
+        if (!al || !bl || al.condition !== bl.condition || al.truth === bl.truth || al.branchId !== bl.branchId) return null;
         const t = al.truth ? a : b;
         const f = al.truth ? b : a;
         const cond = al.condition;
@@ -2604,8 +2629,8 @@ function matchMultiStateLogicalLocals(source, stateWhile, stateName, returnName,
                 structured = `if ${condition} then\n${body}\nend`;
             }
             if (prefix === 0) {
+                if (!recordRootConditional(al.branchId, joinId)) return null;
                 out.push(structured);
-                conditionalIfCount++;
             } else {
                 return {
                     env,
@@ -2807,8 +2832,8 @@ function matchMultiStateLogicalLocals(source, stateWhile, stateName, returnName,
             const condition = resolveId(tr.conditionRegister, env);
             if (condition == null) return null;
             const effectCount = effects.length;
-            sends.push({ target: tr.onTrue, env, markers: [...markers, { condition, truth: true, effectCount }], effects });
-            sends.push({ target: tr.onFalse, env, markers: [...markers, { condition, truth: false, effectCount }], effects });
+            sends.push({ target: tr.onTrue, env, markers: [...markers, { condition, truth: true, effectCount, branchId: id }], effects });
+            sends.push({ target: tr.onFalse, env, markers: [...markers, { condition, truth: false, effectCount, branchId: id }], effects });
         }
         for (const send of sends) {
             if (!incoming.has(send.target)) incoming.set(send.target, []);
@@ -2823,7 +2848,7 @@ function matchMultiStateLogicalLocals(source, stateWhile, stateName, returnName,
     }
 
     if (processed.size !== reachable.size || locals.size !== 0 || out.length === 0) return null;
-    if (allowConditionalIf && conditionalIfCount !== 1) return null;
+    if (allowConditionalIf && conditionalIfCount < 1) return null;
     return {
         source: out.join("\n") + "\n",
         statementCount: out.length,

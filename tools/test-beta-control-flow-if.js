@@ -361,4 +361,24 @@ function vmStatesSource(states) {
     assert.strictEqual(result.source, 'if root then\n    local v1 = { 1, 2 }\n    print(v1[1], v1[2])\nelse\n    print("skip")\nend\n');
 }
 
+
+{
+    // Two independent root conditionals are a proven source sequence only when
+    // the second branch starts on the unique non-branching continuation from
+    // the first root join. A straight-line effect between them stays in order.
+    const source = vmStatesSource({
+        1: ['r1 = "a"', 'state = _env[r1]', 'state = state and 2 or 3'],
+        2: ['ReturnVal = "print"', 'state = _env[ReturnVal]', 'r1 = "A"', 'ReturnVal = state(r1)', 'state = 4'],
+        3: ['ReturnVal = "print"', 'state = _env[ReturnVal]', 'r1 = "B"', 'ReturnVal = state(r1)', 'state = 4'],
+        4: ['ReturnVal = "print"', 'state = _env[ReturnVal]', 'r1 = "MID"', 'ReturnVal = state(r1)', 'r1 = "c"', 'state = _env[r1]', 'state = state and 5 or 6'],
+        5: ['ReturnVal = "print"', 'state = _env[ReturnVal]', 'r1 = "C"', 'ReturnVal = state(r1)', 'state = 7'],
+        6: ['ReturnVal = "print"', 'state = _env[ReturnVal]', 'r1 = "D"', 'ReturnVal = state(r1)', 'state = 7'],
+        7: ['ReturnVal = {}', 'state = nil'],
+    });
+    const result = solveBetaControlFlow(source, parse(source));
+    assert.strictEqual(result.applied, true);
+    assert.strictEqual(result.mode, "fresh-simple-if");
+    assert.strictEqual(result.source, 'if a then\n    print("A")\nelse\n    print("B")\nend\nprint("MID")\nif c then\n    print("C")\nelse\n    print("D")\nend\n');
+}
+
 console.log("fresh beta simple-if regression: ok");
