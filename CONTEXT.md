@@ -58,12 +58,11 @@ Once the scope is stated, it is locked for that turn:
 This rule overrides the normal tendency to continue fixing newly discovered related issues. Scope discipline is mandatory.
 ## 2. Mandatory Turn Workflow
 
-At the beginning of every project turn:
-1. Read `CONTEXT.md` completely.
-2. Run `git status --short --branch`.
-3. Run `git log -5 --oneline`.
-4. Inspect current relevant files before changing them.
-5. Preserve unrelated dirty/untracked user work.
+At the beginning of project work:
+1. In a brand-new chat, read `CONTEXT.md` completely. In the same chat, do not reread the entire file on every turn unless it changed externally or the current task depends on a section not already loaded; reuse the already-read context and refresh only relevant sections when needed.
+2. Refresh Git status/history when repository state may have changed. Prefer one combined/context call when supported instead of separate repeated status/log calls.
+3. Inspect current relevant files before changing them; do not reread unchanged files solely for ceremony.
+4. Preserve unrelated dirty/untracked user work.
 
 During work:
 - update `CONTEXT.md` whenever meaningful implementation knowledge, compiler behavior, supported behavior, unsupported behavior, architectural decisions, or test results change
@@ -87,6 +86,19 @@ After meaningful tracked changes:
 Git should be updated constantly: meaningful self-contained project changes should not accumulate uncommitted across many unrelated tasks. Context should also be updated constantly.
 
 Do NOT commit temporary probes/generated outputs unless explicitly requested.
+
+### 2.1 Tool Execution Efficiency
+
+Minimize tool-call latency without weakening correctness or verification:
+- reuse already-discovered tool schemas/capabilities; do not rediscover the same tool unless a prior invocation failed or its capabilities may have changed
+- batch independent reads, searches, status checks, and related commands whenever supported instead of serial one-file/one-command calls
+- prefer foreground execution for commands expected to finish quickly; use background execution and polling only for genuinely long-running work
+- parallelize independent operations when supported; do not serialize unrelated reads or checks
+- avoid redundant rereads/rechecks when the underlying source/state has not changed; revalidate after writes, failures, external changes, or when correctness requires it
+- prefer direct known tools over broad discovery/context tools when the exact target and action are already known
+- for the standard fixture path, run `source -> Medium obfuscate -> normal deobf -> fresh CF -> runtime parity` in the shortest reliable command sequence; inspect intermediate artifacts only on failure or when the user asks to see them
+- combine related CLI operations into one invocation when safe and when later steps do not depend on inspecting earlier output
+- speed must never remove required semantic checks, fail-closed proof, scope discipline, or protection of unrelated user work
 
 ## 3. Workspace / Repository / Material Paths
 
