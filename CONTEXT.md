@@ -1846,9 +1846,9 @@ This section is the shortest current-state handoff. Read the detailed sections a
 
 - branch: `main`
 - remote: `origin/main`
-- last pushed baseline before the mixed logical/conditional work in this handoff: `ce9f971 Recover in-place promoted local lifetimes`
-- immediately preceding relevant commits: `5901341 Recover sequential root conditionals`, `d08e1fb Recover conditional storage lifetimes`, `de51051 Generalize nested elseif recovery`
-- current tracked behavior after this handoff includes closed logical-CFG reduction inside closure-aware conditional recovery; a new chat should run `git log -5 --oneline` for the exact final commit hash rather than relying on a hash duplicated inside this file
+- current feature/code baseline: `72cb949 Compose logical and conditional CFG recovery`; the latest Git commit may be a context-only handoff commit created after this line
+- immediately preceding relevant commits: `ce9f971 Recover in-place promoted local lifetimes`, `5901341 Recover sequential root conditionals`, `d08e1fb Recover conditional storage lifetimes`, `de51051 Generalize nested elseif recovery`
+- current tracked behavior includes closed logical-CFG reduction inside closure-aware conditional recovery; still run `git log -5 --oneline` at the start of a new chat to verify Git truth
 - important historical semantic baseline: `7375421 Refine nil register lifetimes`
 - do not reintroduce discarded experimental CF changes merely because they exist in Git history
 
@@ -1938,6 +1938,55 @@ Correctness fix completed during 2026-09-02 Fresh-CF follow-up:
 - Fresh-CF now emits proven unconditional discarded calls once, promotes their last-use cleanup-backed arguments before the call, consumes the later cleanup, and rejects path-dependent discarded calls instead of guessing
 - focused regression coverage verifies 25 sequential logical/call pairs, conditional-call fail-closed behavior, exact ordering, and no duplicate calls
 - the real 100-pair Medium run produced 100 locals plus 100 prints and matched source/obfuscated/recovered runtime output exactly with a fixed random seed
+
+### Next requested feature: structural early return recovery
+
+The user explicitly paused before implementation and asked for this handoff. **Early-return support has NOT been implemented yet.** Do not claim it is supported until real Medium compiler fixtures, focused regressions, randomized layouts, and runtime parity pass.
+
+Target source shape supplied by the user:
+
+```lua
+if math.random(1,2) then
+    print(1)
+    return 3
+end
+if thing() then
+    return 5
+end
+print(2)
+return 4
+```
+
+The next implementation must be dynamic/structural. Do not key off literal return values, `math.random`, `thing`, state IDs, physical register IDs, or one exact state count. First compile tiny real Medium fixtures and inspect the compiler/normal VM lowering of branch-local returns. Determine the generic terminal-return shape, including `ReturnVal`/return-pack construction, `state = nil`, cleanup ordering, and whether branch-local return paths bypass later join states.
+
+Required semantic model:
+- a return path is terminal source control flow, not a normal branch effect that must converge with fallthrough
+- a conditional may have one terminal return arm and one continuing arm
+- several sequential root conditionals may each terminate on one path while the remaining path continues to later statements
+- nested `if/elseif/else` may contain terminal return arms
+- logical/TESTSET conditions feeding a return-bearing conditional must still use the closed logical-region reducer before statement structuring
+- returned expressions may be constants, locals, calls, tables, varargs, or multi-return where already supported by existing return-pack logic; do not duplicate side effects while reconstructing them
+- compiler cleanup after a proven return must not be emitted as source behavior
+- paths that cannot be proven terminal or whose return pack/lifetime is ambiguous must fail closed
+
+Suggested first implementation direction (analysis target, not completed design): extend conditional candidate/effect propagation with a distinct terminal outcome rather than forcing every candidate to reach the same join. A proven terminal return candidate should carry rendered return source plus its environment/lifetime obligations and stop propagation. At a branch merge, structure source `if`/`elseif`/`else` when nonterminal candidates prove the continuation and terminal candidates prove return termination. Do not simply invent a synthetic join for terminal paths.
+
+Mandatory regression gate for every meaningful early-return solver change:
+- focused early-return normalized tests derived from real Prometheus output
+- real Medium exact parity for the user sample
+- one-sided `if cond then return X end` with fallthrough
+- two or more sequential return-bearing `if`s before a final return
+- `if/elseif/else` with mixed terminal/nonterminal arms
+- nested conditional returns
+- TESTSET / `and` / `or` conditions around return-bearing branches
+- closure-containing root plus returns, so child states do not contaminate root lifetime analysis
+- persistent scalar/table mutations before terminal and continuing paths
+- return of call results / multiple values / varargs where current Fresh-CF return machinery already supports them
+- existing eight core Fresh-CF/register/binding suites
+- randomized fresh Medium layouts, saving any reproducible semantic failure layout
+- `git diff --check`, focused commit, push `origin/main`, and update this context
+
+Keep the existing mixed-CFG invariant from `72cb949`: only closed compiler logical-value regions with result-carrier proof are reduced; source conditional routing stays in the conditional structurer. Early returns must compose with that architecture rather than bypass it.
 
 ### What a new chat should do next
 
