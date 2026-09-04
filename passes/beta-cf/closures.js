@@ -291,6 +291,21 @@ function renderSimpleClosureLeaf(source, leaf, stateName, returnName, options = 
             }
         }
 
+        // A captured closure may be created before the compiler writes the
+        // first value into one of its freshly allocated cells. Prometheus can
+        // then hand that closure through state/ReturnVal into an ordinary TEMP.
+        // Preserve the deferred closure object across that compiler transport;
+        // resolve it only at its first semantic use, after the cell binding has
+        // been initialized. This is not a source alias promotion.
+        if (isIdentifier(rhs) && (rhs.name === stateName || rhs.name === returnName)) {
+            const deferredClosure = env.get(rhs.name);
+            if (deferredClosure?.kind === "captured-closure") {
+                env.set(name, deferredClosure);
+                envMeta.delete(name);
+                continue;
+            }
+        }
+
         let member = null;
         if (rhs?.type === "IndexExpression" && isIdentifier(rhs.base) && isIdentifier(rhs.index) && rhs.base.name !== "_env") {
             const key = env.get(rhs.index.name);

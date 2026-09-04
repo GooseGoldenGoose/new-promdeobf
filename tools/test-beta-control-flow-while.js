@@ -299,7 +299,10 @@ function vmStatesSource(states, registers = "r1, r2, r3, r4, r5, r6") {
     // iteration scope. Prometheus packs the closure call before forwarding it
     // as the final print argument; no dead closure declaration may leak to root.
     const source = vmStatesSource({
-        1: ["r1 = allocUpvalue()", "state = 0", "r3 = state", "state = 10", "upvalueValues[r1] = state", "r2 = args", "state = 2"],
+        // r5 has an earlier unrelated TEMP epoch. The later closure epoch is
+        // still one source local because its own lifetime reaches r5 = nil
+        // before any physical-register reuse on the next iteration.
+        1: ["r1 = allocUpvalue()", 'r5 = "compiler-temp"', "state = 0", "r3 = state", "state = 10", "upvalueValues[r1] = state", "r2 = args", "state = 2"],
         2: ["ReturnVal = 3", "state = r3 < ReturnVal", "state = state and 3 or 4"],
         3: [
             "state = createClosure5(5, { r1 })",
@@ -332,6 +335,123 @@ function vmStatesSource(states, registers = "r1, r2, r3, r4, r5, r6") {
         "end\n");
     const beforeWhile = result.source.slice(0, result.source.indexOf("while "));
     assert.doesNotMatch(beforeWhile, /function\s*\(/);
+}
+
+{
+    // A loop-local closure remains a source binding even when one branch
+    // returns from the function before the compiler emits its nil cleanup.
+    // The physical register also has an earlier unrelated TEMP epoch, so
+    // ownership must be proven for the current cleanup-or-terminal epoch.
+    const source = vmStatesSource({
+        1: ["r1 = allocUpvalue()", 'r5 = "compiler-temp"', "state = 0", "r3 = state", "state = 10", "upvalueValues[r1] = state", "r2 = args", "state = 2"],
+        2: ["ReturnVal = 3", "state = r3 < ReturnVal", "state = state and 3 or 4"],
+        3: ["state = createClosure5(7, { r1 })", "r5 = state", "ReturnVal = 2", "state = r3 == ReturnVal", "state = state and 5 or 6"],
+        4: ["r3 = nil", "ReturnVal = {}", "r1 = releaseUpvalue(r1)", "state = nil"],
+        5: ['ReturnVal = "early"', "ReturnVal = { ReturnVal }", "state = nil"],
+        6: ['ReturnVal = "print"', "state = _env[ReturnVal]", "r4 = { r5(r3) }", "ReturnVal = state(unpack(r4))", "ReturnVal = 1", "state = r3 + ReturnVal", "r3 = state", "r5 = nil", "state = 2"],
+        7: ["r2 = args[1]", "ReturnVal = upvalueValues[upvalues[1]]", "state = ReturnVal + r2", "ReturnVal = { state }", "state = nil"],
+    });
+    const result = solveBetaControlFlow(source, parse(source));
+    assert.strictEqual(result.applied, true);
+    assert.strictEqual(result.mode, "fresh-closure-entry");
+    assert.strictEqual(result.source,
+        "local v1 = 0\n" +
+        "local v2 = 10\n" +
+        "while (v1 < 3) do\n" +
+        "    local v3 = function(v1)\n" +
+        "        return (v2 + v1)\n" +
+        "    end\n" +
+        "    if (v1 == 2) then\n" +
+        '        return "early"\n' +
+        "    end\n" +
+        "    print(v3(v1))\n" +
+        "    v1 = (v1 + 1)\n" +
+        "end\n");
+}
+
+
+{
+    // A source local allocated/captured on each loop iteration is path-local.
+    // A compiler TEMP alias may read that binding, but later physical-register
+    // reuse must not be mistaken for a source assignment to the captured local.
+    const source = vmStatesSource({
+        1: ["state = 0", "r4 = state", "state = 0", "r7 = state", "r2 = args", "state = 2"],
+        2: ["ReturnVal = 4", "state = r4 < ReturnVal", "state = state and 3 or 4"],
+        3: [
+            "ReturnVal = 1", "state = r4 + ReturnVal", "r4 = state",
+            "r5 = allocUpvalue()", "ReturnVal = r7 + r4", "upvalueValues[r5] = ReturnVal",
+            "ReturnVal = createClosure6(5, { r5 })", "r3 = ReturnVal",
+            "r1 = upvalueValues[r5]", "r6 = 10", "ReturnVal = r1 + r6", "upvalueValues[r5] = ReturnVal",
+            "r6 = r3(r4)", "r5 = releaseUpvalue(r5)", "r3 = nil",
+            "r1 = r7 + r6", "r7 = r1", "state = 2",
+        ],
+        4: ["ReturnVal = { r7 }", "r4 = nil", "r7 = nil", "state = nil"],
+        5: ["ReturnVal = upvalueValues[upvalues[1]]", "r2 = args[1]", "state = ReturnVal + r2", "ReturnVal = { state }", "state = nil"],
+    }, "r1, r2, r3, r4, r5, r6, r7, r8");
+    const result = solveBetaControlFlow(source, parse(source));
+    assert.strictEqual(result.applied, true);
+    assert.strictEqual(result.mode, "fresh-closure-entry");
+    assert.strictEqual(result.source,
+        "local v1 = 0\n" +
+        "local v2 = 0\n" +
+        "while (v1 < 4) do\n" +
+        "    v1 = (v1 + 1)\n" +
+        "    local v3 = (v2 + v1)\n" +
+        "    local v4 = function(v1)\n" +
+        "        return (v3 + v1)\n" +
+        "    end\n" +
+        "    v3 = (v3 + 10)\n" +
+        "    v2 = (v2 + v4(v1))\n" +
+        "end\n" +
+        "return v2\n");
+}
+
+{
+    // Prometheus may capture a newly allocated cell before writing its first
+    // value. Preserve the captured-closure object across compiler transport and
+    // resolve it only after the cell has acquired its source binding.
+    const source = vmStatesSource({
+        1: ["r3 = allocUpvalue()", "state = 10", "upvalueValues[r3] = state", "state = 0", "r8 = state", "r2 = args", "state = 2"],
+        2: ["ReturnVal = 2", "state = r8 < ReturnVal", "state = state and 3 or 4"],
+        3: [
+            "ReturnVal = 1", "state = r8 + ReturnVal", "r8 = state",
+            "ReturnVal = createClosure5(5, { r3 })", "r7 = ReturnVal", "ReturnVal = r7(r8)", "r5 = ReturnVal",
+            "r4 = 2", "r6 = r5(r4)", "r1 = upvalueValues[r3]", "ReturnVal = r1 + r6", "upvalueValues[r3] = ReturnVal",
+            "r5 = nil", "r7 = nil", "state = 2",
+        ],
+        4: ["ReturnVal = upvalueValues[r3]", "r3 = releaseUpvalue(r3)", "ReturnVal = { ReturnVal }", "r8 = nil", "state = nil"],
+        5: ["r2 = allocUpvalue()", "state = createClosure6(6, { r2, upvalues[1] })", "r8 = state", "upvalueValues[r2] = args[1]", "ReturnVal = { r8 }", "state = nil"],
+        6: ["r8 = upvalueValues[upvalues[1]]", "r2 = args[1]", "ReturnVal = r8 + r2", "r8 = upvalueValues[upvalues[2]]", "state = ReturnVal + r8", "ReturnVal = { state }", "state = nil"],
+    }, "r1, r2, r3, r4, r5, r6, r7, r8");
+    const result = solveBetaControlFlow(source, parse(source));
+    assert.strictEqual(result.applied, true);
+    assert.strictEqual(result.mode, "fresh-closure-entry");
+    assert.strictEqual(result.source,
+        "local v1 = 10\n" +
+        "local v2 = 0\n" +
+        "while (v2 < 2) do\n" +
+        "    v2 = (v2 + 1)\n" +
+        "    local v3 = function(v2)\n" +
+        "        return function(v3)\n" +
+        "            return ((v2 + v3) + v1)\n" +
+        "        end\n" +
+        "    end\n" +
+        "    local v4 = v3(v2)\n" +
+        "    v1 = (v1 + v4(2))\n" +
+        "end\n" +
+        "return v1\n");
+}
+
+{
+    // A direct createClosure assignment followed by immediate use is not proof
+    // of a named source-local binding. Keep the anonymous/ambiguous shape
+    // fail-closed instead of promoting it through terminal closure ownership.
+    const source = vmStatesSource({
+        1: ["r2 = createClosure2(2, {})", "ReturnVal = r2()", "ReturnVal = { ReturnVal }", "state = nil"],
+        2: ["ReturnVal = 1", "ReturnVal = { ReturnVal }", "state = nil"],
+    });
+    const result = solveBetaControlFlow(source, parse(source));
+    assert.strictEqual(result.applied, false);
 }
 
 console.log("beta control-flow while tests passed");

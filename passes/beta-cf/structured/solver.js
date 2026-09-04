@@ -2,16 +2,15 @@
 
 const { createStructuredContext } = require("./context");
 const { isEmptyTable, isIdentifier, isLuaIdentifier, isPrimitiveLiteral, isSingleAssignment, isVmRegisterName, renderTableFields, renderUnary, sourceOf } = require("../ast");
-const { hasLinearRootContinuation, recordRootConditional, upvalueAliasKey, allocateValueDisplay, allocateTableDisplay, parameterName, capturedSlotName, forwardedCaptureName, displayLocal, activeLocalDisplay, hasActiveLocal, resolveId, resolveRenderableId } = require("./bindings");
+const { hasLinearRootContinuation, recordRootConditional, upvalueAliasKey, pathLocalOwnerKey, pathUpvalueCellKey, hasPathUpvalueCell, upvalueCellBinding, allocateValueDisplay, allocateTableDisplay, parameterName, capturedSlotName, forwardedCaptureName, displayLocal, activeLocalDisplay, hasActiveLocal, resolveId, resolveRenderableId } = require("./bindings");
 const { structuredPackId, structuredPackSlot, structuredPackSlotToken } = require("./tokens");
 const { isCompilerVarargPack, isVarargUnpack, expectedPackSlotsInBlock, cleanupOrTerminalEpoch, maybeOwnStructuredPackSlot, preclaimFutureStructuredPackOwner, preclaimFutureStructuredPackSlots, flushStructuredPack, flushReadyStructuredPacks } = require("./packs");
-const { nodeReadsIdentifier, nodeUsesAsCallBaseMulti, epochReadsOnlyAsCallBase, terminalStableUsedEpoch, transportSourceKind, valueMayBeReadFrom, eventualCleanupOnAllPaths, valueMayBeReadAfter, hasFutureNonNilWrite, cleanupReachedOnAllPaths, analyzePersistentStorage } = require("./lifetime");
+const { nodeReadsIdentifier, nodeUsesAsCallBaseMulti, terminalStableUsedEpoch, transportSourceKind, valueMayBeReadFrom, eventualCleanupOnAllPaths, valueMayBeReadAfter, hasFutureNonNilWrite, analyzePersistentStorage } = require("./lifetime");
 const { render } = require("./render");
 const { renderFunction, renderProgram } = require("../render");
 const { mergeElseIfCandidates, indentConditionalEffect, mergeCandidates } = require("./branches");
 const { markersSharePrefix, terminalSiblingMatch, guardLine, collapseTerminalCandidates, foldTerminalGuards } = require("./terminal");
 
-function callOnlyClosureKey(name) { return "\0fresh-cf-call-only-closure:" + name; }
 
 function isLoopAbruptCandidate(candidate) {
     const effects = candidate?.effects || [];
@@ -206,10 +205,12 @@ function matchMultiStateLogicalLocals(source, stateWhile, stateName, returnName,
                     }
                     continue;
                 }
-                if (isIdentifier(dest.base, "upvalueValues") && isIdentifier(dest.index) && ctx.upvalueCells.has(dest.index.name)) {
+                if (isIdentifier(dest.base, "upvalueValues") && isIdentifier(dest.index) &&
+                    (ctx.upvalueCells.has(dest.index.name) || hasPathUpvalueCell(ctx, dest.index.name, env))) {
                     const value = render(ctx, rhs, env);
                     if (typeof value !== "string") return null;
-                    const existing = ctx.upvalueCellBindings.get(dest.index.name);
+                    const pathCell = hasPathUpvalueCell(ctx, dest.index.name, env);
+                    const existing = upvalueCellBinding(ctx, dest.index.name, env);
                     if (typeof existing === "string") {
                         const line = existing + " = " + value;
                         if (markers.length !== 0) {
@@ -220,12 +221,18 @@ function matchMultiStateLogicalLocals(source, stateWhile, stateName, returnName,
                         }
                         continue;
                     }
-                    // A source local captured by a child closure must have one
-                    // dominating initialization before conditional routing.
-                    if (markers.length !== 0) return null;
                     const display = allocateValueDisplay(ctx);
-                    ctx.upvalueCellBindings.set(dest.index.name, display);
-                    ctx.out.push("local " + display + " = " + value);
+                    if (pathCell) {
+                        if (!ctx.allowConditionalIf || markers.length === 0) return null;
+                        env.set(pathUpvalueCellKey(ctx, dest.index.name), display);
+                        ctx.pathLocalBindingNames.add(display);
+                        effects = [...effects, "local " + display + " = " + value];
+                    } else {
+                        // Root cell initialization must dominate later routing.
+                        if (markers.length !== 0) return null;
+                        ctx.upvalueCellBindings.set(dest.index.name, display);
+                        ctx.out.push("local " + display + " = " + value);
+                    }
                     continue;
                 }
                 if (!isIdentifier(dest.base)) return null;
@@ -250,13 +257,11 @@ function matchMultiStateLogicalLocals(source, stateWhile, stateName, returnName,
             }
             if (!isIdentifier(dest)) return null;
             const name = dest.name;
-            const callOnlyKey = callOnlyClosureKey(name);
-            if (rhs?.type !== "NilLiteral") env.delete(callOnlyKey);
             const capturedRhsAlias = capturedSlotName(ctx, rhs);
             const inheritedUpvalueAlias = typeof capturedRhsAlias === "string"
                 ? capturedRhsAlias
                 : (rhs?.type === "IndexExpression" && isIdentifier(rhs.base, "upvalueValues") && isIdentifier(rhs.index)
-                    ? (ctx.upvalueCellBindings.get(rhs.index.name) ?? null)
+                    ? upvalueCellBinding(ctx, rhs.index.name, env)
                     : (isIdentifier(rhs) ? (env.get(upvalueAliasKey(ctx, rhs.name)) ?? null) : null));
             env.delete(upvalueAliasKey(ctx, name));
 
@@ -361,18 +366,30 @@ function matchMultiStateLogicalLocals(source, stateWhile, stateName, returnName,
                 continue;
             }
             if (rhs?.type === "CallExpression" && isIdentifier(rhs.base, "allocUpvalue") && (rhs.arguments || []).length === 0) {
-                if (markers.length !== 0 || ctx.upvalueCells.has(name) || hasActiveLocal(ctx, name, env)) return null;
-                ctx.upvalueCells.add(name);
-                ctx.upvalueCellBindings.delete(name);
+                if (ctx.upvalueCells.has(name) || hasPathUpvalueCell(ctx, name, env) || hasActiveLocal(ctx, name, env)) return null;
+                if (markers.length !== 0) {
+                    if (!ctx.allowConditionalIf) return null;
+                    env.set(pathUpvalueCellKey(ctx, name), ctx.pathUpvalueCellUnbound);
+                } else {
+                    ctx.upvalueCells.add(name);
+                    ctx.upvalueCellBindings.delete(name);
+                }
                 env.delete(name);
                 continue;
             }
             if (rhs?.type === "CallExpression" && isIdentifier(rhs.base, "releaseUpvalue") &&
-                (rhs.arguments || []).length === 1 && isIdentifier(rhs.arguments[0], name) && ctx.upvalueCells.has(name)) {
-                ctx.upvalueCells.delete(name);
-                ctx.upvalueCellBindings.delete(name);
-                env.delete(name);
-                continue;
+                (rhs.arguments || []).length === 1 && isIdentifier(rhs.arguments[0], name)) {
+                if (hasPathUpvalueCell(ctx, name, env)) {
+                    env.delete(pathUpvalueCellKey(ctx, name));
+                    env.delete(name);
+                    continue;
+                }
+                if (ctx.upvalueCells.has(name)) {
+                    ctx.upvalueCells.delete(name);
+                    ctx.upvalueCellBindings.delete(name);
+                    env.delete(name);
+                    continue;
+                }
             }
             if (i === terminalReturnIndex) {
                 const fields = rhs?.type === "TableConstructorExpression" ? (rhs.fields || []) : [];
@@ -395,17 +412,26 @@ function matchMultiStateLogicalLocals(source, stateWhile, stateName, returnName,
             }
             if (name === ctx.returnName && isEmptyTable(rhs)) continue;
 
+            const transportKind = isIdentifier(rhs) && (rhs.name === ctx.stateName || rhs.name === ctx.returnName)
+                ? transportSourceKind(ctx, block, i, rhs.name) : null;
+            // A terminal-live source closure can have only one static call site
+            // (for example inside a recovered loop). The compiler's explicit
+            // state/ReturnVal handoff from createClosureN is ownership evidence;
+            // direct register=createClosureN anonymous TEMPs never enter here.
+            const terminalClosureTransport = transportKind === "closure" && valueMayBeReadAfter(ctx, id, i, name) &&
+                !hasFutureNonNilWrite(ctx, id, i, name);
             const terminalUsedTransportAlias = ctx.allowConditionalIf && isVmRegisterName(name) && !ctx.cleanupRegs.has(name) &&
                 !hasActiveLocal(ctx, name, env) && isIdentifier(rhs) && (rhs.name === ctx.stateName || rhs.name === ctx.returnName) &&
-                terminalStableUsedEpoch(ctx, id, i, name);
+                (terminalStableUsedEpoch(ctx, id, i, name) || terminalClosureTransport);
             if (terminalUsedTransportAlias) {
                 const value = render(ctx, rhs, env);
                 if (typeof value !== "string") return null;
-                const kind = transportSourceKind(ctx, block, i, rhs.name);
+                const kind = transportKind ?? transportSourceKind(ctx, block, i, rhs.name);
                 const display = kind === "table" ? allocateTableDisplay(ctx) : allocateValueDisplay(ctx);
                 const declaration = value === "nil" ? `local ${display}` : `local ${display} = ${value}`;
                 if (markers.length !== 0) {
                     ctx.pathLocalBindingNames.add(display);
+                    env.set(pathLocalOwnerKey(ctx, name), display);
                     effects = [...effects, declaration];
                 } else {
                     ctx.localNames.set(name, display);
@@ -420,6 +446,7 @@ function matchMultiStateLogicalLocals(source, stateWhile, stateName, returnName,
             if (ctx.cleanupRegs.has(name) && rhs?.type === "NilLiteral") {
                 const activeDisplay = activeLocalDisplay(ctx, name, env);
                 if (activeDisplay !== null && ctx.pathLocalBindingNames.has(activeDisplay)) {
+                    env.delete(pathLocalOwnerKey(ctx, name));
                     env.delete(name);
                     continue;
                 }
@@ -431,12 +458,6 @@ function matchMultiStateLogicalLocals(source, stateWhile, stateName, returnName,
                     continue;
                 }
                 if (ctx.accumulatorRegs.has(name)) {
-                    const callOnlyClosure = env.get(callOnlyKey);
-                    if (typeof callOnlyClosure === "string" && env.get(name) === callOnlyClosure) {
-                        env.delete(name);
-                        env.delete(callOnlyKey);
-                        continue;
-                    }
                     if (ctx.persistentStorageRegs.has(name) && ctx.locals.has(name)) {
                         ctx.locals.delete(name);
                         ctx.localNames.delete(name);
@@ -517,20 +538,13 @@ function matchMultiStateLogicalLocals(source, stateWhile, stateName, returnName,
                 return null;
             }
 
-            const closureProducingRhs = isIdentifier(rhs) ||
-                (rhs?.type === "CallExpression" && isIdentifier(rhs.base) && /^createClosure\d*$/.test(rhs.base.name));
-            const callOnlyClosureEpoch = markers.length !== 0 && ctx.cleanupRegs.has(name) && ctx.accumulatorRegs.has(name) &&
-                !hasActiveLocal(ctx, name, env) && closureProducingRhs && typeof value === "string" && /^function\b/.test(value.trim()) &&
-                epochReadsOnlyAsCallBase(ctx, id, i, name);
-            if (callOnlyClosureEpoch) {
-                env.set(name, value);
-                env.set(callOnlyKey, value);
-                continue;
-            }
-
+            // Source-storage ownership is epoch-local. A source binding may
+            // end either at its compiler nil cleanup or because the function
+            // returns before that cleanup executes. Later writes after either
+            // boundary belong to a new physical-register epoch.
+            const storageEpochEnd = cleanupOrTerminalEpoch(ctx, id, i, name);
             const stableStorageEpoch = ctx.allowConditionalIf && ctx.cleanupRegs.has(name) && !ctx.locals.has(name) &&
-                valueMayBeReadAfter(ctx, id, i, name) && !hasFutureNonNilWrite(ctx, id, i, name) &&
-                cleanupReachedOnAllPaths(ctx, id, i, name);
+                valueMayBeReadAfter(ctx, id, i, name) && storageEpochEnd.valid && storageEpochEnd.sawCleanup;
             // A storage binding that survives a conditional join must already
             // exist before entering that conditional. If the same physical
             // register is written on a branch before any active binding exists,
@@ -551,6 +565,7 @@ function matchMultiStateLogicalLocals(source, stateWhile, stateName, returnName,
                 const declaration = `local ${display} = ${value}`;
                 if (markers.length !== 0) {
                     ctx.pathLocalBindingNames.add(display);
+                    env.set(pathLocalOwnerKey(ctx, name), display);
                     effects = [...effects, declaration];
                 } else {
                     ctx.localNames.set(name, display);

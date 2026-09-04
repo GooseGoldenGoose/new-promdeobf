@@ -16,6 +16,17 @@ function recordRootConditional(ctx, startId, joinId) {
 }
 
 function upvalueAliasKey(ctx, name) { return ctx.upvalueAliasPrefix + name; }
+function pathLocalOwnerKey(ctx, name) { return ctx.pathLocalOwnerPrefix + name; }
+function pathUpvalueCellKey(ctx, name) { return ctx.pathUpvalueCellPrefix + name; }
+function hasPathUpvalueCell(ctx, name, env) { return env.has(pathUpvalueCellKey(ctx, name)); }
+function pathUpvalueCellBinding(ctx, name, env) {
+    const value = env.get(pathUpvalueCellKey(ctx, name));
+    return typeof value === "string" && value !== ctx.pathUpvalueCellUnbound ? value : null;
+}
+function upvalueCellBinding(ctx, name, env) {
+    if (hasPathUpvalueCell(ctx, name, env)) return pathUpvalueCellBinding(ctx, name, env);
+    return ctx.upvalueCellBindings.get(name) ?? null;
+}
 
 function allocateValueDisplay(ctx) {
     let display;
@@ -64,7 +75,8 @@ function displayLocal(ctx, reg) { return ctx.localNames.get(reg) || reg; }
 
 function activeLocalDisplay(ctx, name, env) {
     const value = env.get(name);
-    if (typeof value === "string" && ctx.pathLocalBindingNames.has(value)) return value;
+    if (typeof value === "string" && ctx.pathLocalBindingNames.has(value) &&
+        env.get(pathLocalOwnerKey(ctx, name)) === value) return value;
     if (ctx.locals.has(name)) {
         const display = displayLocal(ctx, name);
         if (value === display) return display;
@@ -86,4 +98,4 @@ function resolveRenderableId(ctx, name, env) {
     return value;
 }
 
-module.exports = { hasLinearRootContinuation, recordRootConditional, upvalueAliasKey, allocateValueDisplay, allocateTableDisplay, parameterName, capturedSlotName, forwardedCaptureName, displayLocal, activeLocalDisplay, hasActiveLocal, resolveId, resolveRenderableId };
+module.exports = { hasLinearRootContinuation, recordRootConditional, upvalueAliasKey, pathLocalOwnerKey, pathUpvalueCellKey, hasPathUpvalueCell, pathUpvalueCellBinding, upvalueCellBinding, allocateValueDisplay, allocateTableDisplay, parameterName, capturedSlotName, forwardedCaptureName, displayLocal, activeLocalDisplay, hasActiveLocal, resolveId, resolveRenderableId };

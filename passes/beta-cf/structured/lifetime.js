@@ -25,60 +25,6 @@ function nodeUsesAsCallBaseMulti(ctx, node, name) {
     return false;
 }
 
-function epochReadsOnlyAsCallBase(ctx, startBlockId, startIndex, name) {
-    const seen = new Set();
-    const stack = [{ blockId: startBlockId, index: startIndex + 1 }];
-    let sawUse = false;
-    while (stack.length) {
-        const cursor = stack.pop();
-        const visitKey = cursor.blockId + ":" + cursor.index;
-        if (seen.has(visitKey)) continue;
-        seen.add(visitKey);
-        const block = ctx.blocks.get(cursor.blockId);
-        if (!block) return false;
-        let overwritten = false;
-        for (let i = cursor.index; i < block.body.length; i++) {
-            if (i === block.transitionIndex) continue;
-            const statement = block.body[i];
-            if (!isSingleAssignment(statement)) return false;
-            const dest = statement.variables[0];
-            const rhs = statement.init[0];
-            if (isIdentifier(dest, name)) { overwritten = true; break; }
-            const readsRhs = nodeReadsIdentifier(ctx, rhs, name);
-            const readsDest = dest?.type === "IndexExpression" && nodeReadsIdentifier(ctx, dest, name);
-            if (readsDest) return false;
-            if (readsRhs) {
-                sawUse = true;
-                if (!nodeUsesAsCallBaseMulti(ctx, rhs, name)) return false;
-                // Every occurrence must be the direct call base, not merely one
-                // occurrence somewhere inside a larger expression.
-                let invalidOccurrence = false;
-                function verify(node, callBasePosition = false) {
-                    if (!node || typeof node !== "object" || invalidOccurrence) return;
-                    if (isIdentifier(node, name)) { if (!callBasePosition) invalidOccurrence = true; return; }
-                    if (node.type === "CallExpression") {
-                        if (isIdentifier(node.base, name)) verify(node.base, true);
-                        else verify(node.base, false);
-                        for (const arg of node.arguments || []) verify(arg, false);
-                        return;
-                    }
-                    for (const [key, value] of Object.entries(node)) {
-                        if (key === "range" || key === "loc" || key === "variables") continue;
-                        if (Array.isArray(value)) for (const item of value) verify(item, false);
-                        else if (value && typeof value === "object") verify(value, false);
-                    }
-                }
-                verify(rhs, false);
-                if (invalidOccurrence) return false;
-            }
-        }
-        if (overwritten) continue;
-        if (block.transition.kind === "branch" && block.transition.conditionRegister === name) return false;
-        for (const next of ctx.successors.get(cursor.blockId) || []) stack.push({ blockId: next, index: 0 });
-    }
-    return sawUse;
-}
-
 function terminalStableUsedEpoch(ctx, startBlockId, startIndex, name) {
     const uses = new Map();
     const seen = new Set();
@@ -126,7 +72,10 @@ function transportSourceKind(ctx, block, statementIndex, transportName) {
         if (i === block.transitionIndex) continue;
         const statement = block.body[i];
         if (!isSingleAssignment(statement, transportName)) continue;
-        return statement.init[0]?.type === "TableConstructorExpression" ? "table" : "value";
+        const rhs = statement.init[0];
+        if (rhs?.type === "TableConstructorExpression") return "table";
+        if (rhs?.type === "CallExpression" && isIdentifier(rhs.base) && /^createClosure\d*$/.test(rhs.base.name)) return "closure";
+        return "value";
     }
     return "value";
 }
@@ -335,4 +284,4 @@ function analyzePersistentStorage(ctx) {
     }
 }
 
-module.exports = { nodeReadsIdentifier, nodeUsesAsCallBaseMulti, epochReadsOnlyAsCallBase, terminalStableUsedEpoch, transportSourceKind, valueMayBeReadFrom, eventualCleanupOnAllPaths, valueMayBeReadAfter, hasFutureNonNilWrite, cleanupReachedOnAllPaths, analyzePersistentStorage };
+module.exports = { nodeReadsIdentifier, nodeUsesAsCallBaseMulti, terminalStableUsedEpoch, transportSourceKind, valueMayBeReadFrom, eventualCleanupOnAllPaths, valueMayBeReadAfter, hasFutureNonNilWrite, cleanupReachedOnAllPaths, analyzePersistentStorage };

@@ -67,12 +67,22 @@ function createStructuredContext(source, stateWhile, stateName, returnName, opti
     // names live in the candidate environment instead of the global physical-
     // register local map, so sibling CFG paths may safely reuse one VM register.
     const pathLocalBindingNames = new Set();
+    // Candidate-local owner identity is separate from rendered value identity.
+    // Compiler aliases may resolve to the same source display but must never be
+    // allowed to mutate that binding merely because their rendered strings match.
+    const pathLocalOwnerPrefix = "\0freshPathLocalOwner:";
     // Root-local upvalue cells are compiler binding-identity transport. Keep
     // their recovered source bindings separate from ordinary VM register
     // locals so captured aliases can be rendered across conditional states.
     const upvalueCells = new Set();
     const upvalueCellBindings = new Map();
     const upvalueAliasPrefix = "\0freshUpvalueAlias:";
+    // Upvalue cells allocated inside a structured branch/loop are path-local
+    // compiler transport. Their cell/binding identity travels in the candidate
+    // environment and disappears at releaseUpvalue, so sibling paths and later
+    // iterations can safely reuse the same physical cell register.
+    const pathUpvalueCellPrefix = "\0freshPathUpvalueCell:";
+    const pathUpvalueCellUnbound = pathUpvalueCellPrefix + "<unbound>";
     // Structured multi-return packs are kept as provenance tokens until every
     // compiler-extracted slot has been proven to belong to source storage.
     // The token never escapes a block: it is flushed into one source multi-local
@@ -142,6 +152,7 @@ function createStructuredContext(source, stateWhile, stateName, returnName, opti
         futureNonNilWriteCache,
         nonNilDefinitionCount,
         pathLocalBindingNames,
+        pathLocalOwnerPrefix,
         persistentStorageRegs,
         structuredPackPrefix,
         nextStructuredPackId,
@@ -153,6 +164,8 @@ function createStructuredContext(source, stateWhile, stateName, returnName, opti
         allowConditionalIf,
         terminalLiveLocals,
         upvalueAliasPrefix,
+        pathUpvalueCellPrefix,
+        pathUpvalueCellUnbound,
         terminalCandidates,
         conditionalIfCount,
         rootReachableOnly,

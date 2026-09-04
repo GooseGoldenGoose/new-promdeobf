@@ -1,7 +1,7 @@
 "use strict";
 
 const { isEmptyTable, isIdentifier, isLuaIdentifier, isPrimitiveLiteral, isSingleAssignment, isVmRegisterName, renderTableFields, renderUnary, sourceOf } = require("../ast");
-const { hasLinearRootContinuation, recordRootConditional, upvalueAliasKey, allocateValueDisplay, allocateTableDisplay, parameterName, capturedSlotName, forwardedCaptureName, displayLocal, activeLocalDisplay, hasActiveLocal, resolveId, resolveRenderableId } = require("./bindings");
+const { hasLinearRootContinuation, recordRootConditional, upvalueAliasKey, pathLocalOwnerKey, allocateValueDisplay, allocateTableDisplay, parameterName, capturedSlotName, forwardedCaptureName, displayLocal, activeLocalDisplay, hasActiveLocal, resolveId, resolveRenderableId } = require("./bindings");
 const { structuredPackId, structuredPackSlot, structuredPackSlotToken } = require("./tokens");
 const { nodeReadsIdentifier, nodeUsesAsCallBaseMulti, terminalStableUsedEpoch, transportSourceKind, valueMayBeReadFrom, eventualCleanupOnAllPaths, valueMayBeReadAfter, hasFutureNonNilWrite, cleanupReachedOnAllPaths, analyzePersistentStorage } = require("./lifetime");
 function isCompilerVarargPack(ctx, node) {
@@ -164,7 +164,10 @@ function flushStructuredPack(ctx, packId, env, markers, effects) {
     }
     const line = `local ${names.join(", ")} = ${pack.call}`;
     if (markers.length !== 0) {
-        for (const info of slots) ctx.pathLocalBindingNames.add(info.display);
+        for (const info of slots) {
+            ctx.pathLocalBindingNames.add(info.display);
+            env.set(pathLocalOwnerKey(ctx, info.ownerReg), info.display);
+        }
         effects = [...effects, line];
     } else {
         ctx.out.push(line);

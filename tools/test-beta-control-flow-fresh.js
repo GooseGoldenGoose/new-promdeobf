@@ -474,7 +474,7 @@ function sequentialLogicalCallStates(count) {
     const result = solveBetaControlFlow(source, parse(source));
     assert.strictEqual(result.applied, true, "recursive structured captured closure was not recovered");
     assert.strictEqual(result.mode, "fresh-closure-entry");
-    assert.strictEqual(result.source, 'local v1 = { value = 1 }\nlocal v2 = 10\nlocal v3 = true\nlocal v4 = (function(v4)\n    local v5 = v4\n    return function(v4)\n        v5 = (v5 + v4)\n        v2 = (v2 + v4)\n        v1.value = (v1.value + v4)\n        if (v4 > 2) then\n            v3 = (not v3)\n        end\n        return v5, v2, v1.value, v3\n    end\nend)(3)\nif _VERSION then\n    return v4(4)\nend\nreturn v4(1)\n');
+    assert.strictEqual(result.source, 'local v1 = { value = 1 }\nlocal v2 = 10\nlocal v3 = true\nlocal v4 = function(v4)\n    local v5 = v4\n    return function(v4)\n        v5 = (v5 + v4)\n        v2 = (v2 + v4)\n        v1.value = (v1.value + v4)\n        if (v4 > 2) then\n            v3 = (not v3)\n        end\n        return v5, v2, v1.value, v3\n    end\nend\nlocal v5 = v4(3)\nif _VERSION then\n    return v5(4)\nend\nreturn v5(1)\n');
 }
 
 
@@ -490,7 +490,7 @@ function sequentialLogicalCallStates(count) {
     const result = solveBetaControlFlow(source, parse(source));
     assert.strictEqual(result.applied, true, "structured captured-table mutation was not recovered");
     assert.strictEqual(result.mode, "fresh-closure-entry");
-    assert.strictEqual(result.source, 'local v1 = { count = 0 }\nif (_VERSION and (function(v2)\n    v1.count = (v1.count + 1)\n    return v2\nend)(true)) then\n    return v1.count\nend\nreturn v1.count\n');
+    assert.strictEqual(result.source, 'local v1 = { count = 0 }\nlocal v2 = function(v2)\n    v1.count = (v1.count + 1)\n    return v2\nend\nif (_VERSION and v2(true)) then\n    return v1.count\nend\nreturn v1.count\n');
 }
 
 {
@@ -505,7 +505,7 @@ function sequentialLogicalCallStates(count) {
     const result = solveBetaControlFlow(source, parse(source));
     assert.strictEqual(result.applied, true, "structured captured rebind was not recovered");
     assert.strictEqual(result.mode, "fresh-closure-entry");
-    assert.strictEqual(result.source, 'local v1 = { x = 0 }\nif (_VERSION and (function()\n    v1 = { x = 2 }\n    return true\nend)()) then\n    return v1.x\nend\nreturn v1.x\n');
+    assert.strictEqual(result.source, 'local v1 = { x = 0 }\nlocal v2 = function()\n    v1 = { x = 2 }\n    return true\nend\nif (_VERSION and v2()) then\n    return v1.x\nend\nreturn v1.x\n');
 }
 
 {
@@ -1917,7 +1917,7 @@ function sequentialLogicalCallStates(count) {
     const result = solveBetaControlFlow(source, parse(source));
     assert.strictEqual(result.applied, true, "nested multi-state vararg-pack transport was not recovered");
     assert.strictEqual(result.mode, "fresh-closure-entry");
-    assert.strictEqual(result.source, 'local v1 = (function(v1)\n    local v2 = v1\n    return function(...)\n        local v1 = select(1, ...)\n        if (v1 and (v1 > 2)) then\n            v2 = (v2 + v1)\n            return v2, ...\n        end\n        v2 = (v2 + 1)\n        return v2, ...\n    end\nend)(10)\nif _VERSION then\n    return v1(4, "A", "B")\nend\nreturn v1(1, "C", "D")\n');
+    assert.strictEqual(result.source, 'local v1 = function(v1)\n    local v2 = v1\n    return function(...)\n        local v1 = select(1, ...)\n        if (v1 and (v1 > 2)) then\n            v2 = (v2 + v1)\n            return v2, ...\n        end\n        v2 = (v2 + 1)\n        return v2, ...\n    end\nend\nlocal v2 = v1(10)\nif _VERSION then\n    return v2(4, "A", "B")\nend\nreturn v2(1, "C", "D")\n');
 }
 
 

@@ -1,7 +1,7 @@
 "use strict";
 
 const { isEmptyTable, isIdentifier, isLuaIdentifier, isPrimitiveLiteral, isSingleAssignment, isVmRegisterName, renderTableFields, renderUnary, sourceOf } = require("../ast");
-const { hasLinearRootContinuation, recordRootConditional, upvalueAliasKey, allocateValueDisplay, allocateTableDisplay, parameterName, capturedSlotName, forwardedCaptureName, displayLocal, activeLocalDisplay, hasActiveLocal, resolveId, resolveRenderableId } = require("./bindings");
+const { hasLinearRootContinuation, recordRootConditional, upvalueAliasKey, upvalueCellBinding, allocateValueDisplay, allocateTableDisplay, parameterName, capturedSlotName, forwardedCaptureName, displayLocal, activeLocalDisplay, hasActiveLocal, resolveId, resolveRenderableId } = require("./bindings");
 const { structuredPackId, structuredPackSlot, structuredPackSlotToken } = require("./tokens");
 const { isCompilerVarargPack, isVarargUnpack, expectedPackSlotsInBlock, cleanupOrTerminalEpoch, maybeOwnStructuredPackSlot, preclaimFutureStructuredPackOwner, preclaimFutureStructuredPackSlots, flushStructuredPack, flushReadyStructuredPacks } = require("./packs");
 function render(ctx, rhs, env, provenRecursive = false, singleCallPacks = null) {
@@ -14,7 +14,7 @@ function render(ctx, rhs, env, provenRecursive = false, singleCallPacks = null) 
         return parameterName(ctx, Number(rhs.index.value));
     }
     if (rhs?.type === "IndexExpression" && isIdentifier(rhs.base, "upvalueValues") && isIdentifier(rhs.index)) {
-        return ctx.upvalueCellBindings.get(rhs.index.name) ?? null;
+        return upvalueCellBinding(ctx, rhs.index.name, env);
     }
     if (provenRecursive && rhs?.type === "IndexExpression" && !isIdentifier(rhs.base)) {
         const base = render(ctx, rhs.base, env, true, singleCallPacks);
@@ -80,7 +80,7 @@ function render(ctx, rhs, env, provenRecursive = false, singleCallPacks = null) 
                     const field = fields[i];
                     if (field?.type !== "TableValue") return null;
                     let captureName = null;
-                    if (isIdentifier(field.value)) captureName = ctx.upvalueCellBindings.get(field.value.name) ?? null;
+                    if (isIdentifier(field.value)) captureName = upvalueCellBinding(ctx, field.value.name, env);
                     else captureName = forwardedCaptureName(ctx, field.value);
                     if (typeof captureName !== "string") return null;
                     childCaptureNames.set(i + 1, captureName);
