@@ -421,6 +421,48 @@ function sequentialLogicalCallStates(count) {
 
 {
     const source = vmStatesSource({
+        1: ['r1 = "cond"', 'r2 = _env[r1]', 'state = r2 and 2 or 3', 'r3 = args'],
+        2: ['ReturnVal = { 1 }', 'state = nil'],
+        3: ['ReturnVal = { 2 }', 'state = nil'],
+    });
+    const result = solveBetaControlFlow(source, parse(source));
+    assert.strictEqual(result.applied, true, "basic early-return branch was not recovered");
+    assert.strictEqual(result.source, "if cond then\n    return 1\nend\nreturn 2\n");
+}
+
+{
+    const source = vmStatesSource({
+        1: ['r1 = "a"', 'r2 = _env[r1]', 'state = r2 and 2 or 3', 'r8 = args', 'ReturnVal = r2'],
+        2: ['r1 = "b"', 'r4 = _env[r1]', 'r6 = state', 'state = r4 and 4 or 5', 'r2 = r4'],
+        3: ['state = ReturnVal and 6 or 7'],
+        4: ['state = r6', 'ReturnVal = r2', 'state = 3'],
+        5: ['r1 = "c"', 'r4 = _env[r1]', 'r2 = r4', 'state = 4'],
+        6: ['ReturnVal = { 1 }', 'state = nil'],
+        7: ['ReturnVal = { 2 }', 'state = nil'],
+    });
+    const result = solveBetaControlFlow(source, parse(source));
+    assert.strictEqual(result.applied, true, "nested TESTSET early return was not recovered");
+    assert.strictEqual(result.source, "if (a and (b or c)) then\n    return 1\nend\nreturn 2\n");
+}
+
+{
+    const source = vmStatesSource({
+        1: ['r1 = "_VERSION"', 'r2 = _env[r1]', 'state = r2 and 2 or 3', 'ReturnVal = r2'],
+        2: ['r3 = "type"', 'r4 = _env[r3]', 'r5 = 1', 'r3 = r4(r5)', 'r4 = "number"', 'r5 = r3 == r4', 'r6 = state', 'state = r5 and 4 or 5', 'r2 = r5'],
+        3: ['state = ReturnVal and 6 or 7'],
+        4: ['state = r6', 'ReturnVal = r2', 'state = 3'],
+        5: ['r3 = "tostring"', 'r4 = _env[r3]', 'r5 = 2', 'r3 = r4(r5)', 'r2 = r3', 'state = 4'],
+        6: ['ReturnVal = { 1 }', 'state = nil'],
+        7: ['ReturnVal = { 2 }', 'state = nil'],
+    });
+    const result = solveBetaControlFlow(source, parse(source));
+    assert.strictEqual(result.applied, true, "call-heavy TESTSET early return was not recovered");
+    assert.strictEqual(result.source, "if (_VERSION and ((type(1) == \"number\") or tostring(2))) then\n    return 1\nend\nreturn 2\n");
+}
+
+
+{
+    const source = vmStatesSource({
         1: ['r1 = "b"', 'r2 = _env[r1]', 'state = r2 and 2 or 3', 'r3 = args', 'ReturnVal = r2'],
         2: ['r2 = ReturnVal', 'r2 = nil', 'ReturnVal = {}', 'state = nil'],
         3: ['r1 = "c"', 'r2 = _env[r1]', 'ReturnVal = r2', 'state = 2'],

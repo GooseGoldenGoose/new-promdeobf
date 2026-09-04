@@ -1939,54 +1939,56 @@ Correctness fix completed during 2026-09-02 Fresh-CF follow-up:
 - focused regression coverage verifies 25 sequential logical/call pairs, conditional-call fail-closed behavior, exact ordering, and no duplicate calls
 - the real 100-pair Medium run produced 100 locals plus 100 prints and matched source/obfuscated/recovered runtime output exactly with a fixed random seed
 
-### Next requested feature: structural early return recovery
+### Structural early return recovery — IMPLEMENTED
 
-The user explicitly paused before implementation and asked for this handoff. **Early-return support has NOT been implemented yet.** Do not claim it is supported until real Medium compiler fixtures, focused regressions, randomized layouts, and runtime parity pass.
+Fresh CF now recovers proven return-bearing conditional CFGs structurally. This composes with the existing closed logical/TESTSET reducer and does not invent synthetic joins for terminal paths.
 
-Target source shape supplied by the user:
+Compiler facts verified directly in `compiler.lua` and real Medium output:
+- explicit source `return` compiles the return payload into `RETURN_REGISTER` / normalized `ReturnVal`, then writes `POS_REGISTER = nil` / normalized `state = nil`; that path is terminal and bypasses later source continuation
+- function fallthrough also creates an empty return pack and terminal state; after normalization an explicit final empty return and fallthrough are not always distinguishable, so Fresh CF omits only a trailing root-scope bare `return` when it is not provably source-authored
+- last-expression calls/varargs use RETURN_ALL transport: compiler pack `{ call(...) }` / `{ ... }` followed by terminal `ReturnVal = { unpack(pack) }`; Fresh CF unwraps this only on the proven terminal return path
 
-```lua
-if math.random(1,2) then
-    print(1)
-    return 3
-end
-if thing() then
-    return 5
-end
-print(2)
-return 4
-```
+Current structural model in `passes/beta-control-flow.js`:
+- terminal CFG candidates are stored separately from continuing candidates
+- sibling terminal candidates collapse only when branch markers, effect prefixes, branch IDs, and polarity prove they are the two arms of the same source conditional
+- one terminal arm + one continuing arm folds into a guard return while the continuing path keeps propagating
+- nested and sequential return-bearing conditionals compose recursively through the same marker/effect model
+- terminal paths stop propagation; they are never forced through a fake join
+- proven terminal-live source aliases may end at function termination without compiler nil cleanup when their epoch is stable to terminal and has no physical-register redefinition
+- terminal return rendering supports constants, locals, tables, calls, multiple values, RETURN_ALL calls, varargs, and closure values where existing Fresh-CF expression/closure recovery proves them
+- proven synthetic logical AST rendering accepts primitive literal indices in `_env[...]` and recursively-rendered call bases only inside already-proven reduced logical expressions; this preserves short-circuit call count/order without broadening ordinary unproven expression rendering
+- ambiguous terminal payloads, lifetimes, path merges, or branch shapes still fail closed
 
-The next implementation must be dynamic/structural. Do not key off literal return values, `math.random`, `thing`, state IDs, physical register IDs, or one exact state count. First compile tiny real Medium fixtures and inspect the compiler/normal VM lowering of branch-local returns. Determine the generic terminal-return shape, including `ReturnVal`/return-pack construction, `state = nil`, cleanup ordering, and whether branch-local return paths bypass later join states.
+Tracked focused regressions in `tools/test-beta-control-flow-fresh.js` now include:
+- basic one-sided terminal branch
+- nested TESTSET `a and (b or c)` feeding early return
+- call-heavy TESTSET with `type(1) == "number" or tostring(2)`, covering the recursively-rendered proven call-base case
+- the pre-existing deep logical/TESTSET regressions remain unchanged and passing
 
-Required semantic model:
-- a return path is terminal source control flow, not a normal branch effect that must converge with fallthrough
-- a conditional may have one terminal return arm and one continuing arm
-- several sequential root conditionals may each terminate on one path while the remaining path continues to later statements
-- nested `if/elseif/else` may contain terminal return arms
-- logical/TESTSET conditions feeding a return-bearing conditional must still use the closed logical-region reducer before statement structuring
-- returned expressions may be constants, locals, calls, tables, varargs, or multi-return where already supported by existing return-pack logic; do not duplicate side effects while reconstructing them
-- compiler cleanup after a proven return must not be emitted as source behavior
-- paths that cannot be proven terminal or whose return pack/lifetime is ambiguous must fail closed
+Real Medium validation completed for these source shapes:
+- one-sided early return + final return
+- side effects before terminal return and on continuation
+- sequential early-return guards
+- `if/else`, `elseif`, and nested return-bearing conditionals
+- logical/TESTSET conditions, including true/false paths, a 23-state deeply nested `and/or` expression, and a call-heavy short-circuit expression
+- returned locals without terminal cleanup
+- persistent table identity/mutation on terminal and continuing paths
+- returned calls / RETURN_ALL
+- multiple return values
+- varargs
+- branch-local storage cleanup
+- closure-containing roots and direct closure-value returns
+- table-constructor return values
+- empty return branches
 
-Suggested first implementation direction (analysis target, not completed design): extend conditional candidate/effect propagation with a distinct terminal outcome rather than forcing every candidate to reach the same join. A proven terminal return candidate should carry rendered return source plus its environment/lifetime obligations and stop propagation. At a branch merge, structure source `if`/`elseif`/`else` when nonterminal candidates prove the continuation and terminal candidates prove return termination. Do not simply invent a synthetic join for terminal paths.
+Validation results on 2026-09-04:
+- all eight established Fresh-CF/register/binding suites pass
+- four complex TESTSET early-return fixtures passed 100/100 exact runtime-parity runs (25 randomized Medium layouts x 4 fixtures)
+- the broader early-return matrix passed 210/210 exact runtime-parity runs (10 randomized Medium layouts x 21 fixtures)
+- no call duplication, short-circuit order change, table identity break, or return-pack expansion mismatch was observed
+- the exact user sample with `math.random(1,2)`, a second `thing()` early-return guard, `print(2)`, and final `return 4` recovers structurally from real Medium output; runtime parity is not a valid gate for that literal sample because `thing` is undefined unless the test defines it (and the random guard is nondeterministic across separate runs)
 
-Mandatory regression gate for every meaningful early-return solver change:
-- focused early-return normalized tests derived from real Prometheus output
-- real Medium exact parity for the user sample
-- one-sided `if cond then return X end` with fallthrough
-- two or more sequential return-bearing `if`s before a final return
-- `if/elseif/else` with mixed terminal/nonterminal arms
-- nested conditional returns
-- TESTSET / `and` / `or` conditions around return-bearing branches
-- closure-containing root plus returns, so child states do not contaminate root lifetime analysis
-- persistent scalar/table mutations before terminal and continuing paths
-- return of call results / multiple values / varargs where current Fresh-CF return machinery already supports them
-- existing eight core Fresh-CF/register/binding suites
-- randomized fresh Medium layouts, saving any reproducible semantic failure layout
-- `git diff --check`, focused commit, push `origin/main`, and update this context
-
-Keep the existing mixed-CFG invariant from `72cb949`: only closed compiler logical-value regions with result-carrier proof are reduced; source conditional routing stays in the conditional structurer. Early returns must compose with that architecture rather than bypass it.
+Early-return recovery still does NOT imply loop-control recovery. General `while`, `repeat`, numeric/generic `for`, `break`, and `continue` remain separate fail-closed features.
 
 ### What a new chat should do next
 

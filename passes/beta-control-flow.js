@@ -2366,6 +2366,7 @@ function matchMultiStateLogicalLocals(source, stateWhile, stateName, returnName,
     const processed = new Set();
     const locals = new Set();
     const localNames = new Map();
+    const terminalLiveLocals = new Set();
     // Branch-local source bindings are path-scoped. Their generated source
     // names live in the candidate environment instead of the global physical-
     // register local map, so sibling CFG paths may safely reuse one VM register.
@@ -2381,6 +2382,7 @@ function matchMultiStateLogicalLocals(source, stateWhile, stateName, returnName,
     // as an ordinary value after the join.
     const persistentStorageRegs = new Set();
     const out = [];
+    const terminalCandidates = [];
     let valueCount = 0;
     let tableCount = 0;
     let conditionalIfCount = 0;
@@ -2406,8 +2408,9 @@ function matchMultiStateLogicalLocals(source, stateWhile, stateName, returnName,
         if (isPrimitiveLiteral(rhs) || isEmptyTable(rhs)) return sourceOf(source, rhs);
         if (rhs?.type === "TableConstructorExpression") return renderTableFields(rhs.fields || [], node => render(node, env, provenRecursive));
         if (isIdentifier(rhs)) return resolveId(rhs.name, env);
-        if (rhs?.type === "IndexExpression" && isIdentifier(rhs.base) && isIdentifier(rhs.index)) {
-            const key = resolveId(rhs.index.name, env);
+        if (rhs?.type === "IndexExpression" && isIdentifier(rhs.base)) {
+            const key = isIdentifier(rhs.index) ? resolveId(rhs.index.name, env)
+                : (provenRecursive && isPrimitiveLiteral(rhs.index) ? sourceOf(source, rhs.index) : null);
             if (key == null) return null;
             if (rhs.base.name === "_env") {
                 const globalName = /^"[A-Za-z_][A-Za-z0-9_]*"$/.test(key) ? key.slice(1, -1) : null;
@@ -2436,12 +2439,13 @@ function matchMultiStateLogicalLocals(source, stateWhile, stateName, returnName,
             if (left == null || right == null) return null;
             return `(${left} ${rhs.operator} ${right})`;
         }
-        if (rhs?.type === "CallExpression" && isIdentifier(rhs.base)) {
+        if (rhs?.type === "CallExpression") {
             if (typeof options.renderSpecialCall === "function") {
                 const special = options.renderSpecialCall(rhs);
                 if (typeof special === "string") return special;
             }
-            const base = resolveId(rhs.base.name, env);
+            const base = isIdentifier(rhs.base) ? resolveId(rhs.base.name, env)
+                : (provenRecursive ? render(rhs.base, env, true) : null);
             if (base == null) return null;
             const args = [];
             for (const arg of rhs.arguments || []) {
@@ -2465,6 +2469,70 @@ function matchMultiStateLogicalLocals(source, stateWhile, stateName, returnName,
             } else if (value && typeof value === "object" && nodeReadsIdentifier(value, name)) return true;
         }
         return false;
+    }
+
+    function nodeUsesAsCallBaseMulti(node, name) {
+        if (!node || typeof node !== "object") return false;
+        if (node.type === "CallExpression" && isIdentifier(node.base, name)) return true;
+        for (const [key, value] of Object.entries(node)) {
+            if (key === "range" || key === "loc" || key === "variables") continue;
+            if (Array.isArray(value)) {
+                if (value.some(item => nodeUsesAsCallBaseMulti(item, name))) return true;
+            } else if (value && typeof value === "object" && nodeUsesAsCallBaseMulti(value, name)) return true;
+        }
+        return false;
+    }
+
+    function terminalStableUsedEpoch(startBlockId, startIndex, name) {
+        const uses = new Map();
+        const seen = new Set();
+        const stack = [{ blockId: startBlockId, index: startIndex + 1 }];
+        let invalid = false;
+        while (stack.length && !invalid) {
+            const cursor = stack.pop();
+            const visitKey = `${cursor.blockId}:${cursor.index}`;
+            if (seen.has(visitKey)) continue;
+            seen.add(visitKey);
+            const block = blocks.get(cursor.blockId);
+            if (!block) return false;
+            for (let i = cursor.index; i < block.body.length; i++) {
+                if (i === block.transitionIndex) continue;
+                const statement = block.body[i];
+                if (!isSingleAssignment(statement)) return false;
+                const dest = statement.variables[0];
+                const rhs = statement.init[0];
+                if (isIdentifier(dest, name)) { invalid = true; break; }
+                if (isIdentifier(dest, stateName) && isIdentifier(rhs, name)) { invalid = true; break; }
+                const ordinaryUse = nodeReadsIdentifier(rhs, name) ||
+                    (dest?.type === "IndexExpression" && nodeReadsIdentifier(dest, name));
+                if (ordinaryUse) {
+                    uses.set(`${cursor.blockId}:${i}`, {
+                        delayed: cursor.blockId !== startBlockId || i > startIndex + 1,
+                        callBase: nodeUsesAsCallBaseMulti(rhs, name),
+                        logical: rhs?.type === "LogicalExpression" && nodeReadsIdentifier(rhs, name),
+                    });
+                }
+            }
+            if (invalid) break;
+            if (block.transition.kind === "branch" && block.transition.conditionRegister === name) {
+                uses.set(`${cursor.blockId}:branch`, { delayed: cursor.blockId !== startBlockId, callBase: false, logical: true });
+            }
+            for (const next of successors.get(cursor.blockId) || []) stack.push({ blockId: next, index: 0 });
+        }
+        if (invalid || uses.size === 0) return false;
+        if (uses.size > 1) return true;
+        const only = [...uses.values()][0];
+        return only.delayed && !only.callBase && !only.logical;
+    }
+
+    function transportSourceKind(block, statementIndex, transportName) {
+        for (let i = statementIndex - 1; i >= 0; i--) {
+            if (i === block.transitionIndex) continue;
+            const statement = block.body[i];
+            if (!isSingleAssignment(statement, transportName)) continue;
+            return statement.init[0]?.type === "TableConstructorExpression" ? "table" : "value";
+        }
+        return "value";
     }
 
     function valueMayBeReadFrom(blockId, name, visiting = new Set()) {
@@ -2800,6 +2868,101 @@ function matchMultiStateLogicalLocals(source, stateWhile, stateName, returnName,
         return String(text).split("\n").map(line => prefix + line).join("\n");
     }
 
+    function markersSharePrefix(aMarkers, bMarkers, length) {
+        if (aMarkers.length < length || bMarkers.length < length) return false;
+        for (let i = 0; i < length; i++) {
+            const a = aMarkers[i], b = bMarkers[i];
+            if (!a || !b || a.condition !== b.condition || a.truth !== b.truth || a.effectCount !== b.effectCount || a.branchId !== b.branchId) return false;
+        }
+        return true;
+    }
+
+    function terminalSiblingMatch(a, b) {
+        const am = a.markers || [], bm = b.markers || [];
+        if (am.length === 0 || am.length !== bm.length || !markersSharePrefix(am, bm, am.length - 1)) return null;
+        const al = am[am.length - 1], bl = bm[bm.length - 1];
+        if (!al || !bl || al.condition !== bl.condition || al.truth === bl.truth || al.effectCount !== bl.effectCount || al.branchId !== bl.branchId) return null;
+        const effectPrefix = al.effectCount;
+        const ae = a.effects || [], be = b.effects || [];
+        if (!Number.isInteger(effectPrefix) || effectPrefix > ae.length || effectPrefix > be.length) return null;
+        for (let i = 0; i < effectPrefix; i++) if (ae[i] !== be[i]) return null;
+        return { al, bl, effectPrefix };
+    }
+
+    function guardLine(condition, truth, bodyEffects) {
+        if (!Array.isArray(bodyEffects) || bodyEffects.length === 0) return null;
+        const test = truth ? condition : `(not ${condition})`;
+        const body = bodyEffects.map(line => indentConditionalEffect(line)).join("\n");
+        return `if ${test} then\n${body}\nend`;
+    }
+
+    function collapseTerminalCandidates() {
+        let changed = true;
+        while (changed) {
+            changed = false;
+            outer: for (let i = 0; i < terminalCandidates.length; i++) {
+                for (let j = i + 1; j < terminalCandidates.length; j++) {
+                    const a = terminalCandidates[i], b = terminalCandidates[j];
+                    const match = terminalSiblingMatch(a, b);
+                    if (!match) continue;
+                    const trueCandidate = match.al.truth ? a : b;
+                    const falseCandidate = match.al.truth ? b : a;
+                    const guard = guardLine(match.al.condition, true, (trueCandidate.effects || []).slice(match.effectPrefix));
+                    if (!guard) return false;
+                    const merged = {
+                        env: new Map(falseCandidate.env),
+                        markers: (falseCandidate.markers || []).slice(0, -1),
+                        effects: [
+                            ...(falseCandidate.effects || []).slice(0, match.effectPrefix),
+                            guard,
+                            ...(falseCandidate.effects || []).slice(match.effectPrefix),
+                        ],
+                        terminal: true,
+                    };
+                    terminalCandidates.splice(j, 1);
+                    terminalCandidates.splice(i, 1, merged);
+                    changed = true;
+                    break outer;
+                }
+            }
+        }
+        return true;
+    }
+
+    function foldTerminalGuards(candidate) {
+        let current = {
+            env: new Map(candidate.env),
+            markers: [...(candidate.markers || [])],
+            effects: [...(candidate.effects || [])],
+        };
+        while (current.markers.length > 0) {
+            let matchIndex = -1;
+            let match = null;
+            for (let i = 0; i < terminalCandidates.length; i++) {
+                const terminal = terminalCandidates[i];
+                const candidateMatch = terminalSiblingMatch(current, terminal);
+                if (!candidateMatch) continue;
+                matchIndex = i;
+                match = candidateMatch;
+                break;
+            }
+            if (matchIndex < 0) break;
+            const terminal = terminalCandidates[matchIndex];
+            const terminalMarker = terminal.markers[terminal.markers.length - 1];
+            const guard = guardLine(terminalMarker.condition, terminalMarker.truth, (terminal.effects || []).slice(match.effectPrefix));
+            if (!guard) return null;
+            const prefixEffects = current.effects.slice(0, match.effectPrefix);
+            current = {
+                env: new Map(current.env),
+                markers: current.markers.slice(0, -1),
+                effects: [...prefixEffects, guard, ...current.effects.slice(match.effectPrefix)],
+            };
+            terminalCandidates.splice(matchIndex, 1);
+            if (!collapseTerminalCandidates()) return null;
+        }
+        return current;
+    }
+
     function mergeCandidates(candidates, joinId) {
         if (candidates.length === 1) return {
             env: new Map(candidates[0].env),
@@ -2885,12 +3048,35 @@ function matchMultiStateLogicalLocals(source, stateWhile, stateName, returnName,
         const id = ready.shift();
         if (processed.has(id)) continue;
         const candidates = incoming.get(id) || [];
-        const merged = mergeCandidates(candidates, id);
+        if (!collapseTerminalCandidates()) return null;
+        const normalizedCandidates = [];
+        for (const candidate of candidates) {
+            const folded = foldTerminalGuards(candidate);
+            if (!folded) return null;
+            normalizedCandidates.push(folded);
+        }
+        const merged = mergeCandidates(normalizedCandidates, id);
         if (!merged) return null;
         let env = merged.env;
         let markers = merged.markers;
         let effects = merged.effects || [];
+        if (markers.length === 0 && effects.length > 0) {
+            out.push(...effects);
+            effects = [];
+        }
         const block = blocks.get(id);
+        let terminalReturnIndex = -1;
+        let terminalReturnLine = null;
+        const terminalPackExprs = new Map();
+        if (block.transition.kind === "stop") {
+            for (let i = block.transitionIndex - 1; i >= 0; i--) {
+                if (!isSingleAssignment(block.body[i], returnName)) continue;
+                if (block.body[i].init[0]?.type !== "TableConstructorExpression") continue;
+                terminalReturnIndex = i;
+                break;
+            }
+            if (terminalReturnIndex < 0) return null;
+        }
         // Normalized dispatcher invariant: entering this leaf proves state == id.
         // The compiler may borrow/copy POS as an ordinary temporary before the
         // real transition at the end of the block.
@@ -2924,6 +3110,17 @@ function matchMultiStateLogicalLocals(source, stateWhile, stateName, returnName,
             if (!isIdentifier(dest)) return null;
             const name = dest.name;
 
+            if (i !== terminalReturnIndex) {
+                const packFields = rhs?.type === "TableConstructorExpression" ? (rhs.fields || []) : [];
+                if (packFields.length === 1 && packFields[0]?.type === "TableValue" && packFields[0].value?.type === "CallExpression") {
+                    const packed = render(packFields[0].value, env, true);
+                    if (typeof packed === "string") terminalPackExprs.set(name, packed);
+                    else terminalPackExprs.delete(name);
+                } else {
+                    terminalPackExprs.delete(name);
+                }
+            }
+
             // A physical register can be reused after an early source epoch
             // was emitted.  The later definition owns the next cleanup epoch;
             // do not let the old marker suppress that new value.
@@ -2933,7 +3130,49 @@ function matchMultiStateLogicalLocals(source, stateWhile, stateName, returnName,
                 env.set(name, "args");
                 continue;
             }
+            if (i === terminalReturnIndex) {
+                const fields = rhs?.type === "TableConstructorExpression" ? (rhs.fields || []) : [];
+                const values = [];
+                for (const field of fields) {
+                    if (field?.type !== "TableValue") return null;
+                    let value = null;
+                    const node = field.value;
+                    if (node?.type === "CallExpression" && isIdentifier(node.base, "unpack") && (node.arguments || []).length === 1 && isIdentifier(node.arguments[0])) {
+                        const packReg = node.arguments[0].name;
+                        if (terminalPackExprs.has(packReg)) value = terminalPackExprs.get(packReg);
+                        else if (resolveId(packReg, env) === "args") value = "...";
+                    }
+                    if (value === null) value = render(node, env, true);
+                    if (typeof value !== "string") return null;
+                    values.push(value);
+                }
+                terminalReturnLine = values.length ? `return ${values.join(", ")}` : "return";
+                continue;
+            }
             if (name === returnName && isEmptyTable(rhs)) continue;
+
+            const terminalUsedTransportAlias = allowConditionalIf && isVmRegisterName(name) && !cleanupRegs.has(name) &&
+                !hasActiveLocal(name, env) && isIdentifier(rhs) && (rhs.name === stateName || rhs.name === returnName) &&
+                terminalStableUsedEpoch(id, i, name);
+            if (terminalUsedTransportAlias) {
+                const value = render(rhs, env);
+                if (typeof value !== "string") return null;
+                const kind = transportSourceKind(block, i, rhs.name);
+                const display = kind === "table" ? `t${++tableCount}` : `v${++valueCount}`;
+                const declaration = value === "nil" ? `local ${display}` : `local ${display} = ${value}`;
+                if (markers.length !== 0) {
+                    pathLocalBindingNames.add(display);
+                    effects = [...effects, declaration];
+                } else {
+                    localNames.set(name, display);
+                    locals.add(name);
+                    terminalLiveLocals.add(name);
+                    out.push(declaration);
+                }
+                env.set(name, display);
+                continue;
+            }
+
             if (cleanupRegs.has(name) && rhs?.type === "NilLiteral") {
                 const activeDisplay = activeLocalDisplay(name, env);
                 if (activeDisplay !== null && pathLocalBindingNames.has(activeDisplay)) {
@@ -3073,7 +3312,16 @@ function matchMultiStateLogicalLocals(source, stateWhile, stateName, returnName,
         processed.add(id);
         const tr = block.transition;
         const sends = [];
-        if (tr.kind === "jump") sends.push({ target: tr.target, env, markers, effects });
+        if (tr.kind === "stop") {
+            if (terminalReturnLine === null) return null;
+            terminalCandidates.push({
+                env: new Map(env),
+                markers: [...markers],
+                effects: [...effects, terminalReturnLine],
+                terminal: true,
+            });
+            if (!collapseTerminalCandidates()) return null;
+        } else if (tr.kind === "jump") sends.push({ target: tr.target, env, markers, effects });
         else if (tr.kind === "branch") {
             const condition = resolveId(tr.conditionRegister, env);
             if (condition == null) return null;
@@ -3093,8 +3341,23 @@ function matchMultiStateLogicalLocals(source, stateWhile, stateName, returnName,
         }
     }
 
+    if (!collapseTerminalCandidates()) return null;
+    if (terminalCandidates.length !== 1 || (terminalCandidates[0].markers || []).length !== 0) return null;
+    const terminalEffects = [...(terminalCandidates[0].effects || [])];
+    // Compiler fallthrough and an explicit empty return share the same final VM
+    // bookkeeping.  At root terminal scope a trailing bare return is therefore
+    // not provably source-authored; omit only that final redundant marker.
+    if (terminalEffects[terminalEffects.length - 1] === "return") terminalEffects.pop();
+    for (const effect of terminalEffects) out.push(effect);
+    for (const name of terminalLiveLocals) {
+        locals.delete(name);
+        localNames.delete(name);
+    }
     if (processed.size !== reachable.size || locals.size !== 0 || out.length === 0) return null;
-    if (allowConditionalIf && conditionalIfCount < 1) return null;
+    if (allowConditionalIf && conditionalIfCount < 1) {
+        if (!out.some(line => /^if\s/.test(line))) return null;
+        conditionalIfCount = 1;
+    }
     return {
         source: out.join("\n") + "\n",
         statementCount: out.length,
