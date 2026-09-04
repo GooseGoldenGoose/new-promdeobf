@@ -14,141 +14,135 @@ const { matchDirectGlobalCallLeaf } = require("./direct-calls");
 const { matchLocalRegisterProgram } = require("./linear/solver");
 const { flattenLogicalRootLeaf } = require("./logical");
 const { matchMultiStateLogicalLocals } = require("./structured/solver");
+const { failure, unsupportedMultiState } = require("./diagnostics");
+
+function recoverClosure(ctx) {
+    const program = matchClosureEntryProgram(ctx.source, ctx.stateWhile, ctx.stateName, ctx.returnName, ctx.closureDiagnostics);
+    if (!program) return null;
+    return {
+        applied: true,
+        mode: "fresh-closure-entry",
+        source: program.source,
+        stateCount: program.stateCount,
+        statementCount: program.statementCount,
+        branchCount: 0,
+        localCount: program.localCount,
+        closureCount: program.closureCount,
+    };
+}
+
+function recoverFlattenedLogical(ctx) {
+    const leaves = ctx.logicalLeaves;
+    if (!leaves || leaves.size <= 1 || !leaves.has(1)) return null;
+    const flattened = flattenLogicalRootLeaf(leaves, 1, ctx.stateName, ctx.returnName);
+    if (!flattened || flattened.consumed.size !== leaves.size) return null;
+    const program = matchLocalRegisterProgram(ctx.source, flattened.leaf, ctx.stateName, ctx.returnName);
+    if (!program) return null;
+    return {
+        applied: true,
+        mode: "fresh-multistate-logical",
+        source: program.source,
+        stateCount: leaves.size,
+        statementCount: program.statementCount,
+        branchCount: leaves.size - 1,
+        localCount: program.localCount,
+    };
+}
+
+function recoverStructuredLogical(ctx) {
+    const program = matchMultiStateLogicalLocals(ctx.source, ctx.stateWhile, ctx.stateName, ctx.returnName);
+    if (!program) return null;
+    return {
+        applied: true,
+        mode: "fresh-multistate-logical",
+        source: program.source,
+        stateCount: program.stateCount,
+        statementCount: program.statementCount,
+        branchCount: program.stateCount - 1,
+        localCount: program.localCount,
+    };
+}
+
+function recoverConditional(ctx) {
+    const program = matchMultiStateLogicalLocals(ctx.source, ctx.stateWhile, ctx.stateName, ctx.returnName, { allowConditionalIf: true });
+    if (!program) return null;
+    return {
+        applied: true,
+        mode: "fresh-simple-if",
+        source: program.source,
+        stateCount: program.stateCount,
+        statementCount: program.statementCount,
+        branchCount: 1,
+        localCount: program.localCount,
+    };
+}
+
+function recoverLinear(ctx) {
+    const program = matchLocalRegisterProgram(ctx.source, ctx.leaf, ctx.stateName, ctx.returnName);
+    return program && { applied: true, mode: "fresh-register-locals", source: program.source, stateCount: 1, statementCount: program.statementCount, branchCount: 0, localCount: program.localCount };
+}
+
+function recoverDirectCalls(ctx) {
+    const calls = matchDirectGlobalCallLeaf(ctx.source, ctx.leaf, ctx.stateName, ctx.returnName);
+    return calls && {
+        applied: true,
+        mode: "fresh-direct-global-call",
+        source: calls.source,
+        stateCount: 1,
+        statementCount: calls.callCount,
+        branchCount: 0,
+        globalName: calls.globalName,
+        argumentCount: calls.argumentCount,
+        callCount: calls.callCount,
+    };
+}
+
+function recoverCallResults(ctx) {
+    const program = matchLocalRegisterProgram(ctx.source, ctx.leaf, ctx.stateName, ctx.returnName, { allowNoLocals: true });
+    return program && { applied: true, mode: "fresh-call-results", source: program.source, stateCount: 1, statementCount: program.statementCount, branchCount: 0, localCount: program.localCount };
+}
+
+const MULTI_STATE_RECOVERERS = [recoverClosure, recoverFlattenedLogical, recoverStructuredLogical, recoverConditional];
+const LINEAR_RECOVERERS = [recoverLinear, recoverDirectCalls, recoverCallResults];
 
 function solveFreshSource(source, ast) {
-    if (typeof source !== "string" || !ast) return { applied: false, reason: "Fresh beta CF requires normal output source and AST", mode: "fresh" };
+    if (typeof source !== "string" || !ast) return failure("Fresh beta CF requires normal output source and AST");
     const vm = findVmFunction(ast);
-    if (!vm) return { applied: false, reason: "Fresh beta CF: no semantically named vm function", mode: "fresh" };
+    if (!vm) return failure("Fresh beta CF: no semantically named vm function");
     const overflow = normalizeRegisterOverflowGraph(vm.functionNode);
-    if (overflow.unsupported > 0) return { applied: false, reason: "Fresh beta CF: dynamic RegisterOverflow index is unsupported", mode: "fresh" };
+    if (overflow.unsupported > 0) return failure("Fresh beta CF: dynamic RegisterOverflow index is unsupported");
     const stateParam = (vm.functionNode.parameters || [])[0];
-    if (!isIdentifier(stateParam)) return { applied: false, reason: "Fresh beta CF: VM state parameter is not an identifier", mode: "fresh" };
+    if (!isIdentifier(stateParam)) return failure("Fresh beta CF: VM state parameter is not an identifier");
     const stateName = stateParam.name;
     const returnName = findVmReturnRegister(vm.functionNode)?.name || null;
     const stateWhile = findStateWhile(vm.functionNode, stateName);
-    if (!stateWhile) return { applied: false, reason: "Fresh beta CF: no while <state> dispatcher", mode: "fresh" };
+    if (!stateWhile) return failure("Fresh beta CF: no while <state> dispatcher");
 
-    const closureDiagnostics = {};
-    const closureProgram = matchClosureEntryProgram(source, stateWhile, stateName, returnName, closureDiagnostics);
-    if (closureProgram) {
-        return {
-            applied: true,
-            mode: "fresh-closure-entry",
-            source: closureProgram.source,
-            stateCount: closureProgram.stateCount,
-            statementCount: closureProgram.statementCount,
-            branchCount: 0,
-            localCount: closureProgram.localCount,
-            closureCount: closureProgram.closureCount,
-        };
-    }
-
-    const logicalLeaves = extractNormalizedStateLeaves(stateWhile, stateName);
-    if (logicalLeaves && logicalLeaves.size > 1 && logicalLeaves.has(1)) {
-        const flattenedLogical = flattenLogicalRootLeaf(logicalLeaves, 1, stateName, returnName);
-        if (flattenedLogical && flattenedLogical.consumed.size === logicalLeaves.size) {
-            const flattenedProgram = matchLocalRegisterProgram(source, flattenedLogical.leaf, stateName, returnName);
-            if (flattenedProgram) {
-                return {
-                    applied: true,
-                    mode: "fresh-multistate-logical",
-                    source: flattenedProgram.source,
-                    stateCount: logicalLeaves.size,
-                    statementCount: flattenedProgram.statementCount,
-                    branchCount: logicalLeaves.size - 1,
-                    localCount: flattenedProgram.localCount,
-                };
-            }
-        }
-    }
-
-    const multiLogical = matchMultiStateLogicalLocals(source, stateWhile, stateName, returnName);
-    if (multiLogical) {
-        return {
-            applied: true,
-            mode: "fresh-multistate-logical",
-            source: multiLogical.source,
-            stateCount: multiLogical.stateCount,
-            statementCount: multiLogical.statementCount,
-            branchCount: multiLogical.stateCount - 1,
-            localCount: multiLogical.localCount,
-        };
-    }
-
-    const simpleIf = matchMultiStateLogicalLocals(source, stateWhile, stateName, returnName, { allowConditionalIf: true });
-    if (simpleIf) {
-        return {
-            applied: true,
-            mode: "fresh-simple-if",
-            source: simpleIf.source,
-            stateCount: simpleIf.stateCount,
-            statementCount: simpleIf.statementCount,
-            branchCount: 1,
-            localCount: simpleIf.localCount,
-        };
+    const ctx = {
+        source, stateWhile, stateName, returnName,
+        closureDiagnostics: {},
+        logicalLeaves: extractNormalizedStateLeaves(stateWhile, stateName),
+    };
+    for (const recover of MULTI_STATE_RECOVERERS) {
+        const result = recover(ctx);
+        if (result) return result;
     }
 
     const leaf = unwrapSingleStateLeaf(stateWhile, stateName);
     if (!leaf) {
-        const leaves = extractNormalizedStateLeaves(stateWhile, stateName);
-        const count = leaves?.size || 0;
-        const detail = closureDiagnostics.reason ? `; closure recovery: ${closureDiagnostics.reason}` : "";
-        const stateDetail = closureDiagnostics.state != null ? ` at state ${closureDiagnostics.state}` : "";
-        const statementDetail = closureDiagnostics.statementIndex != null ? `; root statement ${closureDiagnostics.statementIndex}: ${String(closureDiagnostics.statement || "unknown").replace(/\s+/g, " ").slice(0, 180)}` : "";
-        const unconsumed = Array.isArray(closureDiagnostics.unconsumed) && closureDiagnostics.unconsumed.length ? `; unconsumed states: ${closureDiagnostics.unconsumed.join(",")}` : "";
-        return { applied: false, reason: `Fresh beta CF: unsupported multi-state control flow (${count} normalized states)${detail}${stateDetail}${statementDetail}${unconsumed}`, mode: "fresh" };
+        return unsupportedMultiState(ctx.logicalLeaves?.size || 0, ctx.closureDiagnostics);
     }
-
-    const localProgram = matchLocalRegisterProgram(source, leaf, stateName, returnName);
-    if (localProgram) {
-        return {
-            applied: true,
-            mode: "fresh-register-locals",
-            source: localProgram.source,
-            stateCount: 1,
-            statementCount: localProgram.statementCount,
-            branchCount: 0,
-            localCount: localProgram.localCount,
-        };
+    ctx.leaf = leaf;
+    for (const recover of LINEAR_RECOVERERS) {
+        const result = recover(ctx);
+        if (result) return result;
     }
-
-    const directCalls = matchDirectGlobalCallLeaf(source, leaf, stateName, returnName);
-    if (!directCalls) {
-        const callResultProgram = matchLocalRegisterProgram(source, leaf, stateName, returnName, { allowNoLocals: true });
-        if (callResultProgram) {
-            return {
-                applied: true,
-                mode: "fresh-call-results",
-                source: callResultProgram.source,
-                stateCount: 1,
-                statementCount: callResultProgram.statementCount,
-                branchCount: 0,
-                localCount: callResultProgram.localCount,
-            };
-        }
-        return { applied: false, reason: "Fresh beta CF: one-state leaf is not a proven direct global-call/register-local program", mode: "fresh" };
-    }
-
-    return {
-        applied: true,
-        mode: "fresh-direct-global-call",
-        source: directCalls.source,
-        stateCount: 1,
-        statementCount: directCalls.callCount,
-        branchCount: 0,
-        globalName: directCalls.globalName,
-        argumentCount: directCalls.argumentCount,
-        callCount: directCalls.callCount,
-    };
+    return failure("Fresh beta CF: one-state leaf is not a proven direct global-call/register-local program");
 }
 
 function solveBetaControlFlow(sourceOrAst, astOrBeta) {
     if (typeof sourceOrAst === "string") return solveFreshSource(sourceOrAst, astOrBeta);
-    return {
-        applied: false,
-        reason: "Fresh beta CF no longer consumes beta register-version analysis; pass normal output source + AST",
-        mode: "fresh",
-    };
+    return failure("Fresh beta CF no longer consumes beta register-version analysis; pass normal output source + AST");
 }
 
 module.exports = { solveBetaControlFlow, solveFreshSource };

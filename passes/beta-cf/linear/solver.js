@@ -6,6 +6,7 @@ const { localName, emitSourceLine, allocateLocal, reserveLocal, canPredeclareNil
 const { reservePendingPackDisplayNamesThrough, flushPendingPacks } = require("./packs");
 const { memberMeta, renderCallArg, renderRhs } = require("./render");
 const { canonicalizeInitialSimpleLocals, isEmptyTable, isIdentifier, isLuaIdentifier, isPrimitiveLiteral, isSingleAssignment, isVmRegisterName, sourceOf } = require("../ast");
+const { renderProgram } = require("../render");
 
 function matchLocalRegisterProgram(source, leaf, stateName, returnName, options = {}) {
     const ctx = createLinearContext(source, leaf, stateName, returnName, options);
@@ -459,7 +460,7 @@ function matchLocalRegisterProgram(source, leaf, stateName, returnName, options 
     if (ctx.terminalReturnLine !== null) ctx.out.push(ctx.terminalReturnLine);
     if (ctx.out.length === 0) { if (ctx.options.diagnostics) ctx.options.diagnostics.reason = "recovered program emitted no source statements"; return null; }
     const canonicalOut = canonicalizeInitialSimpleLocals(ctx.out);
-    return { source: canonicalOut.join("\n") + "\n", statementCount: canonicalOut.length, localCount: ctx.declaredCount };
+    return { source: renderProgram(canonicalOut), statementCount: canonicalOut.length, localCount: ctx.declaredCount };
 }
 
 module.exports = { matchLocalRegisterProgram };

@@ -5,12 +5,7 @@ const { solveBetaControlFlow } = require("./beta-cf/solve");
 const { matchDirectGlobalCallLeaf } = require("./beta-cf/direct-calls");
 const { matchLocalRegisterProgram } = require("./beta-cf/linear/solver");
 const { normalizeRegisterOverflowGraph } = require("./beta-cf/normalize");
-
-function unsupported(name) {
-    return function () {
-        return { applied: false, reason: `Fresh beta CF solver: ${name} is not implemented yet` };
-    };
-}
+const { unsupported } = require("./beta-cf/diagnostics");
 
 module.exports = {
     solveBetaControlFlow,

@@ -7,6 +7,7 @@ const { structuredPackId, structuredPackSlot, structuredPackSlotToken } = requir
 const { isCompilerVarargPack, isVarargUnpack, expectedPackSlotsInBlock, cleanupOrTerminalEpoch, maybeOwnStructuredPackSlot, preclaimFutureStructuredPackOwner, preclaimFutureStructuredPackSlots, flushStructuredPack, flushReadyStructuredPacks } = require("./packs");
 const { nodeReadsIdentifier, nodeUsesAsCallBaseMulti, terminalStableUsedEpoch, transportSourceKind, valueMayBeReadFrom, eventualCleanupOnAllPaths, valueMayBeReadAfter, hasFutureNonNilWrite, cleanupReachedOnAllPaths, analyzePersistentStorage } = require("./lifetime");
 const { render } = require("./render");
+const { renderFunction, renderProgram } = require("../render");
 const { mergeElseIfCandidates, indentConditionalEffect, mergeCandidates } = require("./branches");
 const { markersSharePrefix, terminalSiblingMatch, guardLine, collapseTerminalCandidates, foldTerminalGuards } = require("./terminal");
 
@@ -477,12 +478,11 @@ function matchMultiStateLogicalLocals(source, stateWhile, stateName, returnName,
         if (!ctx.out.some(line => /^if\s/.test(line))) return null;
         ctx.conditionalIfCount = 1;
     }
-    let outputSource = ctx.out.join("\n") + "\n";
+    let outputSource = renderProgram(ctx.out);
     if (ctx.renderAsFunction) {
         const params = [...ctx.parameterNames];
         if (ctx.sawVarargs) params.push("...");
-        const body = ctx.out.map(line => String(line).split("\n").map(part => "    " + part).join("\n")).join("\n");
-        outputSource = `function(${params.join(", ")})${body ? "\n" + body + "\n" : ""}end`;
+        outputSource = renderFunction(params, ctx.out);
     }
     return {
         source: outputSource,
