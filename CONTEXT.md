@@ -770,6 +770,33 @@ passes/
   vm-register-overflow.js
   vm-register-scheduler.js
   beta-control-flow.js
+  beta-cf/
+    ast.js
+    cfg.js
+    closures.js
+    diagnostics.js
+    direct-calls.js
+    logical.js
+    normalize.js
+    render.js
+    solve.js
+    linear/
+      context.js
+      lifetime.js
+      bindings.js
+      packs.js
+      render.js
+      solver.js
+    structured/
+      context.js
+      lifetime.js
+      bindings.js
+      tokens.js
+      packs.js
+      render.js
+      branches.js
+      terminal.js
+      solver.js
 tools/
   beta-control-flow.js
   deobfuscate-beta-control-flow.js
@@ -784,7 +811,7 @@ sample/
 output/
 ```
 
-Old/retired beta files may exist for reference. Do not silently fall back to them. Active fresh CF is `passes/beta-control-flow.js`.
+Old/retired beta files may exist for reference. Do not silently fall back to them. `passes/beta-control-flow.js` is the compatibility facade; the active implementation is under `passes/beta-cf/`.
 
 ## 9. Normal Deobfuscation Pipeline in Detail
 
@@ -1160,7 +1187,64 @@ Correct implementation should use AST structure and generic relations such as:
 
 Random register/state IDs and random constants must not matter.
 
-## 11. Fresh CF Entry Flow - `passes/beta-control-flow.js`
+## 11. Fresh CF Modular Architecture and Entry Flow
+
+`passes/beta-control-flow.js` is intentionally a small compatibility facade. It preserves the public solver, direct-call, linear-matcher, overflow-normalizer, and unsupported stub exports. New implementation logic belongs under `passes/beta-cf/`.
+
+Shared modules:
+- `ast.js`: pure AST/source predicates, literal decoding, safe identifier checks, source slicing, and table/unary helpers; it has no solver state
+- `normalize.js`: dispatcher extraction, normalized state leaves/transitions, one-state unwrapping, and static overflow normalization
+- `cfg.js`: the shared `StateGraph` builder and graph queries
+- `logical.js`: compiler logical-value CFG flattening/reduction; this remains separate from source statement branches
+- `closures.js`: simple and recursive multi-state closure recovery, capture mapping, cycle guards, and transactional consumed-state accounting
+- `direct-calls.js`: strict direct global/member call recognition and terminal bookkeeping
+- `render.js`: shared whole-program/function rendering
+- `diagnostics.js`: stable fail-closed result and unsupported-state diagnostics
+- `solve.js`: ordered recovery strategy orchestration
+
+`StateGraph` contract:
+
+```text
+{
+  entryId,
+  blocks,        // id -> { id, body, transitionIndex, transition }
+  successors,   // id -> target ids
+  predecessors, // id -> source ids
+  reachable     // ids reachable from entryId
+}
+```
+
+Transitions are `{ kind: "jump", target }`, `{ kind: "branch", conditionRegister, onTrue, onFalse }`, or `{ kind: "stop" }`. Shared queries provide reachability and unique linear-path proof. Future control-flow features consume this contract rather than rediscovering graph edges.
+
+Linear recovery:
+- `linear/context.js` constructs the explicit context containing source/leaf identity, future-event indexes, cleanup/register-epoch evidence, expression maps, binding names, pending packs, deferred copies, terminal-local sets, output, counters, and diagnostics options
+- `linear/lifetime.js` owns future-read/write, cleanup, last-use, dead-copy, terminal-epoch, and overwrite proof
+- `linear/bindings.js` owns allocation, naming, predeclaration, active ownership, and emission barriers
+- `linear/packs.js` owns pending multi-return slot ownership, display reservation, and ordered flushing
+- `linear/render.js` renders expressions against the explicit linear context
+- `linear/solver.js` orchestrates statements and terminal validation; extracted helpers receive the context explicitly
+
+Structured recovery:
+- `structured/context.js` constructs the explicit context containing the shared graph, environments, global/path-local bindings, displays, branch and terminal candidates, pack reservations, capture/parameter names, output, counters, and lifetime caches
+- `structured/lifetime.js` owns cross-path read, cleanup, stable-terminal epoch, future-write, and persistent-storage proof
+- `structured/bindings.js` owns source displays, active/path-local identity, captures, upvalue aliases, and parameters
+- `structured/tokens.js` defines non-renderable internal pack tokens without coupling bindings back to pack implementation
+- `structured/packs.js` owns all structured multi-return/vararg transport, expected slots, future extraction/owner preclaims, delayed activation, and flushing
+- `structured/render.js` renders only values proven by the structured context and rejects internal tokens
+- `structured/branches.js` owns candidate merging, root ordering, `elseif`, absent-arm versus explicit-empty-arm proof, and source conditional rendering
+- `structured/terminal.js` owns sibling terminal matching, early/guard returns, terminal collapse, and terminal-path folding
+- `structured/solver.js` processes graph blocks, propagates candidate environments, delegates merges, and validates final output
+
+Important isolation rules:
+- logical result-carrier diamonds are reduced in `logical.js`; statement-level branch recovery does not classify them as empty source branches
+- structured pack tokens never render as source and pack ownership never lives inside branch recovery
+- terminal paths are kept separate from continuing candidates and are merged only by `terminal.js`
+- closure recovery calls the same entry-parametric structured solver through a narrow callback contract, independent of whether the parent construct is a conditional or a future loop
+- a small amount of coupling remains intentionally in each solver's statement loop because evaluation order is decided at the exact compiler-statement position; cross-cutting proof and mutable state still live behind explicit context/module boundaries
+
+Future loops must be added as separate modules such as `control/while.js`, `control/repeat.js`, `control/numeric-for.js`, `control/generic-for.js`, and `control/loop-control.js`. They should consume `StateGraph`, lifetime/binding queries, and expression rendering. They must not depend on private `elseif`, structured-pack, upvalue-transport, or closure-transaction internals. General loop and loop-control recovery remains intentionally unsupported.
+
+Before adding any new recovery feature, run syntax checks for every changed/new JavaScript file, all twelve tracked Fresh-CF/if/register/binding/upvalue/version/graph/semantic suites, relevant real Medium runtime-parity fixtures, randomized layout stress for the touched shape, and `git diff --check`.
 
 `solveFreshSource(source, ast)` currently does approximately:
 
@@ -1942,7 +2026,7 @@ Compiler facts verified directly in `compiler.lua` and real Medium output:
 - function fallthrough also creates an empty return pack and terminal state; after normalization an explicit final empty return and fallthrough are not always distinguishable, so Fresh CF omits only a trailing root-scope bare `return` when it is not provably source-authored
 - last-expression calls/varargs use RETURN_ALL transport: compiler pack `{ call(...) }` / `{ ... }` followed by terminal `ReturnVal = { unpack(pack) }`; Fresh CF unwraps this only on the proven terminal return path
 
-Current structural model in `passes/beta-control-flow.js`:
+Current structural model in `passes/beta-cf/structured/`:
 - terminal CFG candidates are stored separately from continuing candidates
 - sibling terminal candidates collapse only when branch markers, effect prefixes, branch IDs, and polarity prove they are the two arms of the same source conditional
 - one terminal arm + one continuing arm folds into a guard return while the continuing path keeps propagating
@@ -2009,10 +2093,10 @@ Validation results on 2026-09-04:
 - two-way conditional merging preserves explicit empty `then`/`else` arms, including asymmetric nonempty/empty bodies. N-way `if/elseif` merging allows empty clauses and preserves an explicit empty final `else` when the final false edge does not jump directly to the join
 - empty statement branches are not confused with compiler short-circuit logical-value branches: the solver checks for the compiler logical result-copy shape and only preserves a zero-effect statement branch when that result-carrier proof is absent
 - permanent Fresh-CF regressions now cover branch-local multi-return feeding a conditional, delayed/future structured-pack owner copies, nested multi-state vararg transport, standalone empty `if`, explicit empty `if/else`, asymmetric empty arms, and nested empty `if/elseif` clauses
-- final validation on 2026-09-04 after all current solver changes: all 12 tracked Fresh-CF/if/register/binding/upvalue/version/graph/semantic suites pass; `git diff --check` passes
-- randomized Medium layout stress after the final empty-branch change: 100/100 each for standalone empty `if`, explicit empty `if/else`, nonempty-then+empty-else, empty-then+nonempty-else, nested empty `if/elseif`, and the 151-state mega = 600/600 PASS
-- focused current-feature layout stress also passes 100/100 for the 7-state branch-local multi-return fixture and 100/100 for the 9-state nested multi-state vararg fixture
-- previous captured-upvalue/recursive-closure stress was rerun after the final solver changes: structured capture 50/50 PASS and recursive structured closures 100/100 PASS
+- final validation after modularization on 2026-09-04: all 12 tracked Fresh-CF/if/register/binding/upvalue/version/graph/semantic suites pass; every changed/new JavaScript file passes `node --check`; `git diff --check` passes
+- real Medium runtime parity after modularization passes for all eight acceptance fixtures with 3, 4, 4, 4, 8, 7, 9, and 151 normalized states respectively: standalone empty `if`, explicit empty `if/else`, both asymmetric empty-arm variants, nested empty `if/elseif`, branch-local multi-return with sibling closures, nested multi-state varargs, and the complex early-return mega fixture
+- randomized Medium layout stress after modularization passes 100/100 for each of those eight fixtures = 800/800 exact-parity runs
+- captured-upvalue and recursive-closure stress after modularization passes 50/50 and 100/100 respectively
 - there is no known blocker in the currently supported straight-line/local/call/table/closure/upvalue/multi-return/vararg/conditional/early-return feature set represented by the established regressions
 
 Early-return recovery still does NOT imply loop-control recovery. General `while`, `repeat`, numeric/generic `for`, `break`, and `continue` remain separate fail-closed features.
