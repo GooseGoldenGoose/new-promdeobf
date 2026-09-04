@@ -15,7 +15,7 @@ function parse(source) {
 function vmStatesSource(states) {
     const lines = [
         "vm = function(state, args, upvalues, gcProxy)",
-        "    local r1, r2, r3, r4, ReturnVal",
+        "    local r1, r2, r3, r4, r5, r6, ReturnVal",
         "    while state do",
     ];
     const ids = Object.keys(states).map(Number).sort((a, b) => a - b);
@@ -379,6 +379,28 @@ function vmStatesSource(states) {
     assert.strictEqual(result.applied, true);
     assert.strictEqual(result.mode, "fresh-simple-if");
     assert.strictEqual(result.source, 'if a then\n    print("A")\nelse\n    print("B")\nend\nprint("MID")\nif c then\n    print("C")\nelse\n    print("D")\nend\n');
+}
+
+
+{
+    // Real Prometheus shape: a child closure is created in the root, a proven
+    // short-circuit value region computes one source local, and the completed
+    // logical value is then consumed by a real source if/else. Logical CFG
+    // reduction must stop at the statement-conditional boundary rather than
+    // treating that if branch as another value-producing TESTSET region.
+    const source = vmStatesSource({
+        1: ['state = createClosure4(7, {})', 'r1 = state', 'state = true', 'r6 = state', 'state = false', 'r4 = r1(r6)', 'r5 = state', 'state = r4 and 2 or 3', 'ReturnVal = r4', 'r3 = args'],
+        2: ['r4 = r1(r5)', 'ReturnVal = r4', 'state = 3'],
+        3: ['r4 = ReturnVal', 'state = r4 and 4 or 5'],
+        4: ['ReturnVal = "print"', 'state = _env[ReturnVal]', 'r2 = "T"', 'ReturnVal = state(r2)', 'state = 6'],
+        5: ['ReturnVal = "print"', 'state = _env[ReturnVal]', 'r2 = "F"', 'ReturnVal = state(r2)', 'state = 6'],
+        6: ['r6 = nil', 'r4 = nil', 'r1 = nil', 'r5 = nil', 'ReturnVal = {}', 'state = nil'],
+        7: ['r3 = args[1]', 'ReturnVal = { r3 }', 'state = nil'],
+    });
+    const result = solveBetaControlFlow(source, parse(source));
+    assert.strictEqual(result.applied, true);
+    assert.strictEqual(result.mode, "fresh-closure-entry");
+    assert.strictEqual(result.source, 'local v1 = function(v1)\n    return v1\nend\nlocal v2 = true\nlocal v3 = false\nlocal v4 = (v1(v2) and v1(v3))\nif v4 then\n    print("T")\nelse\n    print("F")\nend\n');
 }
 
 console.log("fresh beta simple-if regression: ok");

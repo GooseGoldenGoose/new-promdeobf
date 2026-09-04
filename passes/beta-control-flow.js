@@ -1741,7 +1741,7 @@ function renderSimpleClosureLeaf(source, leaf, stateName, returnName, options = 
     return `function(${params.join(", ")})${lines ? `\n${lines}\n` : ""}end`;
 }
 
-function flattenLogicalRootLeaf(leaves, entryId, stateName, returnName, diagnostics = null) {
+function flattenLogicalRootLeaf(leaves, entryId, stateName, returnName, diagnostics = null, options = {}) {
     let currentForDiagnostics = entryId;
     function fail(reason, state = currentForDiagnostics) {
         if (diagnostics && !diagnostics.reason) { diagnostics.reason = reason; diagnostics.state = state; }
@@ -1998,15 +1998,142 @@ function flattenLogicalRootLeaf(leaves, entryId, stateName, returnName, diagnost
         return true;
     }
 
-    if (!flattenPath(entryId, null, out)) return null;
+    const stopId = Number.isInteger(options.stopId) ? options.stopId : null;
+    if (!flattenPath(entryId, stopId, out)) return null;
     return { leaf: out, consumed };
+}
+
+function reduceCompilerLogicalStateGraph(leaves, entryId, stateName, returnName) {
+    const working = new Map([...leaves].map(([id, body]) => [id, [...body]]));
+
+    function transitionOf(body) {
+        for (let i = body.length - 1; i >= 0; i--) {
+            if (!isSingleAssignment(body[i], stateName)) continue;
+            const rhs = body[i].init[0];
+            if (rhs?.type === "NilLiteral") return { index: i, kind: "stop" };
+            if (rhs?.type === "NumericLiteral" && Number.isInteger(Number(rhs.value))) return { index: i, kind: "jump", target: Number(rhs.value) };
+            const branch = decodeLogicalStateTransition(rhs);
+            if (branch) return { index: i, kind: "branch", ...branch };
+        }
+        return null;
+    }
+
+    function buildGraph() {
+        const successors = new Map([...working.keys()].map(id => [id, []]));
+        const predecessors = new Map([...working.keys()].map(id => [id, []]));
+        for (const [id, body] of working) {
+            const tr = transitionOf(body);
+            if (!tr) continue;
+            const targets = tr.kind === "jump" ? [tr.target] : tr.kind === "branch" ? [tr.onTrue, tr.onFalse] : [];
+            for (const target of targets) {
+                if (!working.has(target)) continue;
+                successors.get(id).push(target);
+                predecessors.get(target).push(id);
+            }
+        }
+        return { successors, predecessors };
+    }
+
+    function reachableFrom(start, successors) {
+        const seen = new Set();
+        const queue = [start];
+        while (queue.length) {
+            const id = queue.shift();
+            if (seen.has(id) || !working.has(id)) continue;
+            seen.add(id);
+            for (const next of successors.get(id) || []) queue.push(next);
+        }
+        return seen;
+    }
+
+    function canReach(start, target, successors) {
+        if (start === target) return true;
+        const seen = new Set();
+        const queue = [start];
+        while (queue.length) {
+            const id = queue.shift();
+            if (seen.has(id)) continue;
+            seen.add(id);
+            for (const next of successors.get(id) || []) {
+                if (next === target) return true;
+                if (!seen.has(next)) queue.push(next);
+            }
+        }
+        return false;
+    }
+
+    function logicalJoinFor(id, successors) {
+        const body = working.get(id);
+        const tr = body ? transitionOf(body) : null;
+        if (!tr || tr.kind !== "branch") return null;
+        let hasPrimaryCopy = false;
+        for (let i = body.length - 1; i >= 0; i--) {
+            if (i === tr.index || !isSingleAssignment(body[i])) continue;
+            const dest = body[i].variables[0];
+            const rhs = body[i].init[0];
+            if (isIdentifier(dest) && dest.name !== stateName && isIdentifier(rhs, tr.conditionRegister)) {
+                hasPrimaryCopy = true;
+                break;
+            }
+        }
+        if (!hasPrimaryCopy) return null;
+        const trueReachesFalse = canReach(tr.onTrue, tr.onFalse, successors);
+        const falseReachesTrue = canReach(tr.onFalse, tr.onTrue, successors);
+        if (trueReachesFalse === falseReachesTrue) return null;
+        return trueReachesFalse ? tr.onFalse : tr.onTrue;
+    }
+
+    const initialGraph = buildGraph();
+    const originalReachableStateIds = reachableFrom(entryId, initialGraph.successors);
+    let changed = true;
+    while (changed) {
+        changed = false;
+        const { successors, predecessors } = buildGraph();
+        const reachable = reachableFrom(entryId, successors);
+        for (const id of reachable) {
+            const joinId = logicalJoinFor(id, successors);
+            if (!Number.isInteger(joinId) || joinId === id || !working.has(joinId)) continue;
+            const flattened = flattenLogicalRootLeaf(working, id, stateName, returnName, null, { stopId: joinId });
+            if (!flattened || !flattened.consumed.has(id) || flattened.consumed.has(joinId)) continue;
+            let closed = true;
+            for (const consumedId of flattened.consumed) {
+                if (consumedId !== id) {
+                    for (const pred of predecessors.get(consumedId) || []) {
+                        if (!flattened.consumed.has(pred)) { closed = false; break; }
+                    }
+                    if (!closed) break;
+                }
+                for (const next of successors.get(consumedId) || []) {
+                    if (next !== joinId && !flattened.consumed.has(next)) { closed = false; break; }
+                }
+                if (!closed) break;
+            }
+            if (!closed) continue;
+
+            const originalBody = working.get(id);
+            const originalTransition = transitionOf(originalBody);
+            if (!originalTransition) continue;
+            const transitionStatement = originalBody[originalTransition.index];
+            const jumpStatement = {
+                ...transitionStatement,
+                init: [{ type: "NumericLiteral", value: joinId, raw: String(joinId) }],
+            };
+            working.set(id, [...flattened.leaf, jumpStatement]);
+            for (const consumedId of flattened.consumed) {
+                if (consumedId === id) continue;
+                working.delete(consumedId);
+            }
+            changed = true;
+            break;
+        }
+    }
+
+    return { leaves: working, originalReachableStateIds };
 }
 function matchClosureEntryProgram(source, stateWhile, stateName, returnName, diagnostics = null) {
     const leaves = extractNormalizedStateLeaves(stateWhile, stateName);
     if (!leaves || leaves.size < 2 || !leaves.has(1)) return null;
-    const rootDiagnostics = {};
-    const flattenedRoot = flattenLogicalRootLeaf(leaves, 1, stateName, returnName, rootDiagnostics);
-    const consumedEntries = new Set(flattenedRoot ? flattenedRoot.consumed : [1]);
+    const consumedEntries = new Set();
 
     function renderClosureCall(call, captureNames = null) {
         if (call?.type !== "CallExpression" || !isIdentifier(call.base) || !/^createClosure\d*$/.test(call.base.name)) return null;
@@ -2032,6 +2159,29 @@ function matchClosureEntryProgram(source, stateWhile, stateName, returnName, dia
         return rendered;
     }
 
+    // Mixed root CFGs may contain logical-value regions feeding real
+    // if/elseif/else branches. Recover them with the structural multi-state
+    // solver instead of requiring the whole closure root to flatten into one
+    // logical leaf. Only root-reachable states participate in its lifetime
+    // proof; createClosureN calls render/consume separate child entries.
+    const structuredProgram = matchMultiStateLogicalLocals(source, stateWhile, stateName, returnName, {
+        allowConditionalIf: true,
+        rootReachableOnly: true,
+        renderSpecialCall: renderClosureCall,
+    });
+    if (structuredProgram && consumedEntries.size > 0) {
+        const accounted = new Set([...(structuredProgram.reachableStateIds || []), ...consumedEntries]);
+        if (accounted.size === leaves.size && [...leaves.keys()].every(id => accounted.has(id))) {
+            return { ...structuredProgram, stateCount: leaves.size, closureCount: consumedEntries.size };
+        }
+    }
+
+    // Legacy closure path remains for roots that are entirely reducible to a
+    // flattened logical/register-local leaf, including existing capture cases.
+    consumedEntries.clear();
+    const rootDiagnostics = {};
+    const flattenedRoot = flattenLogicalRootLeaf(leaves, 1, stateName, returnName, rootDiagnostics);
+    for (const id of (flattenedRoot ? flattenedRoot.consumed : [1])) consumedEntries.add(id);
     const root = flattenedRoot?.leaf || leaves.get(1);
     const rootProgramDiagnostics = {};
     const program = matchLocalRegisterProgram(source, root, stateName, returnName, { renderSpecialCall: renderClosureCall, renderCapturedCall: renderClosureCall, diagnostics: rootProgramDiagnostics });
@@ -2099,32 +2249,13 @@ function decodeLogicalStateTransition(rhs) {
 
 function matchMultiStateLogicalLocals(source, stateWhile, stateName, returnName, options = {}) {
     const allowConditionalIf = options.allowConditionalIf === true;
-    const leaves = extractNormalizedStateLeaves(stateWhile, stateName);
-    if (!leaves || leaves.size < 2 || !leaves.has(1)) return null;
-
-    const cleanupRegs = new Set();
-    for (const body of leaves.values()) {
-        for (const statement of body) {
-            if (!isSingleAssignment(statement)) continue;
-            const dest = statement.variables[0];
-            const rhs = statement.init[0];
-            if (isIdentifier(dest) && dest.name !== stateName && dest.name !== returnName && rhs?.type === "NilLiteral") cleanupRegs.add(dest.name);
-        }
-    }
-    if (!cleanupRegs.size && !allowConditionalIf) return null;
-
-    const nonNilDefinitionCount = new Map([...cleanupRegs].map(name => [name, 0]));
-    for (const body of leaves.values()) {
-        for (const statement of body) {
-            if (!isSingleAssignment(statement)) continue;
-            const dest = statement.variables[0];
-            const rhs = statement.init[0];
-            if (isIdentifier(dest) && cleanupRegs.has(dest.name) && rhs?.type !== "NilLiteral") {
-                nonNilDefinitionCount.set(dest.name, nonNilDefinitionCount.get(dest.name) + 1);
-            }
-        }
-    }
-    const accumulatorRegs = new Set([...cleanupRegs].filter(name => nonNilDefinitionCount.get(name) > 1));
+    const rootReachableOnly = options.rootReachableOnly === true;
+    const originalLeaves = extractNormalizedStateLeaves(stateWhile, stateName);
+    if (!originalLeaves || originalLeaves.size < 2 || !originalLeaves.has(1)) return null;
+    const logicalReduction = allowConditionalIf
+        ? reduceCompilerLogicalStateGraph(originalLeaves, 1, stateName, returnName)
+        : { leaves: originalLeaves, originalReachableStateIds: new Set(originalLeaves.keys()) };
+    const leaves = logicalReduction.leaves;
 
     const blocks = new Map();
     for (const [id, body] of leaves) {
@@ -2174,7 +2305,37 @@ function matchMultiStateLogicalLocals(source, stateWhile, stateName, returnName,
         reachable.add(id);
         for (const next of successors.get(id) || []) queue.push(next);
     }
-    if (reachable.size !== blocks.size) return null;
+    if (!rootReachableOnly && reachable.size !== blocks.size) return null;
+
+    // Lifetime/storage proof belongs to one VM invocation root. Child closure
+    // entry states reuse the same physical register names but execute in a
+    // separate invocation, so unreachable child states must never contribute
+    // cleanup/definition evidence to the root program.
+    const cleanupRegs = new Set();
+    for (const id of reachable) {
+        const body = blocks.get(id)?.body || [];
+        for (const statement of body) {
+            if (!isSingleAssignment(statement)) continue;
+            const dest = statement.variables[0];
+            const rhs = statement.init[0];
+            if (isIdentifier(dest) && dest.name !== stateName && dest.name !== returnName && rhs?.type === "NilLiteral") cleanupRegs.add(dest.name);
+        }
+    }
+    if (!cleanupRegs.size && !allowConditionalIf) return null;
+
+    const nonNilDefinitionCount = new Map([...cleanupRegs].map(name => [name, 0]));
+    for (const id of reachable) {
+        const body = blocks.get(id)?.body || [];
+        for (const statement of body) {
+            if (!isSingleAssignment(statement)) continue;
+            const dest = statement.variables[0];
+            const rhs = statement.init[0];
+            if (isIdentifier(dest) && cleanupRegs.has(dest.name) && rhs?.type !== "NilLiteral") {
+                nonNilDefinitionCount.set(dest.name, nonNilDefinitionCount.get(dest.name) + 1);
+            }
+        }
+    }
+    const accumulatorRegs = new Set([...cleanupRegs].filter(name => nonNilDefinitionCount.get(name) > 1));
 
     function hasLinearRootContinuation(fromId, toId) {
         if (!Number.isInteger(fromId) || !Number.isInteger(toId)) return false;
@@ -2241,9 +2402,9 @@ function matchMultiStateLogicalLocals(source, stateWhile, stateName, returnName,
         if (active !== null) return active;
         return env.get(name) ?? null;
     }
-    function render(rhs, env) {
+    function render(rhs, env, provenRecursive = false) {
         if (isPrimitiveLiteral(rhs) || isEmptyTable(rhs)) return sourceOf(source, rhs);
-        if (rhs?.type === "TableConstructorExpression") return renderTableFields(rhs.fields || [], node => render(node, env));
+        if (rhs?.type === "TableConstructorExpression") return renderTableFields(rhs.fields || [], node => render(node, env, provenRecursive));
         if (isIdentifier(rhs)) return resolveId(rhs.name, env);
         if (rhs?.type === "IndexExpression" && isIdentifier(rhs.base) && isIdentifier(rhs.index)) {
             const key = resolveId(rhs.index.name, env);
@@ -2258,8 +2419,16 @@ function matchMultiStateLogicalLocals(source, stateWhile, stateName, returnName,
             return member && isLuaIdentifier(member) ? `${base}.${member}` : `${base}[${key}]`;
         }
         if (rhs?.type === "UnaryExpression") {
-            const argument = isIdentifier(rhs.argument) ? resolveId(rhs.argument.name, env) : (isPrimitiveLiteral(rhs.argument) ? sourceOf(source, rhs.argument) : null);
+            const argument = provenRecursive ? render(rhs.argument, env, true)
+                : (isIdentifier(rhs.argument) ? resolveId(rhs.argument.name, env) : (isPrimitiveLiteral(rhs.argument) ? sourceOf(source, rhs.argument) : null));
             return renderUnary(rhs.operator, argument);
+        }
+        if ((provenRecursive || (rhs?.type === "LogicalExpression" && rhs.freshCompilerLogical === true)) &&
+            (rhs?.type === "BinaryExpression" || rhs?.type === "LogicalExpression") && rhs.operator) {
+            const left = render(rhs.left, env, true);
+            const right = render(rhs.right, env, true);
+            if (left == null || right == null) return null;
+            return `(${left} ${rhs.operator} ${right})`;
         }
         if ((rhs?.type === "BinaryExpression" || rhs?.type === "LogicalExpression") && rhs.operator) {
             const left = isIdentifier(rhs.left) ? resolveId(rhs.left.name, env) : (isPrimitiveLiteral(rhs.left) ? sourceOf(source, rhs.left) : null);
@@ -2268,11 +2437,16 @@ function matchMultiStateLogicalLocals(source, stateWhile, stateName, returnName,
             return `(${left} ${rhs.operator} ${right})`;
         }
         if (rhs?.type === "CallExpression" && isIdentifier(rhs.base)) {
+            if (typeof options.renderSpecialCall === "function") {
+                const special = options.renderSpecialCall(rhs);
+                if (typeof special === "string") return special;
+            }
             const base = resolveId(rhs.base.name, env);
             if (base == null) return null;
             const args = [];
             for (const arg of rhs.arguments || []) {
-                const value = isIdentifier(arg) ? resolveId(arg.name, env) : (isPrimitiveLiteral(arg) ? sourceOf(source, arg) : null);
+                const value = provenRecursive ? render(arg, env, true)
+                    : (isIdentifier(arg) ? resolveId(arg.name, env) : (isPrimitiveLiteral(arg) ? sourceOf(source, arg) : null));
                 if (value == null) return null;
                 args.push(value);
             }
@@ -2849,8 +3023,15 @@ function matchMultiStateLogicalLocals(source, stateWhile, stateName, returnName,
             const stableStorageEpoch = allowConditionalIf && cleanupRegs.has(name) && !locals.has(name) &&
                 valueMayBeReadAfter(id, i, name) && !hasFutureNonNilWrite(id, i, name) &&
                 cleanupReachedOnAllPaths(id, i, name);
-            if ((persistentStorageRegs.has(name) || stableStorageEpoch) && !hasActiveLocal(name, env)) {
-                if (persistentStorageRegs.has(name) && markers.length !== 0) return null;
+            // A storage binding that survives a conditional join must already
+            // exist before entering that conditional. If the same physical
+            // register is written on a branch before any active binding exists,
+            // that write belongs to an earlier/later TEMP epoch, not to this
+            // persistent source lifetime. Only a marker-free definition may
+            // start the persistent binding; stable branch-local epochs retain
+            // their separate path-scoped proof.
+            const startsPersistentStorage = persistentStorageRegs.has(name) && markers.length === 0;
+            if ((startsPersistentStorage || stableStorageEpoch) && !hasActiveLocal(name, env)) {
                 const display = `v${++valueCount}`;
                 accumulatorRegs.delete(name);
                 const declaration = `local ${display} = ${value}`;
@@ -2918,7 +3099,8 @@ function matchMultiStateLogicalLocals(source, stateWhile, stateName, returnName,
         source: out.join("\n") + "\n",
         statementCount: out.length,
         localCount: valueCount + tableCount,
-        stateCount: leaves.size,
+        stateCount: rootReachableOnly ? logicalReduction.originalReachableStateIds.size : originalLeaves.size,
+        reachableStateIds: [...logicalReduction.originalReachableStateIds],
         conditionalIfCount,
     };
 }

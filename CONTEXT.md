@@ -676,7 +676,7 @@ For nonconstant RHS, compiler may create extra states to preserve short-circuit 
 
 The result register is initialized from LHS, state chooses whether RHS executes, and RHS may overwrite the result before join.
 
-Therefore a multi-state region can represent one source logical expression rather than an `if` statement. Fresh CF currently handles only limited proven forms of this pattern. A 55-state real-compiler stress fixture combining side-effecting short-circuit calls, chained `and/or` values, and nested `if/elseif/else` still fails closed with `logical branch has no compiler result copy`; the same normalized VM was verified to fail identically at commit `5901341`, so this is a pre-existing unsupported logical shape rather than a regression from the later straight-line lifetime work. Keep this limitation separate from unrelated fixes.
+Therefore a multi-state region can represent one source logical expression rather than an `if` statement. Fresh CF now composes proven compiler short-circuit regions with supported source conditionals instead of forcing one matcher to own the entire CFG. Before conditional structuring, `reduceCompilerLogicalStateGraph` identifies a value-producing logical branch only when the branch block contains the compiler result-carrier copy, exactly one successor is the lazy path that reaches the other successor as the join, `flattenLogicalRootLeaf(..., { stopId: join })` proves that lazy region reduces to the same result carrier, and the region is closed: no internal state except the region entry has an external predecessor and no consumed state escapes anywhere except the proven join. The reducer replaces that region with the synthesized proof-marked logical assignment plus a direct jump to the join, then repeats, so logical regions may appear before, inside, or after supported `if/elseif/else` regions. A source conditional that merely consumes an already-computed logical value has no qualifying compiler result-carrier region and remains for conditional structuring. The previous 55-state side-effecting `and/or` + nested `if/elseif/else` fixture now recovers with exact runtime parity rather than failing at state 15.
 
 ### 7.14 `if`
 
@@ -688,7 +688,7 @@ state = condition and innerState or nextState
 
 Each completed branch jumps to final state.
 
-Fresh CF supports proven simple `if`, `if/else`, same-join `elseif` chains, and recursively nested conditional regions. N-way `elseif` recovery is depth-independent: at a join it computes the longest shared outer marker prefix, proves that only the remaining suffix is a canonical false-edge `elseif` chain whose branch bodies converge to that same join, and either emits it at the root or returns it as one structured branch effect when the shared prefix is non-empty. The final false path may carry a normal `else` body or be effect-free, in which case the recovered chain ends with `end` and no invented `else`. This lets `elseif` chains appear dynamically inside outer true/false branches and compose recursively with distinct-inner-join `if` / `if-else` regions. Explicit nesting is preserved because a distinct inner join is recovered before its enclosing join; same-join chains remain `elseif`. Direct/call conditions and cleanup-backed source-local conditions are supported. Common effects that occur inside the outer branch before the nested chain are preserved as a proven effect prefix. Conditional source storage is also supported when lifetime proof is complete: a root-level persistent register may become one source binding only when multiple definitions converge, the merged storage is read after the join, and every reachable path eventually reaches that register's compiler nil cleanup; a branch-local binding may be recovered only for a stable cleanup-backed epoch that is read, has no later non-nil write in that epoch, and reaches cleanup on every continuation path. Branch-local binding identity is path-scoped rather than keyed globally by the reusable physical register, so sibling CFG paths may safely reuse one VM register for unrelated source storage or compiler TEMPs. Proven field/index writes to an active table binding remain inside the owning branch. Multiple independent root conditional regions in one closure are supported as a source sequence only when each later root branch starts on the unique non-branching continuation from the previous root join; straight-line statements between regions remain in order. Conditional markers carry their originating branch-state ID, so equal rendered condition text from different CFG branch sites is not treated as the same marker. This rule is iterative rather than limited to two roots. Existing logical/TESTSET recovery still runs first. The matcher rejects logical result-carrier merges, live path-dependent values, ambiguous storage epochs, empty/ambiguous true or `elseif` bodies, inconsistent marker/effect depths, and non-canonical join shapes.
+Fresh CF supports proven simple `if`, `if/else`, same-join `elseif` chains, and recursively nested conditional regions. N-way `elseif` recovery is depth-independent: at a join it computes the longest shared outer marker prefix, proves that only the remaining suffix is a canonical false-edge `elseif` chain whose branch bodies converge to that same join, and either emits it at the root or returns it as one structured branch effect when the shared prefix is non-empty. The final false path may carry a normal `else` body or be effect-free, in which case the recovered chain ends with `end` and no invented `else`. This lets `elseif` chains appear dynamically inside outer true/false branches and compose recursively with distinct-inner-join `if` / `if-else` regions. Explicit nesting is preserved because a distinct inner join is recovered before its enclosing join; same-join chains remain `elseif`. Direct/call conditions and cleanup-backed source-local conditions are supported. Common effects that occur inside the outer branch before the nested chain are preserved as a proven effect prefix. Conditional source storage is also supported when lifetime proof is complete: a root-level persistent register may become one source binding only when multiple definitions converge, the merged storage is read after the join, and every reachable path eventually reaches that register's compiler nil cleanup; a branch-local binding may be recovered only for a stable cleanup-backed epoch that is read, has no later non-nil write in that epoch, and reaches cleanup on every continuation path. Branch-local binding identity is path-scoped rather than keyed globally by the reusable physical register, so sibling CFG paths may safely reuse one VM register for unrelated source storage or compiler TEMPs. Proven field/index writes to an active table binding remain inside the owning branch. Multiple independent root conditional regions in one closure are supported as a source sequence only when each later root branch starts on the unique non-branching continuation from the previous root join; straight-line statements between regions remain in order. Conditional markers carry their originating branch-state ID, so equal rendered condition text from different CFG branch sites is not treated as the same marker. This rule is iterative rather than limited to two roots. For conditional recovery, proven compiler logical-value regions are reduced structurally before marker-based `if/elseif/else` merging. This keeps logical result production separate from statement-conditional routing while allowing both to coexist in one root CFG. After reduction, root conditional sequencing retains the existing strict unique non-branching continuation proof; logical diamonds do not weaken that sequencing rule because they have already been collapsed. The matcher still rejects live path-dependent values, ambiguous storage epochs, empty/ambiguous true or `elseif` bodies, inconsistent marker/effect depths, non-closed logical regions, and non-canonical join shapes.
 
 ### 7.15 `while`
 
@@ -1170,10 +1170,10 @@ Random register/state IDs and random constants must not matter.
 4. identify `state` parameter
 5. identify `ReturnVal`
 6. find `while state` dispatcher
-7. try closure-entry program recovery
-8. try limited multi-state logical/local recovery
-9. try proven simple `if` / `if/else` / same-join `elseif` / recursive two-way nested-if recovery
-10. if neither applies, require one-state leaf
+7. try closure-entry program recovery; closure roots may first use the mixed structural solver with root-only reachability and the existing child-closure renderer
+8. try fully reducible root logical flattening and multi-state logical/local recovery
+9. try proven `if` / `if/else` / same-join `elseif` / recursive nested-if recovery; this path first reduces closed compiler logical-value subregions before structuring source conditionals
+10. if none applies, require one-state leaf
 11. try register/local program recovery
 12. try direct global-call recovery
 13. if direct call path fails, retry register program allowing zero source locals for call-result statements
@@ -1505,6 +1505,30 @@ for every early-promoted value so it cannot create a duplicate declaration.
 
 It is intentionally conservative.
 
+### 19.3 Mixed logical + conditional CFG composition
+
+When `allowConditionalIf` is enabled, Fresh CF performs a proof-preserving logical CFG reduction before conditional marker propagation. This is the bridge between TESTSET-style value production and source statement control flow.
+
+Dynamic classification rule:
+- decode the generic `state = condition and A or B` transition without assuming its source role
+- require an explicit compiler result-carrier copy from the same branch condition before treating the branch as a logical-value producer
+- prove exactly one branch successor is a lazy path that reaches the other successor as the join
+- reuse strict logical flattening to prove the whole region reduces to that result carrier and stops at the join
+- require the region to be closed against external predecessors/escapes
+- collapse only that region into a synthetic `freshCompilerLogical` AST assignment and direct join jump
+- leave branches without that proof untouched for `if/elseif/else` structuring
+
+The synthetic logical AST is the only form that enables recursive expression rendering in the mixed solver. Ordinary unproven logical ASTs retain the conservative renderer. This prevents a broad recursive-expression relaxation.
+
+Closure-aware mixed recovery scopes CFG/lifetime analysis to states reachable from normalized root entry 1. Child closure entry states are rendered by the existing `createClosureN` path and are excluded from root cleanup/definition evidence, because different VM invocations reuse the same physical `rN` names. All root-reachable original states plus every consumed child closure entry must account for the complete normalized leaf set before closure recovery succeeds.
+
+Persistent storage remains epoch-sensitive. A physical register that belongs to a later persistent source lifetime does not retroactively make an earlier branch TEMP write persistent. A persistent binding may start only on a marker-free definition; branch-local storage still requires its separate cleanup-backed path proof. This matters for layouts where one register is an arithmetic TEMP in one region and the later source local (for example the final logical result) in another.
+
+Verified regression anchors:
+- focused normalized 7-state real-Prometheus shape: child closure + `and` value + consuming `if/else`
+- full 55-state real fixture: side-effecting chained `and/or`, nested `if/elseif/else`, persistent mutations, and a post-conditional logical initializer
+- both recover through `fresh-closure-entry` with source/obfuscated/recovered runtime parity
+
 ## 20. Direct Global Call Recovery
 
 Fresh CF has a strict direct-global-call matcher for simple compiler programs.
@@ -1582,7 +1606,7 @@ Therefore do NOT claim full support for:
 - arbitrary nested control flow
 - arbitrary break/continue structuring
 
-Limited compiler short-circuit multi-state logic and the proven simple `if` / `if/else` / same-join `elseif` / recursive two-way nested-if shapes are supported separately, as documented above.
+Limited compiler short-circuit multi-state logic now composes with the proven `if` / `if/else` / same-join `elseif` / recursive nested-if shapes through the closed logical-region reducer documented above. This is still template-bounded structural recovery, not arbitrary CFG structuring.
 
 ## 24. What "Dynamic / Structural" Means in Practice
 
@@ -1822,16 +1846,9 @@ This section is the shortest current-state handoff. Read the detailed sections a
 
 - branch: `main`
 - remote: `origin/main`
-- latest feature commit before this handoff cleanup: `63a43c7 Preserve shadowed multi-return locals`
-- preceding current feature commits:
-  - `f5d015a Preserve nested captured local bindings`
-  - `93d2b72 Canonicalize shuffled return packs`
-  - `54fd6b7 Recover chained logical CFGs`
-  - `cf9b5bc Preserve nil locals in TESTSET logic`
-  - `bf83687 Recover upvalue logical fallbacks`
-  - `a43b388 Preserve terminal source aliases`
-  - `593c428 Preserve terminal source storage lifetimes`
-  - `6719ce6 Unify overflow register CF interleaving`
+- last pushed baseline before the mixed logical/conditional work in this handoff: `ce9f971 Recover in-place promoted local lifetimes`
+- immediately preceding relevant commits: `5901341 Recover sequential root conditionals`, `d08e1fb Recover conditional storage lifetimes`, `de51051 Generalize nested elseif recovery`
+- current tracked behavior after this handoff includes closed logical-CFG reduction inside closure-aware conditional recovery; a new chat should run `git log -5 --oneline` for the exact final commit hash rather than relying on a hash duplicated inside this file
 - important historical semantic baseline: `7375421 Refine nil register lifetimes`
 - do not reintroduce discarded experimental CF changes merely because they exist in Git history
 
@@ -1859,7 +1876,7 @@ Do not assume a missing old `_tmp_*`, `.normal.lua`, `.beta.cf.lua`, `.obfuscate
 
 ### Current known-good functional state
 
-As of 2026-09-02:
+As of 2026-09-04:
 
 - the complex logic/upvalue stress fixture has 130 normalized states total, with 119 root logical states plus closure states
 - chained/fused `and`/`or` flattening works across that root graph
@@ -1898,6 +1915,8 @@ Current performance baseline after the 2026-09-02 pipeline optimization:
 - conditional recovery supports direct/call conditions, cleanup-backed local conditions, top-level and nested same-join `elseif` chains, and recursively nested distinct-join `if` / `if-else`. Nested `elseif` is recovered by stripping a proven common outer marker prefix and solving the remaining N-way chain structurally, so the rule is independent of nesting depth and outer branch polarity. The previously failing 14-state real fixture containing `else { if N1 ... elseif N2 ... elseif N3 ... else { if DEEP ... } }` now recovers exactly and has source/obfuscated/recovered runtime parity. Focused tests cover nested chains on both outer false and true branches, recursive composition with a deeper inner `if/else`, and top-level/nested chains without a final `else`. Real Medium validation also covers a statement before the nested chain, proving common branch-effect prefixes are preserved. The 14-state nested-elseif fixture, 18-state deep two-way fixture, 9-state prefix fixture, and 8-state no-final-else fixture all passed 5/5 fresh randomized Medium recompiles with exact runtime parity. Existing `or`/TESTSET fixtures remain in `fresh-multistate-logical`.
 - conditional storage recovery now distinguishes source lifetime from reusable physical registers. Root persistent scalar/table storage requires converged definitions, a post-join read, and eventual nil cleanup on every path. Branch-local scalar/table storage requires a stable cleanup-backed epoch with no later non-nil write and cleanup on every continuation path; its binding name lives in the path environment so sibling branches may reuse the same VM register without sharing source scope. Proven table field/index writes stay in the branch, and dead path-dependent compiler TEMPs are dropped at joins only when no later read exists. Focused regressions cover persistent scalar assignment, persistent table mutation, sibling-register reuse, and branch-local table identity. The original 28-state complex variable/table/nested-conditional fixture passed 10/10 fresh randomized Medium recompiles with exact source/obfuscated/recovered runtime parity after this fix.
 - sequential root conditional recovery now proves source ordering across independent top-level `if`/`elseif` regions. Every branch marker records its originating normalized branch state; after one root region merges, the next root is accepted only if its first branch state is the same join or is reached through a chain of blocks with exactly one successor each. Any intervening branch makes the sequence fail closed. A focused normalized regression covers two root `if/else` regions with a straight-line `print` between them. The 65-state extreme nested/storage fixture plus a second top-level `if/elseif/else` passed 10/10 fresh randomized Medium recompiles with exact runtime parity, and a separate three-root fixture with scalar/table mutations between regions also passed exact parity.
+- mixed logical/conditional recovery now reduces only closed compiler logical-value subgraphs before source conditional structuring. The discriminator is structural (result-carrier copy + lazy-path/join proof + closed-region proof), not register/state IDs or source constants. This fixes the previous state-15 failure where a completed short-circuit value was consumed as an outer if condition. Closure roots are analyzed only over root-reachable states; child closure entries cannot contaminate root register lifetimes. A focused 7-state normalized regression is tracked in `tools/test-beta-control-flow-if.js`.
+- final validation for this mixed-CFG change: all eight tracked Fresh-CF/if/register/binding suites pass. Five real Medium fixtures passed 100/100 randomized layouts each with repeated exact runtime parity: the new 7-state closure+logical+if fixture, the full 55-state mixed TESTSET/and/or+nested-if fixture, the existing 65-state if/elseif/else fixture, the 28-state conditional-storage fixture, and the 19-state supported TESTSET fixture. Total: 500/500 fresh randomized layouts. No fixture-specific state/register IDs are used by the reducer.
 
 There is no known blocker in the currently supported straight-line/local/call/table/closure/upvalue/multi-return feature set represented by the established regression fixtures.
 
@@ -1912,7 +1931,7 @@ Do not claim full source reconstruction for:
 - arbitrary nested CFG structuring
 - arbitrary `break` / `continue` reconstruction
 
-Those remain separate future features. Limited compiler-generated short-circuit logical CFGs and the proven simple `if` / `if/else` / same-join `elseif` / recursive nested-if / linearly sequenced root-conditional shapes are supported; none may be generalized into arbitrary CFG guessing.
+Those remain separate future features. Limited compiler-generated short-circuit logical CFGs now compose with the proven simple `if` / `if/else` / same-join `elseif` / recursive nested-if / linearly sequenced root-conditional shapes through closed logical-subgraph reduction; this must not be generalized into arbitrary CFG guessing.
 
 Correctness fix completed during 2026-09-02 Fresh-CF follow-up:
 - the 401-state Medium fixture previously dropped every post-logical `print` call because `matchMultiStateLogicalLocals` stored discarded call results in its environment and later overwrote them without emitting the side effect
