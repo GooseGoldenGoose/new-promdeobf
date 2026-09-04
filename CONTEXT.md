@@ -1961,6 +1961,7 @@ Current structural model in `passes/beta-control-flow.js`:
 - captured source-storage aliases use path-local metadata carried in the candidate environment; field writes are accepted only through an active source local or an alias proven to originate from the recovered upvalue binding, not by generated-name string coincidence
 - direct calls of recovered anonymous closure expressions are parenthesized as `(function(...) ... end)(...)` so reduced TESTSET/call expressions remain syntactically valid Lua
 - path-dependent cell allocation, capture of an uninitialized/unknown cell, non-direct capture-table shapes, ambiguous terminal payloads/lifetimes/merges, and unrelated arbitrary upvalue machinery still fail closed
+- recursive nested closure recovery is still single-state only: `renderClosureCall` recursively sends a child entry to `renderSimpleClosureLeaf`, so a closure returned by another closure fails closed when that returned child has its own multi-state CFG (`if`/branch), even when its captures are otherwise proven; single-state nested captured closures continue to work
 
 Tracked focused regressions in `tools/test-beta-control-flow-fresh.js` now include:
 - basic one-sided terminal branch
@@ -1997,6 +1998,7 @@ Validation results on 2026-09-04:
 - focused real Medium probes for captured table-field mutation, captured scalar increment, and captured table-variable rebind all pass exact runtime parity
 - structured capture stress passed 50/50 exact-parity runs (25 randomized Medium layouts x the minimal captured-table fixture and the 103-state monster)
 - six targeted 103-state source-branch variants covering nested `check()` calls, deep early returns, complex TESTSET paths, and normal fallthrough all passed exact runtime parity
+- a new 151-state Medium stress fixture with three shared root bindings, sibling mutating/rebinding closures, returned nested closures, deep early returns, TESTSET logic, multi-return, and varargs exposed the recursive nested-closure CFG boundary above; a 7-state minimal with the same nested captured closure plus one inner `if` also fails, and an 8-state local-capture-only version still fails, while the equivalent 5-state single-state nested closure passes exact runtime parity. This proves the blocker is nested child multi-state structuring, not shared-root capture forwarding.
 
 Early-return recovery still does NOT imply loop-control recovery. General `while`, `repeat`, numeric/generic `for`, `break`, and `continue` remain separate fail-closed features.
 
