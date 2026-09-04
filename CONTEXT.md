@@ -1191,16 +1191,22 @@ Random register/state IDs and random constants must not matter.
 
 `passes/beta-control-flow.js` is intentionally a small compatibility facade. It preserves the public solver, direct-call, linear-matcher, overflow-normalizer, and unsupported stub exports. New implementation logic belongs under `passes/beta-cf/`.
 
-Shared modules:
-- `ast.js`: pure AST/source predicates, literal decoding, safe identifier checks, source slicing, and table/unary helpers; it has no solver state
-- `normalize.js`: dispatcher extraction, normalized state leaves/transitions, one-state unwrapping, and static overflow normalization
-- `cfg.js`: the shared `StateGraph` builder and graph queries
-- `logical.js`: compiler logical-value CFG flattening/reduction; this remains separate from source statement branches
-- `closures.js`: simple and recursive multi-state closure recovery, capture mapping, cycle guards, and transactional consumed-state accounting
-- `direct-calls.js`: strict direct global/member call recognition and terminal bookkeeping
-- `render.js`: shared whole-program/function rendering
-- `diagnostics.js`: stable fail-closed result and unsupported-state diagnostics
-- `solve.js`: ordered recovery strategy orchestration
+### 11.1 File ownership map - which file contains which work
+
+Use this map before editing Fresh CF. Put new work in the file that owns the behavior instead of growing the compatibility facade or duplicating proof logic in another module.
+
+Public entry and shared work:
+
+- `passes/beta-control-flow.js`: compatibility facade only. It preserves the existing public exports and unsupported feature stubs. Do not put solver implementation here.
+- `passes/beta-cf/solve.js`: top-level entry flow and the ordered choice between closure, logical, structured, linear, and direct-call recovery.
+- `passes/beta-cf/ast.js`: stateless AST/source helpers, literal decoding, safe identifier checks, source slicing, table helpers, and unary helpers.
+- `passes/beta-cf/normalize.js`: dispatcher extraction, normalized state leaves and transitions, one-state unwrapping, and static overflow-register normalization.
+- `passes/beta-cf/cfg.js`: the shared `StateGraph` builder plus reachability, predecessor/successor, and unique-path queries.
+- `passes/beta-cf/logical.js`: compiler short-circuit logical-value graph flattening and reduction. Source `if` branch reconstruction does not belong here.
+- `passes/beta-cf/closures.js`: simple and recursive multi-state closure recovery, capture mapping, recursion/cycle guards, and consumed-state transactions.
+- `passes/beta-cf/direct-calls.js`: strict direct global/member call recognition and its terminal bookkeeping.
+- `passes/beta-cf/render.js`: final whole-program and recovered-function text rendering shared by both solver paths.
+- `passes/beta-cf/diagnostics.js`: stable fail-closed results and unsupported-state diagnostic messages.
 
 `StateGraph` contract:
 
@@ -1216,24 +1222,41 @@ Shared modules:
 
 Transitions are `{ kind: "jump", target }`, `{ kind: "branch", conditionRegister, onTrue, onFalse }`, or `{ kind: "stop" }`. Shared queries provide reachability and unique linear-path proof. Future control-flow features consume this contract rather than rediscovering graph edges.
 
-Linear recovery:
-- `linear/context.js` constructs the explicit context containing source/leaf identity, future-event indexes, cleanup/register-epoch evidence, expression maps, binding names, pending packs, deferred copies, terminal-local sets, output, counters, and diagnostics options
-- `linear/lifetime.js` owns future-read/write, cleanup, last-use, dead-copy, terminal-epoch, and overwrite proof
-- `linear/bindings.js` owns allocation, naming, predeclaration, active ownership, and emission barriers
-- `linear/packs.js` owns pending multi-return slot ownership, display reservation, and ordered flushing
-- `linear/render.js` renders expressions against the explicit linear context
-- `linear/solver.js` orchestrates statements and terminal validation; extracted helpers receive the context explicitly
+Linear recovery (one normalized state / straight-line statement order):
 
-Structured recovery:
-- `structured/context.js` constructs the explicit context containing the shared graph, environments, global/path-local bindings, displays, branch and terminal candidates, pack reservations, capture/parameter names, output, counters, and lifetime caches
-- `structured/lifetime.js` owns cross-path read, cleanup, stable-terminal epoch, future-write, and persistent-storage proof
-- `structured/bindings.js` owns source displays, active/path-local identity, captures, upvalue aliases, and parameters
-- `structured/tokens.js` defines non-renderable internal pack tokens without coupling bindings back to pack implementation
-- `structured/packs.js` owns all structured multi-return/vararg transport, expected slots, future extraction/owner preclaims, delayed activation, and flushing
-- `structured/render.js` renders only values proven by the structured context and rejects internal tokens
-- `structured/branches.js` owns candidate merging, root ordering, `elseif`, absent-arm versus explicit-empty-arm proof, and source conditional rendering
-- `structured/terminal.js` owns sibling terminal matching, early/guard returns, terminal collapse, and terminal-path folding
-- `structured/solver.js` processes graph blocks, propagates candidate environments, delegates merges, and validates final output
+- `passes/beta-cf/linear/context.js`: builds the explicit linear context: source/leaf identity, future-event indexes, register epochs and cleanup evidence, expressions, binding names, pending packs, deferred copies, terminal locals, output, counters, and diagnostic options.
+- `passes/beta-cf/linear/lifetime.js`: future reads/writes, cleanup, last-use, dead-copy, terminal-epoch, and overwrite proof.
+- `passes/beta-cf/linear/bindings.js`: source-local allocation and naming, predeclaration, active ownership, emitted lines, and emission barriers.
+- `passes/beta-cf/linear/packs.js`: pending multi-return slot ownership, display-name reservation, and source-order flushing.
+- `passes/beta-cf/linear/render.js`: expression, call-argument, and member rendering against the linear context.
+- `passes/beta-cf/linear/solver.js`: the straight-line statement loop, delegation to the modules above, and final terminal validation.
+
+Structured recovery (multiple normalized states / branching paths):
+
+- `passes/beta-cf/structured/context.js`: builds the explicit structured context: shared graph, environments, global/path-local bindings, displays, branch and terminal candidates, pack reservations, capture/parameter names, output, counters, and lifetime caches.
+- `passes/beta-cf/structured/lifetime.js`: cross-path reads, cleanup, stable terminal epochs, future writes, and persistent-storage proof.
+- `passes/beta-cf/structured/bindings.js`: source displays, active and path-local identity, captures, upvalue aliases, and function parameters.
+- `passes/beta-cf/structured/tokens.js`: non-renderable internal pack tokens; this keeps binding code independent from pack implementation.
+- `passes/beta-cf/structured/packs.js`: structured multi-return and vararg transport, expected slots, future extraction/owner preclaims, delayed activation, and flushing.
+- `passes/beta-cf/structured/render.js`: expression rendering for values proven by the structured context; internal pack tokens are rejected here.
+- `passes/beta-cf/structured/branches.js`: candidate merging, root ordering, `elseif`, absent-arm versus explicit-empty-arm proof, and source conditional rendering.
+- `passes/beta-cf/structured/terminal.js`: sibling terminal matching, early and guard returns, terminal collapse, and terminal-path folding.
+- `passes/beta-cf/structured/solver.js`: graph-block processing, candidate-environment propagation, delegation to branch/terminal/pack logic, and final validation.
+
+Fast routing for future changes:
+
+- public API compatibility -> `passes/beta-control-flow.js`
+- recovery strategy order -> `passes/beta-cf/solve.js`
+- AST shape recognition -> `passes/beta-cf/ast.js`
+- normalized dispatcher/state decoding -> `passes/beta-cf/normalize.js`
+- graph/path questions -> `passes/beta-cf/cfg.js`
+- short-circuit `and`/`or` recovery -> `passes/beta-cf/logical.js`
+- closure/upvalue recovery -> `passes/beta-cf/closures.js`
+- one-state locals/calls/tables/packs -> the matching `passes/beta-cf/linear/` module
+- multi-state locals/calls/tables/packs/conditionals/returns -> the matching `passes/beta-cf/structured/` module
+- final program/function layout -> `passes/beta-cf/render.js`
+- unsupported/failure reporting -> `passes/beta-cf/diagnostics.js`
+- focused behavior regressions -> `tools/test-beta-control-flow-fresh.js` and `tools/test-beta-control-flow-if.js`; register, binding, upvalue, version, graph, and semantic-name regressions remain in their matching `tools/test-*.js` suites
 
 Important isolation rules:
 - logical result-carrier diamonds are reduced in `logical.js`; statement-level branch recovery does not classify them as empty source branches
