@@ -5,11 +5,13 @@ const { isEmptyTable, isIdentifier, isLuaIdentifier, isPrimitiveLiteral, isSingl
 const { hasLinearRootContinuation, recordRootConditional, upvalueAliasKey, allocateValueDisplay, allocateTableDisplay, parameterName, capturedSlotName, forwardedCaptureName, displayLocal, activeLocalDisplay, hasActiveLocal, resolveId, resolveRenderableId } = require("./bindings");
 const { structuredPackId, structuredPackSlot, structuredPackSlotToken } = require("./tokens");
 const { isCompilerVarargPack, isVarargUnpack, expectedPackSlotsInBlock, cleanupOrTerminalEpoch, maybeOwnStructuredPackSlot, preclaimFutureStructuredPackOwner, preclaimFutureStructuredPackSlots, flushStructuredPack, flushReadyStructuredPacks } = require("./packs");
-const { nodeReadsIdentifier, nodeUsesAsCallBaseMulti, terminalStableUsedEpoch, transportSourceKind, valueMayBeReadFrom, eventualCleanupOnAllPaths, valueMayBeReadAfter, hasFutureNonNilWrite, cleanupReachedOnAllPaths, analyzePersistentStorage } = require("./lifetime");
+const { nodeReadsIdentifier, nodeUsesAsCallBaseMulti, epochReadsOnlyAsCallBase, terminalStableUsedEpoch, transportSourceKind, valueMayBeReadFrom, eventualCleanupOnAllPaths, valueMayBeReadAfter, hasFutureNonNilWrite, cleanupReachedOnAllPaths, analyzePersistentStorage } = require("./lifetime");
 const { render } = require("./render");
 const { renderFunction, renderProgram } = require("../render");
 const { mergeElseIfCandidates, indentConditionalEffect, mergeCandidates } = require("./branches");
 const { markersSharePrefix, terminalSiblingMatch, guardLine, collapseTerminalCandidates, foldTerminalGuards } = require("./terminal");
+
+function callOnlyClosureKey(name) { return "\0fresh-cf-call-only-closure:" + name; }
 
 function isLoopAbruptCandidate(candidate) {
     const effects = candidate?.effects || [];
@@ -248,6 +250,8 @@ function matchMultiStateLogicalLocals(source, stateWhile, stateName, returnName,
             }
             if (!isIdentifier(dest)) return null;
             const name = dest.name;
+            const callOnlyKey = callOnlyClosureKey(name);
+            if (rhs?.type !== "NilLiteral") env.delete(callOnlyKey);
             const capturedRhsAlias = capturedSlotName(ctx, rhs);
             const inheritedUpvalueAlias = typeof capturedRhsAlias === "string"
                 ? capturedRhsAlias
@@ -427,6 +431,12 @@ function matchMultiStateLogicalLocals(source, stateWhile, stateName, returnName,
                     continue;
                 }
                 if (ctx.accumulatorRegs.has(name)) {
+                    const callOnlyClosure = env.get(callOnlyKey);
+                    if (typeof callOnlyClosure === "string" && env.get(name) === callOnlyClosure) {
+                        env.delete(name);
+                        env.delete(callOnlyKey);
+                        continue;
+                    }
                     if (ctx.persistentStorageRegs.has(name) && ctx.locals.has(name)) {
                         ctx.locals.delete(name);
                         ctx.localNames.delete(name);
@@ -477,7 +487,7 @@ function matchMultiStateLogicalLocals(source, stateWhile, stateName, returnName,
                         promotedArguments.push(argument.name);
                     }
                 }
-                const value = render(ctx, rhs, env);
+                const value = render(ctx, rhs, env, false, terminalPackExprs);
                 if (value == null) return null;
                 if (!valueMayBeReadAfter(ctx, id, i, name)) {
                     if (markers.length !== 0) {
@@ -505,6 +515,17 @@ function matchMultiStateLogicalLocals(source, stateWhile, stateName, returnName,
                 const next = block.body[i + 1];
                 if (name !== ctx.stateName && !hasActiveLocal(ctx, name, env) && isSingleAssignment(next, name)) continue;
                 return null;
+            }
+
+            const closureProducingRhs = isIdentifier(rhs) ||
+                (rhs?.type === "CallExpression" && isIdentifier(rhs.base) && /^createClosure\d*$/.test(rhs.base.name));
+            const callOnlyClosureEpoch = markers.length !== 0 && ctx.cleanupRegs.has(name) && ctx.accumulatorRegs.has(name) &&
+                !hasActiveLocal(ctx, name, env) && closureProducingRhs && typeof value === "string" && /^function\b/.test(value.trim()) &&
+                epochReadsOnlyAsCallBase(ctx, id, i, name);
+            if (callOnlyClosureEpoch) {
+                env.set(name, value);
+                env.set(callOnlyKey, value);
+                continue;
             }
 
             const stableStorageEpoch = ctx.allowConditionalIf && ctx.cleanupRegs.has(name) && !ctx.locals.has(name) &&

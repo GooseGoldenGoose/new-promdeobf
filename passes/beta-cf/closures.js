@@ -409,6 +409,28 @@ function matchClosureEntryProgram(source, stateWhile, stateName, returnName, dia
         return null;
     }
 
+    // Root CFGs that contain both a proven while region and child closures
+    // must use the same transactional closure renderer as child-entry while
+    // recovery. Otherwise createClosureN calls inside the loop body are seen
+    // as ordinary calls and the while path fails before child states can be
+    // consumed. Keep this attempt isolated so a failed loop proof cannot
+    // contaminate the ordinary structured/legacy closure paths below.
+    const rootSnapshot = new Set(consumedEntries);
+    const rootClosureSnapshot = new Set(renderedClosureEntries);
+    const loopProgram = matchCompilerWhileProgram(source, stateWhile, stateName, returnName, {
+        allowConditionalIf: true,
+        rootReachableOnly: true,
+        renderSpecialCall: renderClosureCall,
+        renderCapturedCall: renderClosureCall,
+    });
+    if (loopProgram && consumedEntries.size > 0) {
+        const accounted = new Set([...(loopProgram.reachableStateIds || []), ...consumedEntries]);
+        if (accounted.size === leaves.size && [...leaves.keys()].every(id => accounted.has(id))) {
+            return { ...loopProgram, stateCount: leaves.size, closureCount: renderedClosureEntries.size };
+        }
+    }
+    restoreConsumedEntries(rootSnapshot, rootClosureSnapshot);
+
     // Mixed root CFGs may contain logical-value regions feeding real
     // if/elseif/else branches. Recover them with the structural multi-state
     // solver instead of requiring the whole closure root to flatten into one

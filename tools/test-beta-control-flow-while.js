@@ -294,4 +294,44 @@ function vmStatesSource(states, registers = "r1, r2, r3, r4, r5, r6") {
     assert.match(result.source, /print\(v1\(\)\)/);
 }
 
+{
+    // A captured closure created inside the loop body must be reconstructed at
+    // iteration scope. Prometheus packs the closure call before forwarding it
+    // as the final print argument; no dead closure declaration may leak to root.
+    const source = vmStatesSource({
+        1: ["r1 = allocUpvalue()", "state = 0", "r3 = state", "state = 10", "upvalueValues[r1] = state", "r2 = args", "state = 2"],
+        2: ["ReturnVal = 3", "state = r3 < ReturnVal", "state = state and 3 or 4"],
+        3: [
+            "state = createClosure5(5, { r1 })",
+            "r5 = state",
+            'ReturnVal = "print"',
+            "state = _env[ReturnVal]",
+            "r4 = { r5(r3) }",
+            "ReturnVal = state(unpack(r4))",
+            "ReturnVal = 1",
+            "state = r3 + ReturnVal",
+            "r3 = state",
+            "r5 = nil",
+            "state = 2",
+        ],
+        4: ["r3 = nil", "ReturnVal = {}", "r1 = releaseUpvalue(r1)", "state = nil"],
+        5: ["r2 = args[1]", "ReturnVal = upvalueValues[upvalues[1]]", "state = ReturnVal + r2", "ReturnVal = { state }", "state = nil"],
+    });
+    const result = solveBetaControlFlow(source, parse(source));
+    assert.strictEqual(result.applied, true);
+    assert.strictEqual(result.mode, "fresh-closure-entry");
+    assert.strictEqual(result.source,
+        "local v1 = 0\n" +
+        "local v2 = 10\n" +
+        "while (v1 < 3) do\n" +
+        "    local v3 = function(v1)\n" +
+        "        return (v2 + v1)\n" +
+        "    end\n" +
+        "    print(v3(v1))\n" +
+        "    v1 = (v1 + 1)\n" +
+        "end\n");
+    const beforeWhile = result.source.slice(0, result.source.indexOf("while "));
+    assert.doesNotMatch(beforeWhile, /function\s*\(/);
+}
+
 console.log("beta control-flow while tests passed");

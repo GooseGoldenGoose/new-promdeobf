@@ -252,6 +252,53 @@ function collectBreakRegion(graph, startId, coreIds, exitId) {
     return { ids, terminalIds };
 }
 
+function collectMixedAbruptRegion(graph, startId, coreIds, exitId, returnName) {
+    if (startId === exitId || coreIds.has(startId) || !graph.blocks.has(startId)) return null;
+    const ids = new Set();
+    const breakTerminalIds = new Set();
+    const returnTerminalIds = new Set();
+    const visiting = new Set();
+    let invalid = false;
+
+    function visit(id) {
+        if (invalid || ids.has(id)) return;
+        if (id === exitId || coreIds.has(id) || visiting.has(id)) { invalid = true; return; }
+        const block = graph.blocks.get(id);
+        if (!block) { invalid = true; return; }
+        visiting.add(id);
+
+        if (block.transition?.kind === "stop") {
+            if (!isCompilerTerminalReturnBlock(block, returnName)) invalid = true;
+            else returnTerminalIds.add(id);
+        } else if (block.transition?.kind === "jump" && block.transition.target === exitId) {
+            breakTerminalIds.add(id);
+        } else {
+            const targets = transitionTargets(block.transition);
+            if (!targets.length) invalid = true;
+            for (const target of targets) {
+                if (invalid) break;
+                // Prometheus break cleanup is a dedicated jump block. A direct
+                // conditional edge to the loop final has not proven source break.
+                if (target === exitId || coreIds.has(target)) { invalid = true; break; }
+                visit(target);
+            }
+        }
+
+        visiting.delete(id);
+        ids.add(id);
+    }
+
+    visit(startId);
+    if (invalid || !ids.size || !breakTerminalIds.size || !returnTerminalIds.size) return null;
+    for (const id of ids) {
+        for (const pred of graph.predecessors.get(id) || []) {
+            if (coreIds.has(pred) || ids.has(pred)) continue;
+            return null;
+        }
+    }
+    return { ids, breakTerminalIds, returnTerminalIds };
+}
+
 function matchCompilerWhileConditionRegion(graph, loopInfo, dominators, returnName = null) {
     if (!loopInfo?.coreIds?.size || !loopInfo.backedgeSources?.size) return null;
     const coreIds = loopInfo.coreIds;
@@ -293,8 +340,14 @@ function matchCompilerWhileConditionRegion(graph, loopInfo, dominators, returnNa
                 continue;
             }
             const returnRegion = collectTerminalReturnRegion(graph, target, coreIds, returnName);
-            if (!returnRegion) return null;
-            for (const member of returnRegion.ids) terminalReturnRegionIds.add(member);
+            if (returnRegion) {
+                for (const member of returnRegion.ids) terminalReturnRegionIds.add(member);
+                continue;
+            }
+            const mixedAbruptRegion = collectMixedAbruptRegion(graph, target, coreIds, exitId, returnName);
+            if (!mixedAbruptRegion) return null;
+            for (const terminal of mixedAbruptRegion.breakTerminalIds) breakTerminalIds.add(terminal);
+            for (const terminal of mixedAbruptRegion.returnTerminalIds) terminalReturnRegionIds.add(terminal);
         }
     }
 

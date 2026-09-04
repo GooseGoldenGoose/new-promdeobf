@@ -4,9 +4,9 @@ const { isEmptyTable, isIdentifier, isLuaIdentifier, isPrimitiveLiteral, isSingl
 const { hasLinearRootContinuation, recordRootConditional, upvalueAliasKey, allocateValueDisplay, allocateTableDisplay, parameterName, capturedSlotName, forwardedCaptureName, displayLocal, activeLocalDisplay, hasActiveLocal, resolveId, resolveRenderableId } = require("./bindings");
 const { structuredPackId, structuredPackSlot, structuredPackSlotToken } = require("./tokens");
 const { isCompilerVarargPack, isVarargUnpack, expectedPackSlotsInBlock, cleanupOrTerminalEpoch, maybeOwnStructuredPackSlot, preclaimFutureStructuredPackOwner, preclaimFutureStructuredPackSlots, flushStructuredPack, flushReadyStructuredPacks } = require("./packs");
-function render(ctx, rhs, env, provenRecursive = false) {
+function render(ctx, rhs, env, provenRecursive = false, singleCallPacks = null) {
     if (isPrimitiveLiteral(rhs) || isEmptyTable(rhs)) return sourceOf(ctx.source, rhs);
-    if (rhs?.type === "TableConstructorExpression") return renderTableFields(rhs.fields || [], node => render(ctx, node, env, provenRecursive));
+    if (rhs?.type === "TableConstructorExpression") return renderTableFields(rhs.fields || [], node => render(ctx, node, env, provenRecursive, singleCallPacks));
     if (isIdentifier(rhs)) return resolveRenderableId(ctx, rhs.name, env);
     const capturedSlot = capturedSlotName(ctx, rhs);
     if (typeof capturedSlot === "string") return capturedSlot;
@@ -17,9 +17,9 @@ function render(ctx, rhs, env, provenRecursive = false) {
         return ctx.upvalueCellBindings.get(rhs.index.name) ?? null;
     }
     if (provenRecursive && rhs?.type === "IndexExpression" && !isIdentifier(rhs.base)) {
-        const base = render(ctx, rhs.base, env, true);
+        const base = render(ctx, rhs.base, env, true, singleCallPacks);
         const key = isIdentifier(rhs.index) ? resolveRenderableId(ctx, rhs.index.name, env)
-            : (isPrimitiveLiteral(rhs.index) ? sourceOf(ctx.source, rhs.index) : render(ctx, rhs.index, env, true));
+            : (isPrimitiveLiteral(rhs.index) ? sourceOf(ctx.source, rhs.index) : render(ctx, rhs.index, env, true, singleCallPacks));
         if (typeof base !== "string" || typeof key !== "string" || structuredPackId(ctx, base) || structuredPackSlot(ctx, base) || base === ctx.varargPackMarker) return null;
         const member = /^"[A-Za-z_][A-Za-z0-9_]*"$/.test(key) ? key.slice(1, -1) : null;
         return member && isLuaIdentifier(member) ? `${base}.${member}` : `${base}[${key}]`;
@@ -38,14 +38,14 @@ function render(ctx, rhs, env, provenRecursive = false) {
         return member && isLuaIdentifier(member) ? `${base}.${member}` : `${base}[${key}]`;
     }
     if (rhs?.type === "UnaryExpression") {
-        const argument = provenRecursive ? render(ctx, rhs.argument, env, true)
+        const argument = provenRecursive ? render(ctx, rhs.argument, env, true, singleCallPacks)
             : (isIdentifier(rhs.argument) ? resolveRenderableId(ctx, rhs.argument.name, env) : (isPrimitiveLiteral(rhs.argument) ? sourceOf(ctx.source, rhs.argument) : null));
         return renderUnary(rhs.operator, argument);
     }
     if ((provenRecursive || (rhs?.type === "LogicalExpression" && rhs.freshCompilerLogical === true)) &&
         (rhs?.type === "BinaryExpression" || rhs?.type === "LogicalExpression") && rhs.operator) {
-        const left = render(ctx, rhs.left, env, true);
-        const right = render(ctx, rhs.right, env, true);
+        const left = render(ctx, rhs.left, env, true, singleCallPacks);
+        const right = render(ctx, rhs.right, env, true, singleCallPacks);
         if (left == null || right == null) return null;
         return `(${left} ${rhs.operator} ${right})`;
     }
@@ -95,16 +95,24 @@ function render(ctx, rhs, env, provenRecursive = false) {
             if (typeof special === "string") return special;
         }
         const base = isIdentifier(rhs.base) ? resolveRenderableId(ctx, rhs.base.name, env)
-            : (provenRecursive ? render(ctx, rhs.base, env, true) : null);
+            : (provenRecursive ? render(ctx, rhs.base, env, true, singleCallPacks) : null);
         if (base == null) return null;
         const args = [];
-        for (const arg of rhs.arguments || []) {
+        const callArgs = rhs.arguments || [];
+        for (let argIndex = 0; argIndex < callArgs.length; argIndex++) {
+            const arg = callArgs[argIndex];
             let value = null;
-            if (ctx.renderAsFunction && isVarargUnpack(ctx, arg, env)) {
+            const finalSingleCallPack = argIndex === callArgs.length - 1 &&
+                arg?.type === "CallExpression" && isIdentifier(arg.base, "unpack") &&
+                (arg.arguments || []).length === 1 && isIdentifier(arg.arguments[0]) &&
+                singleCallPacks instanceof Map ? singleCallPacks.get(arg.arguments[0].name) : null;
+            if (typeof finalSingleCallPack === "string") {
+                value = finalSingleCallPack;
+            } else if (ctx.renderAsFunction && isVarargUnpack(ctx, arg, env)) {
                 ctx.sawVarargs = true;
                 value = "...";
             } else {
-                value = provenRecursive ? render(ctx, arg, env, true)
+                value = provenRecursive ? render(ctx, arg, env, true, singleCallPacks)
                     : (isIdentifier(arg) ? resolveRenderableId(ctx, arg.name, env) : (isPrimitiveLiteral(arg) ? sourceOf(ctx.source, arg) : null));
             }
             if (value == null || structuredPackId(ctx, value) || structuredPackSlot(ctx, value) || value === ctx.varargPackMarker) return null;
