@@ -1961,7 +1961,8 @@ Current structural model in `passes/beta-control-flow.js`:
 - captured source-storage aliases use path-local metadata carried in the candidate environment; field writes are accepted only through an active source local or an alias proven to originate from the recovered upvalue binding, not by generated-name string coincidence
 - direct calls of recovered anonymous closure expressions are parenthesized as `(function(...) ... end)(...)` so reduced TESTSET/call expressions remain syntactically valid Lua
 - path-dependent cell allocation, capture of an uninitialized/unknown cell, non-direct capture-table shapes, ambiguous terminal payloads/lifetimes/merges, and unrelated arbitrary upvalue machinery still fail closed
-- recursive nested closure recovery is still single-state only: `renderClosureCall` recursively sends a child entry to `renderSimpleClosureLeaf`, so a closure returned by another closure fails closed when that returned child has its own multi-state CFG (`if`/branch), even when its captures are otherwise proven; single-state nested captured closures continue to work
+- recursive nested closure recovery now supports proven multi-state child CFGs dynamically: `renderClosureCall` first keeps the single-state `renderSimpleClosureLeaf` fast path, then recursively invokes the same structural `matchMultiStateLogicalLocals` solver for a child entry when needed; the structural solver is entry-parametric, receives the child capture map, reconstructs child parameters from proven `args[N]` reads, resolves captured-slot reads/writes, supports mixed local-cell + forwarded `upvalues[N]` capture tables, and renders the recovered child as a function expression
+- recursive closure consumption is transactional: a rendering-entry cycle guard prevents recursive self-consumption, failed child attempts roll back all descendant state-consumption side effects, and a successful multi-state child claims exactly its proven reachable state set; generated child parameter/local names avoid collisions with already-recovered capture bindings
 
 Tracked focused regressions in `tools/test-beta-control-flow-fresh.js` now include:
 - basic one-sided terminal branch
@@ -1969,6 +1970,7 @@ Tracked focused regressions in `tools/test-beta-control-flow-fresh.js` now inclu
 - call-heavy TESTSET with `type(1) == "number" or tostring(2)`, covering the recursively-rendered proven call-base case
 - structured captured-table mutation inside an early-return TESTSET root
 - structured captured-variable rebind, proving the child closure writes the recovered outer binding rather than a copied value
+- recursive structured child closure with forwarded captures and its own three-state conditional CFG
 - the pre-existing deep logical/TESTSET regressions remain unchanged and passing
 
 Real Medium validation completed for these source shapes:
@@ -1998,7 +2000,10 @@ Validation results on 2026-09-04:
 - focused real Medium probes for captured table-field mutation, captured scalar increment, and captured table-variable rebind all pass exact runtime parity
 - structured capture stress passed 50/50 exact-parity runs (25 randomized Medium layouts x the minimal captured-table fixture and the 103-state monster)
 - six targeted 103-state source-branch variants covering nested `check()` calls, deep early returns, complex TESTSET paths, and normal fallthrough all passed exact runtime parity
-- a new 151-state Medium stress fixture with three shared root bindings, sibling mutating/rebinding closures, returned nested closures, deep early returns, TESTSET logic, multi-return, and varargs exposed the recursive nested-closure CFG boundary above; a 7-state minimal with the same nested captured closure plus one inner `if` also fails, and an 8-state local-capture-only version still fails, while the equivalent 5-state single-state nested closure passes exact runtime parity. This proves the blocker is nested child multi-state structuring, not shared-root capture forwarding.
+- recursive nested multi-state closure recovery is now fixed: the former 7-state forwarded-capture minimal and 8-state local-capture-only minimal both pass exact runtime parity, the previous 5-state single-state path remains passing, a 12-state depth-3 fixture with child + grandchild `if/else` CFGs and shared captured-table mutation passes, and a nested early-return child fixture passes
+- randomized recursive-closure stress passed 100/100 exact-parity runs (25 randomized Medium layouts x 4 fixtures: forwarded captures, local-only captures, depth-3 recursion, nested early return)
+- a separate two-parameter nested multi-state child probe also passes exact runtime parity, proving child parameter recovery is indexed structurally from `args[N]` rather than hardcoded to the first argument
+- the original 151-state mega fixture still does not fully recover because it also contains independent unsupported root shapes. A separate 7-state root-only probe reproduces branch-local multi-return storage feeding a conditional (`local a,b,c = call(); if c then ...`), and a nested vararg child probe still fails on compiler vararg-pack transport inside a multi-state child. Keep those as separate future features; do not weaken recursive closure proof to accept them.
 
 Early-return recovery still does NOT imply loop-control recovery. General `while`, `repeat`, numeric/generic `for`, `break`, and `continue` remain separate fail-closed features.
 

@@ -463,6 +463,23 @@ function sequentialLogicalCallStates(count) {
 
 {
     const source = vmStatesSource({
+        1: ['r3 = allocUpvalue()', 'r6 = 1', 'ReturnVal = "value"', 'state = { [ReturnVal] = r6 }', 'r6 = allocUpvalue()', 'r1 = allocUpvalue()', 'upvalueValues[r6] = state', 'state = 10', 'upvalueValues[r3] = state', 'state = true', 'upvalueValues[r1] = state', 'state = createClosure2(4, { r3, r6, r1 })', 'r5 = state', 'ReturnVal = 3', 'state = r5(ReturnVal)', 'r4 = state', 'ReturnVal = "_VERSION"', 'state = _env[ReturnVal]', 'state = state and 2 or 3', 'r7 = args'],
+        2: ['ReturnVal = 4', 'state = { r4(ReturnVal) }', 'ReturnVal = { unpack(state) }', 'state = nil'],
+        3: ['ReturnVal = 1', 'state = { r4(ReturnVal) }', 'ReturnVal = { unpack(state) }', 'state = nil'],
+        4: ['r7 = args[1]', 'r6 = allocUpvalue()', 'state = createClosure6(5, { r6, upvalues[1], upvalues[2], upvalues[3] })', 'upvalueValues[r6] = r7', 'ReturnVal = { state }', 'state = nil'],
+        5: ['r7 = args[1]', 'ReturnVal = upvalueValues[upvalues[1]]', 'state = ReturnVal + r7', 'upvalueValues[upvalues[1]] = state', 'r6 = upvalueValues[upvalues[2]]', 'ReturnVal = r6 + r7', 'upvalueValues[upvalues[2]] = ReturnVal', 'r6 = upvalueValues[upvalues[3]]', 'r4 = upvalueValues[upvalues[3]]', 'r2 = "value"', 'r5 = r4[r2]', 'r1 = r5 + r7', 'r3 = "value"', 'r6[r3] = r1', 'r3 = 2', 'r6 = r7 > r3', 'state = r6 and 6 or 7'],
+        6: ['r3 = upvalueValues[upvalues[4]]', 'r6 = not r3', 'upvalueValues[upvalues[4]] = r6', 'state = 7'],
+        7: ['r3 = upvalueValues[upvalues[1]]', 'r1 = upvalueValues[upvalues[2]]', 'r4 = upvalueValues[upvalues[3]]', 'r2 = "value"', 'r5 = r4[r2]', 'r4 = upvalueValues[upvalues[4]]', 'ReturnVal = { r3, r1, r5, r4 }', 'state = nil'],
+    });
+    const result = solveBetaControlFlow(source, parse(source));
+    assert.strictEqual(result.applied, true, "recursive structured captured closure was not recovered");
+    assert.strictEqual(result.mode, "fresh-closure-entry");
+    assert.strictEqual(result.source, 'local v1 = { value = 1 }\nlocal v2 = 10\nlocal v3 = true\nlocal v4 = (function(v4)\n    local v5 = v4\n    return function(v4)\n        v5 = (v5 + v4)\n        v2 = (v2 + v4)\n        v1.value = (v1.value + v4)\n        if (v4 > 2) then\n            v3 = (not v3)\n        end\n        return v5, v2, v1.value, v3\n    end\nend)(3)\nif _VERSION then\n    return v4(4)\nend\nreturn v4(1)\n');
+}
+
+
+{
+    const source = vmStatesSource({
         1: ['ReturnVal = "count"', 'r1 = 0', 'state = { [ReturnVal] = r1 }', 'r1 = allocUpvalue()', 'upvalueValues[r1] = state', 'state = createClosure3(6, { r1 })', 'r5 = state', 'r4 = "_VERSION"', 'r2 = _env[r4]', 'state = r2 and 2 or 3', 'r3 = args', 'ReturnVal = r2'],
         2: ['r4 = true', 'r2 = r5(r4)', 'ReturnVal = r2', 'state = 3'],
         3: ['state = ReturnVal and 4 or 5'],

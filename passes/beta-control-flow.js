@@ -2134,6 +2134,13 @@ function matchClosureEntryProgram(source, stateWhile, stateName, returnName, dia
     const leaves = extractNormalizedStateLeaves(stateWhile, stateName);
     if (!leaves || leaves.size < 2 || !leaves.has(1)) return null;
     const consumedEntries = new Set();
+    const renderedClosureEntries = new Set();
+    const renderingEntries = new Set();
+
+    function restoreConsumedEntries(stateSnapshot, closureSnapshot) {
+        for (const id of [...consumedEntries]) if (!stateSnapshot.has(id)) consumedEntries.delete(id);
+        for (const id of [...renderedClosureEntries]) if (!closureSnapshot.has(id)) renderedClosureEntries.delete(id);
+    }
 
     function renderClosureCall(call, captureNames = null) {
         if (call?.type !== "CallExpression" || !isIdentifier(call.base) || !/^createClosure\d*$/.test(call.base.name)) return null;
@@ -2143,20 +2150,49 @@ function matchClosureEntryProgram(source, stateWhile, stateName, returnName, dia
         if (captureNames === null && fields.length !== 0) return null;
         if (captureNames instanceof Map && fields.length !== captureNames.size) return null;
         const entryId = Number(args[0].value);
-        if (!Number.isInteger(entryId) || entryId === 1 || consumedEntries.has(entryId)) return null;
+        if (!Number.isInteger(entryId) || entryId === 1 || consumedEntries.has(entryId) || renderingEntries.has(entryId)) return null;
         const childLeaf = leaves.get(entryId);
         if (!childLeaf) return null;
-        consumedEntries.add(entryId);
-        const rendered = renderSimpleClosureLeaf(source, childLeaf, stateName, returnName, {
+
+        const snapshot = new Set(consumedEntries);
+        const closureSnapshot = new Set(renderedClosureEntries);
+        renderingEntries.add(entryId);
+        let rendered = renderSimpleClosureLeaf(source, childLeaf, stateName, returnName, {
             renderSpecialCall: renderClosureCall,
             renderCapturedCall: renderClosureCall,
             captureNames: captureNames instanceof Map ? captureNames : undefined,
         });
-        if (!rendered) {
-            consumedEntries.delete(entryId);
-            return null;
+        if (rendered) {
+            consumedEntries.add(entryId);
+            renderedClosureEntries.add(entryId);
+            renderingEntries.delete(entryId);
+            return rendered;
         }
-        return rendered;
+
+        restoreConsumedEntries(snapshot, closureSnapshot);
+        const structured = matchMultiStateLogicalLocals(source, stateWhile, stateName, returnName, {
+            allowConditionalIf: true,
+            rootReachableOnly: true,
+            entryId,
+            captureNames: captureNames instanceof Map ? captureNames : undefined,
+            renderAsFunction: true,
+            renderSpecialCall: renderClosureCall,
+            renderCapturedCall: renderClosureCall,
+        });
+        if (structured) {
+            const childStates = structured.reachableStateIds || [];
+            const overlaps = childStates.some(id => snapshot.has(id));
+            if (!overlaps && childStates.includes(entryId)) {
+                for (const id of childStates) consumedEntries.add(id);
+                renderedClosureEntries.add(entryId);
+                renderingEntries.delete(entryId);
+                return structured.source;
+            }
+        }
+
+        restoreConsumedEntries(snapshot, closureSnapshot);
+        renderingEntries.delete(entryId);
+        return null;
     }
 
     // Mixed root CFGs may contain logical-value regions feeding real
@@ -2173,13 +2209,14 @@ function matchClosureEntryProgram(source, stateWhile, stateName, returnName, dia
     if (structuredProgram && consumedEntries.size > 0) {
         const accounted = new Set([...(structuredProgram.reachableStateIds || []), ...consumedEntries]);
         if (accounted.size === leaves.size && [...leaves.keys()].every(id => accounted.has(id))) {
-            return { ...structuredProgram, stateCount: leaves.size, closureCount: consumedEntries.size };
+            return { ...structuredProgram, stateCount: leaves.size, closureCount: renderedClosureEntries.size };
         }
     }
 
     // Legacy closure path remains for roots that are entirely reducible to a
     // flattened logical/register-local leaf, including existing capture cases.
     consumedEntries.clear();
+    renderedClosureEntries.clear();
     const rootDiagnostics = {};
     const flattenedRoot = flattenLogicalRootLeaf(leaves, 1, stateName, returnName, rootDiagnostics);
     for (const id of (flattenedRoot ? flattenedRoot.consumed : [1])) consumedEntries.add(id);
@@ -2201,7 +2238,7 @@ function matchClosureEntryProgram(source, stateWhile, stateName, returnName, dia
         if (diagnostics) { diagnostics.reason = "not all normalized state leaves were consumed"; diagnostics.unconsumed = [...leaves.keys()].filter(id => !consumedEntries.has(id)); }
         return null;
     }
-    return { ...program, stateCount: leaves.size, closureCount: consumedEntries.size - rootStateCount };
+    return { ...program, stateCount: leaves.size, closureCount: renderedClosureEntries.size };
 }
 
 function extractNormalizedStateLeaves(stateWhile, stateName) {
@@ -2251,10 +2288,13 @@ function decodeLogicalStateTransition(rhs) {
 function matchMultiStateLogicalLocals(source, stateWhile, stateName, returnName, options = {}) {
     const allowConditionalIf = options.allowConditionalIf === true;
     const rootReachableOnly = options.rootReachableOnly === true;
+    const entryId = Number.isInteger(options.entryId) ? options.entryId : 1;
+    const captureNames = options.captureNames instanceof Map ? options.captureNames : null;
+    const renderAsFunction = options.renderAsFunction === true;
     const originalLeaves = extractNormalizedStateLeaves(stateWhile, stateName);
-    if (!originalLeaves || originalLeaves.size < 2 || !originalLeaves.has(1)) return null;
+    if (!originalLeaves || originalLeaves.size < 2 || !originalLeaves.has(entryId)) return null;
     const logicalReduction = allowConditionalIf
-        ? reduceCompilerLogicalStateGraph(originalLeaves, 1, stateName, returnName)
+        ? reduceCompilerLogicalStateGraph(originalLeaves, entryId, stateName, returnName)
         : { leaves: originalLeaves, originalReachableStateIds: new Set(originalLeaves.keys()) };
     const leaves = logicalReduction.leaves;
 
@@ -2299,7 +2339,7 @@ function matchMultiStateLogicalLocals(source, stateWhile, stateName, returnName,
     }
 
     const reachable = new Set();
-    const queue = [1];
+    const queue = [entryId];
     while (queue.length) {
         const id = queue.shift();
         if (reachable.has(id)) continue;
@@ -2353,7 +2393,7 @@ function matchMultiStateLogicalLocals(source, stateWhile, stateName, returnName,
     }
 
     function recordRootConditional(startId, joinId) {
-        const anchor = lastRootConditionalJoinId === null ? 1 : lastRootConditionalJoinId;
+        const anchor = lastRootConditionalJoinId === null ? entryId : lastRootConditionalJoinId;
         if (!hasLinearRootContinuation(anchor, startId)) return false;
         lastRootConditionalJoinId = joinId;
         conditionalIfCount++;
@@ -2362,8 +2402,8 @@ function matchMultiStateLogicalLocals(source, stateWhile, stateName, returnName,
 
     const indegree = new Map();
     for (const id of reachable) indegree.set(id, (predecessors.get(id) || []).filter(p => reachable.has(p)).length);
-    const ready = [1];
-    const incoming = new Map([[1, [{ env: new Map(), markers: [], effects: [] }]]]);
+    const ready = [entryId];
+    const incoming = new Map([[entryId, [{ env: new Map(), markers: [], effects: [] }]]]);
     const processed = new Set();
     const locals = new Set();
     const localNames = new Map();
@@ -2391,10 +2431,57 @@ function matchMultiStateLogicalLocals(source, stateWhile, stateName, returnName,
     const persistentStorageRegs = new Set();
     const out = [];
     const terminalCandidates = [];
+    const parameterNames = [];
+    const reservedBindingNames = new Set();
+    if (captureNames) {
+        for (const value of captureNames.values()) if (typeof value === "string" && isLuaIdentifier(value)) reservedBindingNames.add(value);
+    }
+    let nextValueSuffix = 1;
+    let nextTableSuffix = 1;
     let valueCount = 0;
     let tableCount = 0;
     let conditionalIfCount = 0;
     let lastRootConditionalJoinId = null;
+    let sawVarargs = false;
+
+    function allocateValueDisplay() {
+        let display;
+        do display = `v${nextValueSuffix++}`; while (reservedBindingNames.has(display));
+        reservedBindingNames.add(display);
+        valueCount++;
+        return display;
+    }
+    function allocateTableDisplay() {
+        let display;
+        do display = `t${nextTableSuffix++}`; while (reservedBindingNames.has(display));
+        reservedBindingNames.add(display);
+        tableCount++;
+        return display;
+    }
+    function parameterName(index) {
+        if (!renderAsFunction || !Number.isInteger(index) || index < 1) return null;
+        while (parameterNames.length < index) {
+            let display;
+            do display = `v${nextValueSuffix++}`; while (reservedBindingNames.has(display));
+            reservedBindingNames.add(display);
+            parameterNames.push(display);
+        }
+        return parameterNames[index - 1];
+    }
+    function capturedSlotName(node) {
+        if (!captureNames || node?.type !== "IndexExpression" || !isIdentifier(node.base, "upvalueValues")) return null;
+        const slotExpr = node.index;
+        if (slotExpr?.type !== "IndexExpression" || !isIdentifier(slotExpr.base, "upvalues") || slotExpr.index?.type !== "NumericLiteral") return null;
+        const slot = Number(slotExpr.index.value);
+        if (!Number.isInteger(slot) || slot < 1) return null;
+        return captureNames.get(slot) ?? null;
+    }
+    function forwardedCaptureName(node) {
+        if (!captureNames || node?.type !== "IndexExpression" || !isIdentifier(node.base, "upvalues") || node.index?.type !== "NumericLiteral") return null;
+        const slot = Number(node.index.value);
+        if (!Number.isInteger(slot) || slot < 1) return null;
+        return captureNames.get(slot) ?? null;
+    }
 
     function displayLocal(reg) { return localNames.get(reg) || reg; }
     function activeLocalDisplay(name, env) {
@@ -2416,6 +2503,11 @@ function matchMultiStateLogicalLocals(source, stateWhile, stateName, returnName,
         if (isPrimitiveLiteral(rhs) || isEmptyTable(rhs)) return sourceOf(source, rhs);
         if (rhs?.type === "TableConstructorExpression") return renderTableFields(rhs.fields || [], node => render(node, env, provenRecursive));
         if (isIdentifier(rhs)) return resolveId(rhs.name, env);
+        const capturedSlot = capturedSlotName(rhs);
+        if (typeof capturedSlot === "string") return capturedSlot;
+        if (renderAsFunction && rhs?.type === "IndexExpression" && isIdentifier(rhs.base, "args") && rhs.index?.type === "NumericLiteral") {
+            return parameterName(Number(rhs.index.value));
+        }
         if (rhs?.type === "IndexExpression" && isIdentifier(rhs.base, "upvalueValues") && isIdentifier(rhs.index)) {
             return upvalueCellBindings.get(rhs.index.name) ?? null;
         }
@@ -2451,6 +2543,17 @@ function matchMultiStateLogicalLocals(source, stateWhile, stateName, returnName,
             return `(${left} ${rhs.operator} ${right})`;
         }
         if (rhs?.type === "CallExpression") {
+            if (renderAsFunction && isIdentifier(rhs.base, "select") && (rhs.arguments || []).length === 2 &&
+                rhs.arguments[0]?.type === "NumericLiteral" && Number(rhs.arguments[0].value) === 1 &&
+                rhs.arguments[1]?.type === "CallExpression" && isIdentifier(rhs.arguments[1].base, "unpack") &&
+                (rhs.arguments[1].arguments || []).length === 1 && isIdentifier(rhs.arguments[1].arguments[0], "args")) {
+                sawVarargs = true;
+                return "...";
+            }
+            if (renderAsFunction && isIdentifier(rhs.base, "unpack") && (rhs.arguments || []).length === 1 && isIdentifier(rhs.arguments[0], "args")) {
+                sawVarargs = true;
+                return "...";
+            }
             if (isIdentifier(rhs.base) && /^createClosure\d*$/.test(rhs.base.name) && typeof options.renderCapturedCall === "function") {
                 const args = rhs.arguments || [];
                 const fields = args[1]?.type === "TableConstructorExpression" ? (args[1].fields || []) : [];
@@ -2458,8 +2561,10 @@ function matchMultiStateLogicalLocals(source, stateWhile, stateName, returnName,
                     const captureNames = new Map();
                     for (let i = 0; i < fields.length; i++) {
                         const field = fields[i];
-                        if (field?.type !== "TableValue" || !isIdentifier(field.value)) return null;
-                        const captureName = upvalueCellBindings.get(field.value.name);
+                        if (field?.type !== "TableValue") return null;
+                        let captureName = null;
+                        if (isIdentifier(field.value)) captureName = upvalueCellBindings.get(field.value.name) ?? null;
+                        else captureName = forwardedCaptureName(field.value);
                         if (typeof captureName !== "string") return null;
                         captureNames.set(i + 1, captureName);
                     }
@@ -2668,7 +2773,7 @@ function matchMultiStateLogicalLocals(source, stateWhile, stateName, returnName,
                     }
                 }
             }
-            if (convergedRead && eventualCleanupOnAllPaths(1, -1, name)) persistentStorageRegs.add(name);
+            if (convergedRead && eventualCleanupOnAllPaths(entryId, -1, name)) persistentStorageRegs.add(name);
         }
     }
 
@@ -3120,6 +3225,19 @@ function matchMultiStateLogicalLocals(source, stateWhile, stateName, returnName,
             const rhs = statement.init[0];
 
             if (dest?.type === "IndexExpression") {
+                const capturedDestination = capturedSlotName(dest);
+                if (typeof capturedDestination === "string") {
+                    const value = render(rhs, env);
+                    if (typeof value !== "string") return null;
+                    const line = capturedDestination + " = " + value;
+                    if (markers.length !== 0) {
+                        if (!allowConditionalIf) return null;
+                        effects = [...effects, line];
+                    } else {
+                        out.push(line);
+                    }
+                    continue;
+                }
                 if (isIdentifier(dest.base, "upvalueValues") && isIdentifier(dest.index) && upvalueCells.has(dest.index.name)) {
                     const value = render(rhs, env);
                     if (typeof value !== "string") return null;
@@ -3137,7 +3255,7 @@ function matchMultiStateLogicalLocals(source, stateWhile, stateName, returnName,
                     // A source local captured by a child closure must have one
                     // dominating initialization before conditional routing.
                     if (markers.length !== 0) return null;
-                    const display = "v" + (++valueCount);
+                    const display = allocateValueDisplay();
                     upvalueCellBindings.set(dest.index.name, display);
                     out.push("local " + display + " = " + value);
                     continue;
@@ -3164,9 +3282,12 @@ function matchMultiStateLogicalLocals(source, stateWhile, stateName, returnName,
             }
             if (!isIdentifier(dest)) return null;
             const name = dest.name;
-            const inheritedUpvalueAlias = rhs?.type === "IndexExpression" && isIdentifier(rhs.base, "upvalueValues") && isIdentifier(rhs.index)
-                ? (upvalueCellBindings.get(rhs.index.name) ?? null)
-                : (isIdentifier(rhs) ? (env.get(upvalueAliasKey(rhs.name)) ?? null) : null);
+            const capturedRhsAlias = capturedSlotName(rhs);
+            const inheritedUpvalueAlias = typeof capturedRhsAlias === "string"
+                ? capturedRhsAlias
+                : (rhs?.type === "IndexExpression" && isIdentifier(rhs.base, "upvalueValues") && isIdentifier(rhs.index)
+                    ? (upvalueCellBindings.get(rhs.index.name) ?? null)
+                    : (isIdentifier(rhs) ? (env.get(upvalueAliasKey(rhs.name)) ?? null) : null));
             env.delete(upvalueAliasKey(name));
 
             if (i !== terminalReturnIndex) {
@@ -3231,7 +3352,7 @@ function matchMultiStateLogicalLocals(source, stateWhile, stateName, returnName,
                 const value = render(rhs, env);
                 if (typeof value !== "string") return null;
                 const kind = transportSourceKind(block, i, rhs.name);
-                const display = kind === "table" ? `t${++tableCount}` : `v${++valueCount}`;
+                const display = kind === "table" ? allocateTableDisplay() : allocateValueDisplay();
                 const declaration = value === "nil" ? `local ${display}` : `local ${display} = ${value}`;
                 if (markers.length !== 0) {
                     pathLocalBindingNames.add(display);
@@ -3268,7 +3389,7 @@ function matchMultiStateLogicalLocals(source, stateWhile, stateName, returnName,
                     }
                     const value = env.get(name);
                     if (value == null) return null;
-                    const display = `v${++valueCount}`;
+                    const display = allocateValueDisplay();
                     out.push(`local ${display} = ${value}`);
                     env.delete(name);
                     continue;
@@ -3293,7 +3414,7 @@ function matchMultiStateLogicalLocals(source, stateWhile, stateName, returnName,
                         if (valueMayBeReadAfter(id, i, argument.name)) continue;
                         const argumentValue = env.get(argument.name);
                         if (typeof argumentValue !== "string") return null;
-                        const display = `v${++valueCount}`;
+                        const display = allocateValueDisplay();
                         localNames.set(argument.name, display);
                         locals.add(argument.name);
                         out.push(`local ${display} = ${argumentValue}`);
@@ -3344,7 +3465,7 @@ function matchMultiStateLogicalLocals(source, stateWhile, stateName, returnName,
             // their separate path-scoped proof.
             const startsPersistentStorage = persistentStorageRegs.has(name) && markers.length === 0;
             if ((startsPersistentStorage || stableStorageEpoch) && !hasActiveLocal(name, env)) {
-                const display = `v${++valueCount}`;
+                const display = allocateValueDisplay();
                 accumulatorRegs.delete(name);
                 const declaration = `local ${display} = ${value}`;
                 if (markers.length !== 0) {
@@ -3363,7 +3484,7 @@ function matchMultiStateLogicalLocals(source, stateWhile, stateName, returnName,
                 isIdentifier(rhs, stateName) && block.transition.kind === "branch" && block.transition.conditionRegister === name;
             if (conditionalIfLocalHandoff) accumulatorRegs.delete(name);
             if (cleanupRegs.has(name) && !accumulatorRegs.has(name) && !hasActiveLocal(name, env) && isIdentifier(rhs) && rhs.name !== name) {
-                const display = rhs?.type === "TableConstructorExpression" ? `t${++tableCount}` : `v${++valueCount}`;
+                const display = rhs?.type === "TableConstructorExpression" ? allocateTableDisplay() : allocateValueDisplay();
                 localNames.set(name, display);
                 locals.add(name);
                 out.push(`local ${display} = ${value}`);
@@ -3434,8 +3555,15 @@ function matchMultiStateLogicalLocals(source, stateWhile, stateName, returnName,
         if (!out.some(line => /^if\s/.test(line))) return null;
         conditionalIfCount = 1;
     }
+    let outputSource = out.join("\n") + "\n";
+    if (renderAsFunction) {
+        const params = [...parameterNames];
+        if (sawVarargs) params.push("...");
+        const body = out.map(line => String(line).split("\n").map(part => "    " + part).join("\n")).join("\n");
+        outputSource = `function(${params.join(", ")})${body ? "\n" + body + "\n" : ""}end`;
+    }
     return {
-        source: out.join("\n") + "\n",
+        source: outputSource,
         statementCount: out.length,
         localCount: valueCount + tableCount,
         stateCount: rootReachableOnly ? logicalReduction.originalReachableStateIds.size : originalLeaves.size,
