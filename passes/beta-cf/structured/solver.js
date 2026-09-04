@@ -11,6 +11,129 @@ const { renderFunction, renderProgram } = require("../render");
 const { mergeElseIfCandidates, indentConditionalEffect, mergeCandidates } = require("./branches");
 const { markersSharePrefix, terminalSiblingMatch, guardLine, collapseTerminalCandidates, foldTerminalGuards } = require("./terminal");
 
+function isLoopAbruptCandidate(candidate) {
+    const effects = candidate?.effects || [];
+    const tail = effects[effects.length - 1];
+    return tail === "break" || tail === "continue";
+}
+
+function collapseLoopAbruptPool(ctx, pool) {
+    if (!Array.isArray(pool) || pool.length < 2) return true;
+    let changed = true;
+    while (changed) {
+        changed = false;
+        outer: for (let i = 0; i < pool.length; i++) {
+            if (!isLoopAbruptCandidate(pool[i])) continue;
+            for (let j = i + 1; j < pool.length; j++) {
+                if (!isLoopAbruptCandidate(pool[j])) continue;
+                const a = pool[i], b = pool[j];
+                const match = terminalSiblingMatch(ctx, a, b);
+                if (!match) continue;
+                const trueCandidate = match.al.truth ? a : b;
+                const falseCandidate = match.al.truth ? b : a;
+                const guard = guardLine(ctx, match.al.condition, true, (trueCandidate.effects || []).slice(match.effectPrefix));
+                if (!guard) return false;
+                const merged = {
+                    env: new Map(falseCandidate.env),
+                    markers: (falseCandidate.markers || []).slice(0, -1),
+                    effects: [
+                        ...(falseCandidate.effects || []).slice(0, match.effectPrefix),
+                        guard,
+                        ...(falseCandidate.effects || []).slice(match.effectPrefix),
+                    ],
+                };
+                pool.splice(j, 1);
+                pool.splice(i, 1, merged);
+                changed = true;
+                break outer;
+            }
+        }
+    }
+    return true;
+}
+
+function foldLoopAbruptGuards(ctx, candidate, currentId) {
+    const joinIds = ctx.options?.loopBodyJoinIds;
+    if (!(joinIds instanceof Set) || joinIds.size === 0 || !candidate) return candidate;
+    let current = {
+        env: new Map(candidate.env),
+        markers: [...(candidate.markers || [])],
+        effects: [...(candidate.effects || [])],
+    };
+    while (current.markers.length > 0) {
+        let folded = false;
+        for (const joinId of joinIds) {
+            // Never mutate the candidate list currently being iterated. The
+            // body join itself can use the ordinary candidate merger.
+            if (joinId === currentId) continue;
+            const pool = ctx.incoming.get(joinId);
+            if (!Array.isArray(pool) || pool.length === 0) continue;
+            if (!collapseLoopAbruptPool(ctx, pool)) return null;
+            for (let i = 0; i < pool.length; i++) {
+                const abrupt = pool[i];
+                if (!isLoopAbruptCandidate(abrupt)) continue;
+                const match = terminalSiblingMatch(ctx, current, abrupt);
+                if (!match) continue;
+                const marker = abrupt.markers[abrupt.markers.length - 1];
+                // The dedicated while merger owns the proven loop decision.
+                // Folding an abrupt body path across that marker would turn
+                // the loop itself into an if-guard before while rendering.
+                const loopBranchIds = ctx.options?.loopBranchIds;
+                if (loopBranchIds instanceof Set && loopBranchIds.has(marker.branchId)) continue;
+                const guard = guardLine(ctx, marker.condition, marker.truth, (abrupt.effects || []).slice(match.effectPrefix));
+                if (!guard) return null;
+                const prefix = current.effects.slice(0, match.effectPrefix);
+                current = {
+                    env: new Map(current.env),
+                    markers: current.markers.slice(0, -1),
+                    effects: [...prefix, guard, ...current.effects.slice(match.effectPrefix)],
+                };
+                pool.splice(i, 1);
+                if (!collapseLoopAbruptPool(ctx, pool)) return null;
+                folded = true;
+                break;
+            }
+            if (folded) break;
+        }
+        if (!folded) break;
+    }
+    return current;
+}
+
+function reduceLoopNestedCandidates(ctx, candidates, joinId) {
+    if (!(ctx.options?.loopBodyJoinIds instanceof Set) || candidates.length < 3) return null;
+    const work = candidates.map(candidate => ({
+        env: new Map(candidate.env),
+        markers: [...(candidate.markers || [])],
+        effects: [...(candidate.effects || [])],
+    }));
+    let changed = true;
+    while (work.length > 2 && changed) {
+        changed = false;
+        outer: for (let i = 0; i < work.length; i++) {
+            for (let j = i + 1; j < work.length; j++) {
+                const sibling = terminalSiblingMatch(ctx, work[i], work[j]);
+                if (!sibling) continue;
+                // Keep speculative reduction inside an enclosing branch. A
+                // prefix-free pair would be a root conditional and belongs to
+                // the existing N-way/root ordering proof instead.
+                if ((work[i].markers || []).length <= 1) continue;
+                let merged = mergeCandidates(ctx, [work[i], work[j]], joinId);
+                if (!merged) continue;
+                merged = foldTerminalGuards(ctx, merged);
+                if (!merged) return null;
+                merged = foldLoopAbruptGuards(ctx, merged, joinId);
+                if (!merged) return null;
+                work.splice(j, 1);
+                work.splice(i, 1, merged);
+                changed = true;
+                break outer;
+            }
+        }
+    }
+    return changed || work.length < candidates.length ? work : null;
+}
+
 function matchMultiStateLogicalLocals(source, stateWhile, stateName, returnName, options = {}) {
     const ctx = createStructuredContext(source, stateWhile, stateName, returnName, options);
     if (!ctx) return null;
@@ -22,11 +145,17 @@ function matchMultiStateLogicalLocals(source, stateWhile, stateName, returnName,
         if (!collapseTerminalCandidates(ctx)) return null;
         const normalizedCandidates = [];
         for (const candidate of candidates) {
-            const folded = foldTerminalGuards(ctx, candidate);
+            const terminalFolded = foldTerminalGuards(ctx, candidate);
+            if (!terminalFolded) return null;
+            const folded = foldLoopAbruptGuards(ctx, terminalFolded, id);
             if (!folded) return null;
             normalizedCandidates.push(folded);
         }
-        const merged = mergeCandidates(ctx, normalizedCandidates, id);
+        let merged = mergeCandidates(ctx, normalizedCandidates, id);
+        if (!merged && normalizedCandidates.length > 2 && ctx.options?.loopBodyJoinIds instanceof Set) {
+            const reduced = reduceLoopNestedCandidates(ctx, normalizedCandidates, id);
+            if (reduced) merged = mergeCandidates(ctx, reduced, id);
+        }
         if (!merged) return null;
         let env = merged.env;
         let markers = merged.markers;

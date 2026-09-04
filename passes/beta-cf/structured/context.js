@@ -92,14 +92,21 @@ function createStructuredContext(source, stateWhile, stateName, returnName, opti
     // In conditional recovery, some cleanup-backed registers are source
     // storage rather than compiler value accumulators. The ordinary proof
     // discovers them from converged definitions/read-after-join. Loop recovery
-    // can additionally prove a binding from the original back-edge before the
-    // graph is made acyclic; only cleanup-backed accumulator epochs are accepted.
+    // can additionally prove a binding from a real preheader definition plus a
+    // value carried across a proven back-edge before the graph is made acyclic.
+    // If that compiler VAR has no nil cleanup at all, its source lifetime ends
+    // at function terminal instead; keep it live through terminal rendering.
     const persistentStorageRegs = new Set();
     const forcedPersistentStorageRegs = options.forcedPersistentStorageRegs instanceof Set
         ? options.forcedPersistentStorageRegs : null;
     if (forcedPersistentStorageRegs) {
         for (const name of forcedPersistentStorageRegs) {
-            if (cleanupRegs.has(name) && accumulatorRegs.has(name)) persistentStorageRegs.add(name);
+            if (cleanupRegs.has(name) && accumulatorRegs.has(name)) {
+                persistentStorageRegs.add(name);
+            } else if (!cleanupRegs.has(name)) {
+                persistentStorageRegs.add(name);
+                terminalLiveLocals.add(name);
+            }
         }
     }
     const out = [];

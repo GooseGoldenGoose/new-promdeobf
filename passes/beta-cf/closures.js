@@ -15,6 +15,7 @@ const { extractNormalizedStateLeaves } = require("./normalize");
 const { flattenLogicalRootLeaf } = require("./logical");
 const { matchLocalRegisterProgram } = require("./linear/solver");
 const { matchMultiStateLogicalLocals } = require("./structured/solver");
+const { matchCompilerWhileProgram } = require("./control/while");
 
 function renderSimpleClosureLeaf(source, leaf, stateName, returnName, options = {}) {
     const env = new Map();
@@ -369,7 +370,7 @@ function matchClosureEntryProgram(source, stateWhile, stateName, returnName, dia
         }
 
         restoreConsumedEntries(snapshot, closureSnapshot);
-        const structured = matchMultiStateLogicalLocals(source, stateWhile, stateName, returnName, {
+        const childOptions = {
             allowConditionalIf: true,
             rootReachableOnly: true,
             entryId,
@@ -377,7 +378,21 @@ function matchClosureEntryProgram(source, stateWhile, stateName, returnName, dia
             renderAsFunction: true,
             renderSpecialCall: renderClosureCall,
             renderCapturedCall: renderClosureCall,
-        });
+        };
+        const loopStructured = matchCompilerWhileProgram(source, stateWhile, stateName, returnName, childOptions);
+        if (loopStructured) {
+            const childStates = loopStructured.reachableStateIds || [];
+            const overlaps = childStates.some(id => snapshot.has(id));
+            if (!overlaps && childStates.includes(entryId)) {
+                for (const id of childStates) consumedEntries.add(id);
+                renderedClosureEntries.add(entryId);
+                renderingEntries.delete(entryId);
+                return loopStructured.source;
+            }
+        }
+
+        restoreConsumedEntries(snapshot, closureSnapshot);
+        const structured = matchMultiStateLogicalLocals(source, stateWhile, stateName, returnName, childOptions);
         if (structured) {
             const childStates = structured.reachableStateIds || [];
             const overlaps = childStates.some(id => snapshot.has(id));

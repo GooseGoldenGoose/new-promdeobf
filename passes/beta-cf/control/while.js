@@ -153,6 +153,54 @@ function looksLikeCompilerNumericFor(block) {
     return hasSelfAdd && hasNot && hasLessEqual && hasGreaterEqual;
 }
 
+function isCompilerTerminalReturnBlock(block, returnName) {
+    if (!block || block.transition?.kind !== "stop" || typeof returnName !== "string") return false;
+    for (let i = block.transitionIndex - 1; i >= 0; i--) {
+        const statement = block.body[i];
+        if (!isSingleAssignment(statement, returnName)) continue;
+        return statement.init[0]?.type === "TableConstructorExpression";
+    }
+    return false;
+}
+
+function collectTerminalReturnRegion(graph, startId, coreIds, returnName) {
+    if (coreIds.has(startId) || !graph.blocks.has(startId)) return null;
+    const ids = new Set();
+    const visiting = new Set();
+    let invalid = false;
+
+    function visit(id) {
+        if (invalid || ids.has(id)) return;
+        if (coreIds.has(id) || visiting.has(id)) { invalid = true; return; }
+        const block = graph.blocks.get(id);
+        if (!block) { invalid = true; return; }
+        visiting.add(id);
+        if (block.transition?.kind === "stop") {
+            if (!isCompilerTerminalReturnBlock(block, returnName)) invalid = true;
+        } else {
+            const targets = transitionTargets(block.transition);
+            if (!targets.length) invalid = true;
+            for (const target of targets) {
+                if (invalid) break;
+                if (coreIds.has(target)) { invalid = true; break; }
+                visit(target);
+            }
+        }
+        visiting.delete(id);
+        ids.add(id);
+    }
+
+    visit(startId);
+    if (invalid || !ids.size) return null;
+    for (const id of ids) {
+        for (const pred of graph.predecessors.get(id) || []) {
+            if (coreIds.has(pred) || ids.has(pred)) continue;
+            return null;
+        }
+    }
+    return { ids };
+}
+
 function collectBreakRegion(graph, startId, coreIds, exitId) {
     if (startId === exitId || coreIds.has(startId) || !graph.blocks.has(startId)) return null;
     const ids = new Set();
@@ -204,7 +252,7 @@ function collectBreakRegion(graph, startId, coreIds, exitId) {
     return { ids, terminalIds };
 }
 
-function matchCompilerWhileConditionRegion(graph, loopInfo, dominators) {
+function matchCompilerWhileConditionRegion(graph, loopInfo, dominators, returnName = null) {
     if (!loopInfo?.coreIds?.size || !loopInfo.backedgeSources?.size) return null;
     const coreIds = loopInfo.coreIds;
     const headerId = loopInfo.headerId;
@@ -232,62 +280,39 @@ function matchCompilerWhileConditionRegion(graph, loopInfo, dominators) {
 
     const breakRegionIds = new Set();
     const breakTerminalIds = new Set();
+    const terminalReturnRegionIds = new Set();
     for (const id of coreIds) {
         const block = graph.blocks.get(id);
         for (const target of transitionTargets(block?.transition)) {
             if (coreIds.has(target)) continue;
             if (id === decision.id && target === exitId) continue;
-            const region = collectBreakRegion(graph, target, coreIds, exitId);
-            if (!region) return null;
-            for (const member of region.ids) breakRegionIds.add(member);
-            for (const terminal of region.terminalIds) breakTerminalIds.add(terminal);
+            const breakRegion = collectBreakRegion(graph, target, coreIds, exitId);
+            if (breakRegion) {
+                for (const member of breakRegion.ids) breakRegionIds.add(member);
+                for (const terminal of breakRegion.terminalIds) breakTerminalIds.add(terminal);
+                continue;
+            }
+            const returnRegion = collectTerminalReturnRegion(graph, target, coreIds, returnName);
+            if (!returnRegion) return null;
+            for (const member of returnRegion.ids) terminalReturnRegionIds.add(member);
         }
     }
 
+    // Every proven body -> check edge ends the current iteration. Prometheus
+    // does not always preserve which one was lexical fallthrough versus an
+    // explicit source continue. Mark them uniformly; the renderer removes only
+    // a redundant final top-level continue at the loop tail. This keeps branch
+    // continues explicit without guessing a unique physical latch.
     const backedgeSources = [...loopInfo.backedgeSources];
-    let normalLatchId = null;
-    if (backedgeSources.length === 1) {
-        normalLatchId = backedgeSources[0];
-    } else {
-        let bestScore = -1;
-        let tied = false;
-        for (const source of backedgeSources) {
-            const block = graph.blocks.get(source);
-            if (!block) return null;
-            let meaningful = 0;
-            for (let i = 0; i < block.transitionIndex; i++) {
-                const statement = block.body[i];
-                if (!isSingleAssignment(statement)) { meaningful += 2; continue; }
-                const dest = statement.variables[0];
-                const rhs = statement.init[0];
-                const compilerCleanup = isIdentifier(dest) && isVmRegisterName(dest.name) &&
-                    (rhs?.type === "NilLiteral" ||
-                        (rhs?.type === "CallExpression" && isIdentifier(rhs.base, "releaseUpvalue") &&
-                            (rhs.arguments || []).length === 1 && isIdentifier(rhs.arguments[0], dest.name)));
-                if (!compilerCleanup) meaningful++;
-            }
-            if (meaningful > bestScore) {
-                bestScore = meaningful;
-                normalLatchId = source;
-                tied = false;
-            } else if (meaningful === bestScore) {
-                tied = true;
-            }
-        }
-        // If several iteration-ending paths are structurally identical, the
-        // source distinction between final fallthrough and `continue` is lost.
-        // Choosing either is runtime-equivalent, but fail closed instead of
-        // pretending the compiler preserved syntax it did not preserve.
-        if (tied) return null;
-    }
 
     return {
         coreIds,
         breakRegionIds,
         breakTerminalIds,
+        terminalReturnRegionIds,
         backedgeSources: new Set(backedgeSources),
-        continueIds: new Set(backedgeSources.filter(id => id !== normalLatchId)),
-        normalLatchId,
+        continueIds: new Set(backedgeSources),
+        normalLatchId: null,
         preheaderId,
         headerId,
         decisionId: decision.id,
@@ -375,7 +400,7 @@ function candidateLoopCarriedRegisters(graph, matches) {
     return { registers: candidates, starts };
 }
 
-function collapseCompilerWhileLoops(leaves, entryId, stateName) {
+function collapseCompilerWhileLoops(leaves, entryId, stateName, returnName = null) {
     if (!(leaves instanceof Map) || !Number.isInteger(entryId) || typeof stateName !== "string") return null;
     const graph = createStateGraph(leaves, entryId, stateName);
     if (!graph || graph.reachable.size < 3) return null;
@@ -384,7 +409,7 @@ function collapseCompilerWhileLoops(leaves, entryId, stateName) {
 
     const matches = [];
     for (const loopInfo of natural.loops) {
-        const match = matchCompilerWhileConditionRegion(graph, loopInfo, natural.dominators);
+        const match = matchCompilerWhileConditionRegion(graph, loopInfo, natural.dominators, returnName);
         if (!match) return null;
         matches.push(match);
     }
@@ -392,6 +417,7 @@ function collapseCompilerWhileLoops(leaves, entryId, stateName) {
     const transformed = cloneLeaves(leaves);
     const controlByBlockId = new Map();
     const loopBranchIds = new Set();
+    const loopBodyJoinIds = new Set();
     let nextSyntheticId = -1;
     while (transformed.has(nextSyntheticId)) nextSyntheticId--;
 
@@ -402,6 +428,7 @@ function collapseCompilerWhileLoops(leaves, entryId, stateName) {
         const bodyJoinId = nextSyntheticId--;
         match.bodyJoinId = bodyJoinId;
         loopBranchIds.add(match.decisionId);
+        loopBodyJoinIds.add(bodyJoinId);
 
         for (const source of match.backedgeSources) {
             if (!rewriteJumpTarget(transformed, graph, source, bodyJoinId)) return null;
@@ -419,6 +446,7 @@ function collapseCompilerWhileLoops(leaves, entryId, stateName) {
         leaves: transformed,
         matches,
         loopBranchIds,
+        loopBodyJoinIds,
         controlByBlockId,
         loopCarriedStorageRegs: loopCarried.registers,
         loopCarriedStorageStarts: loopCarried.starts,
@@ -428,7 +456,11 @@ function collapseCompilerWhileLoops(leaves, entryId, stateName) {
 function matchCompilerWhileProgram(source, stateWhile, stateName, returnName, options = {}) {
     const originalLeaves = extractNormalizedStateLeaves(stateWhile, stateName);
     if (!originalLeaves || originalLeaves.size < 4) return null;
-    const collapsed = collapseCompilerWhileLoops(originalLeaves, Number.isInteger(options.entryId) ? options.entryId : 1, stateName);
+    const entryId = Number.isInteger(options.entryId) ? options.entryId : 1;
+    const originalGraph = createStateGraph(originalLeaves, entryId, stateName);
+    if (!originalGraph) return null;
+    const originalReachableStateIds = [...originalGraph.reachable];
+    const collapsed = collapseCompilerWhileLoops(originalLeaves, entryId, stateName, returnName);
     if (!collapsed) return null;
 
     const program = matchMultiStateLogicalLocals(source, stateWhile, stateName, returnName, {
@@ -436,6 +468,7 @@ function matchCompilerWhileProgram(source, stateWhile, stateName, returnName, op
         allowConditionalIf: true,
         normalizedLeaves: collapsed.leaves,
         loopBranchIds: collapsed.loopBranchIds,
+        loopBodyJoinIds: collapsed.loopBodyJoinIds,
         loopControlByBlockId: collapsed.controlByBlockId,
         forcedPersistentStorageRegs: collapsed.loopCarriedStorageRegs,
         forcedPersistentStorageStarts: collapsed.loopCarriedStorageStarts,
@@ -444,7 +477,8 @@ function matchCompilerWhileProgram(source, stateWhile, stateName, returnName, op
     if (!program) return null;
     return {
         ...program,
-        stateCount: originalLeaves.size,
+        stateCount: originalReachableStateIds.length,
+        reachableStateIds: originalReachableStateIds,
         loopCount: collapsed.matches.length,
         loopMatches: collapsed.matches,
     };

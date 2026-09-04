@@ -209,4 +209,89 @@ function vmStatesSource(states, registers = "r1, r2, r3, r4, r5, r6") {
         "print(\"done\", v1)\n");
 }
 
+
+{
+    // Several proven body->check edges may all be source continue sites; no
+    // unique physical latch is required. The only continue omitted is the
+    // redundant lexical tail/fallthrough of the reconstructed loop body.
+    const source = vmStatesSource({
+        1: ["state = 0", "r1 = state", "state = 0", "r4 = state", "r2 = args", "state = 2"],
+        2: ["ReturnVal = 10", "state = r1 < ReturnVal", "state = state and 3 or 4"],
+        3: ["ReturnVal = 1", "state = r1 + ReturnVal", "r1 = state", "r3 = 2", "ReturnVal = r1 == r3", "state = ReturnVal and 5 or 6"],
+        4: ["r1 = nil", "r4 = nil", "ReturnVal = {}", "state = nil"],
+        5: ["r3 = 20", "ReturnVal = r4 + r3", "r4 = ReturnVal", "state = 2"],
+        6: ["r3 = 4", "ReturnVal = r1 == r3", "state = ReturnVal and 7 or 8"],
+        7: ["r3 = 40", "ReturnVal = r4 + r3", "r4 = ReturnVal", "state = 2"],
+        8: ["r3 = 6", "ReturnVal = r1 == r3", "state = ReturnVal and 9 or 10"],
+        9: ["r3 = 60", "ReturnVal = r4 + r3", "r4 = ReturnVal", "state = 2"],
+        10: ["ReturnVal = r4 + r1", "r4 = ReturnVal", "state = 2"],
+    });
+    const result = solveBetaControlFlow(source, parse(source));
+    assert.strictEqual(result.applied, true);
+    assert.strictEqual(result.mode, "fresh-while");
+    assert.strictEqual((result.source.match(/\bcontinue\b/g) || []).length, 3);
+    assert.match(result.source, /if \(v1 == 2\) then[\s\S]*continue/);
+    assert.match(result.source, /if \(v1 == 4\) then[\s\S]*continue/);
+    assert.match(result.source, /if \(v1 == 6\) then[\s\S]*continue/);
+    assert.doesNotMatch(result.source, /continue\nend\n$/);
+}
+
+{
+    // A loop body may terminate the whole VM invocation. The off-cycle region
+    // is accepted only when it closes in a compiler ReturnVal pack + stop.
+    const source = vmStatesSource({
+        1: ["state = 0", "r1 = state", "r3 = args", "state = 2"],
+        2: ["ReturnVal = 5", "state = r1 < ReturnVal", "state = state and 3 or 4"],
+        3: ["ReturnVal = 1", "state = r1 + ReturnVal", "r1 = state", "r2 = 3", "ReturnVal = r1 == r2", "state = ReturnVal and 5 or 6"],
+        4: ['ReturnVal = "done"', "ReturnVal = { r1, ReturnVal }", "state = nil"],
+        5: ['ReturnVal = "hit"', "ReturnVal = { r1, ReturnVal }", "state = nil"],
+        6: ["state = 2"],
+    });
+    const result = solveBetaControlFlow(source, parse(source));
+    assert.strictEqual(result.applied, true);
+    assert.strictEqual(result.mode, "fresh-while");
+    assert.strictEqual(result.source,
+        "local v1 = 0\n" +
+        "while (v1 < 5) do\n" +
+        "    v1 = (v1 + 1)\n" +
+        "    if (v1 == 3) then\n" +
+        '        return v1, "hit"\n' +
+        "    end\n" +
+        "end\n" +
+        'return v1, "done"\n');
+}
+
+{
+    // Child closure entries may contain a recovered while. Synthetic body-join
+    // IDs must not leak into reachable-state accounting or closure consumption.
+    const source = vmStatesSource({
+        1: [
+            "state = createClosure4(2, {})",
+            "r3 = state",
+            'ReturnVal = "print"',
+            "state = _env[ReturnVal]",
+            "r2 = { r3() }",
+            "r3 = nil",
+            "ReturnVal = state(unpack(r2))",
+            "r1 = args",
+            "ReturnVal = {}",
+            "state = nil",
+        ],
+        2: ["state = 0", "r1 = state", "state = 3"],
+        3: ["ReturnVal = 3", "state = r1 < ReturnVal", "state = state and 4 or 5"],
+        4: ["ReturnVal = 1", "state = r1 + ReturnVal", "r1 = state", "r3 = 2", "ReturnVal = r1 == r3", "state = ReturnVal and 6 or 7"],
+        5: ['ReturnVal = "done"', "ReturnVal = { r1, ReturnVal }", "state = nil"],
+        6: ['ReturnVal = "hit"', "ReturnVal = { r1, ReturnVal }", "state = nil"],
+        7: ["state = 3"],
+    });
+    const result = solveBetaControlFlow(source, parse(source));
+    assert.strictEqual(result.applied, true);
+    assert.strictEqual(result.mode, "fresh-closure-entry");
+    assert.strictEqual(result.stateCount, 7);
+    assert.match(result.source, /local v1 = function\(\)/);
+    assert.match(result.source, /while \(v1 < 3\) do/);
+    assert.match(result.source, /return v1, "hit"/);
+    assert.match(result.source, /print\(v1\(\)\)/);
+}
+
 console.log("beta control-flow while tests passed");

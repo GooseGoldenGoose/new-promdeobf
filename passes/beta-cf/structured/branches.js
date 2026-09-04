@@ -205,7 +205,13 @@ function mergeCandidates(ctx, candidates, joinId) {
         if (branchCarriesLogicalResult || branchTransition?.kind !== "branch" ||
             branchTransition.onTrue === joinId || branchTransition.onFalse !== joinId ||
             falseEffects.length !== 0) return null;
-        const body = trueEffects.map(line => indentConditionalEffect(ctx, line)).join("\n");
+        // All proven body->check edges are represented as continue during CFG
+        // collapse. A direct continue at the lexical end of the reconstructed
+        // body is redundant fallthrough and can be omitted without affecting
+        // any branch-local continue.
+        const loopBodyEffects = [...trueEffects];
+        if (loopBodyEffects[loopBodyEffects.length - 1] === "continue") loopBodyEffects.pop();
+        const body = loopBodyEffects.map(line => indentConditionalEffect(ctx, line)).join("\n");
         const structured = `while ${cond} do\n${body ? body + "\n" : ""}end`;
         if (prefix === 0) {
             if (!recordRootConditional(ctx, al.branchId, joinId)) return null;
