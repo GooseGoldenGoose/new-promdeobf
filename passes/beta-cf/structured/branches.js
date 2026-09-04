@@ -193,6 +193,33 @@ function mergeCandidates(ctx, candidates, joinId) {
         }
         else return null;
     }
+
+    const loopBranchIds = ctx.options?.loopBranchIds;
+    const isWhileBranch = loopBranchIds instanceof Set && loopBranchIds.has(al.branchId);
+    if (isWhileBranch) {
+        // Compiler WhileStatement lowering is pre-test and always routes true
+        // into the body and false directly to the continuation. The loop
+        // recognizer breaks only the proven body latch before this merge, so
+        // any other polarity/effect shape must fail closed rather than become
+        // a guessed source while.
+        if (branchCarriesLogicalResult || branchTransition?.kind !== "branch" ||
+            branchTransition.onTrue === joinId || branchTransition.onFalse !== joinId ||
+            falseEffects.length !== 0) return null;
+        const body = trueEffects.map(line => indentConditionalEffect(ctx, line)).join("\n");
+        const structured = `while ${cond} do\n${body ? body + "\n" : ""}end`;
+        if (prefix === 0) {
+            if (!recordRootConditional(ctx, al.branchId, joinId)) return null;
+            ctx.out.push(structured);
+        } else {
+            return {
+                env,
+                markers: am.slice(0, prefix),
+                effects: [...te.slice(0, effectPrefix), structured],
+            };
+        }
+        return { env, markers: am.slice(0, prefix), effects: te.slice(0, effectPrefix) };
+    }
+
     if (hasConditionalEffects || preserveEmptyStatementBranch) {
         let structured;
         if (explicitTrueArm && explicitFalseArm) {

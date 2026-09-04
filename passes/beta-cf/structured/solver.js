@@ -329,6 +329,14 @@ function matchMultiStateLogicalLocals(source, stateWhile, stateName, returnName,
                     for (const argument of rhs.arguments || []) {
                         if (!isIdentifier(argument) || !ctx.cleanupRegs.has(argument.name) || ctx.locals.has(argument.name) || ctx.earlyCleanupPending.has(argument.name)) continue;
                         if (valueMayBeReadAfter(ctx, id, i, argument.name)) continue;
+                        // While preheaders can reuse the eventual source-local
+                        // physical register as a call-argument TEMP before the
+                        // real source handoff. Suppress only that loop-scoped
+                        // promotion when a later non-nil write starts the next
+                        // epoch; ordinary structured recovery keeps its legacy
+                        // promotion behavior unchanged.
+                        if (ctx.options?.suppressFutureWriteCallArgumentPromotion &&
+                            hasFutureNonNilWrite(ctx, id, i, argument.name)) continue;
                         const argumentValue = env.get(argument.name);
                         if (typeof argumentValue !== "string") return null;
                         const display = allocateValueDisplay(ctx);
@@ -380,7 +388,13 @@ function matchMultiStateLogicalLocals(source, stateWhile, stateName, returnName,
             // persistent source lifetime. Only a marker-free definition may
             // start the persistent binding; stable branch-local epochs retain
             // their separate path-scoped proof.
-            const startsPersistentStorage = ctx.persistentStorageRegs.has(name) && markers.length === 0;
+            const forcedPersistentStarts = ctx.options?.forcedPersistentStorageStarts;
+            const forcedPersistentRegs = ctx.options?.forcedPersistentStorageRegs;
+            const provenLoopPreheaderStart = forcedPersistentStarts instanceof Map &&
+                forcedPersistentStarts.get(name) instanceof Set && forcedPersistentStarts.get(name).has(id);
+            const isForcedLoopStorage = forcedPersistentRegs instanceof Set && forcedPersistentRegs.has(name);
+            const startsPersistentStorage = ctx.persistentStorageRegs.has(name) &&
+                (provenLoopPreheaderStart || (!isForcedLoopStorage && markers.length === 0));
             if ((startsPersistentStorage || stableStorageEpoch) && !hasActiveLocal(ctx, name, env)) {
                 const display = allocateValueDisplay(ctx);
                 ctx.accumulatorRegs.delete(name);
@@ -429,6 +443,13 @@ function matchMultiStateLogicalLocals(source, stateWhile, stateName, returnName,
             if (structuredPackId(ctx, value) || structuredPackSlot(ctx, value)) return null;
         }
 
+        const loopControlMap = ctx.options?.loopControlByBlockId;
+        const loopControl = loopControlMap instanceof Map ? loopControlMap.get(id) : null;
+        if (loopControl !== null && loopControl !== undefined) {
+            if ((loopControl !== "break" && loopControl !== "continue") || block.transition.kind !== "jump") return null;
+            effects = [...effects, loopControl];
+        }
+
         ctx.processed.add(id);
         const tr = block.transition;
         const sends = [];
@@ -475,7 +496,7 @@ function matchMultiStateLogicalLocals(source, stateWhile, stateName, returnName,
     }
     if (ctx.processed.size !== ctx.reachable.size || ctx.locals.size !== 0 || ctx.out.length === 0) return null;
     if (ctx.allowConditionalIf && ctx.conditionalIfCount < 1) {
-        if (!ctx.out.some(line => /^if\s/.test(line))) return null;
+        if (!ctx.out.some(line => /^if\s/.test(line) || /^while\s/.test(line))) return null;
         ctx.conditionalIfCount = 1;
     }
     let outputSource = renderProgram(ctx.out);

@@ -699,7 +699,7 @@ Compiler pattern:
 4. body executes
 5. body jumps back to check
 
-General `while` collapse is currently not implemented in fresh CF.
+Fresh CF now recovers proven Prometheus pre-test `while` regions structurally in `passes/beta-cf/control/while.js`. The matcher discovers natural loops from CFG back-edges whose target dominates the source, proves a unique preheader and compiler while decision polarity (true -> body, false -> final), reduces compiler TESTSET/short-circuit condition regions through the existing logical reducer, and collapses nested loops inner-first. It supports loop-carried source locals, supported nested `if/elseif/else`, nested `while`, and compiler `break`/`continue` edges. Loop-local storage that starts inside an outer loop is tied to its exact proven compiler preheader so later physical-register reuse cannot invent another source local. Numeric/generic-for signatures are explicitly rejected by the while matcher. Ambiguous natural loops, overlapping non-nested loops, unproven extra exits/back-edges, and unsupported body semantics remain fail-closed.
 
 ### 7.16 `repeat ... until`
 
@@ -744,7 +744,7 @@ Then:
 - `break` -> loop final block
 - `continue` -> loop start/check block
 
-Any future recovery must preserve these scope cleanups semantically even if compiler cleanup statements disappear from final source.
+Fresh-CF while recovery now recognizes these edges only inside an already-proven compiler while region. A body path that reaches the proven loop final becomes source `break`; an additional proven body back-edge to the loop check becomes source `continue`. The normal latch is chosen structurally and ambiguous equal candidates fail closed. Compiler cleanup statements disappear only after the associated source lifetime is proven. Equivalent source layout may use an `else` around the non-terminating sibling path when VM control flow no longer proves whether that code was lexically after the original `if`.
 
 ### Root captured-local reads during pending multi-return packs
 
@@ -1207,6 +1207,7 @@ Public entry and shared work:
 - `passes/beta-cf/direct-calls.js`: strict direct global/member call recognition and its terminal bookkeeping.
 - `passes/beta-cf/render.js`: final whole-program and recovered-function text rendering shared by both solver paths.
 - `passes/beta-cf/diagnostics.js`: stable fail-closed results and unsupported-state diagnostic messages.
+- `passes/beta-cf/control/while.js`: Prometheus while natural-loop discovery, compiler-while signature proof, inner-first loop collapse, break/continue edge classification, loop-carried storage-start proof, and anti-matching for numeric/generic for shapes.
 
 `StateGraph` contract:
 
@@ -1256,7 +1257,8 @@ Fast routing for future changes:
 - multi-state locals/calls/tables/packs/conditionals/returns -> the matching `passes/beta-cf/structured/` module
 - final program/function layout -> `passes/beta-cf/render.js`
 - unsupported/failure reporting -> `passes/beta-cf/diagnostics.js`
-- focused behavior regressions -> `tools/test-beta-control-flow-fresh.js` and `tools/test-beta-control-flow-if.js`; register, binding, upvalue, version, graph, and semantic-name regressions remain in their matching `tools/test-*.js` suites
+- proven Prometheus while / nested while / loop break+continue -> `passes/beta-cf/control/while.js` plus shared structured lifetime/branch rendering
+- focused behavior regressions -> `tools/test-beta-control-flow-fresh.js`, `tools/test-beta-control-flow-if.js`, and `tools/test-beta-control-flow-while.js`; register, binding, upvalue, version, graph, and semantic-name regressions remain in their matching `tools/test-*.js` suites
 
 Important isolation rules:
 - logical result-carrier diamonds are reduced in `logical.js`; statement-level branch recovery does not classify them as empty source branches
@@ -1265,7 +1267,7 @@ Important isolation rules:
 - closure recovery calls the same entry-parametric structured solver through a narrow callback contract, independent of whether the parent construct is a conditional or a future loop
 - a small amount of coupling remains intentionally in each solver's statement loop because evaluation order is decided at the exact compiler-statement position; cross-cutting proof and mutable state still live behind explicit context/module boundaries
 
-Future loops must be added as separate modules such as `control/while.js`, `control/repeat.js`, `control/numeric-for.js`, `control/generic-for.js`, and `control/loop-control.js`. They should consume `StateGraph`, lifetime/binding queries, and expression rendering. They must not depend on private `elseif`, structured-pack, upvalue-transport, or closure-transaction internals. General loop and loop-control recovery remains intentionally unsupported.
+Loop recovery remains modular. `control/while.js` now owns proven Prometheus while recovery and consumes `StateGraph` plus narrow structured-solver options for lifetime/control effects. Future `repeat`, numeric-for, and generic-for support must remain separate modules such as `control/repeat.js`, `control/numeric-for.js`, and `control/generic-for.js`. They must not duplicate private `elseif`, structured-pack, upvalue-transport, or closure-transaction internals. Unsupported/ambiguous loop shapes continue to fail closed.
 
 Before adding any new recovery feature, run syntax checks for every changed/new JavaScript file, all twelve tracked Fresh-CF/if/register/binding/upvalue/version/graph/semantic suites, relevant real Medium runtime-parity fixtures, randomized layout stress for the touched shape, and `git diff --check`.
 
@@ -1695,8 +1697,6 @@ The following exported helpers are currently intentionally unsupported/stubs:
 - `lowerTerminalReturn`
 - `collapseCompilerNumericForLoops`
 - `collapseCompilerGenericForLoops`
-- `collapseCompilerWhileLoops`
-- `matchCompilerWhileConditionRegion`
 - `collapseCompilerRepeatLoops`
 - `matchCompilerRepeatConditionRegion`
 - `removeDuplicatedRepeatConditionRegions`
@@ -1706,12 +1706,12 @@ The following exported helpers are currently intentionally unsupported/stubs:
 
 Therefore do NOT claim full support for:
 - arbitrary `if` regions beyond proven recursive same-join `elseif` chains and distinct two-way joins; branch-local/persistent declarations and assignments are supported only for cleanup-proven storage epochs/merges, while ambiguous lifetime, escaping, or path-dependent storage remains fail-closed
-- general `while`
+- arbitrary/unproven `while` CFGs outside the compiler natural-loop/signature proof
 - general `repeat`
 - numeric `for`
 - generic `for`
-- arbitrary nested control flow
-- arbitrary break/continue structuring
+- arbitrary nested control flow outside the proven conditional/while composition
+- break/continue outside a proven compiler while region or with ambiguous loop-control edges
 
 Limited compiler short-circuit multi-state logic now composes with the proven `if` / `if/else` / same-join `elseif` / recursive nested-if shapes through the closed logical-region reducer documented above. This is still template-bounded structural recovery, not arbitrary CFG structuring.
 
@@ -2016,6 +2016,7 @@ Current performance baseline after the 2026-09-02 pipeline optimization:
 - conditional recovery supports direct/call conditions, cleanup-backed local conditions, top-level and nested same-join `elseif` chains, and recursively nested distinct-join `if` / `if-else`. Nested `elseif` is recovered by stripping a proven common outer marker prefix and solving the remaining N-way chain structurally, so the rule is independent of nesting depth and outer branch polarity. The previously failing 14-state real fixture containing `else { if N1 ... elseif N2 ... elseif N3 ... else { if DEEP ... } }` now recovers exactly and has source/obfuscated/recovered runtime parity. Focused tests cover nested chains on both outer false and true branches, recursive composition with a deeper inner `if/else`, and top-level/nested chains without a final `else`. Real Medium validation also covers a statement before the nested chain, proving common branch-effect prefixes are preserved. The 14-state nested-elseif fixture, 18-state deep two-way fixture, 9-state prefix fixture, and 8-state no-final-else fixture all passed 5/5 fresh randomized Medium recompiles with exact runtime parity. Existing `or`/TESTSET fixtures remain in `fresh-multistate-logical`.
 - conditional storage recovery now distinguishes source lifetime from reusable physical registers. Root persistent scalar/table storage requires converged definitions, a post-join read, and eventual nil cleanup on every path. Branch-local scalar/table storage requires a stable cleanup-backed epoch with no later non-nil write and cleanup on every continuation path; its binding name lives in the path environment so sibling branches may reuse the same VM register without sharing source scope. Proven table field/index writes stay in the branch, and dead path-dependent compiler TEMPs are dropped at joins only when no later read exists. Focused regressions cover persistent scalar assignment, persistent table mutation, sibling-register reuse, and branch-local table identity. The original 28-state complex variable/table/nested-conditional fixture passed 10/10 fresh randomized Medium recompiles with exact source/obfuscated/recovered runtime parity after this fix.
 - sequential root conditional recovery now proves source ordering across independent top-level `if`/`elseif` regions. Every branch marker records its originating normalized branch state; after one root region merges, the next root is accepted only if its first branch state is the same join or is reached through a chain of blocks with exactly one successor each. Any intervening branch makes the sequence fail closed. A focused normalized regression covers two root `if/else` regions with a straight-line `print` between them. The 65-state extreme nested/storage fixture plus a second top-level `if/elseif/else` passed 10/10 fresh randomized Medium recompiles with exact runtime parity, and a separate three-root fixture with scalar/table mutations between regions also passed exact parity.
+- Fresh-CF Prometheus `while` recovery is now implemented structurally in `passes/beta-cf/control/while.js`. It handles simple/call/logical conditions (including the 18-state chained and/or probe), loop-carried locals, supported nested if/else, nested while, and compiler break/continue. The exact user six-condition probe set all routes to `fresh-while`. Five real Medium fixtures (counter loop, loop local, nested if/else, break, nested while) passed exact source/obfuscated/recovered runtime parity in one final batch; Luau `continue` was validated structurally because LuaJIT is not a reliable runtime target for that keyword. Randomized Medium stress then passed 25/25 fresh layouts for each of those five executable fixtures with exact runtime parity plus 25/25 structural layouts for `continue`, 150/150 total. Numeric-for and generic-for Medium fixtures remain unsupported and were explicitly verified not to be misclassified as while. The focused `tools/test-beta-control-flow-while.js` suite tracks canonical while, logical conditions, loop-carried storage, nested conditionals, break, continue, nested while, and a malformed break-like fail-closed shape. All twelve established Fresh-CF/if/register/binding/upvalue/version/graph/semantic suites plus the new while suite pass after the change.
 - mixed logical/conditional recovery now reduces only closed compiler logical-value subgraphs before source conditional structuring. The discriminator is structural (result-carrier copy + lazy-path/join proof + closed-region proof), not register/state IDs or source constants. This fixes the previous state-15 failure where a completed short-circuit value was consumed as an outer if condition. Closure roots are analyzed only over root-reachable states; child closure entries cannot contaminate root register lifetimes. A focused 7-state normalized regression is tracked in `tools/test-beta-control-flow-if.js`.
 - final validation for this mixed-CFG change: all eight tracked Fresh-CF/if/register/binding suites pass. Five real Medium fixtures passed 100/100 randomized layouts each with repeated exact runtime parity: the new 7-state closure+logical+if fixture, the full 55-state mixed TESTSET/and/or+nested-if fixture, the existing 65-state if/elseif/else fixture, the 28-state conditional-storage fixture, and the 19-state supported TESTSET fixture. Total: 500/500 fresh randomized layouts. No fixture-specific state/register IDs are used by the reducer.
 
@@ -2025,12 +2026,12 @@ There is no known blocker in the currently supported straight-line/local/call/ta
 
 Do not claim full source reconstruction for:
 - arbitrary `if` regions beyond proven recursive same-join `elseif` chains, distinct two-way joins, and linearly sequenced root regions; branch-local/persistent declarations and assignments are supported only for cleanup-proven storage epochs/merges, while ambiguous lifetime, escaping, or path-dependent storage remains fail-closed
-- general `while`
+- arbitrary/unproven `while` CFGs outside the compiler natural-loop/signature proof
 - general `repeat`
 - numeric `for`
 - generic `for`
-- arbitrary nested CFG structuring
-- arbitrary `break` / `continue` reconstruction
+- arbitrary nested CFG structuring outside the proven conditional/while composition
+- `break` / `continue` outside a proven compiler while region or with ambiguous loop-control edges
 
 Those remain separate future features. Limited compiler-generated short-circuit logical CFGs now compose with the proven simple `if` / `if/else` / same-join `elseif` / recursive nested-if / linearly sequenced root-conditional shapes through closed logical-subgraph reduction; this must not be generalized into arbitrary CFG guessing.
 
@@ -2122,7 +2123,7 @@ Validation results on 2026-09-04:
 - captured-upvalue and recursive-closure stress after modularization passes 50/50 and 100/100 respectively
 - there is no known blocker in the currently supported straight-line/local/call/table/closure/upvalue/multi-return/vararg/conditional/early-return feature set represented by the established regressions
 
-Early-return recovery still does NOT imply loop-control recovery. General `while`, `repeat`, numeric/generic `for`, `break`, and `continue` remain separate fail-closed features.
+Early-return recovery remains separate from loop proof. Proven Prometheus `while` regions now have their own structural recovery, including nested while and compiler break/continue edges; `repeat`, numeric/generic `for`, and ambiguous loop/control-flow shapes remain separate fail-closed features.
 
 ### What a new chat should do next
 

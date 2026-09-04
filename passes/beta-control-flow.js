@@ -5,6 +5,7 @@ const { solveBetaControlFlow } = require("./beta-cf/solve");
 const { matchDirectGlobalCallLeaf } = require("./beta-cf/direct-calls");
 const { matchLocalRegisterProgram } = require("./beta-cf/linear/solver");
 const { normalizeRegisterOverflowGraph } = require("./beta-cf/normalize");
+const { collapseCompilerWhileLoops, matchCompilerWhileConditionRegion } = require("./beta-cf/control/while");
 const { unsupported } = require("./beta-cf/diagnostics");
 
 module.exports = {
@@ -16,8 +17,8 @@ module.exports = {
     lowerTerminalReturn: unsupported("lowerTerminalReturn"),
     collapseCompilerNumericForLoops: unsupported("collapseCompilerNumericForLoops"),
     collapseCompilerGenericForLoops: unsupported("collapseCompilerGenericForLoops"),
-    collapseCompilerWhileLoops: unsupported("collapseCompilerWhileLoops"),
-    matchCompilerWhileConditionRegion: unsupported("matchCompilerWhileConditionRegion"),
+    collapseCompilerWhileLoops,
+    matchCompilerWhileConditionRegion,
     collapseCompilerRepeatLoops: unsupported("collapseCompilerRepeatLoops"),
     matchCompilerRepeatConditionRegion: unsupported("matchCompilerRepeatConditionRegion"),
     removeDuplicatedRepeatConditionRegions: unsupported("removeDuplicatedRepeatConditionRegions"),

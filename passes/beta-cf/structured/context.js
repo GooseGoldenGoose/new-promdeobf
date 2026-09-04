@@ -11,7 +11,9 @@ function createStructuredContext(source, stateWhile, stateName, returnName, opti
     const entryId = Number.isInteger(options.entryId) ? options.entryId : 1;
     const captureNames = options.captureNames instanceof Map ? options.captureNames : null;
     const renderAsFunction = options.renderAsFunction === true;
-    const originalLeaves = extractNormalizedStateLeaves(stateWhile, stateName);
+    const originalLeaves = options.normalizedLeaves instanceof Map
+        ? new Map([...options.normalizedLeaves].map(([id, body]) => [id, [...body]]))
+        : extractNormalizedStateLeaves(stateWhile, stateName);
     if (!originalLeaves || originalLeaves.size < 2 || !originalLeaves.has(entryId)) return null;
     const logicalReduction = allowConditionalIf
         ? reduceCompilerLogicalStateGraph(originalLeaves, entryId, stateName, returnName)
@@ -88,10 +90,18 @@ function createStructuredContext(source, stateWhile, stateName, returnName, opti
     // append a duplicate declaration or reorder it after the call.
     const earlyCleanupPending = new Set();
     // In conditional recovery, some cleanup-backed registers are source
-    // storage rather than compiler value accumulators. They are proven below
-    // only when multiple definitions converge and the merged storage is read
-    // as an ordinary value after the join.
+    // storage rather than compiler value accumulators. The ordinary proof
+    // discovers them from converged definitions/read-after-join. Loop recovery
+    // can additionally prove a binding from the original back-edge before the
+    // graph is made acyclic; only cleanup-backed accumulator epochs are accepted.
     const persistentStorageRegs = new Set();
+    const forcedPersistentStorageRegs = options.forcedPersistentStorageRegs instanceof Set
+        ? options.forcedPersistentStorageRegs : null;
+    if (forcedPersistentStorageRegs) {
+        for (const name of forcedPersistentStorageRegs) {
+            if (cleanupRegs.has(name) && accumulatorRegs.has(name)) persistentStorageRegs.add(name);
+        }
+    }
     const out = [];
     const terminalCandidates = [];
     const parameterNames = [];
