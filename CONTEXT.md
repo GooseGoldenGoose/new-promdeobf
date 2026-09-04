@@ -1987,6 +1987,8 @@ Validation results on 2026-09-04:
 - the broader early-return matrix passed 210/210 exact runtime-parity runs (10 randomized Medium layouts x 21 fixtures)
 - no call duplication, short-circuit order change, table identity break, or return-pack expansion mismatch was observed
 - the exact user sample with `math.random(1,2)`, a second `thing()` early-return guard, `print(2)`, and final `return 4` recovers structurally from real Medium output; runtime parity is not a valid gate for that literal sample because `thing` is undefined unless the test defines it (and the random guard is nondeterministic across separate runs)
+- a 33-state deeply nested early-return fixture with nesting depth 5, nested `if/elseif/else`, logical `and/or`, side effects, and multiple returns passed exact source/obfuscated/recovered runtime parity on the first real Medium run
+- a harder 103-state stress fixture exposed a separate closure/upvalue boundary, not an early-return CFG failure: its local `check` closure captures table `t` and mutates `t.count`, and the structured multi-state path currently fails closed on that mutating captured-table closure. Removing only that capture/mutation while keeping the deep early returns, TESTSET logic, multi-return helper, and nested `transform` closure produced a 73-state fixture that passed exact runtime parity; a 71-state variant without captured closures also passed. Treat mutating captured-upvalue recovery inside structured multi-state conditional roots as a separate future feature; do not weaken early-return/TESTSET proof to accept it.
 
 Early-return recovery still does NOT imply loop-control recovery. General `while`, `repeat`, numeric/generic `for`, `break`, and `continue` remain separate fail-closed features.
 
