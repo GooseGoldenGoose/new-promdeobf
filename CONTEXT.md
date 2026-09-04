@@ -2003,20 +2003,33 @@ Validation results on 2026-09-04:
 - recursive nested multi-state closure recovery is now fixed: the former 7-state forwarded-capture minimal and 8-state local-capture-only minimal both pass exact runtime parity, the previous 5-state single-state path remains passing, a 12-state depth-3 fixture with child + grandchild `if/else` CFGs and shared captured-table mutation passes, and a nested early-return child fixture passes
 - randomized recursive-closure stress passed 100/100 exact-parity runs (25 randomized Medium layouts x 4 fixtures: forwarded captures, local-only captures, depth-3 recursion, nested early return)
 - a separate two-parameter nested multi-state child probe also passes exact runtime parity, proving child parameter recovery is indexed structurally from `args[N]` rather than hardcoded to the first argument
-- the original 151-state mega fixture still does not fully recover because it also contains independent unsupported root shapes. A separate 7-state root-only probe reproduces branch-local multi-return storage feeding a conditional (`local a,b,c = call(); if c then ...`), and a nested vararg child probe still fails on compiler vararg-pack transport inside a multi-state child. Keep those as separate future features; do not weaken recursive closure proof to accept them.
+- branch-local multi-return storage feeding later conditional CFG is now implemented in the current working tree: a real 7-state Medium fixture with sibling captured closures recovers `local v4, v5, v6 = mutate(2)`, uses the third result in a following `if`, preserves all returned values, and passes exact source/obfuscated/recovered runtime parity
+- nested multi-state vararg-pack transport is now implemented in the current working tree: both the former 7-state simple nested vararg child and the 9-state nested logical/TESTSET vararg child recover `function(...)`, `select(1, ...)`, branch CFG, and `return value, ...` with exact runtime parity
+- the structured multi-return implementation is provenance/epoch based, not fixture-specific: it tracks compiler call-pack identity, expected extracted slots, physical-register transport copies through `state`/`ReturnVal`, one source owner per slot, mixed cleanup-or-terminal lifetime proof, source-local declaration emission once the required slot owners are proven, and removal of consumed compiler pack-table tokens
+- the structured vararg implementation recognizes the compiler-created persistent vararg pack `{ select(1, unpack(args)) }` and treats it as one semantic `...` value across child states; terminal `unpack(varargPack)` reconstructs `...` and the recovered child signature adds `...` only when that proof is used
+- while testing the 151-state mega, two extra generic renderer issues were also fixed in the current working tree: proven recursive logical ASTs may render nested index bases such as a captured `shared.value` read only inside already-proven recursive expressions, and all structured identifier resolution is guarded so internal pending-pack markers cannot leak into generated Lua text
+- the exact focused Fresh-CF outputs are currently in `output/_tmp_multi_shared_sibling_closures.beta.cf.lua`, `output/_tmp_recursive_multistate_varargs_simple.beta.cf.lua`, and `output/_tmp_recursive_multistate_varargs.beta.cf.lua`; all three corresponding real Medium runs passed exact runtime parity
+- IMPORTANT ACTIVE WIP: these new multi-return/vararg/renderer changes are currently UNCOMMITTED in `passes/beta-control-flow.js`; the last committed solver implementation is `795f1b5 Recover recursive structured closures` (a later context-only handoff commit may be HEAD). Do not discard or overwrite the tracked solver modification when starting a new chat
+- no permanent tracked regression has been added for these two new features yet, and the full core/randomized regression gate has NOT been run after the latest WIP changes; this must happen before committing the solver
+- the original 151-state mega fixture `_tmp_early_return_nested_complex4.lua` still fails after the latest marker-guard fix with the public fallback error `unsupported multi-state control flow (151 normalized states)`; focused multi-return and vararg fixtures still pass, so the mega now contains at least one additional independent blocker. Next chat must instrument/trace the first actual structural failure rather than weakening the proven pack/vararg rules or assuming those focused features regressed.
 
 Early-return recovery still does NOT imply loop-control recovery. General `while`, `repeat`, numeric/generic `for`, `break`, and `continue` remain separate fail-closed features.
 
 ### What a new chat should do next
 
-1. Read this entire `CONTEXT.md`.
-2. Run `git status --short --branch` and `git log -5 --oneline`.
-3. Inspect the actual current implementation related to the user's next request.
-4. Treat current code + tests + this file as authority; do not rely on old chat memory.
-5. Keep scope locked to the user's exact request.
-6. Use compiler source and tiny real Medium fixtures when a VM pattern is uncertain.
-7. Preserve source statements; do not optimize them away.
-8. After a real change, update this context, run focused + core tests, `git diff --check`, focused commit, and push `origin/main`.
+1. Read this entire `CONTEXT.md` before editing anything.
+2. Run `git status --short --branch` and `git log -5 --oneline`. Expect `passes/beta-control-flow.js` to be modified and many `_tmp_*` files untracked. The solver modification is intentional active WIP; do NOT restore/reset it.
+3. First re-run the two focused proofs to ensure the WIP survived handoff:
+   - `node tools/fast-obf-deobf.js _tmp_multi_shared_sibling_closures.lua --preset Medium --runtime`
+   - `node tools/fast-obf-deobf.js _tmp_recursive_multistate_varargs.lua --preset Medium --runtime`
+   Both should recover and pass exact runtime parity.
+4. Re-run `node tools/fast-obf-deobf.js _tmp_early_return_nested_complex4.lua --preset Medium --runtime`. It currently still fails. Instrument the current structured solver to find the FIRST real internal failing state/statement; the public `state 1` closure diagnostic is only a fallback and is not the root cause.
+5. Keep the new pack/vararg rules structural and dynamic: no hardcoded state IDs, physical register IDs, source literals, globals, or fixture constants. Preserve exact evaluation order, call count, short-circuit behavior, multiple-return expansion, table/upvalue identity, and register epochs.
+6. Once the 151-state mega passes, add permanent tracked Fresh-CF regressions for at least: branch-local multi-return feeding a conditional; nested multi-state vararg transport; and any extra mega blocker fixed during continuation.
+7. Run the full current Fresh-CF/register/binding/upvalue/version/graph/semantic suites plus randomized Medium stress for the new features. Also rerun the previous 103-state captured-upvalue monster and recursive-closure stress shapes.
+8. Run `git diff --check` and review the exact tracked diff. Stage only intentional tracked files; never stage/delete unrelated `_tmp_*` probes.
+9. Update this context to remove WIP/stale unsupported wording, then make a focused commit and push `origin/main`.
+10. Treat current code + tests + this file as authority; use Prometheus compiler source and tiny real Medium fixtures whenever a lowering pattern is uncertain. Preserve source statements; Fresh CF is recovery, not a general optimizer.
 ## 32. Context Maintenance Rule
 
 This file should contain current durable truth, not a chronological diary.
