@@ -463,6 +463,36 @@ function sequentialLogicalCallStates(count) {
 
 {
     const source = vmStatesSource({
+        1: ['ReturnVal = "count"', 'r1 = 0', 'state = { [ReturnVal] = r1 }', 'r1 = allocUpvalue()', 'upvalueValues[r1] = state', 'state = createClosure3(6, { r1 })', 'r5 = state', 'r4 = "_VERSION"', 'r2 = _env[r4]', 'state = r2 and 2 or 3', 'r3 = args', 'ReturnVal = r2'],
+        2: ['r4 = true', 'r2 = r5(r4)', 'ReturnVal = r2', 'state = 3'],
+        3: ['state = ReturnVal and 4 or 5'],
+        4: ['ReturnVal = upvalueValues[r1]', 'r2 = "count"', 'state = ReturnVal[r2]', 'ReturnVal = { state }', 'state = nil'],
+        5: ['ReturnVal = upvalueValues[r1]', 'r2 = "count"', 'state = ReturnVal[r2]', 'ReturnVal = { state }', 'state = nil'],
+        6: ['r3 = args[1]', 'state = upvalueValues[upvalues[1]]', 'r2 = upvalueValues[upvalues[1]]', 'r4 = "count"', 'r5 = r2[r4]', 'r2 = 1', 'r1 = r5 + r2', 'ReturnVal = "count"', 'state[ReturnVal] = r1', 'ReturnVal = { r3 }', 'state = nil'],
+    });
+    const result = solveBetaControlFlow(source, parse(source));
+    assert.strictEqual(result.applied, true, "structured captured-table mutation was not recovered");
+    assert.strictEqual(result.mode, "fresh-closure-entry");
+    assert.strictEqual(result.source, 'local v1 = { count = 0 }\nif (_VERSION and (function(v2)\n    v1.count = (v1.count + 1)\n    return v2\nend)(true)) then\n    return v1.count\nend\nreturn v1.count\n');
+}
+
+{
+    const source = vmStatesSource({
+        1: ['ReturnVal = "x"', 'r1 = 0', 'state = { [ReturnVal] = r1 }', 'r1 = allocUpvalue()', 'upvalueValues[r1] = state', 'r2 = "_VERSION"', 'r4 = _env[r2]', 'state = createClosure5(6, { r1 })', 'r5 = state', 'state = r4 and 2 or 3', 'r3 = args', 'ReturnVal = r4'],
+        2: ['r4 = r5()', 'ReturnVal = r4', 'state = 3'],
+        3: ['state = ReturnVal and 4 or 5'],
+        4: ['ReturnVal = upvalueValues[r1]', 'r4 = "x"', 'state = ReturnVal[r4]', 'ReturnVal = { state }', 'state = nil'],
+        5: ['ReturnVal = upvalueValues[r1]', 'r4 = "x"', 'state = ReturnVal[r4]', 'ReturnVal = { state }', 'state = nil'],
+        6: ['ReturnVal = "x"', 'r3 = 2', 'state = { [ReturnVal] = r3 }', 'upvalueValues[upvalues[1]] = state', 'ReturnVal = true', 'ReturnVal = { ReturnVal }', 'state = nil'],
+    });
+    const result = solveBetaControlFlow(source, parse(source));
+    assert.strictEqual(result.applied, true, "structured captured rebind was not recovered");
+    assert.strictEqual(result.mode, "fresh-closure-entry");
+    assert.strictEqual(result.source, 'local v1 = { x = 0 }\nif (_VERSION and (function()\n    v1 = { x = 2 }\n    return true\nend)()) then\n    return v1.x\nend\nreturn v1.x\n');
+}
+
+{
+    const source = vmStatesSource({
         1: ['r1 = "b"', 'r2 = _env[r1]', 'state = r2 and 2 or 3', 'r3 = args', 'ReturnVal = r2'],
         2: ['r2 = ReturnVal', 'r2 = nil', 'ReturnVal = {}', 'state = nil'],
         3: ['r1 = "c"', 'r2 = _env[r1]', 'ReturnVal = r2', 'state = 2'],

@@ -1957,12 +1957,17 @@ Current structural model in `passes/beta-control-flow.js`:
 - proven terminal-live source aliases may end at function termination without compiler nil cleanup when their epoch is stable to terminal and has no physical-register redefinition
 - terminal return rendering supports constants, locals, tables, calls, multiple values, RETURN_ALL calls, varargs, and closure values where existing Fresh-CF expression/closure recovery proves them
 - proven synthetic logical AST rendering accepts primitive literal indices in `_env[...]` and recursively-rendered call bases only inside already-proven reduced logical expressions; this preserves short-circuit call count/order without broadening ordinary unproven expression rendering
-- ambiguous terminal payloads, lifetimes, path merges, or branch shapes still fail closed
+- structured multi-state roots now recover compiler local upvalue cells when allocation and first binding initialization dominate conditional routing: `allocUpvalue()` is treated as binding-identity bookkeeping, `upvalueValues[cell] = value` creates/updates the recovered source local, direct `upvalueValues[cell]` reads resolve to that same binding, and `createClosureN(entry, { cell... })` passes proven binding names into the existing captured-closure renderer
+- captured source-storage aliases use path-local metadata carried in the candidate environment; field writes are accepted only through an active source local or an alias proven to originate from the recovered upvalue binding, not by generated-name string coincidence
+- direct calls of recovered anonymous closure expressions are parenthesized as `(function(...) ... end)(...)` so reduced TESTSET/call expressions remain syntactically valid Lua
+- path-dependent cell allocation, capture of an uninitialized/unknown cell, non-direct capture-table shapes, ambiguous terminal payloads/lifetimes/merges, and unrelated arbitrary upvalue machinery still fail closed
 
 Tracked focused regressions in `tools/test-beta-control-flow-fresh.js` now include:
 - basic one-sided terminal branch
 - nested TESTSET `a and (b or c)` feeding early return
 - call-heavy TESTSET with `type(1) == "number" or tostring(2)`, covering the recursively-rendered proven call-base case
+- structured captured-table mutation inside an early-return TESTSET root
+- structured captured-variable rebind, proving the child closure writes the recovered outer binding rather than a copied value
 - the pre-existing deep logical/TESTSET regressions remain unchanged and passing
 
 Real Medium validation completed for these source shapes:
@@ -1988,7 +1993,10 @@ Validation results on 2026-09-04:
 - no call duplication, short-circuit order change, table identity break, or return-pack expansion mismatch was observed
 - the exact user sample with `math.random(1,2)`, a second `thing()` early-return guard, `print(2)`, and final `return 4` recovers structurally from real Medium output; runtime parity is not a valid gate for that literal sample because `thing` is undefined unless the test defines it (and the random guard is nondeterministic across separate runs)
 - a 33-state deeply nested early-return fixture with nesting depth 5, nested `if/elseif/else`, logical `and/or`, side effects, and multiple returns passed exact source/obfuscated/recovered runtime parity on the first real Medium run
-- a harder 103-state stress fixture exposed a separate closure/upvalue boundary, not an early-return CFG failure: its local `check` closure captures table `t` and mutates `t.count`, and the structured multi-state path currently fails closed on that mutating captured-table closure. Removing only that capture/mutation while keeping the deep early returns, TESTSET logic, multi-return helper, and nested `transform` closure produced a 73-state fixture that passed exact runtime parity; a 71-state variant without captured closures also passed. Treat mutating captured-upvalue recovery inside structured multi-state conditional roots as a separate future feature; do not weaken early-return/TESTSET proof to accept it.
+- the former 103-state captured-table blocker is fixed: the exact monster fixture now recovers its captured `t` binding, mutating `check` closure, nested early returns, TESTSET logic, multi-return helper, and nested `transform` closure with exact source/obfuscated/recovered runtime parity
+- focused real Medium probes for captured table-field mutation, captured scalar increment, and captured table-variable rebind all pass exact runtime parity
+- structured capture stress passed 50/50 exact-parity runs (25 randomized Medium layouts x the minimal captured-table fixture and the 103-state monster)
+- six targeted 103-state source-branch variants covering nested `check()` calls, deep early returns, complex TESTSET paths, and normal fallthrough all passed exact runtime parity
 
 Early-return recovery still does NOT imply loop-control recovery. General `while`, `repeat`, numeric/generic `for`, `break`, and `continue` remain separate fail-closed features.
 

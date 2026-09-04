@@ -2168,6 +2168,7 @@ function matchClosureEntryProgram(source, stateWhile, stateName, returnName, dia
         allowConditionalIf: true,
         rootReachableOnly: true,
         renderSpecialCall: renderClosureCall,
+        renderCapturedCall: renderClosureCall,
     });
     if (structuredProgram && consumedEntries.size > 0) {
         const accounted = new Set([...(structuredProgram.reachableStateIds || []), ...consumedEntries]);
@@ -2371,6 +2372,13 @@ function matchMultiStateLogicalLocals(source, stateWhile, stateName, returnName,
     // names live in the candidate environment instead of the global physical-
     // register local map, so sibling CFG paths may safely reuse one VM register.
     const pathLocalBindingNames = new Set();
+    // Root-local upvalue cells are compiler binding-identity transport. Keep
+    // their recovered source bindings separate from ordinary VM register
+    // locals so captured aliases can be rendered across conditional states.
+    const upvalueCells = new Set();
+    const upvalueCellBindings = new Map();
+    const upvalueAliasPrefix = "\0freshUpvalueAlias:";
+    function upvalueAliasKey(name) { return upvalueAliasPrefix + name; }
     // A source value may be held in a register until one terminal cleanup,
     // even though its last real use is an earlier call.  Remember those
     // already-emitted epochs so the eventual compiler nil write does not
@@ -2408,6 +2416,9 @@ function matchMultiStateLogicalLocals(source, stateWhile, stateName, returnName,
         if (isPrimitiveLiteral(rhs) || isEmptyTable(rhs)) return sourceOf(source, rhs);
         if (rhs?.type === "TableConstructorExpression") return renderTableFields(rhs.fields || [], node => render(node, env, provenRecursive));
         if (isIdentifier(rhs)) return resolveId(rhs.name, env);
+        if (rhs?.type === "IndexExpression" && isIdentifier(rhs.base, "upvalueValues") && isIdentifier(rhs.index)) {
+            return upvalueCellBindings.get(rhs.index.name) ?? null;
+        }
         if (rhs?.type === "IndexExpression" && isIdentifier(rhs.base)) {
             const key = isIdentifier(rhs.index) ? resolveId(rhs.index.name, env)
                 : (provenRecursive && isPrimitiveLiteral(rhs.index) ? sourceOf(source, rhs.index) : null);
@@ -2440,6 +2451,23 @@ function matchMultiStateLogicalLocals(source, stateWhile, stateName, returnName,
             return `(${left} ${rhs.operator} ${right})`;
         }
         if (rhs?.type === "CallExpression") {
+            if (isIdentifier(rhs.base) && /^createClosure\d*$/.test(rhs.base.name) && typeof options.renderCapturedCall === "function") {
+                const args = rhs.arguments || [];
+                const fields = args[1]?.type === "TableConstructorExpression" ? (args[1].fields || []) : [];
+                if (fields.length > 0) {
+                    const captureNames = new Map();
+                    for (let i = 0; i < fields.length; i++) {
+                        const field = fields[i];
+                        if (field?.type !== "TableValue" || !isIdentifier(field.value)) return null;
+                        const captureName = upvalueCellBindings.get(field.value.name);
+                        if (typeof captureName !== "string") return null;
+                        captureNames.set(i + 1, captureName);
+                    }
+                    const captured = options.renderCapturedCall(rhs, captureNames);
+                    if (typeof captured === "string") return captured;
+                    return null;
+                }
+            }
             if (typeof options.renderSpecialCall === "function") {
                 const special = options.renderSpecialCall(rhs);
                 if (typeof special === "string") return special;
@@ -2454,7 +2482,8 @@ function matchMultiStateLogicalLocals(source, stateWhile, stateName, returnName,
                 if (value == null) return null;
                 args.push(value);
             }
-            return `${base}(${args.join(", ")})`;
+            const callable = /^function\b/.test(base.trim()) ? "(" + base + ")" : base;
+            return callable + "(" + args.join(", ") + ")";
         }
         return null;
     }
@@ -3081,6 +3110,7 @@ function matchMultiStateLogicalLocals(source, stateWhile, stateName, returnName,
         // The compiler may borrow/copy POS as an ordinary temporary before the
         // real transition at the end of the block.
         env.set(stateName, String(id));
+        env.delete(upvalueAliasKey(stateName));
 
         for (let i = 0; i < block.body.length; i++) {
             if (i === block.transitionIndex) continue;
@@ -3090,8 +3120,33 @@ function matchMultiStateLogicalLocals(source, stateWhile, stateName, returnName,
             const rhs = statement.init[0];
 
             if (dest?.type === "IndexExpression") {
-                if (!isIdentifier(dest.base) || !hasActiveLocal(dest.base.name, env)) return null;
+                if (isIdentifier(dest.base, "upvalueValues") && isIdentifier(dest.index) && upvalueCells.has(dest.index.name)) {
+                    const value = render(rhs, env);
+                    if (typeof value !== "string") return null;
+                    const existing = upvalueCellBindings.get(dest.index.name);
+                    if (typeof existing === "string") {
+                        const line = existing + " = " + value;
+                        if (markers.length !== 0) {
+                            if (!allowConditionalIf) return null;
+                            effects = [...effects, line];
+                        } else {
+                            out.push(line);
+                        }
+                        continue;
+                    }
+                    // A source local captured by a child closure must have one
+                    // dominating initialization before conditional routing.
+                    if (markers.length !== 0) return null;
+                    const display = "v" + (++valueCount);
+                    upvalueCellBindings.set(dest.index.name, display);
+                    out.push("local " + display + " = " + value);
+                    continue;
+                }
+                if (!isIdentifier(dest.base)) return null;
                 const base = resolveId(dest.base.name, env);
+                const stableBase = hasActiveLocal(dest.base.name, env) ||
+                    (typeof base === "string" && env.get(upvalueAliasKey(dest.base.name)) === base);
+                if (!stableBase) return null;
                 const key = isIdentifier(dest.index) ? resolveId(dest.index.name, env)
                     : (isPrimitiveLiteral(dest.index) ? sourceOf(source, dest.index) : null);
                 const value = render(rhs, env);
@@ -3109,6 +3164,10 @@ function matchMultiStateLogicalLocals(source, stateWhile, stateName, returnName,
             }
             if (!isIdentifier(dest)) return null;
             const name = dest.name;
+            const inheritedUpvalueAlias = rhs?.type === "IndexExpression" && isIdentifier(rhs.base, "upvalueValues") && isIdentifier(rhs.index)
+                ? (upvalueCellBindings.get(rhs.index.name) ?? null)
+                : (isIdentifier(rhs) ? (env.get(upvalueAliasKey(rhs.name)) ?? null) : null);
+            env.delete(upvalueAliasKey(name));
 
             if (i !== terminalReturnIndex) {
                 const packFields = rhs?.type === "TableConstructorExpression" ? (rhs.fields || []) : [];
@@ -3128,6 +3187,20 @@ function matchMultiStateLogicalLocals(source, stateWhile, stateName, returnName,
 
             if (isIdentifier(rhs, "args") && name !== stateName && name !== returnName) {
                 env.set(name, "args");
+                continue;
+            }
+            if (rhs?.type === "CallExpression" && isIdentifier(rhs.base, "allocUpvalue") && (rhs.arguments || []).length === 0) {
+                if (markers.length !== 0 || upvalueCells.has(name) || hasActiveLocal(name, env)) return null;
+                upvalueCells.add(name);
+                upvalueCellBindings.delete(name);
+                env.delete(name);
+                continue;
+            }
+            if (rhs?.type === "CallExpression" && isIdentifier(rhs.base, "releaseUpvalue") &&
+                (rhs.arguments || []).length === 1 && isIdentifier(rhs.arguments[0], name) && upvalueCells.has(name)) {
+                upvalueCells.delete(name);
+                upvalueCellBindings.delete(name);
+                env.delete(name);
                 continue;
             }
             if (i === terminalReturnIndex) {
@@ -3306,6 +3379,9 @@ function matchMultiStateLogicalLocals(source, stateWhile, stateName, returnName,
                 env.set(name, activeLocalDisplay(name, env));
             } else {
                 env.set(name, value);
+                if (typeof inheritedUpvalueAlias === "string" && value === inheritedUpvalueAlias) {
+                    env.set(upvalueAliasKey(name), inheritedUpvalueAlias);
+                }
             }
         }
 
