@@ -2419,6 +2419,46 @@ function matchMultiStateLogicalLocals(source, stateWhile, stateName, returnName,
     const upvalueCellBindings = new Map();
     const upvalueAliasPrefix = "\0freshUpvalueAlias:";
     function upvalueAliasKey(name) { return upvalueAliasPrefix + name; }
+    // Structured multi-return packs are kept as provenance tokens until every
+    // compiler-extracted slot has been proven to belong to source storage.
+    // The token never escapes a block: it is flushed into one source multi-local
+    // declaration before control-flow propagation.
+    const structuredPackPrefix = "\0freshStructuredPack:";
+    const structuredPackSlotPrefix = "\0freshStructuredPackSlot:";
+    const structuredPacks = new Map();
+    const structuredPackFutureOwnerCopies = new Map();
+    const structuredPackFutureExtractions = new Map();
+    let nextStructuredPackId = 0;
+    const varargPackMarker = "\0freshVarargPack";
+    function structuredPackId(value) {
+        return typeof value === "string" && value.startsWith(structuredPackPrefix)
+            ? value.slice(structuredPackPrefix.length) : null;
+    }
+    function structuredPackSlot(value) {
+        if (typeof value !== "string" || !value.startsWith(structuredPackSlotPrefix)) return null;
+        const rest = value.slice(structuredPackSlotPrefix.length);
+        const split = rest.lastIndexOf(":");
+        if (split < 1) return null;
+        const packId = rest.slice(0, split);
+        const slot = Number(rest.slice(split + 1));
+        return Number.isInteger(slot) && slot > 0 ? { packId, slot } : null;
+    }
+    function structuredPackSlotToken(packId, slot) { return structuredPackSlotPrefix + packId + ":" + slot; }
+    function isCompilerVarargPack(node) {
+        const fields = node?.type === "TableConstructorExpression" ? (node.fields || []) : [];
+        if (fields.length !== 1 || fields[0]?.type !== "TableValue") return false;
+        const selectCall = fields[0].value;
+        if (selectCall?.type !== "CallExpression" || !isIdentifier(selectCall.base, "select") || (selectCall.arguments || []).length !== 2) return false;
+        if (selectCall.arguments[0]?.type !== "NumericLiteral" || Number(selectCall.arguments[0].value) !== 1) return false;
+        const unpackCall = selectCall.arguments[1];
+        return unpackCall?.type === "CallExpression" && isIdentifier(unpackCall.base, "unpack") &&
+            (unpackCall.arguments || []).length === 1 && isIdentifier(unpackCall.arguments[0], "args");
+    }
+    function isVarargUnpack(node, env) {
+        return node?.type === "CallExpression" && isIdentifier(node.base, "unpack") &&
+            (node.arguments || []).length === 1 && isIdentifier(node.arguments[0]) &&
+            resolveId(node.arguments[0].name, env) === varargPackMarker;
+    }
     // A source value may be held in a register until one terminal cleanup,
     // even though its last real use is an earlier call.  Remember those
     // already-emitted epochs so the eventual compiler nil write does not
@@ -2499,10 +2539,15 @@ function matchMultiStateLogicalLocals(source, stateWhile, stateName, returnName,
         if (active !== null) return active;
         return env.get(name) ?? null;
     }
+    function resolveRenderableId(name, env) {
+        const value = resolveId(name, env);
+        if (structuredPackId(value) || structuredPackSlot(value) || value === varargPackMarker) return null;
+        return value;
+    }
     function render(rhs, env, provenRecursive = false) {
         if (isPrimitiveLiteral(rhs) || isEmptyTable(rhs)) return sourceOf(source, rhs);
         if (rhs?.type === "TableConstructorExpression") return renderTableFields(rhs.fields || [], node => render(node, env, provenRecursive));
-        if (isIdentifier(rhs)) return resolveId(rhs.name, env);
+        if (isIdentifier(rhs)) return resolveRenderableId(rhs.name, env);
         const capturedSlot = capturedSlotName(rhs);
         if (typeof capturedSlot === "string") return capturedSlot;
         if (renderAsFunction && rhs?.type === "IndexExpression" && isIdentifier(rhs.base, "args") && rhs.index?.type === "NumericLiteral") {
@@ -2511,22 +2556,30 @@ function matchMultiStateLogicalLocals(source, stateWhile, stateName, returnName,
         if (rhs?.type === "IndexExpression" && isIdentifier(rhs.base, "upvalueValues") && isIdentifier(rhs.index)) {
             return upvalueCellBindings.get(rhs.index.name) ?? null;
         }
+        if (provenRecursive && rhs?.type === "IndexExpression" && !isIdentifier(rhs.base)) {
+            const base = render(rhs.base, env, true);
+            const key = isIdentifier(rhs.index) ? resolveRenderableId(rhs.index.name, env)
+                : (isPrimitiveLiteral(rhs.index) ? sourceOf(source, rhs.index) : render(rhs.index, env, true));
+            if (typeof base !== "string" || typeof key !== "string" || structuredPackId(base) || structuredPackSlot(base) || base === varargPackMarker) return null;
+            const member = /^"[A-Za-z_][A-Za-z0-9_]*"$/.test(key) ? key.slice(1, -1) : null;
+            return member && isLuaIdentifier(member) ? `${base}.${member}` : `${base}[${key}]`;
+        }
         if (rhs?.type === "IndexExpression" && isIdentifier(rhs.base)) {
-            const key = isIdentifier(rhs.index) ? resolveId(rhs.index.name, env)
+            const key = isIdentifier(rhs.index) ? resolveRenderableId(rhs.index.name, env)
                 : (provenRecursive && isPrimitiveLiteral(rhs.index) ? sourceOf(source, rhs.index) : null);
             if (key == null) return null;
             if (rhs.base.name === "_env") {
                 const globalName = /^"[A-Za-z_][A-Za-z0-9_]*"$/.test(key) ? key.slice(1, -1) : null;
                 return globalName && isLuaIdentifier(globalName) ? globalName : `_env[${key}]`;
             }
-            const base = resolveId(rhs.base.name, env);
+            const base = resolveRenderableId(rhs.base.name, env);
             if (base == null) return null;
             const member = /^"[A-Za-z_][A-Za-z0-9_]*"$/.test(key) ? key.slice(1, -1) : null;
             return member && isLuaIdentifier(member) ? `${base}.${member}` : `${base}[${key}]`;
         }
         if (rhs?.type === "UnaryExpression") {
             const argument = provenRecursive ? render(rhs.argument, env, true)
-                : (isIdentifier(rhs.argument) ? resolveId(rhs.argument.name, env) : (isPrimitiveLiteral(rhs.argument) ? sourceOf(source, rhs.argument) : null));
+                : (isIdentifier(rhs.argument) ? resolveRenderableId(rhs.argument.name, env) : (isPrimitiveLiteral(rhs.argument) ? sourceOf(source, rhs.argument) : null));
             return renderUnary(rhs.operator, argument);
         }
         if ((provenRecursive || (rhs?.type === "LogicalExpression" && rhs.freshCompilerLogical === true)) &&
@@ -2537,12 +2590,16 @@ function matchMultiStateLogicalLocals(source, stateWhile, stateName, returnName,
             return `(${left} ${rhs.operator} ${right})`;
         }
         if ((rhs?.type === "BinaryExpression" || rhs?.type === "LogicalExpression") && rhs.operator) {
-            const left = isIdentifier(rhs.left) ? resolveId(rhs.left.name, env) : (isPrimitiveLiteral(rhs.left) ? sourceOf(source, rhs.left) : null);
-            const right = isIdentifier(rhs.right) ? resolveId(rhs.right.name, env) : (isPrimitiveLiteral(rhs.right) ? sourceOf(source, rhs.right) : null);
+            const left = isIdentifier(rhs.left) ? resolveRenderableId(rhs.left.name, env) : (isPrimitiveLiteral(rhs.left) ? sourceOf(source, rhs.left) : null);
+            const right = isIdentifier(rhs.right) ? resolveRenderableId(rhs.right.name, env) : (isPrimitiveLiteral(rhs.right) ? sourceOf(source, rhs.right) : null);
             if (left == null || right == null) return null;
             return `(${left} ${rhs.operator} ${right})`;
         }
         if (rhs?.type === "CallExpression") {
+            if (renderAsFunction && isVarargUnpack(rhs, env)) {
+                sawVarargs = true;
+                return "...";
+            }
             if (renderAsFunction && isIdentifier(rhs.base, "select") && (rhs.arguments || []).length === 2 &&
                 rhs.arguments[0]?.type === "NumericLiteral" && Number(rhs.arguments[0].value) === 1 &&
                 rhs.arguments[1]?.type === "CallExpression" && isIdentifier(rhs.arguments[1].base, "unpack") &&
@@ -2577,14 +2634,20 @@ function matchMultiStateLogicalLocals(source, stateWhile, stateName, returnName,
                 const special = options.renderSpecialCall(rhs);
                 if (typeof special === "string") return special;
             }
-            const base = isIdentifier(rhs.base) ? resolveId(rhs.base.name, env)
+            const base = isIdentifier(rhs.base) ? resolveRenderableId(rhs.base.name, env)
                 : (provenRecursive ? render(rhs.base, env, true) : null);
             if (base == null) return null;
             const args = [];
             for (const arg of rhs.arguments || []) {
-                const value = provenRecursive ? render(arg, env, true)
-                    : (isIdentifier(arg) ? resolveId(arg.name, env) : (isPrimitiveLiteral(arg) ? sourceOf(source, arg) : null));
-                if (value == null) return null;
+                let value = null;
+                if (renderAsFunction && isVarargUnpack(arg, env)) {
+                    sawVarargs = true;
+                    value = "...";
+                } else {
+                    value = provenRecursive ? render(arg, env, true)
+                        : (isIdentifier(arg) ? resolveRenderableId(arg.name, env) : (isPrimitiveLiteral(arg) ? sourceOf(source, arg) : null));
+                }
+                if (value == null || structuredPackId(value) || structuredPackSlot(value) || value === varargPackMarker) return null;
                 args.push(value);
             }
             const callable = /^function\b/.test(base.trim()) ? "(" + base + ")" : base;
@@ -2657,6 +2720,203 @@ function matchMultiStateLogicalLocals(source, stateWhile, stateName, returnName,
         if (uses.size > 1) return true;
         const only = [...uses.values()][0];
         return only.delayed && !only.callBase && !only.logical;
+    }
+
+    function expectedPackSlotsInBlock(block, creationIndex, packReg) {
+        const slots = new Set();
+        for (let cursor = creationIndex + 1; cursor < block.body.length; cursor++) {
+            if (cursor === block.transitionIndex) continue;
+            const statement = block.body[cursor];
+            if (!isSingleAssignment(statement)) return null;
+            const dest = statement.variables[0];
+            const rhs = statement.init[0];
+            if (isIdentifier(dest, packReg)) break;
+            if (rhs?.type === "IndexExpression" && isIdentifier(rhs.base, packReg) && rhs.index?.type === "NumericLiteral") {
+                const slot = Number(rhs.index.value);
+                if (!Number.isInteger(slot) || slot < 1 || slots.has(slot)) return null;
+                slots.add(slot);
+            }
+        }
+        if (!slots.size) return null;
+        const ordered = [...slots].sort((a,b) => a-b);
+        for (let i = 0; i < ordered.length; i++) if (ordered[i] !== i + 1) return null;
+        return ordered;
+    }
+
+    function cleanupOrTerminalEpoch(blockId, statementIndex, name, visiting = new Set()) {
+        const visitKey = blockId + ":" + statementIndex + ":" + name;
+        if (visiting.has(visitKey)) return { valid: false, sawCleanup: false };
+        const block = blocks.get(blockId);
+        if (!block) return { valid: false, sawCleanup: false };
+        const nextVisiting = new Set(visiting);
+        nextVisiting.add(visitKey);
+        for (let i = statementIndex + 1; i < block.body.length; i++) {
+            if (i === block.transitionIndex) continue;
+            const statement = block.body[i];
+            if (!isSingleAssignment(statement)) return { valid: false, sawCleanup: false };
+            const dest = statement.variables[0];
+            if (!isIdentifier(dest, name)) continue;
+            if (statement.init[0]?.type === "NilLiteral") return { valid: true, sawCleanup: true };
+            return { valid: false, sawCleanup: false };
+        }
+        const next = successors.get(blockId) || [];
+        if (next.length === 0) return { valid: block.transition.kind === "stop", sawCleanup: false };
+        let sawCleanup = false;
+        for (const target of next) {
+            const child = cleanupOrTerminalEpoch(target, -1, name, nextVisiting);
+            if (!child.valid) return { valid: false, sawCleanup: false };
+            sawCleanup = sawCleanup || child.sawCleanup;
+        }
+        return { valid: true, sawCleanup };
+    }
+
+    function maybeOwnStructuredPackSlot(pack, slot, reg, blockId, statementIndex) {
+        if (!pack || !Number.isInteger(slot) || !isVmRegisterName(reg) || reg === stateName || reg === returnName) return;
+        const epochEnd = cleanupOrTerminalEpoch(blockId, statementIndex, reg);
+        if (!epochEnd.valid || !valueMayBeReadAfter(blockId, statementIndex, reg)) return;
+        const terminalOwned = terminalStableUsedEpoch(blockId, statementIndex, reg);
+        const mixedCleanupOwned = epochEnd.sawCleanup;
+        if (!mixedCleanupOwned && !terminalOwned) return;
+        const info = pack.slots.get(slot);
+        if (!info) return;
+        if (info.ownerReg && info.ownerReg !== reg) { info.ambiguous = true; return; }
+        info.ownerReg = reg;
+        info.terminalLive = terminalOwned && !epochEnd.sawCleanup;
+    }
+
+    // The scheduler may delay a compiler source-storage handoff until after an
+    // earlier semantic use of the same extracted return slot. Prove the first
+    // future same-block copy from the still-live carrier into valid source
+    // storage so the source multi-local can be emitted before that use.
+    function preclaimFutureStructuredPackOwner(pack, slot, carrierReg, blockId, statementIndex) {
+        const info = pack?.slots.get(slot);
+        const block = blocks.get(blockId);
+        if (!info || info.ownerReg || info.ambiguous || !block ||
+            !(isVmRegisterName(carrierReg) || carrierReg === stateName || carrierReg === returnName)) return;
+        const carriers = new Set([carrierReg]);
+        for (let i = statementIndex + 1; i < block.body.length; i++) {
+            if (i === block.transitionIndex) continue;
+            const statement = block.body[i];
+            if (!isSingleAssignment(statement)) return;
+            const dest = statement.variables[0];
+            const rhs = statement.init[0];
+            const copiedCarrier = isIdentifier(rhs) && carriers.has(rhs.name);
+            if (copiedCarrier && isIdentifier(dest)) {
+                maybeOwnStructuredPackSlot(pack, slot, dest.name, blockId, i);
+                if (info.ambiguous) return;
+                carriers.add(dest.name);
+                if (info.ownerReg === dest.name) {
+                    info.ownerDeferred = true;
+                    structuredPackFutureOwnerCopies.set(blockId + ":" + i, {
+                        packId: pack.id,
+                        slot,
+                        ownerReg: dest.name,
+                        carrierReg: rhs.name,
+                    });
+                    return;
+                }
+            }
+            if (isIdentifier(dest) && carriers.has(dest.name) && !copiedCarrier) carriers.delete(dest.name);
+            if (carriers.size === 0) return;
+        }
+    }
+
+    // Prometheus may delay some pack-slot extraction statements until after
+    // a semantic use of an earlier slot. The call has already happened; these
+    // static rPack[N] reads and their proven source-storage handoffs are
+    // compiler transport. Pre-prove them inside the same block so one source
+    // multi-local declaration can exist at the original call position.
+    function preclaimFutureStructuredPackSlots(pack, blockId, creationIndex) {
+        const block = blocks.get(blockId);
+        if (!pack || !block) return false;
+        const seen = new Set();
+        for (let i = creationIndex + 1; i < block.body.length; i++) {
+            if (i === block.transitionIndex) continue;
+            const statement = block.body[i];
+            if (!isSingleAssignment(statement)) return false;
+            const dest = statement.variables[0];
+            const rhs = statement.init[0];
+            if (isIdentifier(dest, pack.packReg)) break;
+            if (rhs?.type !== "IndexExpression" || !isIdentifier(rhs.base, pack.packReg) || rhs.index?.type !== "NumericLiteral") continue;
+            const slot = Number(rhs.index.value);
+            if (!pack.slots.has(slot) || seen.has(slot) || !isIdentifier(dest)) return false;
+            seen.add(slot);
+            const info = pack.slots.get(slot);
+            info.tempRegs.add(dest.name);
+            structuredPackFutureExtractions.set(blockId + ":" + i, {
+                packId: pack.id,
+                slot,
+                carrierReg: dest.name,
+                packReg: pack.packReg,
+            });
+            maybeOwnStructuredPackSlot(pack, slot, dest.name, blockId, i);
+            if (info.ambiguous) return false;
+            if (info.ownerReg === dest.name) info.ownerDeferred = true;
+            if (!info.ownerReg) preclaimFutureStructuredPackOwner(pack, slot, dest.name, blockId, i);
+            if (info.ambiguous) return false;
+        }
+        return pack.expectedSlots.every(slot => seen.has(slot));
+    }
+
+    function flushStructuredPack(packId, env, markers, effects) {
+        const pack = structuredPacks.get(packId);
+        if (!pack || pack.emitted) return effects;
+        const slots = pack.expectedSlots.map(slot => pack.slots.get(slot));
+        if (slots.some(info => !info || info.ambiguous || !info.ownerReg)) return null;
+        const ownerRegs = slots.map(info => info.ownerReg);
+        if (new Set(ownerRegs).size !== ownerRegs.length) return null;
+        const names = [];
+        for (const info of slots) {
+            let display = info.ownerDeferred ? null : activeLocalDisplay(info.ownerReg, env);
+            if (display === null) display = allocateValueDisplay();
+            info.display = display;
+            names.push(display);
+        }
+        const line = `local ${names.join(", ")} = ${pack.call}`;
+        if (markers.length !== 0) {
+            for (const info of slots) pathLocalBindingNames.add(info.display);
+            effects = [...effects, line];
+        } else {
+            out.push(line);
+            for (const info of slots) {
+                localNames.set(info.ownerReg, info.display);
+                locals.add(info.ownerReg);
+                if (info.terminalLive) terminalLiveLocals.add(info.ownerReg);
+            }
+        }
+        for (const [reg, value] of [...env.entries()]) {
+            if (structuredPackId(value) === packId) {
+                env.delete(reg);
+                continue;
+            }
+            const meta = structuredPackSlot(value);
+            if (!meta || meta.packId !== packId) continue;
+            const info = pack.slots.get(meta.slot);
+            if (!info?.display) return null;
+            env.set(reg, info.display);
+        }
+        for (const info of slots) {
+            const current = structuredPackSlot(env.get(info.ownerReg));
+            if (current?.packId === packId && current.slot === info.slot) env.set(info.ownerReg, info.display);
+        }
+        pack.emitted = true;
+        return effects;
+    }
+
+    function flushReadyStructuredPacks(env, markers, effects, requireAll = false) {
+        for (const [packId, pack] of structuredPacks) {
+            if (pack.emitted) continue;
+            const present = [...env.values()].some(value => structuredPackId(value) === packId || structuredPackSlot(value)?.packId === packId);
+            if (!present) continue;
+            const ready = pack.expectedSlots.every(slot => {
+                const info = pack.slots.get(slot);
+                return info && !info.ambiguous && !!info.ownerReg;
+            });
+            if (!ready) { if (requireAll) return null; continue; }
+            effects = flushStructuredPack(packId, env, markers, effects);
+            if (effects === null) return null;
+        }
+        return effects;
     }
 
     function transportSourceKind(block, statementIndex, transportName) {
@@ -2974,13 +3234,16 @@ function matchMultiStateLogicalLocals(source, stateWhile, stateName, returnName,
             for (let i = 0; i < baseEffectCount; i++) if (effects[i] !== commonEffects[i]) return null;
         }
         const bodies = ordered.map(candidate => (candidate.effects || []).slice(baseEffectCount));
-        if (bodies.slice(0, chainLength).some(body => body.length === 0)) return null;
+        // Empty source clauses are valid. Once the elseif marker chain and join are
+        // structurally proven, preserve the empty clause so condition evaluation is kept.
         const lines = [];
         for (let depth = 0; depth < chainLength; depth++) {
             lines.push(`${depth === 0 ? "if" : "elseif"} ${conditions[depth]} then`);
             for (const effect of bodies[depth]) lines.push(indentConditionalEffect(effect));
         }
-        if (bodies[chainLength].length > 0) {
+        const finalBranch = blocks.get(conditionBranchIds[chainLength - 1]);
+        const explicitElse = finalBranch?.transition?.kind === "branch" && finalBranch.transition.onFalse !== joinId;
+        if (explicitElse || bodies[chainLength].length > 0) {
             lines.push("else");
             for (const effect of bodies[chainLength]) lines.push(indentConditionalEffect(effect));
         }
@@ -3123,6 +3386,21 @@ function matchMultiStateLogicalLocals(source, stateWhile, stateName, returnName,
         const trueEffects = te.slice(effectPrefix), falseEffects = fe.slice(effectPrefix);
         const hasConditionalEffects = trueEffects.length > 0 || falseEffects.length > 0;
         if (hasConditionalEffects && !allowConditionalIf) return null;
+        const branchBlock = blocks.get(al.branchId);
+        const branchTransition = branchBlock?.transition;
+        const branchCarriesLogicalResult = !!(branchBlock && branchTransition?.kind === "branch" &&
+            branchBlock.body.some((statement, index) => {
+                if (index === branchBlock.transitionIndex || !isSingleAssignment(statement)) return false;
+                const dest = statement.variables[0];
+                const rhs = statement.init[0];
+                return isIdentifier(dest) && dest.name !== stateName && isIdentifier(rhs, branchTransition.conditionRegister);
+            }));
+        const trueDirectJoin = branchTransition?.kind === "branch" && branchTransition.onTrue === joinId;
+        const falseDirectJoin = branchTransition?.kind === "branch" && branchTransition.onFalse === joinId;
+        const explicitTrueArm = branchTransition?.kind === "branch" && !trueDirectJoin;
+        const explicitFalseArm = branchTransition?.kind === "branch" && !falseDirectJoin;
+        const preserveEmptyStatementBranch = allowConditionalIf && !hasConditionalEffects && !branchCarriesLogicalResult &&
+            (explicitTrueArm || explicitFalseArm);
         const keys = new Set([...t.env.keys(), ...f.env.keys()]);
         keys.delete(stateName);
         const env = new Map();
@@ -3152,17 +3430,18 @@ function matchMultiStateLogicalLocals(source, stateWhile, stateName, returnName,
             }
             else return null;
         }
-        if (hasConditionalEffects) {
+        if (hasConditionalEffects || preserveEmptyStatementBranch) {
             let structured;
-            if (trueEffects.length > 0 && falseEffects.length > 0) {
+            if (explicitTrueArm && explicitFalseArm) {
                 const trueBody = trueEffects.map(line => indentConditionalEffect(line)).join("\n");
                 const falseBody = falseEffects.map(line => indentConditionalEffect(line)).join("\n");
-                structured = `if ${cond} then\n${trueBody}\nelse\n${falseBody}\nend`;
+                structured = `if ${cond} then\n${trueBody ? trueBody + "\n" : ""}else\n${falseBody ? falseBody + "\n" : ""}end`;
             } else {
-                const bodyEffects = trueEffects.length > 0 ? trueEffects : falseEffects;
-                const condition = trueEffects.length > 0 ? cond : `(not ${cond})`;
+                const useTrueArm = explicitTrueArm || (!explicitFalseArm && trueEffects.length > 0);
+                const bodyEffects = useTrueArm ? trueEffects : falseEffects;
+                const condition = useTrueArm ? cond : `(not ${cond})`;
                 const body = bodyEffects.map(line => indentConditionalEffect(line)).join("\n");
-                structured = `if ${condition} then\n${body}\nend`;
+                structured = `if ${condition} then\n${body ? body + "\n" : ""}end`;
             }
             if (prefix === 0) {
                 if (!recordRootConditional(al.branchId, joinId)) return null;
@@ -3290,6 +3569,37 @@ function matchMultiStateLogicalLocals(source, stateWhile, stateName, returnName,
                     : (isIdentifier(rhs) ? (env.get(upvalueAliasKey(rhs.name)) ?? null) : null));
             env.delete(upvalueAliasKey(name));
 
+            const reservedPackExtraction = structuredPackFutureExtractions.get(id + ":" + i);
+            if (reservedPackExtraction) {
+                const reservedPack = structuredPacks.get(reservedPackExtraction.packId);
+                const reservedInfo = reservedPack?.slots.get(reservedPackExtraction.slot);
+                if (reservedPack?.emitted && reservedInfo?.display && name === reservedPackExtraction.carrierReg &&
+                    rhs?.type === "IndexExpression" && isIdentifier(rhs.base, reservedPackExtraction.packReg) &&
+                    rhs.index?.type === "NumericLiteral" && Number(rhs.index.value) === reservedPackExtraction.slot) {
+                    env.set(name, reservedInfo.display);
+                    continue;
+                }
+            }
+
+            const reservedPackOwnerCopy = structuredPackFutureOwnerCopies.get(id + ":" + i);
+            if (reservedPackOwnerCopy) {
+                const reservedPack = structuredPacks.get(reservedPackOwnerCopy.packId);
+                const reservedInfo = reservedPack?.slots.get(reservedPackOwnerCopy.slot);
+                if (reservedPack?.emitted && reservedInfo?.display && reservedInfo.ownerReg === name &&
+                    isIdentifier(rhs, reservedPackOwnerCopy.carrierReg) && resolveId(rhs.name, env) === reservedInfo.display) {
+                    env.set(name, reservedInfo.display);
+                    reservedInfo.ownerDeferred = false;
+                    continue;
+                }
+            }
+
+            if (renderAsFunction && isCompilerVarargPack(rhs)) {
+                if (name === stateName || name === returnName || hasActiveLocal(name, env)) return null;
+                sawVarargs = true;
+                env.set(name, varargPackMarker);
+                continue;
+            }
+
             if (i !== terminalReturnIndex) {
                 const packFields = rhs?.type === "TableConstructorExpression" ? (rhs.fields || []) : [];
                 if (packFields.length === 1 && packFields[0]?.type === "TableValue" && packFields[0].value?.type === "CallExpression") {
@@ -3299,6 +3609,55 @@ function matchMultiStateLogicalLocals(source, stateWhile, stateName, returnName,
                 } else {
                     terminalPackExprs.delete(name);
                 }
+            }
+
+            const packFieldsForStructured = rhs?.type === "TableConstructorExpression" ? (rhs.fields || []) : [];
+            const structuredPackCallNode = packFieldsForStructured.length === 1 && packFieldsForStructured[0]?.type === "TableValue" &&
+                packFieldsForStructured[0].value?.type === "CallExpression" ? packFieldsForStructured[0].value : null;
+            if (structuredPackCallNode && !isCompilerVarargPack(rhs)) {
+                const expectedSlots = expectedPackSlotsInBlock(block, i, name);
+                if (expectedSlots) {
+                    const call = render(structuredPackCallNode, env, true);
+                    if (typeof call !== "string") return null;
+                    const packId = String(++nextStructuredPackId);
+                    const pack = { id: packId, packReg: name, call, expectedSlots, slots: new Map(), emitted: false };
+                    for (const slot of expectedSlots) pack.slots.set(slot, { slot, tempRegs: new Set(), ownerReg: null, display: null, ambiguous: false, ownerDeferred: false });
+                    structuredPacks.set(packId, pack);
+                    if (!preclaimFutureStructuredPackSlots(pack, id, i)) return null;
+                    env.set(name, structuredPackPrefix + packId);
+                    effects = flushReadyStructuredPacks(env, markers, effects, false);
+                    if (effects === null) return null;
+                    continue;
+                }
+            }
+
+            const packIndexMeta = rhs?.type === "IndexExpression" && isIdentifier(rhs.base) && rhs.index?.type === "NumericLiteral"
+                ? { packId: structuredPackId(resolveId(rhs.base.name, env)), slot: Number(rhs.index.value) } : null;
+            if (packIndexMeta?.packId) {
+                const pack = structuredPacks.get(packIndexMeta.packId);
+                const info = pack?.slots.get(packIndexMeta.slot);
+                if (!pack || !info || pack.emitted) return null;
+                info.tempRegs.add(name);
+                maybeOwnStructuredPackSlot(pack, packIndexMeta.slot, name, id, i);
+                env.set(name, structuredPackSlotToken(packIndexMeta.packId, packIndexMeta.slot));
+                if (!info.ownerReg && !info.ambiguous) preclaimFutureStructuredPackOwner(pack, packIndexMeta.slot, name, id, i);
+                effects = flushReadyStructuredPacks(env, markers, effects, false);
+                if (effects === null) return null;
+                continue;
+            }
+
+            const copiedPackSlot = isIdentifier(rhs) ? structuredPackSlot(resolveId(rhs.name, env)) : null;
+            if (copiedPackSlot) {
+                const pack = structuredPacks.get(copiedPackSlot.packId);
+                const info = pack?.slots.get(copiedPackSlot.slot);
+                if (!pack || !info || pack.emitted) return null;
+                info.tempRegs.add(name);
+                maybeOwnStructuredPackSlot(pack, copiedPackSlot.slot, name, id, i);
+                env.set(name, structuredPackSlotToken(copiedPackSlot.packId, copiedPackSlot.slot));
+                if (!info.ownerReg && !info.ambiguous) preclaimFutureStructuredPackOwner(pack, copiedPackSlot.slot, name, id, i);
+                effects = flushReadyStructuredPacks(env, markers, effects, false);
+                if (effects === null) return null;
+                continue;
             }
 
             // A physical register can be reused after an early source epoch
@@ -3334,7 +3693,7 @@ function matchMultiStateLogicalLocals(source, stateWhile, stateName, returnName,
                     if (node?.type === "CallExpression" && isIdentifier(node.base, "unpack") && (node.arguments || []).length === 1 && isIdentifier(node.arguments[0])) {
                         const packReg = node.arguments[0].name;
                         if (terminalPackExprs.has(packReg)) value = terminalPackExprs.get(packReg);
-                        else if (resolveId(packReg, env) === "args") value = "...";
+                        else if (resolveId(packReg, env) === "args" || resolveId(packReg, env) === varargPackMarker) { value = "..."; sawVarargs = true; }
                     }
                     if (value === null) value = render(node, env, true);
                     if (typeof value !== "string") return null;
@@ -3504,6 +3863,12 @@ function matchMultiStateLogicalLocals(source, stateWhile, stateName, returnName,
                     env.set(upvalueAliasKey(name), inheritedUpvalueAlias);
                 }
             }
+        }
+
+        effects = flushReadyStructuredPacks(env, markers, effects, true);
+        if (effects === null) return null;
+        for (const value of env.values()) {
+            if (structuredPackId(value) || structuredPackSlot(value)) return null;
         }
 
         processed.add(id);

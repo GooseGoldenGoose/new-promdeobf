@@ -1846,21 +1846,15 @@ This section is the shortest current-state handoff. Read the detailed sections a
 
 - branch: `main`
 - remote: `origin/main`
-- current feature/code baseline: `72cb949 Compose logical and conditional CFG recovery`; the latest Git commit may be a context-only handoff commit created after this line
-- immediately preceding relevant commits: `ce9f971 Recover in-place promoted local lifetimes`, `5901341 Recover sequential root conditionals`, `d08e1fb Recover conditional storage lifetimes`, `de51051 Generalize nested elseif recovery`
-- current tracked behavior includes closed logical-CFG reduction inside closure-aware conditional recovery; still run `git log -5 --oneline` at the start of a new chat to verify Git truth
+- current feature/code baseline is the latest commit containing this `CONTEXT.md`; verify exact Git truth with `git log -5 --oneline` rather than relying on an older hardcoded hash
+- immediately preceding relevant handoff/recovery commits include `e12bbf5 Refresh active Fresh-CF handoff` and `795f1b5 Recover recursive structured closures`
+- current tracked behavior includes closed logical-CFG reduction, structural early returns, recursive multi-state closure recovery, structured multi-return/vararg transport, and empty conditional-clause preservation
 - important historical semantic baseline: `7375421 Refine nil register lifetimes`
 - do not reintroduce discarded experimental CF changes merely because they exist in Git history
 
 ### Current unrelated user work to preserve
 
-Tracked user edits that are intentionally unrelated to fresh-CF work:
-- `main.js`
-- `formater/input.txt`
-
-Do not stage, revert, overwrite, or clean those unless the user explicitly asks.
-
-Ambiguous untracked work such as `opt/`, `opti/`, `sample/input.txt`, and non-generated source fixtures is also not disposable by default.
+As of the 2026-09-04 validation/commit pass, `git status --short` shows no unrelated tracked modifications beyond the active Fresh-CF solver/test/context work. Many `_tmp_*` probes/fixtures and `passes/_tmp_*` debug copies are intentionally untracked. Do not clean, reset, stage, or delete them unless the user explicitly asks.
 
 ### Workspace cleanup state
 
@@ -1918,7 +1912,7 @@ Current performance baseline after the 2026-09-02 pipeline optimization:
 - mixed logical/conditional recovery now reduces only closed compiler logical-value subgraphs before source conditional structuring. The discriminator is structural (result-carrier copy + lazy-path/join proof + closed-region proof), not register/state IDs or source constants. This fixes the previous state-15 failure where a completed short-circuit value was consumed as an outer if condition. Closure roots are analyzed only over root-reachable states; child closure entries cannot contaminate root register lifetimes. A focused 7-state normalized regression is tracked in `tools/test-beta-control-flow-if.js`.
 - final validation for this mixed-CFG change: all eight tracked Fresh-CF/if/register/binding suites pass. Five real Medium fixtures passed 100/100 randomized layouts each with repeated exact runtime parity: the new 7-state closure+logical+if fixture, the full 55-state mixed TESTSET/and/or+nested-if fixture, the existing 65-state if/elseif/else fixture, the 28-state conditional-storage fixture, and the 19-state supported TESTSET fixture. Total: 500/500 fresh randomized layouts. No fixture-specific state/register IDs are used by the reducer.
 
-There is no known blocker in the currently supported straight-line/local/call/table/closure/upvalue/multi-return feature set represented by the established regression fixtures.
+There is no known blocker in the currently supported straight-line/local/call/table/closure/upvalue/multi-return/vararg/conditional/early-return feature set represented by the established regression fixtures.
 
 ### Still intentionally unsupported / fail-closed
 
@@ -2003,33 +1997,39 @@ Validation results on 2026-09-04:
 - recursive nested multi-state closure recovery is now fixed: the former 7-state forwarded-capture minimal and 8-state local-capture-only minimal both pass exact runtime parity, the previous 5-state single-state path remains passing, a 12-state depth-3 fixture with child + grandchild `if/else` CFGs and shared captured-table mutation passes, and a nested early-return child fixture passes
 - randomized recursive-closure stress passed 100/100 exact-parity runs (25 randomized Medium layouts x 4 fixtures: forwarded captures, local-only captures, depth-3 recursion, nested early return)
 - a separate two-parameter nested multi-state child probe also passes exact runtime parity, proving child parameter recovery is indexed structurally from `args[N]` rather than hardcoded to the first argument
-- branch-local multi-return storage feeding later conditional CFG is now implemented in the current working tree: a real 7-state Medium fixture with sibling captured closures recovers `local v4, v5, v6 = mutate(2)`, uses the third result in a following `if`, preserves all returned values, and passes exact source/obfuscated/recovered runtime parity
-- nested multi-state vararg-pack transport is now implemented in the current working tree: both the former 7-state simple nested vararg child and the 9-state nested logical/TESTSET vararg child recover `function(...)`, `select(1, ...)`, branch CFG, and `return value, ...` with exact runtime parity
-- the structured multi-return implementation is provenance/epoch based, not fixture-specific: it tracks compiler call-pack identity, expected extracted slots, physical-register transport copies through `state`/`ReturnVal`, one source owner per slot, mixed cleanup-or-terminal lifetime proof, source-local declaration emission once the required slot owners are proven, and removal of consumed compiler pack-table tokens
-- the structured vararg implementation recognizes the compiler-created persistent vararg pack `{ select(1, unpack(args)) }` and treats it as one semantic `...` value across child states; terminal `unpack(varargPack)` reconstructs `...` and the recovered child signature adds `...` only when that proof is used
-- while testing the 151-state mega, two extra generic renderer issues were also fixed in the current working tree: proven recursive logical ASTs may render nested index bases such as a captured `shared.value` read only inside already-proven recursive expressions, and all structured identifier resolution is guarded so internal pending-pack markers cannot leak into generated Lua text
-- the exact focused Fresh-CF outputs are currently in `output/_tmp_multi_shared_sibling_closures.beta.cf.lua`, `output/_tmp_recursive_multistate_varargs_simple.beta.cf.lua`, and `output/_tmp_recursive_multistate_varargs.beta.cf.lua`; all three corresponding real Medium runs passed exact runtime parity
-- IMPORTANT ACTIVE WIP: these new multi-return/vararg/renderer changes are currently UNCOMMITTED in `passes/beta-control-flow.js`; the last committed solver implementation is `795f1b5 Recover recursive structured closures` (a later context-only handoff commit may be HEAD). Do not discard or overwrite the tracked solver modification when starting a new chat
-- no permanent tracked regression has been added for these two new features yet, and the full core/randomized regression gate has NOT been run after the latest WIP changes; this must happen before committing the solver
-- the original 151-state mega fixture `_tmp_early_return_nested_complex4.lua` still fails after the latest marker-guard fix with the public fallback error `unsupported multi-state control flow (151 normalized states)`; focused multi-return and vararg fixtures still pass, so the mega now contains at least one additional independent blocker. Next chat must instrument/trace the first actual structural failure rather than weakening the proven pack/vararg rules or assuming those focused features regressed.
+- branch-local multi-return storage feeding later conditional CFG is implemented and tracked: a real 7-state Medium fixture with sibling captured closures recovers the source multi-return binding, uses later result slots in conditionals, preserves all return values, and passes exact runtime parity
+- nested multi-state vararg-pack transport is implemented and tracked: the 9-state nested logical/TESTSET vararg child recovers `function(...)`, `select(1, ...)`, branch CFG, and `return value, ...` with exact runtime parity
+- structured multi-return recovery is provenance/epoch based, not fixture-specific: it tracks compiler call-pack identity, expected extracted slots, physical-register transport through ordinary registers plus borrowed `state`/`ReturnVal`, one source owner per slot, mixed cleanup-or-terminal lifetime proof, and one declaration for the recovered source multi-local
+- same-block future pack proof is now part of that model: from pack creation to pack-register overwrite, Fresh CF preclaims every expected static `pack[N]` extraction, reserves the exact extraction statement, proves the eventual source owner directly or through a future carrier copy, and may emit the source declaration before later compiler bookkeeping when semantic use occurs first; reserved extraction/owner copies are validated again when encountered
+- deferred structured-pack owners do not reuse a stale display from an earlier physical-register epoch; owner activation occurs only at the proven reserved copy/extraction point
+- the structured vararg model recognizes compiler-created `{ select(1, unpack(args)) }` as persistent semantic `...` transport across child states; terminal `unpack(varargPack)` reconstructs `...`, and recovered child signatures add `...` only when that structural proof is used
+- proven recursive logical ASTs may render nested index bases such as captured table-field reads only inside already-proven recursive expressions; structured identifier resolution remains guarded so internal pack markers cannot leak into generated Lua
+- the former 151-state mega blocker is fixed. The missing shape was a compiler call-pack whose first slot was extracted and semantically used before later expected slots/owner copies were emitted. Future slot/owner preclaim solves this structurally without state/register/source constants
+- empty conditional clauses are now preserved structurally. A direct branch edge to the join proves that source arm is absent; an intermediate branch state before the join proves that arm is explicitly present even when it has zero effects. This distinguishes `if x then end` from `if x then else end` without guessing
+- two-way conditional merging preserves explicit empty `then`/`else` arms, including asymmetric nonempty/empty bodies. N-way `if/elseif` merging allows empty clauses and preserves an explicit empty final `else` when the final false edge does not jump directly to the join
+- empty statement branches are not confused with compiler short-circuit logical-value branches: the solver checks for the compiler logical result-copy shape and only preserves a zero-effect statement branch when that result-carrier proof is absent
+- permanent Fresh-CF regressions now cover branch-local multi-return feeding a conditional, delayed/future structured-pack owner copies, nested multi-state vararg transport, standalone empty `if`, explicit empty `if/else`, asymmetric empty arms, and nested empty `if/elseif` clauses
+- final validation on 2026-09-04 after all current solver changes: all 12 tracked Fresh-CF/if/register/binding/upvalue/version/graph/semantic suites pass; `git diff --check` passes
+- randomized Medium layout stress after the final empty-branch change: 100/100 each for standalone empty `if`, explicit empty `if/else`, nonempty-then+empty-else, empty-then+nonempty-else, nested empty `if/elseif`, and the 151-state mega = 600/600 PASS
+- focused current-feature layout stress also passes 100/100 for the 7-state branch-local multi-return fixture and 100/100 for the 9-state nested multi-state vararg fixture
+- previous captured-upvalue/recursive-closure stress was rerun after the final solver changes: structured capture 50/50 PASS and recursive structured closures 100/100 PASS
+- there is no known blocker in the currently supported straight-line/local/call/table/closure/upvalue/multi-return/vararg/conditional/early-return feature set represented by the established regressions
 
 Early-return recovery still does NOT imply loop-control recovery. General `while`, `repeat`, numeric/generic `for`, `break`, and `continue` remain separate fail-closed features.
 
 ### What a new chat should do next
 
 1. Read this entire `CONTEXT.md` before editing anything.
-2. Run `git status --short --branch` and `git log -5 --oneline`. Expect `passes/beta-control-flow.js` to be modified and many `_tmp_*` files untracked. The solver modification is intentional active WIP; do NOT restore/reset it.
-3. First re-run the two focused proofs to ensure the WIP survived handoff:
-   - `node tools/fast-obf-deobf.js _tmp_multi_shared_sibling_closures.lua --preset Medium --runtime`
-   - `node tools/fast-obf-deobf.js _tmp_recursive_multistate_varargs.lua --preset Medium --runtime`
-   Both should recover and pass exact runtime parity.
-4. Re-run `node tools/fast-obf-deobf.js _tmp_early_return_nested_complex4.lua --preset Medium --runtime`. It currently still fails. Instrument the current structured solver to find the FIRST real internal failing state/statement; the public `state 1` closure diagnostic is only a fallback and is not the root cause.
-5. Keep the new pack/vararg rules structural and dynamic: no hardcoded state IDs, physical register IDs, source literals, globals, or fixture constants. Preserve exact evaluation order, call count, short-circuit behavior, multiple-return expansion, table/upvalue identity, and register epochs.
-6. Once the 151-state mega passes, add permanent tracked Fresh-CF regressions for at least: branch-local multi-return feeding a conditional; nested multi-state vararg transport; and any extra mega blocker fixed during continuation.
-7. Run the full current Fresh-CF/register/binding/upvalue/version/graph/semantic suites plus randomized Medium stress for the new features. Also rerun the previous 103-state captured-upvalue monster and recursive-closure stress shapes.
-8. Run `git diff --check` and review the exact tracked diff. Stage only intentional tracked files; never stage/delete unrelated `_tmp_*` probes.
-9. Update this context to remove WIP/stale unsupported wording, then make a focused commit and push `origin/main`.
-10. Treat current code + tests + this file as authority; use Prometheus compiler source and tiny real Medium fixtures whenever a lowering pattern is uncertain. Preserve source statements; Fresh CF is recovery, not a general optimizer.
+2. Run `git status --short --branch` and `git log -5 --oneline`; trust Git/current tracked tests over old temp output.
+3. Preserve all unrelated/untracked `_tmp_*` probes unless the user explicitly asks to clean them. Do not reset the solver merely because many temp files exist.
+4. Before changing Fresh CF, run the focused regression that matches the intended feature, then the full Fresh-CF/if/register/binding/upvalue/version/graph/semantic suites after the edit.
+5. For compiler-lowering uncertainty, inspect Prometheus `compiler.lua` and generate a tiny real Medium fixture. Recovery rules must be structural: no fixture-specific state IDs, register IDs, source literals, or globals.
+6. Preserve exact evaluation order, call count, short-circuit behavior, multi-return expansion, table/upvalue identity, vararg semantics, and register epochs. Fail closed on ambiguous merges/lifetimes.
+7. For new conditional shapes, use CFG evidence (branch targets, joins, result-carrier copies, cleanup/terminal proof) rather than source guesses. Empty branches are supported only when their explicit/absent arm is structurally distinguishable.
+8. General loops and loop-control reconstruction remain separate future work; do not infer them from early-return/conditional support.
+9. Before commit: run randomized Medium stress for the touched feature, `git diff --check`, inspect the exact tracked diff, update this context, and stage only intentional tracked files.
+10. Treat current code + tracked tests + this file as authority; generated `output/` and `_tmp_*` files are disposable probes, not project truth.
+
 ## 32. Context Maintenance Rule
 
 This file should contain current durable truth, not a chronological diary.

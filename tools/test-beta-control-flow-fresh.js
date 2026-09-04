@@ -1867,4 +1867,135 @@ function sequentialLogicalCallStates(count) {
     assert.strictEqual(result.source, 'local v1, v2, v3 = f()\nprint(v1, v2, v3)\n');
 }
 
+
+{
+    // A branch-local multi-return binding may terminate on one successor while
+    // the sibling path reaches the compiler nil cleanup. Both paths belong to
+    // the same source-local epoch and must emit one multi-local declaration.
+    const source = vmStatesSource({
+        1: ['r1 = "_VERSION"', 'r2 = _env[r1]', 'state = r2 and 2 or 5', 'ReturnVal = r2'],
+        2: ['r1 = "f"', 'r2 = _env[r1]', 'r3 = { r2() }', 'r4 = r3[1]', 'r5 = r3[2]', 'r6 = r3[3]', 'state = r6 and 3 or 4'],
+        3: ['ReturnVal = { r4, r5, r6 }', 'state = nil'],
+        4: ['r4 = nil', 'r5 = nil', 'r6 = nil', 'state = 5'],
+        5: ['ReturnVal = { 0 }', 'state = nil'],
+    });
+    const result = solveBetaControlFlow(source, parse(source));
+    assert.strictEqual(result.applied, true, "branch-local multi-return feeding a conditional was not recovered");
+    assert.strictEqual(result.mode, "fresh-simple-if");
+    assert.strictEqual(result.source, 'if _VERSION then\n    local v1, v2, v3 = f()\n    if v3 then\n        return v1, v2, v3\n    end\nend\nreturn 0\n');
+}
+
+{
+    // Prometheus may borrow state/ReturnVal for extracted return slots and
+    // schedule the final source-storage copy after an earlier semantic use of
+    // another slot. Prove that future handoff before rendering the use.
+    const source = vmStatesSource({
+        1: ['r1 = "f"', 'r2 = _env[r1]', 'r3 = { r2() }', 'state = r3[1]', 'r4 = state', 'r5 = r3[3]', 'ReturnVal = r3[2]', 'r6 = r4 < r5', 'r7 = ReturnVal', 'state = r6 and 2 or 3'],
+        2: ['ReturnVal = { r4, r7, r5 }', 'state = nil'],
+        3: ['ReturnVal = { 0 }', 'state = nil'],
+    });
+    const result = solveBetaControlFlow(source, parse(source));
+    assert.strictEqual(result.applied, true, "delayed structured-pack source owner was not proven before semantic slot use");
+    assert.strictEqual(result.mode, "fresh-simple-if");
+    assert.strictEqual(result.source, 'local v1, v2, v3 = f()\nif (v1 < v3) then\n    return v1, v2, v3\nend\nreturn 0\n');
+}
+
+{
+    // Nested child CFG varargs persist through the compiler's
+    // { select(1, unpack(args)) } pack and terminal unpack(pack) returns.
+    const source = vmStatesSource({
+        1: ['state = createClosure5(4, {})', 'r1 = state', 'ReturnVal = 10', 'state = r1(ReturnVal)', 'r2 = state', 'ReturnVal = "_VERSION"', 'state = _env[ReturnVal]', 'state = state and 2 or 3', 'r5 = args'],
+        2: ['r3 = "A"', 'ReturnVal = 4', 'r4 = "B"', 'state = { r2(ReturnVal, r3, r4) }', 'ReturnVal = { unpack(state) }', 'state = nil'],
+        3: ['r4 = "D"', 'ReturnVal = 1', 'r3 = "C"', 'state = { r2(ReturnVal, r3, r4) }', 'ReturnVal = { unpack(state) }', 'state = nil'],
+        4: ['r1 = allocUpvalue()', 'r5 = args[1]', 'state = createClosure(5, { r1 })', 'upvalueValues[r1] = r5', 'ReturnVal = { state }', 'state = nil'],
+        5: ['ReturnVal = "select"', 'state = _env[ReturnVal]', 'r5 = { select(1, unpack(args)) }', 'r1 = 1', 'ReturnVal = state(r1, unpack(r5))', 'r1 = ReturnVal', 'state = r1 and 6 or 7', 'ReturnVal = r1'],
+        6: ['r3 = 2', 'r2 = r1 > r3', 'ReturnVal = r2', 'state = 7'],
+        7: ['state = ReturnVal and 8 or 9'],
+        8: ['ReturnVal = upvalueValues[upvalues[1]]', 'state = ReturnVal + r1', 'upvalueValues[upvalues[1]] = state', 'ReturnVal = upvalueValues[upvalues[1]]', 'ReturnVal = { ReturnVal, unpack(r5) }', 'state = nil'],
+        9: ['r2 = upvalueValues[upvalues[1]]', 'r3 = 1', 'ReturnVal = r2 + r3', 'upvalueValues[upvalues[1]] = ReturnVal', 'r2 = upvalueValues[upvalues[1]]', 'ReturnVal = { r2, unpack(r5) }', 'state = nil'],
+    });
+    const result = solveBetaControlFlow(source, parse(source));
+    assert.strictEqual(result.applied, true, "nested multi-state vararg-pack transport was not recovered");
+    assert.strictEqual(result.mode, "fresh-closure-entry");
+    assert.strictEqual(result.source, 'local v1 = (function(v1)\n    local v2 = v1\n    return function(...)\n        local v1 = select(1, ...)\n        if (v1 and (v1 > 2)) then\n            v2 = (v2 + v1)\n            return v2, ...\n        end\n        v2 = (v2 + 1)\n        return v2, ...\n    end\nend)(10)\nif _VERSION then\n    return v1(4, "A", "B")\nend\nreturn v1(1, "C", "D")\n');
+}
+
+
+{
+    // A standalone empty source if still evaluates its condition. The compiler
+    // proves "no else" structurally because the false edge goes directly to join.
+    const source = vmStatesSource({
+        1: ['ReturnVal = "thing"', 'state = _env[ReturnVal]', 'state = state and 2 or 3'],
+        2: ['state = 3'],
+        3: ['ReturnVal = {}', 'state = nil'],
+    });
+    const result = solveBetaControlFlow(source, parse(source));
+    assert.strictEqual(result.applied, true, "standalone empty if was not recovered");
+    assert.strictEqual(result.mode, "fresh-simple-if");
+    assert.strictEqual(result.source, 'if thing then\nend\n');
+}
+
+{
+    // An explicit empty else has two distinct empty branch states before the join.
+    // Preserve that source structure instead of collapsing it to an if without else.
+    const source = vmStatesSource({
+        1: ['ReturnVal = "thing"', 'state = _env[ReturnVal]', 'state = state and 2 or 3'],
+        2: ['state = 4'],
+        3: ['state = 4'],
+        4: ['ReturnVal = {}', 'state = nil'],
+    });
+    const result = solveBetaControlFlow(source, parse(source));
+    assert.strictEqual(result.applied, true, "explicit empty if/else was not recovered");
+    assert.strictEqual(result.mode, "fresh-simple-if");
+    assert.strictEqual(result.source, 'if thing then\nelse\nend\n');
+}
+
+ {
+    // Explicit else remains source-visible when only the then arm has effects.
+    const source = vmStatesSource({
+        1: ['ReturnVal = "thing"', 'state = _env[ReturnVal]', 'state = state and 2 or 3'],
+        2: ['ReturnVal = "print"', 'state = _env[ReturnVal]', 'r1 = 1', 'ReturnVal = state(r1)', 'state = 4'],
+        3: ['state = 4'],
+        4: ['ReturnVal = {}', 'state = nil'],
+    });
+    const result = solveBetaControlFlow(source, parse(source));
+    assert.strictEqual(result.applied, true, "empty explicit else was collapsed away");
+    assert.strictEqual(result.mode, "fresh-simple-if");
+    assert.strictEqual(result.source, 'if thing then\n    print(1)\nelse\nend\n');
+}
+
+{
+    // Explicit empty then arm remains source-visible when only else has effects.
+    const source = vmStatesSource({
+        1: ['ReturnVal = "thing"', 'state = _env[ReturnVal]', 'state = state and 2 or 3'],
+        2: ['state = 4'],
+        3: ['ReturnVal = "print"', 'state = _env[ReturnVal]', 'r1 = 2', 'ReturnVal = state(r1)', 'state = 4'],
+        4: ['ReturnVal = {}', 'state = nil'],
+    });
+    const result = solveBetaControlFlow(source, parse(source));
+    assert.strictEqual(result.applied, true, "empty explicit then arm was collapsed away");
+    assert.strictEqual(result.mode, "fresh-simple-if");
+    assert.strictEqual(result.source, 'if thing then\nelse\n    print(2)\nend\n');
+}
+
+ {
+    // Empty if/elseif source clauses still evaluate their conditions. Prometheus
+    // can represent literal conditions by borrowing `state` itself as the branch
+    // carrier, with no TESTSET/compiler result-copy register.
+    const source = vmStatesSource({
+        1: ['ReturnVal = "print"', 'state = _env[ReturnVal]', 'r2 = 1', 'ReturnVal = state(r2)', 'state = 1', 'state = state and 2 or 3', 'r1 = args'],
+        2: ['ReturnVal = "print"', 'state = _env[ReturnVal]', 'r2 = 2', 'ReturnVal = state(r2)', 'state = 4'],
+        3: ['ReturnVal = "print"', 'state = _env[ReturnVal]', 'r2 = 3', 'ReturnVal = state(r2)', 'state = 3', 'state = state and 5 or 6'],
+        4: ['ReturnVal = {}', 'state = nil'],
+        5: ['state = 7'],
+        6: ['state = 4', 'state = state and 8 or 7'],
+        7: ['state = 4'],
+        8: ['state = 7'],
+    });
+    const result = solveBetaControlFlow(source, parse(source));
+    assert.strictEqual(result.applied, true, "empty literal if/elseif clauses were rejected as compiler logical branches");
+    assert.strictEqual(result.mode, "fresh-simple-if");
+    assert.strictEqual(result.source, 'print(1)\nif 1 then\n    print(2)\nelse\n    print(3)\n    if 3 then\n    elseif 4 then\n    end\nend\n');
+}
+
 console.log("fresh beta direct-global-call regression: ok");
