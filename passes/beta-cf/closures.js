@@ -473,7 +473,7 @@ function matchClosureEntryProgram(source, stateWhile, stateName, returnName, dia
     for (const id of (flattenedRoot ? flattenedRoot.consumed : [1])) consumedEntries.add(id);
     const root = flattenedRoot?.leaf || leaves.get(1);
     const rootProgramDiagnostics = {};
-    const program = matchLocalRegisterProgram(source, root, stateName, returnName, { renderSpecialCall: renderClosureCall, renderCapturedCall: renderClosureCall, diagnostics: rootProgramDiagnostics });
+    const program = matchLocalRegisterProgram(source, root, stateName, returnName, { renderSpecialCall: renderClosureCall, renderCapturedCall: renderClosureCall, diagnostics: rootProgramDiagnostics, allowNoLocals: true });
     if (!program) {
         if (diagnostics && !diagnostics.reason) {
             diagnostics.reason = flattenedRoot ? "flattened root is not a proven register-local program" : (rootDiagnostics.reason || "root is not a proven register-local program");

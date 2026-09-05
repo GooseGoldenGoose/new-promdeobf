@@ -443,15 +443,19 @@ function vmStatesSource(states, registers = "r1, r2, r3, r4, r5, r6") {
 }
 
 {
-    // A direct createClosure assignment followed by immediate use is not proof
-    // of a named source-local binding. Keep the anonymous/ambiguous shape
-    // fail-closed instead of promoting it through terminal closure ownership.
+    // A createClosure TEMP used directly as a callable is an anonymous function
+    // expression, not a named source local. Reuse the ordinary TEMP-call path.
     const source = vmStatesSource({
         1: ["r2 = createClosure2(2, {})", "ReturnVal = r2()", "ReturnVal = { ReturnVal }", "state = nil"],
         2: ["ReturnVal = 1", "ReturnVal = { ReturnVal }", "state = nil"],
     });
     const result = solveBetaControlFlow(source, parse(source));
-    assert.strictEqual(result.applied, false);
+    assert.strictEqual(result.applied, true);
+    assert.strictEqual(result.mode, "fresh-closure-entry");
+    assert.strictEqual(result.source,
+        "return (function()\n" +
+        "    return 1\n" +
+        "end)()\n");
 }
 
 {
@@ -588,4 +592,45 @@ function vmStatesSource(states, registers = "r1, r2, r3, r4, r5, r6") {
     assert.match(result.source, /return "done"/);
 }
 
+
+{
+    // An immediately-called anonymous closure is compiler TEMP transport, not
+    // a named source local. Resolve createClosureN into a callable TEMP, then
+    // reuse the ordinary call path while rendering the structured child body.
+    const source = vmStatesSource({
+        1: ["state = createClosure2(2, {})", "ReturnVal = state()", "r1 = args", "ReturnVal = {}", "state = nil"],
+        2: ["state = 3"],
+        3: ["state = 1", "state = state and 4 or 5"],
+        4: ['ReturnVal = "print"', "state = _env[ReturnVal]", "r1 = 1", "ReturnVal = state(r1)", "state = 3"],
+        5: ["ReturnVal = {}", "state = nil"],
+    });
+    const result = solveBetaControlFlow(source, parse(source));
+    assert.strictEqual(result.applied, true);
+    assert.strictEqual(result.mode, "fresh-closure-entry");
+    assert.strictEqual(result.source,
+        "(function()\n" +
+        "    while 1 do\n" +
+        "        print(1)\n" +
+        "    end\n" +
+        "end)()\n");
+}
+
+{
+    // IIFE argument evaluation is ordinary TEMP production between callable
+    // creation and invocation; it must not require a special closure-call path.
+    const source = vmStatesSource({
+        1: ["state = createClosure2(2, {})", "r2 = 3", "ReturnVal = state(r2)", "r1 = args", "ReturnVal = {}", "state = nil"],
+        2: ["r1 = args[1]", "state = 0", "r2 = state", "state = 3"],
+        3: ["state = r2 < r1", "state = state and 4 or 5"],
+        4: ['ReturnVal = "print"', "state = _env[ReturnVal]", "ReturnVal = state(r2)", "ReturnVal = 1", "state = r2 + ReturnVal", "r2 = state", "state = 3"],
+        5: ["r1 = nil", "r2 = nil", "ReturnVal = {}", "state = nil"],
+    });
+    const result = solveBetaControlFlow(source, parse(source));
+    assert.strictEqual(result.applied, true);
+    assert.strictEqual(result.mode, "fresh-closure-entry");
+    assert.match(result.source, /^\(function\(v1\)/);
+    assert.match(result.source, /while \(v\d+ < v\d+\) do/);
+    assert.match(result.source, /print\(v\d+\)/);
+    assert.match(result.source, /end\)\(3\)\n$/);
+}
 console.log("beta control-flow while tests passed");

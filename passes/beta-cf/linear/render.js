@@ -114,7 +114,8 @@ function renderRhs(ctx, rhs) {
         if (member?.kind === "member" && args.length > 0 && args[0] === member.base) {
             return `${member.base}:${member.member}(${args.slice(1).join(", ")})`;
         }
-        return `${base}(${args.join(", ")})`;
+        const callable = /^function\b/.test(base.trim()) ? `(${base})` : base;
+        return `${callable}(${args.join(", ")})`;
     }
     return null;
 }

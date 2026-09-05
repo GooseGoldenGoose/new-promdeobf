@@ -212,7 +212,16 @@ function matchLocalRegisterProgram(source, leaf, stateName, returnName, options 
                 continue;
             }
         }
-        if (name === ctx.returnName && isEmptyTable(rhs) && !valueUsedBeforeOverwrite(ctx, index, ctx.returnName)) { ctx.sawReturnReset = true; continue; }
+        if (name === ctx.returnName && isEmptyTable(rhs)) {
+            const next = ctx.leaf[index + 1];
+            const terminalAtLeafEnd = index === ctx.leaf.length - 1;
+            const terminalStopNext = isSingleAssignment(next, ctx.stateName) && next.init[0]?.type === "NilLiteral";
+            if (!valueUsedBeforeOverwrite(ctx, index, ctx.returnName) || terminalAtLeafEnd || terminalStopNext) {
+                ctx.sawReturnReset = true;
+                if (terminalAtLeafEnd) ctx.sawStop = true;
+                continue;
+            }
+        }
         if (name === ctx.stateName && rhs?.type === "NilLiteral") {
             if (valueUsedBeforeOverwrite(ctx, index, ctx.stateName)) {
                 ctx.expr.set(ctx.stateName, "nil"); ctx.exprKinds.set(ctx.stateName, "value"); continue;
@@ -445,8 +454,10 @@ function matchLocalRegisterProgram(source, leaf, stateName, returnName, options 
     }
 
     if (!flushPendingPacks(ctx)) { if (ctx.options.diagnostics) ctx.options.diagnostics.reason = "final pending multi-return pack flush failed"; return null; }
-    if (ctx.options.allowNoLocals !== true && ctx.declaredCount === 0) { if (ctx.options.diagnostics) ctx.options.diagnostics.reason = "no proven source locals were recovered"; return null; }
-    if (ctx.options.allowNoLocals === true && (!ctx.sawReturnReset || !ctx.sawStop)) { if (ctx.options.diagnostics) ctx.options.diagnostics.reason = `terminal bookkeeping incomplete: return=${ctx.sawReturnReset}, stop=${ctx.sawStop}`; return null; }
+    if (ctx.declaredCount === 0) {
+        if (ctx.options.allowNoLocals !== true) { if (ctx.options.diagnostics) ctx.options.diagnostics.reason = "no proven source locals were recovered"; return null; }
+        if (!ctx.sawReturnReset || !ctx.sawStop) { if (ctx.options.diagnostics) ctx.options.diagnostics.reason = `terminal bookkeeping incomplete: return=${ctx.sawReturnReset}, stop=${ctx.sawStop}`; return null; }
+    }
     if (ctx.deferredTerminalClosureCopies.size !== 0) { if (ctx.options.diagnostics) ctx.options.diagnostics.reason = "terminal closure handoff copy was not consumed"; return null; }
     if (ctx.deferredTerminalUnusedCopies.size !== 0) { if (ctx.options.diagnostics) ctx.options.diagnostics.reason = "terminal unused-local handoff copy was not consumed"; return null; }
     if (ctx.deferredUpvalueClosureStores.size !== 0) { if (ctx.options.diagnostics) ctx.options.diagnostics.reason = "upvalue closure handoff store was not consumed"; return null; }
