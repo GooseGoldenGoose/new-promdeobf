@@ -777,8 +777,11 @@ passes/
     closures.js
     diagnostics.js
     direct-calls.js
+    expression-semantics.js
     global-writes.js
     logical.js
+    statement-ir.js
+    statement-semantics.js
     normalize.js
     render.js
     solve.js
@@ -1207,6 +1210,9 @@ Public entry and shared work:
 - `passes/beta-cf/logical.js`: compiler short-circuit logical-value graph flattening and reduction. Source `if` branch reconstruction does not belong here.
 - `passes/beta-cf/closures.js`: simple and recursive multi-state closure recovery, capture mapping, recursion/cycle guards, and consumed-state transactions.
 - `passes/beta-cf/direct-calls.js`: strict direct global/member call recognition and its terminal bookkeeping.
+- `passes/beta-cf/statement-ir.js`: shared decoding of every ordinary VM assignment into `register-write` or `index-write` IR plus shared call-kind classification (`call`, closure creation, upvalue allocation/release). Both linear and structured solvers consume this same decoder.
+- `passes/beta-cf/statement-semantics.js`: shared ordinary assignment semantics such as proven environment/global writes and stable table/index writes. It returns source effects; the caller decides only where that effect belongs in straight-line or structured control flow.
+- `passes/beta-cf/expression-semantics.js`: shared rendered-expression primitives for global reads, member/index access, infix expressions, and callable formatting. Context-specific resolvers still prove the underlying values/lifetimes.
 - `passes/beta-cf/render.js`: final whole-program and recovered-function text rendering shared by both solver paths.
 - `passes/beta-cf/diagnostics.js`: stable fail-closed results and unsupported-state diagnostic messages.
 - `passes/beta-cf/control/while.js`: Prometheus while natural-loop discovery, compiler-while signature proof, inner-first loop collapse, break/continue edge classification, loop-carried storage-start proof, and anti-matching for numeric/generic for shapes.
@@ -1255,8 +1261,9 @@ Fast routing for future changes:
 - graph/path questions -> `passes/beta-cf/cfg.js`
 - short-circuit `and`/`or` recovery -> `passes/beta-cf/logical.js`
 - closure/upvalue recovery -> `passes/beta-cf/closures.js`
-- one-state locals/calls/tables/packs -> the matching `passes/beta-cf/linear/` module
-- multi-state locals/calls/tables/packs/conditionals/returns -> the matching `passes/beta-cf/structured/` module
+- ordinary VM statement meaning and expression syntax -> `passes/beta-cf/statement-ir.js`, `passes/beta-cf/statement-semantics.js`, and `passes/beta-cf/expression-semantics.js` (shared by all block shapes)
+- one-state lifetime/pack ownership and emission ordering -> the matching `passes/beta-cf/linear/` module
+- multi-state lifetime/dataflow, candidate placement, conditionals/returns -> the matching `passes/beta-cf/structured/` module
 - final program/function layout -> `passes/beta-cf/render.js`
 - unsupported/failure reporting -> `passes/beta-cf/diagnostics.js`
 - proven Prometheus while / nested while / loop break+continue -> `passes/beta-cf/control/while.js` plus shared structured lifetime/branch rendering
@@ -1267,11 +1274,13 @@ Important isolation rules:
 - structured pack tokens never render as source and pack ownership never lives inside branch recovery
 - terminal paths are kept separate from continuing candidates and are merged only by `terminal.js`
 - closure recovery calls the same entry-parametric structured solver through a narrow callback contract, independent of whether the parent construct is a conditional or a future loop
-- a small amount of coupling remains intentionally in each solver's statement loop because evaluation order is decided at the exact compiler-statement position; cross-cutting proof and mutable state still live behind explicit context/module boundaries
+- ordinary statement syntax/meaning must NOT be reimplemented per solver or per control-flow construct. Every block decodes assignments through `statement-ir.js`; ordinary global/table writes go through `statement-semantics.js`; shared expression syntax goes through `expression-semantics.js`. Linear/structured adapters may differ only where proof genuinely depends on lifetime, pack ownership, path-local identity, or effect placement. `if`, `elseif`, and `while` do not get separate handlers for normal assignments/calls/indexing.
+
+Shared block-semantics refactor validated on 2026-09-05: the exact 10-state Roblox-style `while -> if -> if/elseif` global-write sample still recovers; a finite 9-state Medium fixture mixing loop-carried locals, table member/index reads+writes, global writes, calls, and nested `if/elseif/else` has exact source/obfuscated/recovered runtime parity; randomized Medium stress passed 25/25 exact-parity layouts; the full established 15-suite gate passes.
 
 Loop recovery remains modular. `control/while.js` now owns proven Prometheus while recovery and consumes `StateGraph` plus narrow structured-solver options for lifetime/control effects. Future `repeat`, numeric-for, and generic-for support must remain separate modules such as `control/repeat.js`, `control/numeric-for.js`, and `control/generic-for.js`. They must not duplicate private `elseif`, structured-pack, upvalue-transport, or closure-transaction internals. Unsupported/ambiguous loop shapes continue to fail closed.
 
-Before adding any new recovery feature, run syntax checks for every changed/new JavaScript file, all twelve tracked Fresh-CF/if/register/binding/upvalue/version/graph/semantic suites, relevant real Medium runtime-parity fixtures, randomized layout stress for the touched shape, and `git diff --check`.
+Before adding any new recovery feature, run syntax checks for every changed/new JavaScript file, the established 15-suite Fresh-CF/if/while/register/binding/upvalue/version/graph/semantic gate, relevant real Medium runtime-parity fixtures, randomized layout stress for the touched shape, and `git diff --check`.
 
 `solveFreshSource(source, ast)` currently does approximately:
 

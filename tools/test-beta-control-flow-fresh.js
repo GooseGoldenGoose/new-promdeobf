@@ -1,6 +1,9 @@
 const assert = require("assert");
 const luaparse = require("../parser/luaparse");
 const { solveBetaControlFlow } = require("../passes/beta-control-flow");
+const { decodeVmStatement, callKind } = require("../passes/beta-cf/statement-ir");
+const { renderOrdinaryIndexWrite } = require("../passes/beta-cf/statement-semantics");
+const { renderEnvironmentRead, renderIndexAccess, renderCallable } = require("../passes/beta-cf/expression-semantics");
 
 function parse(source) {
     return luaparse.parse(source, {
@@ -1998,4 +2001,33 @@ function sequentialLogicalCallStates(count) {
     assert.strictEqual(result.source, 'print(1)\nif 1 then\n    print(2)\nelse\n    print(3)\n    if 3 then\n    elseif 4 then\n    end\nend\n');
 }
 
+{
+    // Every Fresh-CF block starts from the same VM-statement IR and ordinary
+    // expression/write semantics. Control-flow solvers may differ in lifetime
+    // placement, but they must not rediscover the meaning of normal statements.
+    const registerStatement = parse("r1 = print(1)").body[0];
+    const registerOp = decodeVmStatement(registerStatement);
+    assert.strictEqual(registerOp.kind, "register-write");
+    assert.strictEqual(registerOp.targetName, "r1");
+    assert.strictEqual(callKind(registerOp.value), "call");
+
+    const closureStatement = parse("r1 = createClosure2(3, {})").body[0];
+    assert.strictEqual(callKind(decodeVmStatement(closureStatement).value), "closure");
+
+    const indexStatement = parse("_env[r1] = r2").body[0];
+    assert.strictEqual(decodeVmStatement(indexStatement).kind, "index-write");
+
+    assert.deepStrictEqual(
+        renderOrdinaryIndexWrite({ baseName: "_env", renderedBase: null, renderedKey: '"thing"', renderedValue: "123", stableBase: true }),
+        { kind: "global-write", line: "thing = 123", baseName: "_env" },
+    );
+    assert.deepStrictEqual(
+        renderOrdinaryIndexWrite({ baseName: "r1", renderedBase: "v1", renderedKey: '"field"', renderedValue: "2", stableBase: true }),
+        { kind: "index-write", line: "v1.field = 2", baseName: "r1" },
+    );
+    assert.strictEqual(renderOrdinaryIndexWrite({ baseName: "r1", renderedBase: "v1", renderedKey: '"field"', renderedValue: "2", stableBase: false }), null);
+    assert.strictEqual(renderEnvironmentRead('"print"'), "print");
+    assert.strictEqual(renderIndexAccess("v1", '"field"'), "v1.field");
+    assert.strictEqual(renderCallable("function()\nend", ["1"]), "(function()\nend)(1)");
+}
 console.log("fresh beta direct-global-call regression: ok");

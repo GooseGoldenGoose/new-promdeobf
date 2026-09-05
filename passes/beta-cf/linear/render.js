@@ -1,14 +1,15 @@
 "use strict";
 
-const { isIdentifier, isSingleAssignment, isPrimitiveLiteral, isEmptyTable, isVmRegisterName, sourceOf, renderTableFields, renderUnary, isLuaIdentifier } = require("../ast");
+const { isIdentifier, isSingleAssignment, isPrimitiveLiteral, isEmptyTable, isVmRegisterName, sourceOf, renderTableFields, renderUnary } = require("../ast");
 const { localName } = require("./bindings");
+const { staticMemberNameFromRenderedKey, renderEnvironmentRead, renderIndexAccess, renderInfix, renderCallable } = require("../expression-semantics");
 function memberMeta(ctx, rhs) {
     if (rhs?.type !== "IndexExpression" || !isIdentifier(rhs.base) || !isIdentifier(rhs.index) || rhs.base.name === "_env") return null;
     const key = ctx.expr.get(rhs.index.name) ?? (ctx.locals.has(rhs.index.name) ? localName(ctx, rhs.index.name) : null);
     const base = ctx.expr.get(rhs.base.name) ?? (ctx.locals.has(rhs.base.name) ? localName(ctx, rhs.base.name) : null);
     if (typeof key !== "string" || typeof base !== "string") return null;
-    const member = /^"[A-Za-z_][A-Za-z0-9_]*"$/.test(key) ? key.slice(1, -1) : null;
-    return member && isLuaIdentifier(member) ? { kind: "member", base, member } : null;
+    const member = staticMemberNameFromRenderedKey(key);
+    return member ? { kind: "member", base, member } : null;
 }
 
 function renderCallArg(ctx, arg) {
@@ -37,13 +38,13 @@ function renderRhs(ctx, rhs) {
         const left = renderRhs(ctx, rhs.left);
         const right = renderRhs(ctx, rhs.right);
         if (typeof left !== "string" || typeof right !== "string") return null;
-        return `(${left} ${rhs.operator} ${right})`;
+        return renderInfix(left, rhs.operator, right);
     }
     if (rhs?.type === "LogicalExpression" && rhs.freshCompilerLogical === true && typeof rhs.operator === "string") {
         const left = renderRhs(ctx, rhs.left);
         const right = renderRhs(ctx, rhs.right);
         if (typeof left !== "string" || typeof right !== "string") return null;
-        return `(${left} ${rhs.operator} ${right})`;
+        return renderInfix(left, rhs.operator, right);
     }
     if (rhs?.type === "LogicalExpression" && isIdentifier(rhs.left)) {
         const rightIsIdentifier = isIdentifier(rhs.right);
@@ -53,7 +54,7 @@ function renderRhs(ctx, rhs) {
         const left = ctx.expr.get(rhs.left.name) ?? (ctx.locals.has(rhs.left.name) ? localName(ctx, rhs.left.name) : null);
         const right = renderRhs(ctx, rhs.right);
         if (left == null || right == null || typeof rhs.operator !== "string") return null;
-        return `(${left} ${rhs.operator} ${right})`;
+        return renderInfix(left, rhs.operator, right);
     }
     if (rhs?.type === "IndexExpression" && isIdentifier(rhs.base)) {
         if (rhs.base.name === "upvalueValues" && isIdentifier(rhs.index)) {
@@ -69,13 +70,11 @@ function renderRhs(ctx, rhs) {
         const key = ctx.expr.get(rhs.index.name);
         if (key == null) return null;
         if (rhs.base.name === "_env") {
-            const globalName = /^"[A-Za-z_][A-Za-z0-9_]*"$/.test(key) ? key.slice(1, -1) : null;
-            return globalName && isLuaIdentifier(globalName) ? globalName : `_env[${key}]`;
+            return renderEnvironmentRead(key);
         }
         const base = ctx.expr.get(rhs.base.name) ?? (ctx.locals.has(rhs.base.name) ? localName(ctx, rhs.base.name) : null);
         if (base == null) return null;
-        const member = /^"[A-Za-z_][A-Za-z0-9_]*"$/.test(key) ? key.slice(1, -1) : null;
-        return member && isLuaIdentifier(member) ? `${base}.${member}` : `${base}[${key}]`;
+        return renderIndexAccess(base, key);
     }
     if (rhs?.type === "CallExpression" && isIdentifier(rhs.base)) {
         if (/^createClosure\d*$/.test(rhs.base.name) && typeof ctx.options.renderCapturedCall === "function") {
@@ -114,8 +113,7 @@ function renderRhs(ctx, rhs) {
         if (member?.kind === "member" && args.length > 0 && args[0] === member.base) {
             return `${member.base}:${member.member}(${args.slice(1).join(", ")})`;
         }
-        const callable = /^function\b/.test(base.trim()) ? `(${base})` : base;
-        return `${callable}(${args.join(", ")})`;
+        return renderCallable(base, args);
     }
     return null;
 }

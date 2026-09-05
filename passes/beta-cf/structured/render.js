@@ -1,9 +1,10 @@
 "use strict";
 
-const { isEmptyTable, isIdentifier, isLuaIdentifier, isPrimitiveLiteral, isSingleAssignment, isVmRegisterName, renderTableFields, renderUnary, sourceOf } = require("../ast");
+const { isEmptyTable, isIdentifier, isPrimitiveLiteral, isSingleAssignment, isVmRegisterName, renderTableFields, renderUnary, sourceOf } = require("../ast");
 const { hasLinearRootContinuation, recordRootConditional, upvalueAliasKey, upvalueCellBinding, allocateValueDisplay, allocateTableDisplay, parameterName, capturedSlotName, forwardedCaptureName, displayLocal, activeLocalDisplay, hasActiveLocal, resolveId, resolveRenderableId } = require("./bindings");
 const { structuredPackId, structuredPackSlot, structuredPackSlotToken } = require("./tokens");
 const { isCompilerVarargPack, isVarargUnpack, expectedPackSlotsInBlock, cleanupOrTerminalEpoch, maybeOwnStructuredPackSlot, preclaimFutureStructuredPackOwner, preclaimFutureStructuredPackSlots, flushStructuredPack, flushReadyStructuredPacks } = require("./packs");
+const { renderEnvironmentRead, renderIndexAccess, renderInfix, renderCallable } = require("../expression-semantics");
 function render(ctx, rhs, env, provenRecursive = false, singleCallPacks = null) {
     if (isPrimitiveLiteral(rhs) || isEmptyTable(rhs)) return sourceOf(ctx.source, rhs);
     if (rhs?.type === "TableConstructorExpression") return renderTableFields(rhs.fields || [], node => render(ctx, node, env, provenRecursive, singleCallPacks));
@@ -21,21 +22,18 @@ function render(ctx, rhs, env, provenRecursive = false, singleCallPacks = null) 
         const key = isIdentifier(rhs.index) ? resolveRenderableId(ctx, rhs.index.name, env)
             : (isPrimitiveLiteral(rhs.index) ? sourceOf(ctx.source, rhs.index) : render(ctx, rhs.index, env, true, singleCallPacks));
         if (typeof base !== "string" || typeof key !== "string" || structuredPackId(ctx, base) || structuredPackSlot(ctx, base) || base === ctx.varargPackMarker) return null;
-        const member = /^"[A-Za-z_][A-Za-z0-9_]*"$/.test(key) ? key.slice(1, -1) : null;
-        return member && isLuaIdentifier(member) ? `${base}.${member}` : `${base}[${key}]`;
+        return renderIndexAccess(base, key);
     }
     if (rhs?.type === "IndexExpression" && isIdentifier(rhs.base)) {
         const key = isIdentifier(rhs.index) ? resolveRenderableId(ctx, rhs.index.name, env)
             : (provenRecursive && isPrimitiveLiteral(rhs.index) ? sourceOf(ctx.source, rhs.index) : null);
         if (key == null) return null;
         if (rhs.base.name === "_env") {
-            const globalName = /^"[A-Za-z_][A-Za-z0-9_]*"$/.test(key) ? key.slice(1, -1) : null;
-            return globalName && isLuaIdentifier(globalName) ? globalName : `_env[${key}]`;
+            return renderEnvironmentRead(key);
         }
         const base = resolveRenderableId(ctx, rhs.base.name, env);
         if (base == null) return null;
-        const member = /^"[A-Za-z_][A-Za-z0-9_]*"$/.test(key) ? key.slice(1, -1) : null;
-        return member && isLuaIdentifier(member) ? `${base}.${member}` : `${base}[${key}]`;
+        return renderIndexAccess(base, key);
     }
     if (rhs?.type === "UnaryExpression") {
         const argument = provenRecursive ? render(ctx, rhs.argument, env, true, singleCallPacks)
@@ -47,13 +45,13 @@ function render(ctx, rhs, env, provenRecursive = false, singleCallPacks = null) 
         const left = render(ctx, rhs.left, env, true, singleCallPacks);
         const right = render(ctx, rhs.right, env, true, singleCallPacks);
         if (left == null || right == null) return null;
-        return `(${left} ${rhs.operator} ${right})`;
+        return renderInfix(left, rhs.operator, right);
     }
     if ((rhs?.type === "BinaryExpression" || rhs?.type === "LogicalExpression") && rhs.operator) {
         const left = isIdentifier(rhs.left) ? resolveRenderableId(ctx, rhs.left.name, env) : (isPrimitiveLiteral(rhs.left) ? sourceOf(ctx.source, rhs.left) : null);
         const right = isIdentifier(rhs.right) ? resolveRenderableId(ctx, rhs.right.name, env) : (isPrimitiveLiteral(rhs.right) ? sourceOf(ctx.source, rhs.right) : null);
         if (left == null || right == null) return null;
-        return `(${left} ${rhs.operator} ${right})`;
+        return renderInfix(left, rhs.operator, right);
     }
     if (rhs?.type === "CallExpression") {
         if (ctx.renderAsFunction && isVarargUnpack(ctx, rhs, env)) {
@@ -118,8 +116,7 @@ function render(ctx, rhs, env, provenRecursive = false, singleCallPacks = null) 
             if (value == null || structuredPackId(ctx, value) || structuredPackSlot(ctx, value) || value === ctx.varargPackMarker) return null;
             args.push(value);
         }
-        const callable = /^function\b/.test(base.trim()) ? "(" + base + ")" : base;
-        return callable + "(" + args.join(", ") + ")";
+        return renderCallable(base, args);
     }
     return null;
 }

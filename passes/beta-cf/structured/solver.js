@@ -1,14 +1,15 @@
 "use strict";
 
 const { createStructuredContext } = require("./context");
-const { isEmptyTable, isIdentifier, isLuaIdentifier, isPrimitiveLiteral, isSingleAssignment, isVmRegisterName, renderTableFields, renderUnary, sourceOf } = require("../ast");
+const { isEmptyTable, isIdentifier, isPrimitiveLiteral, isSingleAssignment, isVmRegisterName, renderTableFields, renderUnary, sourceOf } = require("../ast");
 const { hasLinearRootContinuation, recordRootConditional, upvalueAliasKey, pathLocalOwnerKey, pathUpvalueCellKey, hasPathUpvalueCell, upvalueCellBinding, allocateValueDisplay, allocateTableDisplay, parameterName, capturedSlotName, forwardedCaptureName, displayLocal, activeLocalDisplay, hasActiveLocal, resolveId, resolveRenderableId } = require("./bindings");
 const { structuredPackId, structuredPackSlot, structuredPackSlotToken } = require("./tokens");
 const { isCompilerVarargPack, isVarargUnpack, expectedPackSlotsInBlock, cleanupOrTerminalEpoch, maybeOwnStructuredPackSlot, preclaimFutureStructuredPackOwner, preclaimFutureStructuredPackSlots, flushStructuredPack, flushReadyStructuredPacks } = require("./packs");
 const { nodeReadsIdentifier, nodeUsesAsCallBaseMulti, terminalStableUsedEpoch, transportSourceKind, valueMayBeReadFrom, eventualCleanupOnAllPaths, valueMayBeReadAfter, hasFutureNonNilWrite, analyzePersistentStorage } = require("./lifetime");
 const { render } = require("./render");
 const { renderFunction, renderProgram } = require("../render");
-const { renderStaticEnvironmentWrite } = require("../global-writes");
+const { decodeVmStatement, callKind } = require("../statement-ir");
+const { renderOrdinaryIndexWrite } = require("../statement-semantics");
 const { mergeElseIfCandidates, indentConditionalEffect, mergeCandidates } = require("./branches");
 const { markersSharePrefix, terminalSiblingMatch, guardLine, collapseTerminalCandidates, foldTerminalGuards } = require("./terminal");
 
@@ -293,11 +294,12 @@ function matchMultiStateLogicalLocals(source, stateWhile, stateName, returnName,
         for (let i = 0; i < block.body.length; i++) {
             if (i === block.transitionIndex) continue;
             const statement = block.body[i];
-            if (!isSingleAssignment(statement)) return null;
-            const dest = statement.variables[0];
-            const rhs = statement.init[0];
+            const op = decodeVmStatement(statement);
+            if (!op) return null;
+            const dest = op.destination;
+            const rhs = op.value;
 
-            if (dest?.type === "IndexExpression") {
+            if (op.kind === "index-write") {
                 const capturedDestination = capturedSlotName(ctx, dest);
                 if (typeof capturedDestination === "string") {
                     const value = render(ctx, rhs, env);
@@ -346,34 +348,23 @@ function matchMultiStateLogicalLocals(source, stateWhile, stateName, returnName,
                     : (isPrimitiveLiteral(dest.index) ? sourceOf(ctx.source, dest.index) : null);
                 const value = render(ctx, rhs, env);
                 if (key == null || value == null) return null;
-                if (dest.base.name === "_env") {
-                    const line = renderStaticEnvironmentWrite(key, value);
-                    if (!line) return null;
-                    if (markers.length !== 0) {
-                        if (!ctx.allowConditionalIf) return null;
-                        effects = [...effects, line];
-                    } else {
-                        ctx.out.push(line);
-                    }
-                    continue;
-                }
-                const base = resolveId(ctx, dest.base.name, env);
-                const stableBase = hasActiveLocal(ctx, dest.base.name, env) ||
-                    (typeof base === "string" && env.get(upvalueAliasKey(ctx, dest.base.name)) === base);
-                if (!stableBase || base == null) return null;
-                const member = /^"[A-Za-z_][A-Za-z0-9_]*"$/.test(key) ? key.slice(1, -1) : null;
-                const target = member && isLuaIdentifier(member) ? base + "." + member : base + "[" + key + "]";
-                const line = target + " = " + value;
+                const baseName = dest.base.name;
+                const base = baseName === "_env" ? null : resolveId(ctx, baseName, env);
+                const stableBase = baseName === "_env" || hasActiveLocal(ctx, baseName, env) ||
+                    (typeof base === "string" && env.get(upvalueAliasKey(ctx, baseName)) === base);
+                const decoded = renderOrdinaryIndexWrite({ baseName, renderedBase: base, renderedKey: key, renderedValue: value, stableBase });
+                if (!decoded) return null;
                 if (markers.length !== 0) {
                     if (!ctx.allowConditionalIf) return null;
-                    effects = [...effects, line];
+                    effects = [...effects, decoded.line];
                 } else {
-                    ctx.out.push(line);
+                    ctx.out.push(decoded.line);
                 }
                 continue;
             }
-            if (!isIdentifier(dest)) return null;
-            const name = dest.name;
+            if (op.kind !== "register-write") return null;
+            const name = op.targetName;
+            const rhsCallKind = callKind(rhs);
             const capturedRhsAlias = capturedSlotName(ctx, rhs);
             const inheritedUpvalueAlias = typeof capturedRhsAlias === "string"
                 ? capturedRhsAlias
@@ -482,7 +473,7 @@ function matchMultiStateLogicalLocals(source, stateWhile, stateName, returnName,
                 env.set(name, "args");
                 continue;
             }
-            if (rhs?.type === "CallExpression" && isIdentifier(rhs.base, "allocUpvalue") && (rhs.arguments || []).length === 0) {
+            if (rhsCallKind === "alloc-upvalue" && (rhs.arguments || []).length === 0) {
                 if (ctx.upvalueCells.has(name) || hasPathUpvalueCell(ctx, name, env) || hasActiveLocal(ctx, name, env)) return null;
                 if (markers.length !== 0) {
                     if (!ctx.allowConditionalIf) return null;
@@ -494,7 +485,7 @@ function matchMultiStateLogicalLocals(source, stateWhile, stateName, returnName,
                 env.delete(name);
                 continue;
             }
-            if (rhs?.type === "CallExpression" && isIdentifier(rhs.base, "releaseUpvalue") &&
+            if (rhsCallKind === "release-upvalue" &&
                 (rhs.arguments || []).length === 1 && isIdentifier(rhs.arguments[0], name)) {
                 if (hasPathUpvalueCell(ctx, name, env)) {
                     env.delete(pathUpvalueCellKey(ctx, name));
@@ -600,7 +591,7 @@ function matchMultiStateLogicalLocals(source, stateWhile, stateName, returnName,
             // without a read, preserve the call itself.  A path-dependent
             // call cannot be represented as a bare source statement here, so
             // fail closed instead of moving it ctx.out of its branch.
-            if (rhs?.type === "CallExpression" && (!ctx.cleanupRegs.has(name) || !valueMayBeReadAfter(ctx, id, i, name))) {
+            if (rhsCallKind !== null && (!ctx.cleanupRegs.has(name) || !valueMayBeReadAfter(ctx, id, i, name))) {
                 const promotedArguments = [];
                 if (markers.length === 0) {
                     for (const argument of rhs.arguments || []) {

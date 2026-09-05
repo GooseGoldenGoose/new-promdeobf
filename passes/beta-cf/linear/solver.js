@@ -5,9 +5,10 @@ const { nodeUsesIdentifier, valueUsedBeforeOverwrite, hasLaterNilAssignment, has
 const { localName, emitSourceLine, allocateLocal, reserveLocal, canPredeclareNilLocal, predeclareNilReads } = require("./bindings");
 const { reservePendingPackDisplayNamesThrough, flushPendingPacks } = require("./packs");
 const { memberMeta, renderCallArg, renderRhs } = require("./render");
-const { canonicalizeInitialSimpleLocals, isEmptyTable, isIdentifier, isLuaIdentifier, isPrimitiveLiteral, isSingleAssignment, isVmRegisterName, sourceOf } = require("../ast");
+const { canonicalizeInitialSimpleLocals, isEmptyTable, isIdentifier, isPrimitiveLiteral, isSingleAssignment, isVmRegisterName, sourceOf } = require("../ast");
 const { renderProgram } = require("../render");
-const { renderStaticEnvironmentWrite } = require("../global-writes");
+const { decodeVmStatement, callKind } = require("../statement-ir");
+const { renderOrdinaryIndexWrite } = require("../statement-semantics");
 
 function matchLocalRegisterProgram(source, leaf, stateName, returnName, options = {}) {
     const ctx = createLinearContext(source, leaf, stateName, returnName, options);
@@ -15,10 +16,11 @@ function matchLocalRegisterProgram(source, leaf, stateName, returnName, options 
     for (let index = 0; index < ctx.leaf.length; index++) {
         const statement = ctx.leaf[index];
         if (ctx.options.diagnostics) { ctx.options.diagnostics.statementIndex = index; ctx.options.diagnostics.statement = sourceOf(ctx.source, statement) || statement?.type || "unknown"; }
-        if (!isSingleAssignment(statement)) return null;
-        const dest = statement.variables[0], rhs = statement.init[0];
+        const op = decodeVmStatement(statement);
+        if (!op) return null;
+        const dest = op.destination, rhs = op.value;
         predeclareNilReads(ctx, rhs, index);
-        if (dest?.type === "IndexExpression" && isIdentifier(dest.base, "upvalueValues") && isIdentifier(dest.index)) {
+        if (op.kind === "index-write" && isIdentifier(dest.base, "upvalueValues") && isIdentifier(dest.index)) {
             if (!ctx.upvalueCells.has(dest.index.name)) return null;
             const deferredTemp = ctx.deferredUpvalueClosureStores.get(dest.index.name);
             if (deferredTemp != null) {
@@ -34,27 +36,23 @@ function matchLocalRegisterProgram(source, leaf, stateName, returnName, options 
             ctx.declaredCount++;
             continue;
         }
-        if (dest?.type === "IndexExpression" && isIdentifier(dest.base) && isIdentifier(dest.index)) {
+        if (op.kind === "index-write") {
+            if (!isIdentifier(dest.base) || !isIdentifier(dest.index)) return null;
             const key = renderRhs(ctx, dest.index);
             const value = renderRhs(ctx, rhs);
             if (typeof key !== "string" || typeof value !== "string") return null;
-            const fieldName = /^"[A-Za-z_][A-Za-z0-9_]*"$/.test(key) ? key.slice(1, -1) : null;
-            if (dest.base.name === "_env") {
-                const line = renderStaticEnvironmentWrite(key, value);
-                if (!line) return null;
-                ctx.out.push(line);
-                continue;
-            }
-            const base = renderRhs(ctx, dest.base);
-            const baseMeta = ctx.exprMeta.get(dest.base.name);
-            const stableBase = ctx.locals.has(dest.base.name) || ctx.exprKinds.get(dest.base.name) === "table" || baseMeta?.kind === "member";
-            if (typeof base !== "string" || !stableBase) return null;
-            const target = fieldName && isLuaIdentifier(fieldName) ? `${base}.${fieldName}` : `${base}[${key}]`;
-            emitSourceLine(ctx, `${target} = ${value}`, [dest.base.name]);
+            const baseName = dest.base.name;
+            const base = baseName === "_env" ? null : renderRhs(ctx, dest.base);
+            const baseMeta = baseName === "_env" ? null : ctx.exprMeta.get(baseName);
+            const stableBase = baseName === "_env" || ctx.locals.has(baseName) || ctx.exprKinds.get(baseName) === "table" || baseMeta?.kind === "member";
+            const decoded = renderOrdinaryIndexWrite({ baseName, renderedBase: base, renderedKey: key, renderedValue: value, stableBase });
+            if (!decoded) return null;
+            if (decoded.kind === "global-write") ctx.out.push(decoded.line);
+            else emitSourceLine(ctx, decoded.line, [baseName]);
             continue;
         }
-        if (!isIdentifier(dest)) return null;
-        const name = dest.name;
+        if (op.kind !== "register-write") return null;
+        const name = op.targetName;
         const isPackIndex = rhs?.type === "IndexExpression" && isIdentifier(rhs.base) && ctx.exprKinds.get(rhs.base.name) === "return-pack" && rhs.index?.type === "NumericLiteral";
         const isPackSlotCopy = isIdentifier(rhs) && ctx.exprKinds.get(rhs.name) === "pack-slot";
         const returnPackFields = rhs?.type === "TableConstructorExpression" ? (rhs.fields || []) : [];
@@ -66,11 +64,12 @@ function matchLocalRegisterProgram(source, leaf, stateName, returnName, options 
         const isKnownUpvalueRead = rhs?.type === "IndexExpression" && isIdentifier(rhs.base, "upvalueValues") && isIdentifier(rhs.index) && typeof ctx.upvalueCells.get(rhs.index.name) === "string";
         const isStableGlobalLoad = ctx.pendingPacks.size > 0 && isVmRegisterName(name) && rhs?.type === "IndexExpression" && isIdentifier(rhs.base, "_env") && isIdentifier(rhs.index) && typeof ctx.expr.get(rhs.index.name) === "string" && !rhsDependsOnPendingPack(ctx, rhs.index);
         const isBorrowedStateGlobalLoadBeforePackSlot = ctx.pendingPacks.size > 0 && name === ctx.stateName && rhs?.type === "IndexExpression" && isIdentifier(rhs.base, "_env") && isIdentifier(rhs.index) && typeof ctx.expr.get(rhs.index.name) === "string" && !rhsDependsOnPendingPack(ctx, rhs.index) && hasFuturePendingPackSlotBeforeStateTouch(ctx, index);
-        const isUpvalueAllocation = rhs?.type === "CallExpression" && isIdentifier(rhs.base, "allocUpvalue") && (rhs.arguments || []).length === 0 && name !== ctx.stateName && name !== ctx.returnName && !ctx.upvalueCells.has(name);
-        const releaseArgs = rhs?.type === "CallExpression" && isIdentifier(rhs.base, "releaseUpvalue") ? (rhs.arguments || []) : null;
+        const rhsCallKind = callKind(rhs);
+        const isUpvalueAllocation = rhsCallKind === "alloc-upvalue" && (rhs.arguments || []).length === 0 && name !== ctx.stateName && name !== ctx.returnName && !ctx.upvalueCells.has(name);
+        const releaseArgs = rhsCallKind === "release-upvalue" ? (rhs.arguments || []) : null;
         const isKnownUpvalueRelease = releaseArgs?.length === 1 && isIdentifier(releaseArgs[0], name) && name !== ctx.stateName && name !== ctx.returnName && ctx.upvalueCells.has(name);
-        const isCallExpression = rhs?.type === "CallExpression";
-        const isClosureCreation = isCallExpression && isIdentifier(rhs.base) && /^createClosure\d*$/.test(rhs.base.name);
+        const isCallExpression = rhsCallKind !== null;
+        const isClosureCreation = rhsCallKind === "closure";
         const cleanupFutureLocal = isCallExpression ? findFutureCleanupCopy(ctx, index, name) : null;
         const terminalClosureFutureLocal = isClosureCreation && !cleanupFutureLocal ? findFutureTerminalClosureCopy(ctx, index, name) : null;
         const upvalueClosureFutureCell = isClosureCreation && !cleanupFutureLocal && !terminalClosureFutureLocal ? findFutureUpvalueClosureStore(ctx, index, name) : null;
@@ -184,12 +183,12 @@ function matchLocalRegisterProgram(source, leaf, stateName, returnName, options 
             continue;
         }
 
-        if (rhs?.type === "CallExpression" && isIdentifier(rhs.base, "allocUpvalue") && (rhs.arguments || []).length === 0) {
+        if (rhsCallKind === "alloc-upvalue" && (rhs.arguments || []).length === 0) {
             if (name === ctx.stateName || name === ctx.returnName || ctx.upvalueCells.has(name)) return null;
             ctx.upvalueCells.set(name, null);
             continue;
         }
-        if (rhs?.type === "CallExpression" && isIdentifier(rhs.base, "releaseUpvalue")) {
+        if (rhsCallKind === "release-upvalue") {
             const args = rhs.arguments || [];
             if (args.length !== 1 || !isIdentifier(args[0]) || args[0].name !== name || !ctx.upvalueCells.has(name)) return null;
             ctx.upvalueCells.delete(name);
