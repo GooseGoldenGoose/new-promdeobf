@@ -564,4 +564,28 @@ function vmStatesSource(states, registers = "r1, r2, r3, r4, r5, r6") {
         'end\n');
 }
 
+{
+    // A proven source break may jump to the loop's normal exit even when that
+    // exit block is itself a terminal function return. Do not absorb the break
+    // path into a pure terminal-return region; keep the mixed break/return arm.
+    const source = vmStatesSource({
+        1: ["state = 0", "r1 = state", "state = 2"],
+        2: ["r2 = 3", "state = r1 < r2", "state = state and 3 or 4"],
+        3: ["r2 = 1", "state = r1 + r2", "r1 = state", "r2 = 2", "ReturnVal = r1 == r2", "state = ReturnVal and 5 or 6"],
+        4: ['ReturnVal = "done"', "ReturnVal = { ReturnVal }", "r1 = nil", "state = nil"],
+        5: ["r2 = 0", "ReturnVal = r1 > r2", "state = ReturnVal and 7 or 8"],
+        6: ["state = 2"],
+        7: ["state = 4"],
+        8: ['ReturnVal = "bad"', "ReturnVal = { ReturnVal }", "state = nil"],
+    });
+    const result = solveBetaControlFlow(source, parse(source));
+    assert.strictEqual(result.applied, true);
+    assert.strictEqual(result.mode, "fresh-while");
+    assert.match(result.source, /while \(v1 < 3\) do/);
+    assert.match(result.source, /if \(v1 == 2\) then/);
+    assert.match(result.source, /return "bad"/);
+    assert.match(result.source, /break/);
+    assert.match(result.source, /return "done"/);
+}
+
 console.log("beta control-flow while tests passed");

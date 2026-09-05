@@ -129,6 +129,19 @@ function foldLoopAbruptGuards(ctx, candidate, currentId) {
             if (joinId === currentId) continue;
             const pool = ctx.incoming.get(joinId);
             if (!Array.isArray(pool) || pool.length === 0) continue;
+            // A proven break candidate can reach the synthetic loop join before its
+            // opposite terminal-return sibling is processed. Once that terminal
+            // sibling is proven, fold it into the queued break path before
+            // matching the abrupt subtree against an outer branch.
+            // The terminal guard is safe because its body exits the function;
+            // the abrupt tail remains the only continuation of that candidate.
+            for (let poolIndex = 0; poolIndex < pool.length; poolIndex++) {
+                const tail = pool[poolIndex]?.effects?.[pool[poolIndex].effects.length - 1];
+                if (tail !== "break") continue;
+                const terminalFoldedAbrupt = foldTerminalGuards(ctx, pool[poolIndex]);
+                if (!terminalFoldedAbrupt) return null;
+                pool[poolIndex] = terminalFoldedAbrupt;
+            }
             if (!collapseLoopAbruptPool(ctx, pool)) return null;
             for (let i = 0; i < pool.length; i++) {
                 const abrupt = pool[i];
@@ -237,7 +250,12 @@ function matchMultiStateLogicalLocals(source, stateWhile, stateName, returnName,
             if (!terminalFolded) return null;
             const folded = foldLoopAbruptGuards(ctx, terminalFolded, id);
             if (!folded) return null;
-            normalizedCandidates.push(folded);
+            // Abrupt reduction can remove a nested marker and expose a terminal
+            // sibling that was not at equal depth during the first pass. Fold
+            // exact terminal siblings again before N-way/ancestor convergence.
+            const refoldedTerminal = foldTerminalGuards(ctx, folded);
+            if (!refoldedTerminal) return null;
+            normalizedCandidates.push(refoldedTerminal);
         }
         let merged = mergeCandidates(ctx, normalizedCandidates, id);
         if (!merged && normalizedCandidates.length > 2 && ctx.options?.loopBodyJoinIds instanceof Set) {

@@ -163,15 +163,15 @@ function isCompilerTerminalReturnBlock(block, returnName) {
     return false;
 }
 
-function collectTerminalReturnRegion(graph, startId, coreIds, returnName) {
-    if (coreIds.has(startId) || !graph.blocks.has(startId)) return null;
+function collectTerminalReturnRegion(graph, startId, coreIds, returnName, forbiddenExitId = null) {
+    if (startId === forbiddenExitId || coreIds.has(startId) || !graph.blocks.has(startId)) return null;
     const ids = new Set();
     const visiting = new Set();
     let invalid = false;
 
     function visit(id) {
         if (invalid || ids.has(id)) return;
-        if (coreIds.has(id) || visiting.has(id)) { invalid = true; return; }
+        if (id === forbiddenExitId || coreIds.has(id) || visiting.has(id)) { invalid = true; return; }
         const block = graph.blocks.get(id);
         if (!block) { invalid = true; return; }
         visiting.add(id);
@@ -339,7 +339,7 @@ function matchCompilerWhileConditionRegion(graph, loopInfo, dominators, returnNa
                 for (const terminal of breakRegion.terminalIds) breakTerminalIds.add(terminal);
                 continue;
             }
-            const returnRegion = collectTerminalReturnRegion(graph, target, coreIds, returnName);
+            const returnRegion = collectTerminalReturnRegion(graph, target, coreIds, returnName, exitId);
             if (returnRegion) {
                 for (const member of returnRegion.ids) terminalReturnRegionIds.add(member);
                 continue;

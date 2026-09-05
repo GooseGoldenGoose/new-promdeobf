@@ -1964,7 +1964,7 @@ This section is the shortest current-state handoff. Read the detailed sections a
 
 ### Current unrelated user work to preserve
 
-As of the 2026-09-04 validation/commit pass, `git status --short` shows no unrelated tracked modifications beyond the active Fresh-CF solver/test/context work. Many `_tmp_*` probes/fixtures and `passes/_tmp_*` debug copies are intentionally untracked. Do not clean, reset, stage, or delete them unless the user explicitly asks.
+As of the 2026-09-05 validation pass, unrelated tracked work must still be preserved. Untracked `_tmp_*.lua` source fixtures may be intentionally retained when they are useful for real-Medium stress/reproduction, but task-local patch/debug/trace/backup scripts and generated temp outputs are disposable. Once a behavior has durable tracked regression coverage and the temporary artifact is no longer needed, delete that artifact instead of accumulating stale debug copies. Preserve unrelated/user-created temp material unless it is proven disposable or the user explicitly requests its cleanup.
 
 ### Workspace cleanup state
 
@@ -2030,6 +2030,8 @@ Current performance baseline after the 2026-09-02 pipeline optimization:
 There is no known blocker in the currently supported straight-line/local/call/table/closure/upvalue/multi-return/vararg/conditional/early-return feature set represented by the established regression fixtures.
 
 2026-09-05 terminal-loop convergence validation: the 10-state compound logical/terminal sibling case and 15-state N-way no-`continue` case recover with exact runtime parity; the 18-state deep closure/identity terminal chain and the established 47-state deep mixed break/continue/return stress recover structurally with source-shape assertions. Fresh Medium randomized validation passed 25/25 layouts for each fixture (100/100 total), with median deobf+CF 96.6 ms and average 92.8 ms. The established 15-suite regression gate also passed after the change. A separate same-preheader TEMP-reuse regression proves loop-carried storage starts at the exact final preheader definition statement, preserving `game:GetService(...).LocalPlayer.Character` instead of binding an earlier key TEMP.
+
+2026-09-05 follow-up while fix: a mixed `break`/`return` subtree can target the loop's normal exit when that same exit block also performs the function's final return. Pure terminal-return-region proof now forbids traversing the proven loop exit, so the edge is classified as `break` and the sibling direct return remains terminal. Before outer convergence, proven terminal siblings are folded into queued abrupt candidates only when the queued control is a proven `break` (not `continue`), then exact terminal folding runs again after abrupt reduction because removing one marker can expose a new sibling. This fixed the formerly unsupported 23-state `_tmp_while_deep_runtime_no_continue.lua` fixture with exact source/obfuscated/recovered runtime parity. The permanent while suite covers the loop-exit-return classification and all 15 established regression commands pass. Fresh Medium certification passed 25/25 layouts for each of four fixtures = 100/100 total: the 23-state no-continue blocker, the 10-state compound-terminal case, the 15-state terminal-elseif case, and the established 47-state deep mixed-control fixture. During cleanup, obsolete task-local debug/trace/patch/backup copies and generated `output/_tmp_*` artifacts were removed; keep useful real-Medium source fixtures, but do not let disposable debug scripts accumulate.
 
 ### Still intentionally unsupported / fail-closed
 
@@ -2139,7 +2141,7 @@ Early-return rendering remains shared with the structured terminal solver, while
 
 1. Read this entire `CONTEXT.md` before editing anything.
 2. Run `git status --short --branch` and `git log -5 --oneline`; trust Git/current tracked tests over old temp output.
-3. Preserve all unrelated/untracked `_tmp_*` probes unless the user explicitly asks to clean them. Do not reset the solver merely because many temp files exist.
+3. Preserve unrelated/user-created temp work, but clean task-local `_tmp_*` patch/debug/trace/backup files once their behavior has durable tracked regression coverage. Keep only source fixtures that remain useful for real-Medium reproduction/stress. Never treat generated temp output as authority.
 4. Before changing Fresh CF, run the focused regression that matches the intended feature, then the full Fresh-CF/if/register/binding/upvalue/version/graph/semantic suites after the edit.
 5. For compiler-lowering uncertainty, inspect Prometheus `compiler.lua` and generate a tiny real Medium fixture. Recovery rules must be structural: no fixture-specific state IDs, register IDs, source literals, or globals.
 6. Preserve exact evaluation order, call count, short-circuit behavior, multi-return expansion, table/upvalue identity, vararg semantics, and register epochs. Fail closed on ambiguous merges/lifetimes.
