@@ -502,6 +502,9 @@ function matchCompilerWhileProgram(source, stateWhile, stateName, returnName, op
 
 module.exports = {
     applyCompilerWhileMatch,
+    collectBreakRegion,
+    collectMixedAbruptRegion,
+    collectTerminalReturnRegion,
     findNaturalLoops,
     loopsAreNestedOrDisjoint,
     collapseCompilerWhileLoops,

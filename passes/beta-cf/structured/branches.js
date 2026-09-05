@@ -194,6 +194,43 @@ function mergeCandidates(ctx, candidates, joinId) {
         else return null;
     }
 
+    const numericForBranchIds = ctx.options?.numericForBranchIds;
+    const isNumericForBranch = numericForBranchIds instanceof Set && numericForBranchIds.has(al.branchId);
+    if (isNumericForBranch) {
+        const meta = ctx.options?.numericForMetaByBranchId instanceof Map
+            ? ctx.options.numericForMetaByBranchId.get(al.branchId) : null;
+        if (!meta || branchCarriesLogicalResult || branchTransition?.kind !== "branch" ||
+            branchTransition.onTrue === joinId || branchTransition.onFalse !== joinId ||
+            falseEffects.length !== 0 || typeof meta.loopVariableDisplay !== "string") return null;
+        const initial = env.get(meta.initialCapture);
+        const final = env.get(meta.finalCapture);
+        const step = env.get(meta.stepCapture);
+        if (typeof initial !== "string" || typeof final !== "string" || typeof step !== "string") return null;
+        const loopBodyEffects = [...trueEffects];
+        if (loopBodyEffects[loopBodyEffects.length - 1] === "continue") loopBodyEffects.pop();
+        const body = loopBodyEffects.map(line => indentConditionalEffect(ctx, line)).join("\n");
+        const renderedStep = /^\(-(?:\d+(?:\.\d*)?|\.\d+)\)$/.test(step) ? step.slice(1, -1) : step;
+        const header = step === "1"
+            ? `for ${meta.loopVariableDisplay} = ${initial}, ${final} do`
+            : `for ${meta.loopVariableDisplay} = ${initial}, ${final}, ${renderedStep} do`;
+        const structured = `${header}\n${body ? body + "\n" : ""}end`;
+        env.delete(meta.initialCapture);
+        env.delete(meta.finalCapture);
+        env.delete(meta.stepCapture);
+        env.delete(meta.conditionName);
+        if (prefix === 0) {
+            if (!recordRootConditional(ctx, al.branchId, joinId)) return null;
+            ctx.out.push(structured);
+        } else {
+            return {
+                env,
+                markers: am.slice(0, prefix),
+                effects: [...te.slice(0, effectPrefix), structured],
+            };
+        }
+        return { env, markers: am.slice(0, prefix), effects: te.slice(0, effectPrefix) };
+    }
+
     const repeatBranchIds = ctx.options?.repeatBranchIds;
     const isRepeatBranch = repeatBranchIds instanceof Set && repeatBranchIds.has(al.branchId);
     if (isRepeatBranch) {

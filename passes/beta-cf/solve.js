@@ -36,8 +36,9 @@ function recoverLoops(ctx) {
     const program = matchCompilerStructuredLoopProgram(ctx.source, ctx.stateWhile, ctx.stateName, ctx.returnName);
     if (!program) return null;
     let mode = "fresh-structured-loops";
-    if (program.repeatLoopCount > 0 && program.whileLoopCount === 0) mode = "fresh-repeat";
-    else if (program.whileLoopCount > 0 && program.repeatLoopCount === 0) mode = "fresh-while";
+    if (program.numericForLoopCount > 0 && program.whileLoopCount === 0 && program.repeatLoopCount === 0) mode = "fresh-numeric-for";
+    else if (program.repeatLoopCount > 0 && program.whileLoopCount === 0 && program.numericForLoopCount === 0) mode = "fresh-repeat";
+    else if (program.whileLoopCount > 0 && program.repeatLoopCount === 0 && program.numericForLoopCount === 0) mode = "fresh-while";
     return {
         applied: true,
         mode,
@@ -49,6 +50,7 @@ function recoverLoops(ctx) {
         loopCount: program.loopCount,
         whileLoopCount: program.whileLoopCount,
         repeatLoopCount: program.repeatLoopCount,
+        numericForLoopCount: program.numericForLoopCount,
         removedCompilerConditionStatementCount: program.removedCompilerConditionStatementCount,
     };
 }

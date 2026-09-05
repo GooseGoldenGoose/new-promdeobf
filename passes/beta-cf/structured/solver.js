@@ -159,6 +159,8 @@ function foldLoopAbruptGuards(ctx, candidate, currentId) {
                 // the loop itself into an if-guard before while rendering.
                 const loopBranchIds = ctx.options?.loopBranchIds;
                 if (loopBranchIds instanceof Set && loopBranchIds.has(marker.branchId)) continue;
+                const numericForBranchIds = ctx.options?.numericForBranchIds;
+                if (numericForBranchIds instanceof Set && numericForBranchIds.has(marker.branchId)) continue;
                 const guard = guardLine(ctx, marker.condition, marker.truth, (abrupt.effects || []).slice(match.effectPrefix));
                 if (!guard) return null;
                 const prefix = current.effects.slice(0, match.effectPrefix);
@@ -285,6 +287,18 @@ function matchMultiStateLogicalLocals(source, stateWhile, stateName, returnName,
                 branchId: repeatStart.repeatId,
                 effectCount: effects.length,
             }];
+        }
+        const numericForBodyStarts = ctx.options?.numericForBodyStarts;
+        const numericForStart = numericForBodyStarts instanceof Map ? numericForBodyStarts.get(id) : null;
+        if (numericForStart) {
+            if (typeof numericForStart.loopVariableDisplay !== "string") {
+                numericForStart.loopVariableDisplay = allocateValueDisplay(ctx);
+            }
+            const display = numericForStart.loopVariableDisplay;
+            ctx.pathLocalBindingNames.add(display);
+            env.set(pathLocalOwnerKey(ctx, numericForStart.loopVarReg), display);
+            env.set(numericForStart.loopVarReg, display);
+            env.delete(upvalueAliasKey(ctx, numericForStart.loopVarReg));
         }
         const block = ctx.blocks.get(id);
         let terminalReturnIndex = -1;
