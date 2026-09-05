@@ -403,4 +403,33 @@ function vmStatesSource(states) {
     assert.strictEqual(result.source, 'local v1 = function(v1)\n    return v1\nend\nlocal v2 = true\nlocal v3 = false\nlocal v4 = (v1(v2) and v1(v3))\nif v4 then\n    print("T")\nelse\n    print("F")\nend\n');
 }
 
+
+{
+    // Static _env writes are ordinary source global assignments even when they
+    // occur under structured control flow. The structured solver must use the
+    // same proof as the linear solver instead of treating _env as a local table.
+    const source = vmStatesSource({
+        1: ['r1 = "thing"', 'state = _env[r1]', 'state = state and 2 or 3'],
+        2: ['r2 = 123', 'r1 = "thing"', '_env[r1] = r2', 'state = 3'],
+        3: ['ReturnVal = {}', 'state = nil'],
+    });
+    const result = solveBetaControlFlow(source, parse(source));
+    assert.strictEqual(result.applied, true);
+    assert.strictEqual(result.mode, "fresh-simple-if");
+    assert.strictEqual(result.source, 'if thing then\n    thing = 123\nend\n');
+}
+
+
+{
+    // Unknown/dynamic environment keys are not source global identifiers. Keep
+    // the same fail-closed rule in structured control flow as in linear code.
+    const source = vmStatesSource({
+        1: ['r1 = "cond"', 'state = _env[r1]', 'state = state and 2 or 3'],
+        2: ['r1 = args[1]', 'r2 = 123', '_env[r1] = r2', 'state = 3'],
+        3: ['ReturnVal = {}', 'state = nil'],
+    });
+    const result = solveBetaControlFlow(source, parse(source));
+    assert.strictEqual(result.applied, false);
+}
+
 console.log("fresh beta simple-if regression: ok");

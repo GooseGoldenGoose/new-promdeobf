@@ -633,4 +633,47 @@ function vmStatesSource(states, registers = "r1, r2, r3, r4, r5, r6") {
     assert.match(result.source, /print\(v\d+\)/);
     assert.match(result.source, /end\)\(3\)\n$/);
 }
+
+{
+    // A source global write inside a while body is still just an ordinary
+    // assignment effect. Prove the static _env key, keep it in the candidate
+    // effect list, and let the normal loop/branch merger place it structurally.
+    const source = vmStatesSource({
+        1: ['state = 2'],
+        2: ['r1 = "looping"', 'state = _env[r1]', 'state = state and 3 or 4'],
+        3: ['r1 = "thing"', 'r2 = 123', '_env[r1] = r2', 'state = 2'],
+        4: ['ReturnVal = {}', 'state = nil'],
+    });
+    const result = solveBetaControlFlow(source, parse(source));
+    assert.strictEqual(result.applied, true);
+    assert.strictEqual(result.mode, "fresh-while");
+    assert.strictEqual(result.source, 'while looping do\n    thing = 123\nend\n');
+}
+
+{
+    // The same static-global write proof must survive nested if/elseif branches
+    // inside a loop; this is not a loop-specific or fixture-specific rule.
+    const source = vmStatesSource({
+        1: ['state = 2'],
+        2: ['r1 = "looping"', 'state = _env[r1]', 'state = state and 3 or 4'],
+        3: ['r1 = "a"', 'state = _env[r1]', 'state = state and 5 or 6'],
+        5: ['r1 = "thing"', 'r2 = 1', '_env[r1] = r2', 'state = 8'],
+        6: ['r1 = "b"', 'state = _env[r1]', 'state = state and 7 or 8'],
+        7: ['r1 = "thing"', 'r2 = 2', '_env[r1] = r2', 'state = 8'],
+        8: ['state = 2'],
+        4: ['ReturnVal = {}', 'state = nil'],
+    });
+    const result = solveBetaControlFlow(source, parse(source));
+    assert.strictEqual(result.applied, true);
+    assert.strictEqual(result.mode, "fresh-while");
+    assert.strictEqual(result.source,
+        'while looping do\n' +
+        '    if a then\n' +
+        '        thing = 1\n' +
+        '    elseif b then\n' +
+        '        thing = 2\n' +
+        '    end\n' +
+        'end\n');
+}
+
 console.log("beta control-flow while tests passed");

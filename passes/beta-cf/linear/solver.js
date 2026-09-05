@@ -7,6 +7,7 @@ const { reservePendingPackDisplayNamesThrough, flushPendingPacks } = require("./
 const { memberMeta, renderCallArg, renderRhs } = require("./render");
 const { canonicalizeInitialSimpleLocals, isEmptyTable, isIdentifier, isLuaIdentifier, isPrimitiveLiteral, isSingleAssignment, isVmRegisterName, sourceOf } = require("../ast");
 const { renderProgram } = require("../render");
+const { renderStaticEnvironmentWrite } = require("../global-writes");
 
 function matchLocalRegisterProgram(source, leaf, stateName, returnName, options = {}) {
     const ctx = createLinearContext(source, leaf, stateName, returnName, options);
@@ -39,8 +40,9 @@ function matchLocalRegisterProgram(source, leaf, stateName, returnName, options 
             if (typeof key !== "string" || typeof value !== "string") return null;
             const fieldName = /^"[A-Za-z_][A-Za-z0-9_]*"$/.test(key) ? key.slice(1, -1) : null;
             if (dest.base.name === "_env") {
-                if (!fieldName || !isLuaIdentifier(fieldName)) return null;
-                ctx.out.push(`${fieldName} = ${value}`);
+                const line = renderStaticEnvironmentWrite(key, value);
+                if (!line) return null;
+                ctx.out.push(line);
                 continue;
             }
             const base = renderRhs(ctx, dest.base);

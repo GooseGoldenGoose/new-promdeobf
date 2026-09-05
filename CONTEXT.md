@@ -777,6 +777,7 @@ passes/
     closures.js
     diagnostics.js
     direct-calls.js
+    global-writes.js
     logical.js
     normalize.js
     render.js
@@ -1451,7 +1452,9 @@ can become:
 GlobalName = value
 ```
 
-only for a proven valid identifier key.
+only for a proven static valid-identifier key. This proof is shared by linear and structured Fresh-CF through `passes/beta-cf/global-writes.js`; `_env` is compiler environment transport, not a source table binding, so structured `if` / `elseif` / `while` regions must recognize the proven environment write before applying ordinary stable-table-base rules. The recovered assignment is then carried as a normal structured branch effect, so the same rule works at arbitrary supported nesting depth. Dynamic/ambiguous `_env[key]` writes remain fail-closed.
+
+Tracked regressions cover a direct structured `if` global write, a `while` body global write, and nested `if/elseif` global writes inside a loop. Real Medium validation on 2026-09-05 includes the original 10-state Roblox-style sample and a finite 10-state runtime fixture; randomized Medium runtime stress passed 25/25 exact source/obfuscated/recovered parity runs.
 
 Table write can become:
 

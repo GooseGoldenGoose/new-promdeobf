@@ -8,6 +8,7 @@ const { isCompilerVarargPack, isVarargUnpack, expectedPackSlotsInBlock, cleanupO
 const { nodeReadsIdentifier, nodeUsesAsCallBaseMulti, terminalStableUsedEpoch, transportSourceKind, valueMayBeReadFrom, eventualCleanupOnAllPaths, valueMayBeReadAfter, hasFutureNonNilWrite, analyzePersistentStorage } = require("./lifetime");
 const { render } = require("./render");
 const { renderFunction, renderProgram } = require("../render");
+const { renderStaticEnvironmentWrite } = require("../global-writes");
 const { mergeElseIfCandidates, indentConditionalEffect, mergeCandidates } = require("./branches");
 const { markersSharePrefix, terminalSiblingMatch, guardLine, collapseTerminalCandidates, foldTerminalGuards } = require("./terminal");
 
@@ -341,14 +342,25 @@ function matchMultiStateLogicalLocals(source, stateWhile, stateName, returnName,
                     continue;
                 }
                 if (!isIdentifier(dest.base)) return null;
-                const base = resolveId(ctx, dest.base.name, env);
-                const stableBase = hasActiveLocal(ctx, dest.base.name, env) ||
-                    (typeof base === "string" && env.get(upvalueAliasKey(ctx, dest.base.name)) === base);
-                if (!stableBase) return null;
                 const key = isIdentifier(dest.index) ? resolveId(ctx, dest.index.name, env)
                     : (isPrimitiveLiteral(dest.index) ? sourceOf(ctx.source, dest.index) : null);
                 const value = render(ctx, rhs, env);
-                if (base == null || key == null || value == null) return null;
+                if (key == null || value == null) return null;
+                if (dest.base.name === "_env") {
+                    const line = renderStaticEnvironmentWrite(key, value);
+                    if (!line) return null;
+                    if (markers.length !== 0) {
+                        if (!ctx.allowConditionalIf) return null;
+                        effects = [...effects, line];
+                    } else {
+                        ctx.out.push(line);
+                    }
+                    continue;
+                }
+                const base = resolveId(ctx, dest.base.name, env);
+                const stableBase = hasActiveLocal(ctx, dest.base.name, env) ||
+                    (typeof base === "string" && env.get(upvalueAliasKey(ctx, dest.base.name)) === base);
+                if (!stableBase || base == null) return null;
                 const member = /^"[A-Za-z_][A-Za-z0-9_]*"$/.test(key) ? key.slice(1, -1) : null;
                 const target = member && isLuaIdentifier(member) ? base + "." + member : base + "[" + key + "]";
                 const line = target + " = " + value;
