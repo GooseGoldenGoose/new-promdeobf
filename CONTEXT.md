@@ -1302,8 +1302,8 @@ Before adding any new recovery feature, run syntax checks for every changed/new 
 11. if none applies, require one-state leaf
 12. try register/local program recovery
 13. try direct global-call recovery
-13. if direct call path fails, retry register program allowing zero source locals for call-result statements
-14. otherwise fail closed with detailed diagnostic reason
+14. if direct call path fails, retry register program allowing zero source locals for call-result statements
+15. otherwise fail closed with detailed diagnostic reason
 
 Current modes include:
 - `fresh-closure-entry`
@@ -2203,3 +2203,51 @@ When a shape is unsupported or ambiguous:
 - only then recover source
 
 Never force a fixture to pass by weakening safety globally.
+
+## Latest Repeat / Loop Checkpoint - 2026-09-05
+
+Feature implementation commit:
+`144aa0eba44f9e83983c14b2ce2b2303f7197d23` (`144aa0e Recover Fresh CF repeat loops`), pushed to `origin/main` and verified `HEAD == origin/main` immediately after the feature commit.
+
+Repeat compiler fact verified directly from `src/prometheus/compiler/compiler.lua`: Prometheus `RepeatStatement` compiles the `until` expression twice. It evaluates the condition once before first body entry and discards the result, then evaluates the real condition at the bottom check. For source such as `repeat until math.random(1,2) == 1`, the obfuscated VM therefore contains an extra effectful `math.random` call before the loop. Fresh CF is source recovery, so it removes that first evaluation only after proving the duplicated pre-loop condition region is structurally/def-use equivalent to the real bottom condition region. Never preserve the compiler bug as source semantics, and never delete an arbitrary pre-loop call without this proof.
+
+Repeat recovery now supports: simple/constant conditions; short-circuit `and`/`or`; nested logical conditions with proven dispatcher POS save/restore transport; ordinary shared body statements; loop-carried locals; nested `if/elseif/else`; `break`; Luau `continue` targeting the bottom condition entry; early `return`; mixed break/continue/return; nested repeat; repeat inside while; while inside repeat; closure-contained repeat; and mixed/nested loop recovery through the unified inner-first natural-loop orchestrator. Body statement meaning continues to come from shared statement/expression semantics, not repeat-specific handlers.
+
+Exact post-commit real-Medium check:
+```lua
+repeat
+    while false do
+    end
+until true
+```
+passed with exact runtime parity and recovered exactly as:
+```lua
+repeat
+    while false do
+    end
+until true
+```
+The run had 7 normalized states; obfuscation ~391.1 ms, Deobf+CF ~93.5 ms, runtime comparison ~63.3 ms.
+
+Final repeat certification before the feature commit: syntax checks PASS; `git diff --check` PASS; permanent `tools/test-beta-control-flow-repeat.js` PASS; full established regression gate expanded to 16/16 PASS; deterministic randomized real-Medium repeat stress 25/25 exact parity. Covered simple repeat, break, nested repeat, repeat/while mixed nesting, deep logical conditions, and closure-contained repeat. Existing while and upvalue suites remained PASS.
+
+Current loop architecture:
+```text
+StateGraph
+  -> discover natural loops
+  -> choose smallest proven loop
+  -> classify as repeat or while
+  -> collapse only that loop / record loop metadata
+  -> recompute graph
+  -> repeat inner-first
+  -> run one shared structured solver
+```
+Files: `control/loops.js` = orchestrator; `control/while.js` = while compiler signature/proofs; `control/repeat.js` = repeat signature + duplicated-condition proof/removal; `control/loop-storage.js` = shared loop-carried-storage evidence and statement-identity remapping after CFG rewrites. Closure child-loop recovery delegates through this same orchestrator.
+
+Current supported core includes straight line, if/else/elseif, nested conditionals, while, repeat, nested/mixed while+repeat, break, continue, early return, globals, stable table reads/writes, calls/namecalls, closures, upvalues, multi-return, varargs, and logical and/or, subject to existing fail-closed proof requirements.
+
+Still explicitly unsupported/fail-closed: general numeric `for`, general generic `for`, and arbitrary/ambiguous CFG or loop shapes that do not match proven Prometheus compiler structure. Do not weaken safety or let while/repeat anti-match logic consume numeric/generic-for signatures.
+
+Workspace hygiene at this checkpoint: preserve user-owned `formater/input.txt`; preserve unrelated pre-existing `_tmp_*` files; remove only task-local fixtures/debug files created by the assistant when finished. The temporary exact nested-constant repeat fixture used after the feature commit is not part of the repository and should be cleaned.
+
+New-chat rule: read all of `CONTEXT.md` first, then run `git status --short --branch` and `git log -5 --oneline`, inspect the actual current files before editing, and trust current repository state over remembered conversation details. Use short caveman-style project updates (`Found:`, `Fixed:`, `Tested:`, `Commit:`). Fix dynamically from compiler/VM/CFG structure; never hardcode state IDs, physical registers, fixture strings, or random layout constants.
