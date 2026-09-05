@@ -704,9 +704,9 @@ Fresh CF now recovers proven Prometheus pre-test `while` regions structurally in
 
 ### 7.16 `repeat ... until`
 
-Compiler uses inner/check/final states and evaluates condition at check to choose final vs another body iteration.
+Prometheus lowers `repeat` as a post-test loop: execution enters the body first, then a bottom condition region routes true -> final and false -> body. The compiler currently has a real bug: it also calls `compileExpression(statement.condition, ...)` once before entering the body and discards that result, so an effectful condition is evaluated one extra time in the obfuscated program. Fresh CF intentionally recovers source semantics, not that compiler bug: `passes/beta-cf/control/repeat.js` proves the duplicated pre-loop condition is alpha/def-use equivalent to the real bottom condition before removing it. Simple single-block conditions and multi-state short-circuit `and`/`or` regions are supported. Nested logical conditions may contain compiler dispatcher-position save/restore transport (`tmp = state` ... `state = tmp`) at multiple depths; this transport is excluded from equivalence only when every CFG path proves the TEMP reaches that restore before any other read/overwrite.
 
-General repeat collapse is currently not implemented in fresh CF.
+Repeat recovery supports loop-carried locals, ordinary shared block semantics, nested `if/elseif/else`, `break`, Luau `continue`, early `return`, nested repeat, repeat-inside-while, while-inside-repeat, and closure-contained repeat. `continue` targets the repeat condition-region entry so the `until` condition is still evaluated. `break` is accepted only through a closed compiler cleanup/jump region to the same repeat final; return exits must be closed compiler terminal-return regions. Ambiguous side exits fail closed. `passes/beta-cf/control/loops.js` discovers natural loops, classifies the smallest loop as `repeat` or `while`, collapses it, recomputes the graph, and repeats inner-first so nested/mixed loops share one structured solver. `passes/beta-cf/control/loop-storage.js` owns shared loop-carried source-storage proof and remaps start evidence by AST statement identity after CFG rewrites, avoiding stale preheader indexes. Numeric/generic-for signatures remain unsupported and must not be misclassified as while/repeat.
 
 ### 7.17 Numeric `for`
 
@@ -1215,7 +1215,10 @@ Public entry and shared work:
 - `passes/beta-cf/expression-semantics.js`: shared rendered-expression primitives for global reads, member/index access, infix expressions, and callable formatting. Context-specific resolvers still prove the underlying values/lifetimes.
 - `passes/beta-cf/render.js`: final whole-program and recovered-function text rendering shared by both solver paths.
 - `passes/beta-cf/diagnostics.js`: stable fail-closed results and unsupported-state diagnostic messages.
-- `passes/beta-cf/control/while.js`: Prometheus while natural-loop discovery, compiler-while signature proof, inner-first loop collapse, break/continue edge classification, loop-carried storage-start proof, and anti-matching for numeric/generic for shapes.
+- `passes/beta-cf/control/loops.js`: shared natural-loop orchestrator. It repeatedly discovers reachable natural loops, classifies/collapses the smallest proven loop inner-first, combines while/repeat metadata, and invokes the structured solver once for pure or mixed nesting.
+- `passes/beta-cf/control/while.js`: compiler pre-test `while` signature proof, while break/continue/return classification, CFG rewriting helpers, natural-loop/dominator utilities, and anti-matching for numeric/generic-for shapes.
+- `passes/beta-cf/control/repeat.js`: compiler post-test `repeat` signature proof, duplicated-condition equivalence/removal (including nested logical POS transport), repeat break/continue/return classification, and repeat CFG rewriting.
+- `passes/beta-cf/control/loop-storage.js`: shared while/repeat loop-carried source-storage evidence and post-rewrite statement-identity remapping.
 
 `StateGraph` contract:
 
@@ -1266,21 +1269,23 @@ Fast routing for future changes:
 - multi-state lifetime/dataflow, candidate placement, conditionals/returns -> the matching `passes/beta-cf/structured/` module
 - final program/function layout -> `passes/beta-cf/render.js`
 - unsupported/failure reporting -> `passes/beta-cf/diagnostics.js`
-- proven Prometheus while / nested while / loop break+continue -> `passes/beta-cf/control/while.js` plus shared structured lifetime/branch rendering
-- focused behavior regressions -> `tools/test-beta-control-flow-fresh.js`, `tools/test-beta-control-flow-if.js`, and `tools/test-beta-control-flow-while.js`; register, binding, upvalue, version, graph, and semantic-name regressions remain in their matching `tools/test-*.js` suites
+- proven Prometheus while/repeat, nested or mixed loops, and loop break+continue -> `passes/beta-cf/control/loops.js` orchestrating `control/while.js` / `control/repeat.js` plus shared structured lifetime/branch rendering
+- focused behavior regressions -> `tools/test-beta-control-flow-fresh.js`, `tools/test-beta-control-flow-if.js`, `tools/test-beta-control-flow-while.js`, and `tools/test-beta-control-flow-repeat.js`; register, binding, upvalue, version, graph, and semantic-name regressions remain in their matching `tools/test-*.js` suites
 
 Important isolation rules:
 - logical result-carrier diamonds are reduced in `logical.js`; statement-level branch recovery does not classify them as empty source branches
 - structured pack tokens never render as source and pack ownership never lives inside branch recovery
 - terminal paths are kept separate from continuing candidates and are merged only by `terminal.js`
 - closure recovery calls the same entry-parametric structured solver through a narrow callback contract, independent of whether the parent construct is a conditional or a future loop
-- ordinary statement syntax/meaning must NOT be reimplemented per solver or per control-flow construct. Every block decodes assignments through `statement-ir.js`; ordinary global/table writes go through `statement-semantics.js`; shared expression syntax goes through `expression-semantics.js`. Linear/structured adapters may differ only where proof genuinely depends on lifetime, pack ownership, path-local identity, or effect placement. `if`, `elseif`, and `while` do not get separate handlers for normal assignments/calls/indexing.
+- ordinary statement syntax/meaning must NOT be reimplemented per solver or per control-flow construct. Every block decodes assignments through `statement-ir.js`; ordinary global/table writes go through `statement-semantics.js`; shared expression syntax goes through `expression-semantics.js`. Linear/structured adapters may differ only where proof genuinely depends on lifetime, pack ownership, path-local identity, or effect placement. `if`, `elseif`, `while`, and `repeat` do not get separate handlers for normal assignments/calls/indexing.
 
 Shared block-semantics refactor validated on 2026-09-05: the exact 10-state Roblox-style `while -> if -> if/elseif` global-write sample still recovers; a finite 9-state Medium fixture mixing loop-carried locals, table member/index reads+writes, global writes, calls, and nested `if/elseif/else` has exact source/obfuscated/recovered runtime parity; randomized Medium stress passed 25/25 exact-parity layouts; the full established 15-suite gate passes.
 
-Loop recovery remains modular. `control/while.js` now owns proven Prometheus while recovery and consumes `StateGraph` plus narrow structured-solver options for lifetime/control effects. Future `repeat`, numeric-for, and generic-for support must remain separate modules such as `control/repeat.js`, `control/numeric-for.js`, and `control/generic-for.js`. They must not duplicate private `elseif`, structured-pack, upvalue-transport, or closure-transaction internals. Unsupported/ambiguous loop shapes continue to fail closed.
+Repeat support validated on 2026-09-05: simple and logical duplicated-condition removal, loop-carried locals, nested body conditionals/global-table-call semantics, break, continue, early return, mixed abrupt control, `and`/`or`/nested logical conditions, nested repeat, repeat-in-while, while-in-repeat, and closure-contained repeat all recover through real Medium fixtures. Finite runtime-capable fixtures have exact source/obfuscated/recovered runtime parity; call-only/continue shapes received structural validation where appropriate. The permanent repeat suite passes, the full gate is 16/16, and deterministic randomized real-Medium repeat stress passed 25/25 exact parity across simple, break, nested, mixed-loop, deep-logical, and closure shapes.
 
-Before adding any new recovery feature, run syntax checks for every changed/new JavaScript file, the established 15-suite Fresh-CF/if/while/register/binding/upvalue/version/graph/semantic gate, relevant real Medium runtime-parity fixtures, randomized layout stress for the touched shape, and `git diff --check`.
+Loop recovery is modular and unified at orchestration level. `control/loops.js` owns natural-loop classification/order and composes metadata from `control/while.js` and `control/repeat.js`; both constructs then reuse the same structured statement/lifetime/branch engine. New numeric-for/generic-for support should add dedicated classifier modules rather than duplicating statement semantics or private `elseif`, pack, upvalue, or closure logic. Unsupported/ambiguous loop shapes continue to fail closed.
+
+Before adding any new recovery feature, run syntax checks for every changed/new JavaScript file, the established 16-suite Fresh-CF/if/while/repeat/register/binding/upvalue/version/graph/semantic gate, relevant real Medium runtime-parity fixtures, randomized layout stress for the touched shape, and `git diff --check`.
 
 `solveFreshSource(source, ast)` currently does approximately:
 
@@ -1290,12 +1295,13 @@ Before adding any new recovery feature, run syntax checks for every changed/new 
 4. identify `state` parameter
 5. identify `ReturnVal`
 6. find `while state` dispatcher
-7. try closure-entry program recovery; closure roots may first use the mixed structural solver with root-only reachability and the existing child-closure renderer
-8. try fully reducible root logical flattening and multi-state logical/local recovery
-9. try proven `if` / `if/else` / same-join `elseif` / recursive nested-if recovery; this path first reduces closed compiler logical-value subregions before structuring source conditionals
-10. if none applies, require one-state leaf
-11. try register/local program recovery
-12. try direct global-call recovery
+7. try closure-entry program recovery; root and child closure entries delegate proven while/repeat loops through the same unified loop orchestrator with root-only reachability and the existing transactional child-closure renderer
+8. try unified structured loop recovery (`while`, `repeat`, nested/mixed loops) before generic logical/conditional recovery
+9. try fully reducible root logical flattening and multi-state logical/local recovery
+10. try proven `if` / `if/else` / same-join `elseif` / recursive nested-if recovery; this path first reduces closed compiler logical-value subregions before structuring source conditionals
+11. if none applies, require one-state leaf
+12. try register/local program recovery
+13. try direct global-call recovery
 13. if direct call path fails, retry register program allowing zero source locals for call-result statements
 14. otherwise fail closed with detailed diagnostic reason
 

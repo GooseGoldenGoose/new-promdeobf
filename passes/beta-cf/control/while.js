@@ -4,6 +4,7 @@ const { isIdentifier, isSingleAssignment, isVmRegisterName } = require("../ast")
 const { createStateGraph } = require("../cfg");
 const { extractNormalizedStateLeaves } = require("../normalize");
 const { matchMultiStateLogicalLocals } = require("../structured/solver");
+const { candidateLoopCarriedRegisters, remapLoopCarriedStarts } = require("./loop-storage");
 
 function transitionTargets(transition) {
     if (transition?.kind === "jump") return [transition.target];
@@ -401,60 +402,25 @@ function syntheticJump(stateName, targetId) {
     };
 }
 
-function candidateLoopCarriedRegisters(graph, matches) {
-    const candidates = new Set();
-    const starts = new Map();
-    for (const match of matches) {
-        const preheader = graph.blocks.get(match.preheaderId);
-        if (!preheader) continue;
-        // One physical register may serve as several compiler TEMPs before
-        // its final preheader value becomes the loop-carried source binding.
-        // Record the exact last non-nil definition that reaches the header so
-        // earlier same-block TEMP epochs can never be promoted as that local.
-        const preheaderDefinitions = new Map();
-        for (let i = 0; i < preheader.transitionIndex; i++) {
-            const statement = preheader.body[i];
-            if (!isSingleAssignment(statement) || !isIdentifier(statement.variables[0])) continue;
-            const name = statement.variables[0].name;
-            if (!isVmRegisterName(name) || statement.init[0]?.type === "NilLiteral") continue;
-            preheaderDefinitions.set(name, i);
-        }
-        for (const [name, definitionIndex] of preheaderDefinitions) {
-            let hasLoopWrite = false;
-            let readsInitialBeforeOverwrite = false;
-            const seen = new Set();
-            const queue = [{ id: match.headerId, live: true }];
-            while (queue.length) {
-                const cursor = queue.shift();
-                const key = cursor.id + ":" + (cursor.live ? "1" : "0");
-                if (seen.has(key)) continue;
-                seen.add(key);
-                const block = graph.blocks.get(cursor.id);
-                if (!block) continue;
-                let live = cursor.live;
-                for (let i = 0; i < block.body.length; i++) {
-                    if (i === block.transitionIndex) continue;
-                    const statement = block.body[i];
-                    if (live && statementReadsName(statement, name)) readsInitialBeforeOverwrite = true;
-                    if (isSingleAssignment(statement) && isIdentifier(statement.variables[0], name)) {
-                        if (statement.init[0]?.type !== "NilLiteral") hasLoopWrite = true;
-                        live = false;
-                    }
-                }
-                if (live && block.transition?.kind === "branch" && block.transition.conditionRegister === name) readsInitialBeforeOverwrite = true;
-                for (const target of transitionTargets(block.transition)) {
-                    if (target === match.headerId || !match.coreIds.has(target)) continue;
-                    queue.push({ id: target, live });
-                }
-            }
-            if (hasLoopWrite && readsInitialBeforeOverwrite) {
-                candidates.add(name);
-                if (!starts.has(name)) starts.set(name, new Set());
-                starts.get(name).add(match.preheaderId + ":" + definitionIndex);
-            }
-        }
+
+function applyCompilerWhileMatch(transformed, graph, match, stateName, bodyJoinId, metadata) {
+    if (!(transformed instanceof Map) || !graph || !match || typeof stateName !== "string" || !Number.isInteger(bodyJoinId) || !metadata) return false;
+    const { loopBranchIds, loopBodyJoinIds, loopBackedgeCountsByJoin, controlByBlockId } = metadata;
+    if (!(loopBranchIds instanceof Set) || !(loopBodyJoinIds instanceof Set) || !(loopBackedgeCountsByJoin instanceof Map) || !(controlByBlockId instanceof Map)) return false;
+    match.bodyJoinId = bodyJoinId;
+    loopBackedgeCountsByJoin.set(bodyJoinId, match.backedgeSources.size);
+    loopBranchIds.add(match.decisionId);
+    loopBodyJoinIds.add(bodyJoinId);
+    for (const source of match.backedgeSources) {
+        if (!rewriteJumpTarget(transformed, graph, source, bodyJoinId)) return false;
+        if (match.continueIds.has(source)) controlByBlockId.set(source, "continue");
     }
-    return { registers: candidates, starts };
+    for (const source of match.breakTerminalIds) {
+        if (!rewriteJumpTarget(transformed, graph, source, bodyJoinId)) return false;
+        controlByBlockId.set(source, "break");
+    }
+    transformed.set(bodyJoinId, [syntheticJump(stateName, match.exitId)]);
+    return true;
 }
 
 function collapseCompilerWhileLoops(leaves, entryId, stateName, returnName = null) {
@@ -484,23 +450,12 @@ function collapseCompilerWhileLoops(leaves, entryId, stateName, returnName = nul
     const ordered = [...matches].sort((a, b) => a.coreIds.size - b.coreIds.size);
     for (const match of ordered) {
         const bodyJoinId = nextSyntheticId--;
-        match.bodyJoinId = bodyJoinId;
-        loopBackedgeCountsByJoin.set(bodyJoinId, match.backedgeSources.size);
-        loopBranchIds.add(match.decisionId);
-        loopBodyJoinIds.add(bodyJoinId);
-
-        for (const source of match.backedgeSources) {
-            if (!rewriteJumpTarget(transformed, graph, source, bodyJoinId)) return null;
-            if (match.continueIds.has(source)) controlByBlockId.set(source, "continue");
-        }
-        for (const source of match.breakTerminalIds) {
-            if (!rewriteJumpTarget(transformed, graph, source, bodyJoinId)) return null;
-            controlByBlockId.set(source, "break");
-        }
-        transformed.set(bodyJoinId, [syntheticJump(stateName, match.exitId)]);
+        if (!applyCompilerWhileMatch(transformed, graph, match, stateName, bodyJoinId, {
+            loopBranchIds, loopBodyJoinIds, loopBackedgeCountsByJoin, controlByBlockId,
+        })) return null;
     }
 
-    const loopCarried = candidateLoopCarriedRegisters(graph, matches);
+    const loopCarried = remapLoopCarriedStarts(candidateLoopCarriedRegisters(graph, matches), transformed);
     return {
         leaves: transformed,
         matches,
@@ -546,6 +501,9 @@ function matchCompilerWhileProgram(source, stateWhile, stateName, returnName, op
 }
 
 module.exports = {
+    applyCompilerWhileMatch,
+    findNaturalLoops,
+    loopsAreNestedOrDisjoint,
     collapseCompilerWhileLoops,
     matchCompilerWhileConditionRegion,
     matchCompilerWhileProgram,

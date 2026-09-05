@@ -194,6 +194,29 @@ function mergeCandidates(ctx, candidates, joinId) {
         else return null;
     }
 
+    const repeatBranchIds = ctx.options?.repeatBranchIds;
+    const isRepeatBranch = repeatBranchIds instanceof Set && repeatBranchIds.has(al.branchId);
+    if (isRepeatBranch) {
+        const scope = prefix > 0 ? am[prefix - 1] : null;
+        if (!scope || scope.kind !== "repeat-scope" || scope.decisionId !== al.branchId ||
+            branchCarriesLogicalResult || branchTransition?.kind !== "branch" ||
+            branchTransition.onTrue !== joinId || branchTransition.onFalse === joinId ||
+            trueEffects.length !== 0 || falseEffects.length !== 0 ||
+            !Number.isInteger(scope.effectCount) || scope.effectCount > effectPrefix) return null;
+        const repeatBodyEffects = te.slice(scope.effectCount, effectPrefix);
+        if (repeatBodyEffects[repeatBodyEffects.length - 1] === "continue") repeatBodyEffects.pop();
+        const body = repeatBodyEffects.map(line => indentConditionalEffect(ctx, line)).join("\n");
+        const structured = `repeat\n${body ? body + "\n" : ""}until ${cond}`;
+        const outerMarkers = am.slice(0, prefix - 1);
+        const prefixEffects = te.slice(0, scope.effectCount);
+        if (outerMarkers.length === 0) {
+            if (!recordRootConditional(ctx, scope.bodyId, joinId)) return null;
+            ctx.out.push(...prefixEffects, structured);
+            return { env, markers: [], effects: [] };
+        }
+        return { env, markers: outerMarkers, effects: [...prefixEffects, structured] };
+    }
+
     const loopBranchIds = ctx.options?.loopBranchIds;
     const isWhileBranch = loopBranchIds instanceof Set && loopBranchIds.has(al.branchId);
     if (isWhileBranch) {

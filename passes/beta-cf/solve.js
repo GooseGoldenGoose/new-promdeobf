@@ -14,7 +14,7 @@ const { matchDirectGlobalCallLeaf } = require("./direct-calls");
 const { matchLocalRegisterProgram } = require("./linear/solver");
 const { flattenLogicalRootLeaf } = require("./logical");
 const { matchMultiStateLogicalLocals } = require("./structured/solver");
-const { matchCompilerWhileProgram } = require("./control/while");
+const { matchCompilerStructuredLoopProgram } = require("./control/loops");
 const { failure, unsupportedMultiState } = require("./diagnostics");
 
 function recoverClosure(ctx) {
@@ -32,18 +32,24 @@ function recoverClosure(ctx) {
     };
 }
 
-function recoverWhile(ctx) {
-    const program = matchCompilerWhileProgram(ctx.source, ctx.stateWhile, ctx.stateName, ctx.returnName);
+function recoverLoops(ctx) {
+    const program = matchCompilerStructuredLoopProgram(ctx.source, ctx.stateWhile, ctx.stateName, ctx.returnName);
     if (!program) return null;
+    let mode = "fresh-structured-loops";
+    if (program.repeatLoopCount > 0 && program.whileLoopCount === 0) mode = "fresh-repeat";
+    else if (program.whileLoopCount > 0 && program.repeatLoopCount === 0) mode = "fresh-while";
     return {
         applied: true,
-        mode: "fresh-while",
+        mode,
         source: program.source,
         stateCount: program.stateCount,
         statementCount: program.statementCount,
         branchCount: program.stateCount - 1,
         localCount: program.localCount,
         loopCount: program.loopCount,
+        whileLoopCount: program.whileLoopCount,
+        repeatLoopCount: program.repeatLoopCount,
+        removedCompilerConditionStatementCount: program.removedCompilerConditionStatementCount,
     };
 }
 
@@ -118,7 +124,7 @@ function recoverCallResults(ctx) {
     return program && { applied: true, mode: "fresh-call-results", source: program.source, stateCount: 1, statementCount: program.statementCount, branchCount: 0, localCount: program.localCount };
 }
 
-const MULTI_STATE_RECOVERERS = [recoverClosure, recoverWhile, recoverFlattenedLogical, recoverStructuredLogical, recoverConditional];
+const MULTI_STATE_RECOVERERS = [recoverClosure, recoverLoops, recoverFlattenedLogical, recoverStructuredLogical, recoverConditional];
 const LINEAR_RECOVERERS = [recoverLinear, recoverDirectCalls, recoverCallResults];
 
 function solveFreshSource(source, ast) {

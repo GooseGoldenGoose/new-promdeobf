@@ -15,7 +15,7 @@ const { extractNormalizedStateLeaves } = require("./normalize");
 const { flattenLogicalRootLeaf } = require("./logical");
 const { matchLocalRegisterProgram } = require("./linear/solver");
 const { matchMultiStateLogicalLocals } = require("./structured/solver");
-const { matchCompilerWhileProgram } = require("./control/while");
+const { matchCompilerStructuredLoopProgram } = require("./control/loops");
 
 function renderSimpleClosureLeaf(source, leaf, stateName, returnName, options = {}) {
     const env = new Map();
@@ -394,7 +394,7 @@ function matchClosureEntryProgram(source, stateWhile, stateName, returnName, dia
             renderSpecialCall: renderClosureCall,
             renderCapturedCall: renderClosureCall,
         };
-        const loopStructured = matchCompilerWhileProgram(source, stateWhile, stateName, returnName, childOptions);
+        const loopStructured = matchCompilerStructuredLoopProgram(source, stateWhile, stateName, returnName, childOptions);
         if (loopStructured) {
             const childStates = loopStructured.reachableStateIds || [];
             const overlaps = childStates.some(id => snapshot.has(id));
@@ -432,7 +432,7 @@ function matchClosureEntryProgram(source, stateWhile, stateName, returnName, dia
     // contaminate the ordinary structured/legacy closure paths below.
     const rootSnapshot = new Set(consumedEntries);
     const rootClosureSnapshot = new Set(renderedClosureEntries);
-    const loopProgram = matchCompilerWhileProgram(source, stateWhile, stateName, returnName, {
+    const loopProgram = matchCompilerStructuredLoopProgram(source, stateWhile, stateName, returnName, {
         allowConditionalIf: true,
         rootReachableOnly: true,
         renderSpecialCall: renderClosureCall,

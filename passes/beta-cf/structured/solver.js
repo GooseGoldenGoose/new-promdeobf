@@ -272,6 +272,20 @@ function matchMultiStateLogicalLocals(source, stateWhile, stateName, returnName,
             ctx.out.push(...effects);
             effects = [];
         }
+        const repeatBodyStarts = ctx.options?.repeatBodyStarts;
+        const repeatStart = repeatBodyStarts instanceof Map ? repeatBodyStarts.get(id) : null;
+        if (repeatStart) {
+            markers = [...markers, {
+                kind: "repeat-scope",
+                repeatId: repeatStart.repeatId,
+                decisionId: repeatStart.decisionId,
+                bodyId: id,
+                condition: null,
+                truth: null,
+                branchId: repeatStart.repeatId,
+                effectCount: effects.length,
+            }];
+        }
         const block = ctx.blocks.get(id);
         let terminalReturnIndex = -1;
         let terminalReturnLine = null;
