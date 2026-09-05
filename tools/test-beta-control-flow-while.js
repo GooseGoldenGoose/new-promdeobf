@@ -454,4 +454,114 @@ function vmStatesSource(states, registers = "r1, r2, r3, r4, r5, r6") {
     assert.strictEqual(result.applied, false);
 }
 
+{
+    // A loop body may have one continuation arm while the sibling enters a
+    // compound short-circuit condition whose leaves all return. The compiler
+    // logical restore path does not reach the synthetic loop-body join, so it
+    // must not consume that queued continue candidate prematurely.
+    const source = vmStatesSource({
+        1: ["state = 0", "r2 = state", "r5 = args", "state = 2"],
+        2: ["ReturnVal = 8", "state = r2 < ReturnVal", "state = state and 3 or 4"],
+        3: ["ReturnVal = 1", "state = r2 + ReturnVal", "r2 = state", "r7 = r2", 'r3 = "x"', "ReturnVal = { [r3] = r7 }", "r3 = ReturnVal", "r6 = 6", "ReturnVal = r2 == r6", "state = ReturnVal and 5 or 6", "r9 = r2"],
+        4: ['ReturnVal = "done"', "ReturnVal = { ReturnVal }", "state = nil"],
+        5: ["r6 = state", "r8 = r7 ~= r9", "state = r8 and 7 or 8", "ReturnVal = r8"],
+        6: ["r9 = nil", "r7 = nil", "r3 = nil", "state = 2"],
+        7: ["state = r6", "state = ReturnVal and 9 or 10"],
+        8: ['r1 = "x"', "r4 = r3[r1]", "r8 = r4 ~= r7", "ReturnVal = r8", "state = 7"],
+        9: ['ReturnVal = "bad"', "ReturnVal = { ReturnVal }", "state = nil"],
+        10: ['ReturnVal = "ok"', "ReturnVal = { ReturnVal }", "state = nil"],
+    }, "r1, r2, r3, r4, r5, r6, r7, r8, r9");
+    const result = solveBetaControlFlow(source, parse(source));
+    assert.strictEqual(result.applied, true);
+    assert.strictEqual(result.mode, "fresh-while");
+    assert.strictEqual(result.source,
+        "local v1 = 0\n" +
+        "while (v1 < 8) do\n" +
+        "    v1 = (v1 + 1)\n" +
+        "    local v2 = v1\n" +
+        "    local v3 = { x = v2 }\n" +
+        "    local v4 = v1\n" +
+        "    if (v1 == 6) then\n" +
+        "        if ((v2 ~= v4) or (v3.x ~= v2)) then\n" +
+        '            return "bad"\n' +
+        "        end\n" +
+        '        return "ok"\n' +
+        "    end\n" +
+        "end\n" +
+        'return "done"\n');
+}
+{
+    // A multi-arm loop conditional may have several continuing arms while one
+    // sibling arm is a nested terminal-return chain. That terminal arm has no
+    // physical edge to the continuation join, so the join must wait for the
+    // ready terminal siblings before elseif convergence is reconstructed.
+    const source = vmStatesSource({
+        1: ["state = 0", "r4 = state", "state = 0", "r5 = state", "r3 = args", "state = 2"],
+        2: ["ReturnVal = 8", "state = r4 < ReturnVal", "state = state and 3 or 4"],
+        3: ["ReturnVal = 1", "state = r4 + ReturnVal", "r4 = state", "r2 = r4", 'r6 = "x"', "ReturnVal = { [r6] = r2 }", "r6 = ReturnVal", "r1 = 2", "ReturnVal = r4 == r1", "state = ReturnVal and 5 or 6", "r10 = r4"],
+        4: ['r2 = "done"', "ReturnVal = { r5, r2 }", "state = nil"],
+        5: ["ReturnVal = r5 + r2", "r5 = ReturnVal", "state = 7"],
+        6: ["r7 = 4", "r1 = r4 == r7", "state = r1 and 8 or 9"],
+        7: ["r10 = nil", "r2 = nil", "r6 = nil", "state = 2"],
+        8: ["r7 = 40", "r1 = r5 + r7", "r5 = r1", "state = 7"],
+        9: ["r9 = 6", "r7 = r4 == r9", "state = r7 and 10 or 11"],
+        10: ["r7 = r2 ~= r10", "state = r7 and 12 or 13"],
+        11: ['r8 = "x"', "r9 = r6[r8]", "r7 = r5 + r9", "r5 = r7", "state = 7"],
+        12: ['r7 = "bad-a"', "ReturnVal = { r5, r7 }", "state = nil"],
+        13: ['r8 = "x"', "r9 = r6[r8]", "r7 = r9 ~= r2", "state = r7 and 14 or 15"],
+        14: ['r7 = "bad-b"', "ReturnVal = { r5, r7 }", "state = nil"],
+        15: ["r9 = 60", "r7 = r5 + r9", 'r9 = "ok"', "ReturnVal = { r7, r9 }", "state = nil"],
+    }, "r1, r2, r3, r4, r5, r6, r7, r8, r9, r10");
+    const result = solveBetaControlFlow(source, parse(source));
+    assert.strictEqual(result.applied, true);
+    assert.strictEqual(result.mode, "fresh-while");
+    assert.strictEqual(result.source,
+        "local v1 = 0\n" +
+        "local v2 = 0\n" +
+        "while (v1 < 8) do\n" +
+        "    v1 = (v1 + 1)\n" +
+        "    local v3 = v1\n" +
+        "    local v4 = { x = v3 }\n" +
+        "    local v5 = v1\n" +
+        "    if (v1 == 2) then\n" +
+        "        v2 = (v2 + v3)\n" +
+        "    elseif (v1 == 4) then\n" +
+        "        v2 = (v2 + 40)\n" +
+        "    else\n" +
+        "        if (v1 == 6) then\n" +
+        "            if (v3 ~= v5) then\n" +
+        '                return v2, "bad-a"\n' +
+        "            end\n" +
+        "            if (v4.x ~= v3) then\n" +
+        '                return v2, "bad-b"\n' +
+        "            end\n" +
+        '            return (v2 + 60), "ok"\n' +
+        "        end\n" +
+        "        v2 = (v2 + v4.x)\n" +
+        "    end\n" +
+        "end\n" +
+        'return v2, "done"\n');
+}
+
+{
+    // A loop-carried register may have unrelated TEMP epochs earlier in the
+    // same preheader block. Only the final proven definition that reaches the
+    // loop header may start the source binding.
+    const source = vmStatesSource({
+        1: ['r1 = "print"', 'r2 = _env[r1]', 'r1 = "pre"', 'ReturnVal = r2(r1)', 'state = 0', 'r1 = state', 'r3 = args', 'state = 2'],
+        2: ['ReturnVal = 2', 'state = r1 < ReturnVal', 'state = state and 3 or 4'],
+        3: ['ReturnVal = 1', 'state = r1 + ReturnVal', 'r1 = state', 'state = 2'],
+        4: ['r1 = nil', 'ReturnVal = {}', 'state = nil'],
+    });
+    const result = solveBetaControlFlow(source, parse(source));
+    assert.strictEqual(result.applied, true);
+    assert.strictEqual(result.mode, "fresh-while");
+    assert.strictEqual(result.source,
+        'print("pre")\n' +
+        'local v1 = 0\n' +
+        'while (v1 < 2) do\n' +
+        '    v1 = (v1 + 1)\n' +
+        'end\n');
+}
+
 console.log("beta control-flow while tests passed");

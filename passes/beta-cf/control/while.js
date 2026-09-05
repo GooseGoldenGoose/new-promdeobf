@@ -407,15 +407,19 @@ function candidateLoopCarriedRegisters(graph, matches) {
     for (const match of matches) {
         const preheader = graph.blocks.get(match.preheaderId);
         if (!preheader) continue;
-        const preheaderDefinitions = new Set();
+        // One physical register may serve as several compiler TEMPs before
+        // its final preheader value becomes the loop-carried source binding.
+        // Record the exact last non-nil definition that reaches the header so
+        // earlier same-block TEMP epochs can never be promoted as that local.
+        const preheaderDefinitions = new Map();
         for (let i = 0; i < preheader.transitionIndex; i++) {
             const statement = preheader.body[i];
             if (!isSingleAssignment(statement) || !isIdentifier(statement.variables[0])) continue;
             const name = statement.variables[0].name;
             if (!isVmRegisterName(name) || statement.init[0]?.type === "NilLiteral") continue;
-            preheaderDefinitions.add(name);
+            preheaderDefinitions.set(name, i);
         }
-        for (const name of preheaderDefinitions) {
+        for (const [name, definitionIndex] of preheaderDefinitions) {
             let hasLoopWrite = false;
             let readsInitialBeforeOverwrite = false;
             const seen = new Set();
@@ -446,7 +450,7 @@ function candidateLoopCarriedRegisters(graph, matches) {
             if (hasLoopWrite && readsInitialBeforeOverwrite) {
                 candidates.add(name);
                 if (!starts.has(name)) starts.set(name, new Set());
-                starts.get(name).add(match.preheaderId);
+                starts.get(name).add(match.preheaderId + ":" + definitionIndex);
             }
         }
     }
@@ -471,6 +475,7 @@ function collapseCompilerWhileLoops(leaves, entryId, stateName, returnName = nul
     const controlByBlockId = new Map();
     const loopBranchIds = new Set();
     const loopBodyJoinIds = new Set();
+    const loopBackedgeCountsByJoin = new Map();
     let nextSyntheticId = -1;
     while (transformed.has(nextSyntheticId)) nextSyntheticId--;
 
@@ -480,6 +485,7 @@ function collapseCompilerWhileLoops(leaves, entryId, stateName, returnName = nul
     for (const match of ordered) {
         const bodyJoinId = nextSyntheticId--;
         match.bodyJoinId = bodyJoinId;
+        loopBackedgeCountsByJoin.set(bodyJoinId, match.backedgeSources.size);
         loopBranchIds.add(match.decisionId);
         loopBodyJoinIds.add(bodyJoinId);
 
@@ -500,6 +506,7 @@ function collapseCompilerWhileLoops(leaves, entryId, stateName, returnName = nul
         matches,
         loopBranchIds,
         loopBodyJoinIds,
+        loopBackedgeCountsByJoin,
         controlByBlockId,
         loopCarriedStorageRegs: loopCarried.registers,
         loopCarriedStorageStarts: loopCarried.starts,
@@ -522,6 +529,7 @@ function matchCompilerWhileProgram(source, stateWhile, stateName, returnName, op
         normalizedLeaves: collapsed.leaves,
         loopBranchIds: collapsed.loopBranchIds,
         loopBodyJoinIds: collapsed.loopBodyJoinIds,
+        loopBackedgeCountsByJoin: collapsed.loopBackedgeCountsByJoin,
         loopControlByBlockId: collapsed.controlByBlockId,
         forcedPersistentStorageRegs: collapsed.loopCarriedStorageRegs,
         forcedPersistentStorageStarts: collapsed.loopCarriedStorageStarts,

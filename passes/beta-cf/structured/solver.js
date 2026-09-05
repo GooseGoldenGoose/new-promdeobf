@@ -12,6 +12,66 @@ const { mergeElseIfCandidates, indentConditionalEffect, mergeCandidates } = requ
 const { markersSharePrefix, terminalSiblingMatch, guardLine, collapseTerminalCandidates, foldTerminalGuards } = require("./terminal");
 
 
+function collectClosedTerminalRegion(ctx, startId, forbiddenIds, entryPredId = null) {
+    const region = new Set();
+    const visiting = new Set();
+    function visit(id) {
+        if (forbiddenIds.has(id) || !ctx.blocks.has(id)) return false;
+        if (region.has(id)) return true;
+        if (visiting.has(id)) return false;
+        visiting.add(id);
+        const block = ctx.blocks.get(id);
+        const tr = block?.transition;
+        let ok = tr?.kind === "stop";
+        if (!ok) {
+            const nextIds = ctx.successors.get(id) || [];
+            ok = nextIds.length > 0 && nextIds.every(visit);
+        }
+        visiting.delete(id);
+        if (!ok) return false;
+        region.add(id);
+        return true;
+    }
+    if (!visit(startId)) return null;
+    for (const id of region) {
+        for (const pred of ctx.predecessors.get(id) || []) {
+            if (region.has(pred) || (id === startId && (entryPredId === null || pred === entryPredId))) continue;
+            return null;
+        }
+    }
+    return region;
+}
+
+function loopTerminalSiblingRegion(ctx, candidate, currentId, requireCurrentRegion = false) {
+    const bodyJoins = ctx.options?.loopBodyJoinIds;
+    const loopBranchIds = ctx.options?.loopBranchIds;
+    const markers = candidate?.markers || [];
+    if (!(bodyJoins instanceof Set) || !(loopBranchIds instanceof Set) || markers.length < 2) return null;
+    let loopMarker = null;
+    for (let i = markers.length - 1; i >= 0; i--) {
+        if (loopBranchIds.has(markers[i].branchId)) { loopMarker = markers[i]; break; }
+    }
+    if (!loopMarker || loopMarker.truth !== true) return null;
+    const loopBlock = ctx.blocks.get(loopMarker.branchId);
+    if (loopBlock?.transition?.kind !== "branch") return null;
+    const forbidden = new Set(bodyJoins);
+    forbidden.add(loopBlock.transition.onFalse);
+    if (requireCurrentRegion) return collectClosedTerminalRegion(ctx, currentId, forbidden);
+    for (let i = markers.length - 1; i >= 0; i--) {
+        const marker = markers[i];
+        if (loopBranchIds.has(marker.branchId)) break;
+        const branch = ctx.blocks.get(marker.branchId);
+        if (branch?.transition?.kind !== "branch") continue;
+        const siblingStart = marker.truth ? branch.transition.onFalse : branch.transition.onTrue;
+        const region = collectClosedTerminalRegion(ctx, siblingStart, forbidden, marker.branchId);
+        if (region) return region;
+    }
+    return null;
+}
+
+function isClosedTerminalLoopSibling(ctx, candidate, currentId) {
+    return loopTerminalSiblingRegion(ctx, candidate, currentId, true) instanceof Set;
+}
 function isLoopAbruptCandidate(candidate) {
     const effects = candidate?.effects || [];
     const tail = effects[effects.length - 1];
@@ -75,6 +135,9 @@ function foldLoopAbruptGuards(ctx, candidate, currentId) {
                 if (!isLoopAbruptCandidate(abrupt)) continue;
                 const match = terminalSiblingMatch(ctx, current, abrupt);
                 if (!match) continue;
+                const backedgeCounts = ctx.options?.loopBackedgeCountsByJoin;
+                if (backedgeCounts instanceof Map && backedgeCounts.get(joinId) === 1 &&
+                    isClosedTerminalLoopSibling(ctx, current, currentId)) continue;
                 const marker = abrupt.markers[abrupt.markers.length - 1];
                 // The dedicated while merger owns the proven loop decision.
                 // Folding an abrupt body path across that marker would turn
@@ -139,11 +202,35 @@ function matchMultiStateLogicalLocals(source, stateWhile, stateName, returnName,
     const ctx = createStructuredContext(source, stateWhile, stateName, returnName, options);
     if (!ctx) return null;
     analyzePersistentStorage(ctx);
+    const deferredTerminalJoinProgress = new Map();
     while (ctx.processingQueue.length) {
         const id = ctx.processingQueue.shift();
         if (ctx.processed.has(id)) continue;
         const candidates = ctx.incoming.get(id) || [];
         if (!collapseTerminalCandidates(ctx)) return null;
+        // A join can become graph-ready before an abrupt sibling has finished
+        // producing terminal candidates because terminal paths have no edge to
+        // the join. Delay only when that opposite branch is a proven closed,
+        // acyclic terminal region inside the loop and one of its states is
+        // already ready to process.
+        let pendingTerminalSibling = null;
+        if (candidates.length > 1) {
+            for (const candidate of candidates) {
+                const region = loopTerminalSiblingRegion(ctx, candidate, id, false);
+                if (region && ctx.processingQueue.some(readyId => region.has(readyId))) {
+                    pendingTerminalSibling = region;
+                    break;
+                }
+            }
+        }
+        if (pendingTerminalSibling) {
+            const lastProgress = deferredTerminalJoinProgress.get(id);
+            if (lastProgress !== ctx.processed.size) {
+                deferredTerminalJoinProgress.set(id, ctx.processed.size);
+                ctx.processingQueue.push(id);
+                continue;
+            }
+        }
         const normalizedCandidates = [];
         for (const candidate of candidates) {
             const terminalFolded = foldTerminalGuards(ctx, candidate);
@@ -555,7 +642,8 @@ function matchMultiStateLogicalLocals(source, stateWhile, stateName, returnName,
             const forcedPersistentStarts = ctx.options?.forcedPersistentStorageStarts;
             const forcedPersistentRegs = ctx.options?.forcedPersistentStorageRegs;
             const provenLoopPreheaderStart = forcedPersistentStarts instanceof Map &&
-                forcedPersistentStarts.get(name) instanceof Set && forcedPersistentStarts.get(name).has(id);
+                forcedPersistentStarts.get(name) instanceof Set &&
+                forcedPersistentStarts.get(name).has(id + ":" + i);
             const isForcedLoopStorage = forcedPersistentRegs instanceof Set && forcedPersistentRegs.has(name);
             const startsPersistentStorage = ctx.persistentStorageRegs.has(name) &&
                 (provenLoopPreheaderStart || (!isForcedLoopStorage && markers.length === 0));
