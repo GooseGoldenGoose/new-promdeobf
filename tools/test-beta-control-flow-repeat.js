@@ -143,4 +143,50 @@ function vmStatesSource(states, registers = "r1, r2, r3, r4, r5, r6, r7, r8, r9"
         'print("DONE", v1)\n');
 }
 
+{
+    // A proven terminal sibling may be folded into an early-return guard before
+    // a later repeat. Consuming that terminal path must advance the root
+    // sequencing anchor so the following loop composes linearly.
+    const source = vmStatesSource({
+        1: ['ReturnVal = "valid"', 'state = _env[ReturnVal]', 'state = state and (2) or (3)', 'r2 = args'],
+        2: ['ReturnVal = "print"', 'state = _env[ReturnVal]', 'r1 = 1', 'ReturnVal = state(r1)', 'state = 4'],
+        3: ['ReturnVal = {}', 'state = nil'],
+        4: ['ReturnVal = "valid"', 'state = _env[ReturnVal]', 'state = 5'],
+        5: ['state = 6'],
+        6: ['ReturnVal = "valid"', 'state = _env[ReturnVal]', 'state = state and (7) or (5)'],
+        7: ['ReturnVal = {}', 'state = nil'],
+    });
+    const result = solveBetaControlFlow(source, parse(source));
+    assert.strictEqual(result.applied, true, "terminal if followed by repeat did not compose");
+    assert.strictEqual(result.mode, "fresh-repeat");
+    assert.strictEqual(result.repeatLoopCount, 1);
+    assert.strictEqual(result.source,
+        'if valid then\n' +
+        'else\n' +
+        '    return\n' +
+        'end\n' +
+        'print(1)\n' +
+        'repeat\n' +
+        'until valid\n');
+}
+{
+    // If a repeat body returns on every path, Prometheus suppresses the body->check
+    // edge and dead-block cleanup removes the bottom condition/final blocks. The
+    // surviving compiler signature is a discarded pre-body condition TEMP followed
+    // by a jump into a closed terminal body. Preserve the proven source repeat.
+    const source = vmStatesSource({
+        1: ["state = 2"],
+        2: ["r1 = true", "state = 3"],
+        3: ['r1 = "f"', "r3 = _env[r1]", "ReturnVal = { r3() }", "ReturnVal = { unpack(ReturnVal) }", "state = nil"],
+        4: ["ReturnVal = {}", "state = nil"],
+    });
+    const result = solveBetaControlFlow(source, parse(source));
+    assert.strictEqual(result.applied, true, "terminal repeat was not recovered");
+    assert.strictEqual(result.mode, "fresh-repeat");
+    assert.strictEqual(result.repeatLoopCount, 1);
+    assert.strictEqual(result.source,
+        "repeat\n" +
+        "    return f()\n" +
+        "until true\n");
+}
 console.log("beta control-flow repeat tests passed");

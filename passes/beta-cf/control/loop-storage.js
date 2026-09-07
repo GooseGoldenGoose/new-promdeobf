@@ -34,6 +34,26 @@ function statementReadsName(statement, name) {
     return nodeReadsName(statement, name);
 }
 
+function valueMayBeReadBeforeOverwriteFrom(graph, blockId, name, visiting = new Set()) {
+    if (visiting.has(blockId)) return false;
+    const block = graph.blocks.get(blockId);
+    if (!block) return false;
+    const nextVisiting = new Set(visiting);
+    nextVisiting.add(blockId);
+    for (let i = 0; i < block.body.length; i++) {
+        if (i === block.transitionIndex) continue;
+        const statement = block.body[i];
+        if (statementReadsName(statement, name)) return true;
+        if (statement?.type === "AssignmentStatement" &&
+            (statement.variables || []).some(dest => isIdentifier(dest, name))) return false;
+    }
+    if (block.transition?.kind === "branch" && block.transition.conditionRegister === name) return true;
+    for (const target of transitionTargets(block.transition)) {
+        if (valueMayBeReadBeforeOverwriteFrom(graph, target, name, nextVisiting)) return true;
+    }
+    return false;
+}
+
 function candidateLoopCarriedRegisters(graph, matches) {
     const candidates = new Set();
     const starts = new Map();
@@ -46,7 +66,10 @@ function candidateLoopCarriedRegisters(graph, matches) {
             const statement = preheader.body[i];
             if (!isSingleAssignment(statement) || !isIdentifier(statement.variables[0])) continue;
             const name = statement.variables[0].name;
-            if (!isVmRegisterName(name) || statement.init[0]?.type === "NilLiteral") continue;
+            // Nil can be a real source initializer for a loop-carried binding.
+            // Ownership is proved below from a loop write plus an observed live
+            // incoming value, so do not discard nil definitions up front.
+            if (!isVmRegisterName(name)) continue;
             preheaderDefinitions.set(name, i);
         }
         for (const [name, definitionIndex] of preheaderDefinitions) {
@@ -73,7 +96,18 @@ function candidateLoopCarriedRegisters(graph, matches) {
                 }
                 if (live && block.transition?.kind === "branch" && block.transition.conditionRegister === name) readsInitialBeforeOverwrite = true;
                 for (const target of transitionTargets(block.transition)) {
-                    if (target === match.headerId || !match.coreIds.has(target)) continue;
+                    if (!match.coreIds.has(target)) {
+                        // A loop-carried source value may be observed only after the
+                        // loop exits (for example a nil-initialized "best match"
+                        // updated conditionally in the body). If this exact incoming
+                        // epoch reaches an exit-side read before overwrite, that is
+                        // source-storage evidence just like an in-loop read.
+                        if (live && valueMayBeReadBeforeOverwriteFrom(graph, target, name)) {
+                            readsInitialBeforeOverwrite = true;
+                        }
+                        continue;
+                    }
+                    if (target === match.headerId) continue;
                     queue.push({ id: target, live });
                 }
             }

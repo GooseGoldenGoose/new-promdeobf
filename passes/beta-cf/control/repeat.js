@@ -525,6 +525,137 @@ function collectTerminalReturnRegion(graph, startId, coreIds, returnName, forbid
     return { ids };
 }
 
+function collectTerminalRepeatBodyRegion(graph, startId, entryPredId, returnName) {
+    if (!graph?.blocks?.has(startId) || typeof returnName !== "string") return null;
+    const ids = new Set(), visiting = new Set();
+    let invalid = false;
+    function visit(id) {
+        if (invalid || ids.has(id)) return;
+        if (visiting.has(id)) { invalid = true; return; }
+        const block = graph.blocks.get(id);
+        if (!block) { invalid = true; return; }
+        visiting.add(id);
+        if (block.transition?.kind === "stop") {
+            if (!isCompilerTerminalReturnBlock(block, returnName)) invalid = true;
+        } else {
+            const targets = transitionTargets(block.transition);
+            if (!targets.length) invalid = true;
+            for (const target of targets) {
+                if (invalid) break;
+                visit(target);
+            }
+        }
+        visiting.delete(id);
+        ids.add(id);
+    }
+    visit(startId);
+    if (invalid || !ids.size) return null;
+    for (const id of ids) {
+        for (const pred of graph.predecessors.get(id) || []) {
+            if (ids.has(pred) || (id === startId && pred === entryPredId)) continue;
+            return null;
+        }
+    }
+    return { ids };
+}
+
+function containsCallExpression(node) {
+    if (!node || typeof node !== "object") return false;
+    if (node.type === "CallExpression") return true;
+    for (const [key, value] of Object.entries(node)) {
+        if (key === "range" || key === "loc") continue;
+        if (Array.isArray(value)) { if (value.some(containsCallExpression)) return true; }
+        else if (value && typeof value === "object" && containsCallExpression(value)) return true;
+    }
+    return false;
+}
+
+function registerOverwrittenBeforeReadOnAllTerminalPaths(graph, startId, regionIds, name) {
+    const memo = new Map(), visiting = new Set();
+    function visit(id) {
+        if (!regionIds.has(id)) return false;
+        if (memo.has(id)) return memo.get(id);
+        if (visiting.has(id)) return false;
+        visiting.add(id);
+        const block = graph.blocks.get(id);
+        if (!block) { visiting.delete(id); memo.set(id, false); return false; }
+        for (let index = 0; index < block.body.length; index++) {
+            if (index === block.transitionIndex) continue;
+            const statement = block.body[index];
+            if (statementReadsName(statement, name)) { visiting.delete(id); memo.set(id, false); return false; }
+            if (isSingleAssignment(statement) && isIdentifier(statement.variables[0], name)) {
+                visiting.delete(id); memo.set(id, true); return true;
+            }
+        }
+        if (block.transition?.kind === "stop") { visiting.delete(id); memo.set(id, false); return false; }
+        const targets = transitionTargets(block.transition);
+        const ok = targets.length > 0 && targets.every(visit);
+        visiting.delete(id); memo.set(id, ok); return ok;
+    }
+    return visit(startId);
+}
+
+function matchCompilerTerminalRepeatPreheaders(graph, stateName, returnName) {
+    if (!graph || typeof stateName !== "string" || typeof returnName !== "string") return [];
+    const matches = [];
+    for (const preheaderId of graph.reachable) {
+        const preheader = graph.blocks.get(preheaderId);
+        if (!preheader || preheader.transition?.kind !== "jump") continue;
+        const bodyId = preheader.transition.target;
+        const terminalRegion = collectTerminalRepeatBodyRegion(graph, bodyId, preheaderId, returnName);
+        if (!terminalRegion) continue;
+        const nonTransition = [];
+        for (let index = 0; index < preheader.body.length; index++) if (index !== preheader.transitionIndex) nonTransition.push(index);
+        if (!nonTransition.length) continue;
+        const candidates = [];
+        for (const index of nonTransition) {
+            const statement = preheader.body[index];
+            // Prometheus may borrow the dispatcher state register itself as the duplicated`r`n            // repeat-condition TEMP before overwriting it with the body jump. The same`r`n            // dependency/read-before-overwrite proof below is sufficient to distinguish`r`n            // that borrowed value from real dispatcher control.`r`n            if (!isSingleAssignment(statement) || !isIdentifier(statement.variables[0])) continue;
+            if (containsCallExpression(statement.init[0])) continue;
+            const name = statement.variables[0].name;
+            let readBeforeOverwrite = false;
+            for (let later = index + 1; later < preheader.body.length; later++) {
+                if (later === preheader.transitionIndex) continue;
+                const laterStatement = preheader.body[later];
+                if (statementReadsName(laterStatement, name)) { readBeforeOverwrite = true; break; }
+                if (isSingleAssignment(laterStatement) && isIdentifier(laterStatement.variables[0], name)) break;
+            }
+            if (readBeforeOverwrite) continue;
+            const slice = dependencySlice(preheader, index, new Set());
+            if (!slice || slice.size !== nonTransition.length || nonTransition.some(member => !slice.has(member))) continue;
+            if (!registerOverwrittenBeforeReadOnAllTerminalPaths(graph, bodyId, terminalRegion.ids, name)) continue;
+            candidates.push({ index, name, slice });
+        }
+        if (candidates.length !== 1) continue;
+        matches.push({ preheaderId, bodyId, terminalRegionIds: terminalRegion.ids, conditionIndex: candidates[0].index, conditionReg: candidates[0].name });
+    }
+    return matches;
+}
+
+function syntheticTerminalRepeatCapture(name, conditionReg) {
+    return {
+        type: "AssignmentStatement",
+        variables: [{ type: "Identifier", name }],
+        init: [{ type: "FreshTerminalRepeatConditionExpression", expression: { type: "Identifier", name: conditionReg } }],
+    };
+}
+
+function applyCompilerTerminalRepeatMatches(transformed, matches, metadata) {
+    if (!(transformed instanceof Map) || !Array.isArray(matches) || !(metadata?.terminalRepeatBodyStarts instanceof Map)) return false;
+    let serial = 0;
+    for (const match of matches) {
+        const body = transformed.get(match.preheaderId);
+        if (!Array.isArray(body) || !Number.isInteger(match.conditionIndex) || match.conditionIndex < 0 || match.conditionIndex >= body.length) return false;
+        const captureName = `__fresh_terminal_repeat_${++serial}_condition`;
+        const next = [...body];
+        next.splice(match.conditionIndex + 1, 0, syntheticTerminalRepeatCapture(captureName, match.conditionReg));
+        transformed.set(match.preheaderId, next);
+        metadata.terminalRepeatBodyStarts.set(match.bodyId, { captureName, preheaderId: match.preheaderId });
+        match.conditionCapture = captureName;
+    }
+    return true;
+}
+
 function collectBreakRegion(graph, startId, coreIds, exitId) {
     if (startId === exitId || coreIds.has(startId) || !graph.blocks.has(startId)) return null;
     const ids = new Set();
@@ -756,6 +887,8 @@ function matchCompilerRepeatProgram(source, stateWhile, stateName, returnName, o
 }
 
 module.exports = {
+    applyCompilerTerminalRepeatMatches,
+    matchCompilerTerminalRepeatPreheaders,
     applyCompilerRepeatMatch,
     matchCompilerRepeatNaturalLoop,
     collapseCompilerRepeatLoops,

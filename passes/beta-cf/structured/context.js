@@ -4,6 +4,7 @@ const { isEmptyTable, isIdentifier, isLuaIdentifier, isPrimitiveLiteral, isSingl
 const { createStateGraph } = require("../cfg");
 const { extractNormalizedStateLeaves } = require("../normalize");
 const { reduceCompilerLogicalStateGraph } = require("../logical");
+const { inferCompilerVarargFirstIndex } = require("../varargs");
 
 function createStructuredContext(source, stateWhile, stateName, returnName, options = {}) {
     const allowConditionalIf = options.allowConditionalIf === true;
@@ -15,12 +16,13 @@ function createStructuredContext(source, stateWhile, stateName, returnName, opti
         ? new Map([...options.normalizedLeaves].map(([id, body]) => [id, [...body]]))
         : extractNormalizedStateLeaves(stateWhile, stateName);
     if (!originalLeaves || originalLeaves.size < 2 || !originalLeaves.has(entryId)) return null;
+    const varargFirstIndex = renderAsFunction ? inferCompilerVarargFirstIndex(originalLeaves.get(entryId) || []) : null;
     const logicalReduction = allowConditionalIf
         ? reduceCompilerLogicalStateGraph(originalLeaves, entryId, stateName, returnName)
         : { leaves: originalLeaves, originalReachableStateIds: new Set(originalLeaves.keys()) };
     const leaves = logicalReduction.leaves;
 
-    const graph = createStateGraph(leaves, entryId, stateName);
+    const graph = createStateGraph(leaves, entryId, stateName, { reachableOnly: rootReachableOnly });
     if (!graph) return null;
     const { blocks, successors, predecessors, reachable } = graph;
     if (!rootReachableOnly && reachable.size !== blocks.size) return null;
@@ -71,11 +73,18 @@ function createStructuredContext(source, stateWhile, stateName, returnName, opti
     // Compiler aliases may resolve to the same source display but must never be
     // allowed to mutate that binding merely because their rendered strings match.
     const pathLocalOwnerPrefix = "\0freshPathLocalOwner:";
+    const deadJoinTempPrefix = "\0freshDeadJoinTemp:";
     // Root-local upvalue cells are compiler binding-identity transport. Keep
     // their recovered source bindings separate from ordinary VM register
     // locals so captured aliases can be rendered across conditional states.
     const upvalueCells = new Set();
     const upvalueCellBindings = new Map();
+    // Physical cell registers are reusable compiler storage. Give each allocUpvalue
+    // epoch its own identity so deferred closures capture cell identity instead
+    // of a physical register name. Candidate envs hold the binding evidence.
+    const upvalueCellIdentities = new Map();
+    const upvalueCellIdentityBindingPrefix = "\0freshUpvalueCellBinding:";
+    let nextUpvalueCellIdentity = 1;
     const upvalueAliasPrefix = "\0freshUpvalueAlias:";
     // Upvalue cells allocated inside a structured branch/loop are path-local
     // compiler transport. Their cell/binding identity travels in the candidate
@@ -91,6 +100,7 @@ function createStructuredContext(source, stateWhile, stateName, returnName, opti
     const structuredPackSlotPrefix = "\0freshStructuredPackSlot:";
     const structuredPacks = new Map();
     const structuredPackFutureOwnerCopies = new Map();
+    const structuredPackFutureCaptureOwners = new Map();
     const structuredPackFutureExtractions = new Map();
     let nextStructuredPackId = 0;
     const varargPackMarker = "\0freshVarargPack";
@@ -143,9 +153,15 @@ function createStructuredContext(source, stateWhile, stateName, returnName, opti
     const valueReadAfterCache = new Map();
     const futureNonNilWriteCache = new Map();
     const cleanupPathCache = new Map();
+    // Exact start-site cache for source bindings whose incoming value survives one
+    // branch while a sibling path reassigns it, then both versions reconverge.
+    // Keying by block/index/register prevents earlier physical-register epochs from
+    // inheriting ownership from a later conditional source lifetime.
+    const conditionalStorageCache = new Map();
     // Every mutable solver concern is carried explicitly across module boundaries.
     return {
         structuredPackFutureOwnerCopies,
+        structuredPackFutureCaptureOwners,
         structuredPackFutureExtractions,
         lastRootConditionalJoinId,
         structuredPackSlotPrefix,
@@ -153,12 +169,16 @@ function createStructuredContext(source, stateWhile, stateName, returnName, opti
         nonNilDefinitionCount,
         pathLocalBindingNames,
         pathLocalOwnerPrefix,
+        deadJoinTempPrefix,
         persistentStorageRegs,
         structuredPackPrefix,
         nextStructuredPackId,
         reservedBindingNames,
         eventualCleanupCache,
         upvalueCellBindings,
+        upvalueCellIdentities,
+        upvalueCellIdentityBindingPrefix,
+        nextUpvalueCellIdentity,
         earlyCleanupPending,
         valueReadAfterCache,
         allowConditionalIf,
@@ -170,9 +190,11 @@ function createStructuredContext(source, stateWhile, stateName, returnName, opti
         conditionalIfCount,
         rootReachableOnly,
         renderAsFunction,
+        varargFirstIndex,
         logicalReduction,
         varargPackMarker,
         cleanupPathCache,
+        conditionalStorageCache,
         accumulatorRegs,
         processingQueue,
         structuredPacks,

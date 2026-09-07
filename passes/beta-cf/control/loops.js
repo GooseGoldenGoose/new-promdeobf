@@ -10,7 +10,8 @@ const {
     loopsAreNestedOrDisjoint,
     matchCompilerWhileConditionRegion,
 } = require("./while");
-const { applyCompilerRepeatMatch, matchCompilerRepeatNaturalLoop } = require("./repeat");
+const { applyCompilerRepeatMatch, matchCompilerRepeatNaturalLoop, applyCompilerTerminalRepeatMatches, matchCompilerTerminalRepeatPreheaders } = require("./repeat");
+const { applyCompilerGenericForMatch, matchCompilerGenericForNaturalLoop } = require("./generic-for");
 const {
     applyCompilerNumericForMatch,
     canonicalizeCompilerNumericForChecks,
@@ -54,18 +55,34 @@ function collapseCompilerStructuredLoops(leaves, entryId, stateName, returnName 
     const loopBackedgeCountsByJoin = new Map();
     const repeatBranchIds = new Set();
     const repeatBodyStarts = new Map();
+    const terminalRepeatBodyStarts = new Map();
     const numericForBranchIds = new Set();
     const numericForMetaByBranchId = new Map();
     const numericForBodyStarts = new Map();
+    const genericForBranchIds = new Set();
+    const genericForMetaByBranchId = new Map();
+    const genericForBodyStarts = new Map();
     const loopControlByBlockId = new Map();
     const loopCarriedEvidence = new Map();
     const matches = [];
     let whileLoopCount = 0;
     let repeatLoopCount = 0;
     let numericForLoopCount = 0;
+    let genericForLoopCount = 0;
     let removedCompilerConditionStatementCount = 0;
     let nextSyntheticId = nextSyntheticBelow(transformed, -1);
     let rounds = 0;
+
+    {
+        const initialGraph = createStateGraph(transformed, entryId, stateName);
+        if (!initialGraph) return null;
+        const terminalRepeatMatches = matchCompilerTerminalRepeatPreheaders(initialGraph, stateName, returnName);
+        if (terminalRepeatMatches.length) {
+            if (!applyCompilerTerminalRepeatMatches(transformed, terminalRepeatMatches, { terminalRepeatBodyStarts })) return null;
+            for (const match of terminalRepeatMatches) matches.push({ type: "repeat-terminal", match });
+            repeatLoopCount += terminalRepeatMatches.length;
+        }
+    }
 
     while (true) {
         if (rounds++ > leaves.size * 3 + 16) return null;
@@ -90,7 +107,8 @@ function collapseCompilerStructuredLoops(leaves, entryId, stateName, returnName 
                     numericMatch.incrementReg,
                     numericMatch.negFlagReg,
                     numericMatch.loopVarReg,
-                ]));
+                    numericMatch.loopVarCellReg,
+                ].filter(Boolean)));
                 const bodyJoinId = nextSyntheticId;
                 nextSyntheticId = nextSyntheticBelow(transformed, bodyJoinId - 1);
                 if (!applyCompilerNumericForMatch(transformed, graph, numericMatch, stateName, bodyJoinId, {
@@ -103,6 +121,31 @@ function collapseCompilerStructuredLoops(leaves, entryId, stateName, returnName 
                 })) return null;
                 matches.push({ type: "numeric-for", match: numericMatch });
                 numericForLoopCount++;
+                applied = true;
+                break;
+            }
+
+            const genericMatch = matchCompilerGenericForNaturalLoop(graph, loopInfo, returnName);
+            if (genericMatch) {
+                const carried = candidateLoopCarriedRegisters(graph, [genericMatch]);
+                mergeEvidence(loopCarriedEvidence, carried.evidence, new Set([
+                    genericMatch.iteratorReg,
+                    genericMatch.invariantReg,
+                    genericMatch.controlReg,
+                    ...genericMatch.loopVarRegs,
+                ]));
+                const bodyJoinId = nextSyntheticId;
+                nextSyntheticId = nextSyntheticBelow(transformed, bodyJoinId - 1);
+                if (!applyCompilerGenericForMatch(transformed, graph, genericMatch, stateName, bodyJoinId, {
+                    genericForBranchIds,
+                    genericForMetaByBranchId,
+                    genericForBodyStarts,
+                    loopBodyJoinIds,
+                    loopBackedgeCountsByJoin,
+                    loopControlByBlockId,
+                })) return null;
+                matches.push({ type: "generic-for", match: genericMatch });
+                genericForLoopCount++;
                 applied = true;
                 break;
             }
@@ -152,15 +195,20 @@ function collapseCompilerStructuredLoops(leaves, entryId, stateName, returnName 
         whileLoopCount,
         repeatLoopCount,
         numericForLoopCount,
+        genericForLoopCount,
         removedCompilerConditionStatementCount,
         loopBranchIds,
         loopBodyJoinIds,
         loopBackedgeCountsByJoin,
         repeatBranchIds,
         repeatBodyStarts,
+        terminalRepeatBodyStarts,
         numericForBranchIds,
         numericForMetaByBranchId,
         numericForBodyStarts,
+        genericForBranchIds,
+        genericForMetaByBranchId,
+        genericForBodyStarts,
         loopControlByBlockId,
         loopCarriedStorageRegs: remappedCarried.registers,
         loopCarriedStorageStarts: remappedCarried.starts,
@@ -168,7 +216,10 @@ function collapseCompilerStructuredLoops(leaves, entryId, stateName, returnName 
 }
 
 function matchCompilerStructuredLoopProgram(source, stateWhile, stateName, returnName, options = {}) {
-    const originalLeaves = extractNormalizedStateLeaves(stateWhile, stateName);
+    const suppliedLeaves = options.normalizedLeaves;
+    const originalLeaves = suppliedLeaves instanceof Map
+        ? cloneLeaves(suppliedLeaves)
+        : extractNormalizedStateLeaves(stateWhile, stateName);
     if (!originalLeaves || originalLeaves.size < 4) return null;
     const entryId = Number.isInteger(options.entryId) ? options.entryId : 1;
     const originalGraphLeaves = cloneLeaves(originalLeaves);
@@ -177,18 +228,32 @@ function matchCompilerStructuredLoopProgram(source, stateWhile, stateName, retur
     if (!originalGraph) return null;
     const collapsed = collapseCompilerStructuredLoops(originalLeaves, entryId, stateName, returnName);
     if (!collapsed) return null;
+    const structuredLeaves = collapsed.leaves;
+    // Terminal-repeat recovery exists specifically for the Prometheus shape where
+    // an all-terminal body suppresses the bottom-check edge and leaves dead final
+    // states outside the root-reachable region. Once that terminal-repeat proof has
+    // succeeded, render only the proven root-reachable invocation states. Other loop
+    // shapes retain the stricter all-block accounting unless their caller explicitly
+    // requested root-reachable recovery (for example transactional closure recovery).
+    const terminalRepeatProven = collapsed.matches.some(item => item?.type === "repeat-terminal");
+    const structuredRootReachableOnly = options.rootReachableOnly === true || terminalRepeatProven;
     const program = matchMultiStateLogicalLocals(source, stateWhile, stateName, returnName, {
         ...options,
         allowConditionalIf: true,
-        normalizedLeaves: collapsed.leaves,
+        rootReachableOnly: structuredRootReachableOnly,
+        normalizedLeaves: structuredLeaves,
         loopBranchIds: collapsed.loopBranchIds,
         loopBodyJoinIds: collapsed.loopBodyJoinIds,
         loopBackedgeCountsByJoin: collapsed.loopBackedgeCountsByJoin,
         repeatBranchIds: collapsed.repeatBranchIds,
         repeatBodyStarts: collapsed.repeatBodyStarts,
+        terminalRepeatBodyStarts: collapsed.terminalRepeatBodyStarts,
         numericForBranchIds: collapsed.numericForBranchIds,
         numericForMetaByBranchId: collapsed.numericForMetaByBranchId,
         numericForBodyStarts: collapsed.numericForBodyStarts,
+        genericForBranchIds: collapsed.genericForBranchIds,
+        genericForMetaByBranchId: collapsed.genericForMetaByBranchId,
+        genericForBodyStarts: collapsed.genericForBodyStarts,
         loopControlByBlockId: collapsed.loopControlByBlockId,
         forcedPersistentStorageRegs: collapsed.loopCarriedStorageRegs,
         forcedPersistentStorageStarts: collapsed.loopCarriedStorageStarts,
@@ -203,6 +268,7 @@ function matchCompilerStructuredLoopProgram(source, stateWhile, stateName, retur
         whileLoopCount: collapsed.whileLoopCount,
         repeatLoopCount: collapsed.repeatLoopCount,
         numericForLoopCount: collapsed.numericForLoopCount,
+        genericForLoopCount: collapsed.genericForLoopCount,
         removedCompilerConditionStatementCount: collapsed.removedCompilerConditionStatementCount,
         loopMatches: collapsed.matches,
     };

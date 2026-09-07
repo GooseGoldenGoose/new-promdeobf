@@ -26,11 +26,39 @@ function transitionTargets(transition) {
 function createStateGraph(leaves, entryId, stateName, options = {}) {
     if (!(leaves instanceof Map) || !leaves.has(entryId)) return null;
     const strictTargets = options.strictTargets !== false;
+    const reachableOnly = options.reachableOnly === true;
     const blocks = new Map();
-    for (const [id, body] of leaves) {
-        const transition = transitionOfBody(body, stateName);
-        if (!transition) return null;
-        blocks.set(id, { id, body, transitionIndex: transition.index, transition });
+
+    if (reachableOnly) {
+        // Child-closure recovery shares one normalized leaf map with its parent
+        // invocation. Parse only states reachable from this invocation entry so
+        // unrelated parent/sibling compiler shapes cannot invalidate its CFG.
+        const queue = [entryId];
+        while (queue.length) {
+            const id = queue.shift();
+            if (blocks.has(id)) continue;
+            const body = leaves.get(id);
+            if (!body) {
+                if (strictTargets) return null;
+                continue;
+            }
+            const transition = transitionOfBody(body, stateName);
+            if (!transition) return null;
+            blocks.set(id, { id, body, transitionIndex: transition.index, transition });
+            for (const target of transitionTargets(transition)) {
+                if (!leaves.has(target)) {
+                    if (strictTargets) return null;
+                    continue;
+                }
+                if (!blocks.has(target)) queue.push(target);
+            }
+        }
+    } else {
+        for (const [id, body] of leaves) {
+            const transition = transitionOfBody(body, stateName);
+            if (!transition) return null;
+            blocks.set(id, { id, body, transitionIndex: transition.index, transition });
+        }
     }
 
     const successors = new Map([...blocks.keys()].map(id => [id, []]));
@@ -38,7 +66,7 @@ function createStateGraph(leaves, entryId, stateName, options = {}) {
     for (const [id, block] of blocks) {
         for (const target of transitionTargets(block.transition)) {
             if (!blocks.has(target)) {
-                if (strictTargets) return null;
+                if (strictTargets && !reachableOnly) return null;
                 continue;
             }
             successors.get(id).push(target);
@@ -46,7 +74,7 @@ function createStateGraph(leaves, entryId, stateName, options = {}) {
         }
     }
 
-    const reachable = reachableFrom(entryId, successors, blocks);
+    const reachable = reachableOnly ? new Set(blocks.keys()) : reachableFrom(entryId, successors, blocks);
     return { entryId, blocks, successors, predecessors, reachable };
 }
 

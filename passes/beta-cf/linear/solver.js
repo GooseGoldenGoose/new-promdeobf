@@ -4,7 +4,7 @@ const { createLinearContext } = require("./context");
 const { nodeUsesIdentifier, valueUsedBeforeOverwrite, hasLaterNilAssignment, hasOnlyDeadCopyUses, isTerminalUnreadEpoch, nodeUsesAsCallBase, isTerminalStableUsedEpoch, findFutureTerminalUnusedCopy, findFutureTerminalClosureCopy, findFutureUpvalueClosureStore, isPurePendingTempRhs, rhsDependsOnPendingPack, rhsUsesPendingPackSourceLocal, hasFuturePendingPackSlotBeforeStateTouch, isDeadPurePendingTemp, hasFutureReassignedLocalUse, findFutureLiveTableCopy, isDeadPlainTableIndexRead, countIdentifierUses, isUniqueFutureTableOperand, isPlainTableMethodLoad, findFutureCleanupCopy, isPosPreservationCopy } = require("./lifetime");
 const { localName, emitSourceLine, allocateLocal, reserveLocal, canPredeclareNilLocal, predeclareNilReads } = require("./bindings");
 const { reservePendingPackDisplayNamesThrough, flushPendingPacks } = require("./packs");
-const { memberMeta, renderCallArg, renderRhs } = require("./render");
+const { memberMeta, renderCallArg, renderRhs, isSourcePackedTableConstructor } = require("./render");
 const { canonicalizeInitialSimpleLocals, isEmptyTable, isIdentifier, isPrimitiveLiteral, isSingleAssignment, isVmRegisterName, sourceOf } = require("../ast");
 const { renderProgram } = require("../render");
 const { decodeVmStatement, callKind } = require("../statement-ir");
@@ -13,6 +13,52 @@ const { renderOrdinaryIndexWrite } = require("../statement-semantics");
 function matchLocalRegisterProgram(source, leaf, stateName, returnName, options = {}) {
     const ctx = createLinearContext(source, leaf, stateName, returnName, options);
     if (!ctx) return null;
+    let pendingAssignmentEffect = null;
+    function lastRegisterWriteBefore(beforeIndex, name) {
+        for (let probe = beforeIndex - 1; probe >= 0; probe--) {
+            const prior = decodeVmStatement(ctx.leaf[probe]);
+            if (prior?.kind === "register-write" && prior.targetName === name) return probe;
+        }
+        return -1;
+    }
+    function assignmentBarrier(registers = []) {
+        let barrier = 0;
+        for (const reg of registers) {
+            if (typeof reg === "string") barrier = Math.max(barrier, ctx.deferredLocalBarriers.get(reg) || 0);
+        }
+        return barrier;
+    }
+    function flushAssignmentEffect() {
+        if (!pendingAssignmentEffect) return;
+        const items = pendingAssignmentEffect.items;
+        const line = items.length === 1
+            ? `${items[0].target} = ${items[0].value}`
+            : `${items.map(item => item.target).join(", ")} = ${items.map(item => item.value).join(", ")}`;
+        if (pendingAssignmentEffect.afterPackOrder > 0) {
+            ctx.deferredSourceLines.push({ line, afterPackOrder: pendingAssignmentEffect.afterPackOrder });
+        } else {
+            ctx.out.splice(pendingAssignmentEffect.insertAt, 0, line);
+        }
+        pendingAssignmentEffect = null;
+    }
+    function queueAssignmentEffect(index, target, value, carrierName, dependencyRegs = []) {
+        if (typeof target !== "string" || typeof value !== "string") return false;
+        const item = { index, target, value, carrierName: typeof carrierName === "string" ? carrierName : null };
+        const afterPackOrder = assignmentBarrier(dependencyRegs);
+        if (!pendingAssignmentEffect) {
+            pendingAssignmentEffect = { firstIndex: index, insertAt: ctx.out.length, afterPackOrder, items: [item] };
+            return true;
+        }
+        const rhsDef = item.carrierName === null ? -1 : lastRegisterWriteBefore(index, item.carrierName);
+        if (rhsDef < 0 || rhsDef >= pendingAssignmentEffect.firstIndex) {
+            flushAssignmentEffect();
+            pendingAssignmentEffect = { firstIndex: index, insertAt: ctx.out.length, afterPackOrder, items: [item] };
+            return true;
+        }
+        pendingAssignmentEffect.afterPackOrder = Math.max(pendingAssignmentEffect.afterPackOrder, afterPackOrder);
+        pendingAssignmentEffect.items.push(item);
+        return true;
+    }
     for (let index = 0; index < ctx.leaf.length; index++) {
         const statement = ctx.leaf[index];
         if (ctx.options.diagnostics) { ctx.options.diagnostics.statementIndex = index; ctx.options.diagnostics.statement = sourceOf(ctx.source, statement) || statement?.type || "unknown"; }
@@ -47,6 +93,9 @@ function matchLocalRegisterProgram(source, leaf, stateName, returnName, options 
             const stableBase = baseName === "_env" || ctx.locals.has(baseName) || ctx.exprKinds.get(baseName) === "table" || baseMeta?.kind === "member";
             const decoded = renderOrdinaryIndexWrite({ baseName, renderedBase: base, renderedKey: key, renderedValue: value, stableBase });
             if (!decoded) return null;
+            const assignmentTarget = decoded.line.slice(0, decoded.line.lastIndexOf(" = "));
+            if (isIdentifier(rhs) && queueAssignmentEffect(index, assignmentTarget, value, rhs.name, [baseName, rhs.name])) continue;
+            flushAssignmentEffect();
             if (decoded.kind === "global-write") ctx.out.push(decoded.line);
             else emitSourceLine(ctx, decoded.line, [baseName]);
             continue;
@@ -56,7 +105,7 @@ function matchLocalRegisterProgram(source, leaf, stateName, returnName, options 
         const isPackIndex = rhs?.type === "IndexExpression" && isIdentifier(rhs.base) && ctx.exprKinds.get(rhs.base.name) === "return-pack" && rhs.index?.type === "NumericLiteral";
         const isPackSlotCopy = isIdentifier(rhs) && ctx.exprKinds.get(rhs.name) === "pack-slot";
         const returnPackFields = rhs?.type === "TableConstructorExpression" ? (rhs.fields || []) : [];
-        const isReturnPackCreation = returnPackFields.length === 1 && returnPackFields[0]?.type === "TableValue" && returnPackFields[0].value?.type === "CallExpression";
+        const isReturnPackCreation = returnPackFields.length === 1 && returnPackFields[0]?.type === "TableValue" && returnPackFields[0].value?.type === "CallExpression" && !isSourcePackedTableConstructor(ctx, rhs);
         const isDeferredStorageCopy = isIdentifier(rhs) && ctx.deferredStorageCopies.get(name) === rhs.name;
         const isDeferredTerminalClosureCopy = isIdentifier(rhs) && ctx.deferredTerminalClosureCopies.get(name) === rhs.name;
         const isDeferredTerminalUnusedCopy = isIdentifier(rhs) && ctx.deferredTerminalUnusedCopies.get(name) === rhs.name;
@@ -355,7 +404,10 @@ function matchLocalRegisterProgram(source, leaf, stateName, returnName, options 
         if (ctx.locals.has(name)) {
             const value = renderRhs(ctx, rhs);
             if (typeof value !== "string") return null;
-            emitSourceLine(ctx, `${localName(ctx, name)} = ${value}`, [name]); ctx.expr.set(name, localName(ctx, name));
+            const localTarget = localName(ctx, name);
+            if (isIdentifier(rhs) && queueAssignmentEffect(index, localTarget, value, rhs.name, [name, rhs.name])) { ctx.expr.set(name, localTarget); ctx.exprKinds.set(name, rhs?.type === "TableConstructorExpression" ? "table" : "value"); continue; }
+            flushAssignmentEffect();
+            emitSourceLine(ctx, `${localTarget} = ${value}`, [name]); ctx.expr.set(name, localTarget);
             ctx.exprKinds.set(name, rhs?.type === "TableConstructorExpression" ? "table" : "value"); continue;
         }
 
@@ -449,11 +501,12 @@ function matchLocalRegisterProgram(source, leaf, stateName, returnName, options 
         ctx.expr.set(name, value);
         if (member) ctx.exprMeta.set(name, member); else ctx.exprMeta.delete(name);
         const fields = rhs?.type === "TableConstructorExpression" ? (rhs.fields || []) : [];
-        const isReturnPack = fields.length === 1 && fields[0]?.type === "TableValue" && fields[0].value?.type === "CallExpression";
+        const isReturnPack = fields.length === 1 && fields[0]?.type === "TableValue" && fields[0].value?.type === "CallExpression" && !isSourcePackedTableConstructor(ctx, rhs);
         ctx.exprKinds.set(name, isReturnPack ? "return-pack" : (rhs?.type === "TableConstructorExpression" ? "table" : "value"));
         if (isReturnPack && !ctx.packCreationOrder.has(name)) ctx.packCreationOrder.set(name, ++ctx.nextPackOrder);
     }
 
+    flushAssignmentEffect();
     if (!flushPendingPacks(ctx)) { if (ctx.options.diagnostics) ctx.options.diagnostics.reason = "final pending multi-return pack flush failed"; return null; }
     if (ctx.declaredCount === 0) {
         if (ctx.options.allowNoLocals !== true) { if (ctx.options.diagnostics) ctx.options.diagnostics.reason = "no proven source locals were recovered"; return null; }

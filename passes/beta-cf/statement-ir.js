@@ -3,6 +3,18 @@
 const { isIdentifier, isSingleAssignment } = require("./ast");
 
 function decodeVmStatement(statement) {
+    if (statement?.type === "CompoundAssignmentStatement") {
+        const destination = statement.variable;
+        const value = statement.value;
+        const operator = statement.op;
+        if (destination?.type === "IndexExpression") {
+            return { kind: "compound-index-write", statement, destination, base: destination.base, key: destination.index, value, operator };
+        }
+        if (isIdentifier(destination)) {
+            return { kind: "compound-register-write", statement, destination, targetName: destination.name, value, operator };
+        }
+        return null;
+    }
     if (!isSingleAssignment(statement)) return null;
     const destination = statement.variables[0];
     const value = statement.init[0];

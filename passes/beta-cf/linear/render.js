@@ -22,11 +22,20 @@ function renderCallArg(ctx, arg) {
     return renderRhs(ctx, arg);
 }
 
+function isSourcePackedTableConstructor(ctx, rhs) {
+    if (rhs?.type !== "TableConstructorExpression") return false;
+    const fields = rhs.fields || [];
+    if (fields.length !== 1 || fields[0]?.type !== "TableValue") return false;
+    const call = fields[0].value;
+    if (call?.type !== "CallExpression" || !isIdentifier(call.base, "unpack") || (call.arguments || []).length !== 1 || !isIdentifier(call.arguments[0])) return false;
+    return ctx.exprKinds.get(call.arguments[0].name) === "return-pack";
+}
+
 function renderRhs(ctx, rhs) {
     if (isPrimitiveLiteral(rhs) || isEmptyTable(rhs)) return sourceOf(ctx.source, rhs);
     if (rhs?.type === "TableConstructorExpression") {
         const fields = rhs.fields || [];
-        if (fields.length === 1 && fields[0]?.type === "TableValue" && fields[0].value?.type === "CallExpression") return renderRhs(ctx, fields[0].value);
+        if (fields.length === 1 && fields[0]?.type === "TableValue" && fields[0].value?.type === "CallExpression" && !isSourcePackedTableConstructor(ctx, rhs)) return renderRhs(ctx, fields[0].value);
         return renderTableFields(fields, node => renderRhs(ctx, node));
     }
     if (isIdentifier(rhs)) return ctx.expr.get(rhs.name) ?? (ctx.locals.has(rhs.name) ? localName(ctx, rhs.name) : null);
@@ -118,4 +127,4 @@ function renderRhs(ctx, rhs) {
     return null;
 }
 
-module.exports = { memberMeta, renderCallArg, renderRhs };
+module.exports = { memberMeta, renderCallArg, renderRhs, isSourcePackedTableConstructor };

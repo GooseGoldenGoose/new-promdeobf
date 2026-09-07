@@ -2,17 +2,108 @@
 
 const { createStructuredContext } = require("./context");
 const { isEmptyTable, isIdentifier, isPrimitiveLiteral, isSingleAssignment, isVmRegisterName, renderTableFields, renderUnary, sourceOf } = require("../ast");
-const { hasLinearRootContinuation, recordRootConditional, upvalueAliasKey, pathLocalOwnerKey, pathUpvalueCellKey, hasPathUpvalueCell, upvalueCellBinding, allocateValueDisplay, allocateTableDisplay, parameterName, capturedSlotName, forwardedCaptureName, displayLocal, activeLocalDisplay, hasActiveLocal, resolveId, resolveRenderableId } = require("./bindings");
+const { hasLinearRootContinuation, recordRootConditional, upvalueAliasKey, pathLocalOwnerKey, deadJoinTempKey, pathUpvalueCellKey, hasPathUpvalueCell, allocateUpvalueCellIdentity, upvalueCellIdentity, bindUpvalueCellIdentity, upvalueCellBinding, deferredClosureValue, isDeferredClosureValue, pendingDeferredLocalValue, isPendingDeferredLocalValue, renderDeferredClosureValue, allocateValueDisplay, allocateTableDisplay, parameterName, capturedSlotName, forwardedCaptureName, displayLocal, activeLocalDisplay, hasActiveLocal, resolveId, resolveRenderableId } = require("./bindings");
 const { structuredPackId, structuredPackSlot, structuredPackSlotToken } = require("./tokens");
-const { isCompilerVarargPack, isVarargUnpack, expectedPackSlotsInBlock, cleanupOrTerminalEpoch, maybeOwnStructuredPackSlot, preclaimFutureStructuredPackOwner, preclaimFutureStructuredPackSlots, flushStructuredPack, flushReadyStructuredPacks } = require("./packs");
-const { nodeReadsIdentifier, nodeUsesAsCallBaseMulti, terminalStableUsedEpoch, transportSourceKind, valueMayBeReadFrom, eventualCleanupOnAllPaths, valueMayBeReadAfter, hasFutureNonNilWrite, analyzePersistentStorage } = require("./lifetime");
+const { isCompilerVarargPack, isVarargUnpack, expectedPackSlotsInBlock, isForwardOnlyPackUseInBlock, cleanupOrTerminalEpoch, maybeOwnStructuredPackSlot, preclaimFutureStructuredPackOwner, preclaimFutureStructuredPackSlots, flushStructuredPack, flushReadyStructuredPacks } = require("./packs");
+const { nodeReadsIdentifier, nodeUsesAsCallBaseMulti, terminalStableUsedEpoch, transportSourceKind, valueMayBeReadFrom, eventualCleanupOnAllPaths, valueMayBeReadAfter, hasFutureNonNilWrite, allReachingDefinitionsAreDeadNilCleanup, conditionalUpdatedStorageEpoch, provenCallArgumentSourceEpoch, provenSingleUseCallResultAt, valueMayBeIndexWriteBaseAfter, analyzePersistentStorage } = require("./lifetime");
 const { render } = require("./render");
 const { renderFunction, renderProgram } = require("../render");
 const { decodeVmStatement, callKind } = require("../statement-ir");
-const { renderOrdinaryIndexWrite } = require("../statement-semantics");
+const { renderOrdinaryIndexWrite, renderOrdinaryIndexCompoundWrite, matchCompilerGlobalAssignmentBatch } = require("../statement-semantics");
 const { mergeElseIfCandidates, indentConditionalEffect, mergeCandidates } = require("./branches");
-const { markersSharePrefix, terminalSiblingMatch, guardLine, collapseTerminalCandidates, foldTerminalGuards } = require("./terminal");
+const { markersSharePrefix, terminalSiblingMatch, guardLine, foldTerminalRepeatScopes, collapseTerminalCandidates, foldTerminalGuards } = require("./terminal");
 
+
+function mutationBaseOwnerKey(name) { return "\0freshMutationBaseOwner:" + name; }
+
+function sourcePackedTablePackReg(rhs, singleCallPacks) {
+    if (rhs?.type !== "TableConstructorExpression" || !(singleCallPacks instanceof Map)) return null;
+    const fields = rhs.fields || [];
+    if (fields.length !== 1 || fields[0]?.type !== "TableValue") return null;
+    const call = fields[0].value;
+    if (call?.type !== "CallExpression" || !isIdentifier(call.base, "unpack") || (call.arguments || []).length !== 1 || !isIdentifier(call.arguments[0])) return null;
+    return singleCallPacks.has(call.arguments[0].name) ? call.arguments[0].name : null;
+}
+
+function isRedundantReleasedUpvalueCleanup(ctx, block, index, name) {
+    for (let probe = index - 1; probe >= 0; probe--) {
+        if (probe === block.transitionIndex) continue;
+        const statement = block.body[probe];
+        if (!isSingleAssignment(statement)) {
+            if (nodeReadsIdentifier(ctx, statement, name)) return false;
+            continue;
+        }
+        const dest = statement.variables[0];
+        const value = statement.init[0];
+        if (isIdentifier(dest, name)) {
+            return value?.type === "CallExpression" && isIdentifier(value.base, "releaseUpvalue") &&
+                (value.arguments || []).length === 1 && isIdentifier(value.arguments[0], name);
+        }
+        if (nodeReadsIdentifier(ctx, value, name) || (dest?.type === "IndexExpression" && nodeReadsIdentifier(ctx, dest, name))) return false;
+    }
+    return false;
+}
+function deferredClosureFromRhs(ctx, rhs, env, rhsCallKind) {
+    if (rhsCallKind === "closure") return deferredClosureValue(ctx, rhs, env);
+    if (!isIdentifier(rhs)) return null;
+    const carried = resolveId(ctx, rhs.name, env);
+    return isDeferredClosureValue(carried) ? carried : null;
+}
+
+function sourceStorageStartsHere(ctx, id, index, name, markers) {
+    const epochEnd = cleanupOrTerminalEpoch(ctx, id, index, name);
+    const cleanupBacked = ctx.allowConditionalIf && ctx.cleanupRegs.has(name) && !ctx.locals.has(name) &&
+        epochEnd.valid && epochEnd.sawCleanup;
+    const forcedStarts = ctx.options?.forcedPersistentStorageStarts;
+    const forcedRegs = ctx.options?.forcedPersistentStorageRegs;
+    const provenLoopPreheaderStart = forcedStarts instanceof Map && forcedStarts.get(name) instanceof Set &&
+        forcedStarts.get(name).has(id + ":" + index);
+    const isForcedLoopStorage = forcedRegs instanceof Set && forcedRegs.has(name);
+    const persistent = ctx.persistentStorageRegs.has(name) &&
+        (provenLoopPreheaderStart || (!isForcedLoopStorage && markers.length === 0));
+    return cleanupBacked || persistent;
+}
+
+function installPendingDeferredLocal(ctx, env, markers, effects, name, initializer, terminalLive = false) {
+    if (!isDeferredClosureValue(initializer) || hasActiveLocal(ctx, name, env)) return null;
+    const pathScoped = markers.length !== 0;
+    if (pathScoped && !ctx.allowConditionalIf) return null;
+    const pending = pendingDeferredLocalValue(initializer, pathScoped);
+    if (!pending) return null;
+    if (pathScoped) {
+        env.set(pathLocalOwnerKey(ctx, name), pending);
+    } else {
+        ctx.locals.add(name);
+        if (terminalLive) ctx.terminalLiveLocals.add(name);
+    }
+    env.set(name, pending);
+    return effects;
+}
+
+function flushReadyPendingDeferredLocals(ctx, env, markers, effects) {
+    let nextEffects = effects;
+    for (const [name, pending] of [...env.entries()]) {
+        if (!isPendingDeferredLocalValue(pending)) continue;
+        const owned = pending.pathScoped
+            ? env.get(pathLocalOwnerKey(ctx, name)) === pending
+            : ctx.locals.has(name);
+        if (!owned) continue;
+        const initializer = renderDeferredClosureValue(ctx, pending.initializer, env);
+        if (typeof initializer !== "string") continue;
+        const display = allocateValueDisplay(ctx);
+        const declaration = `local ${display} = ${initializer}`;
+        if (pending.pathScoped) {
+            ctx.pathLocalBindingNames.add(display);
+            env.set(pathLocalOwnerKey(ctx, name), display);
+            nextEffects = [...nextEffects, declaration];
+        } else {
+            ctx.localNames.set(name, display);
+            ctx.out.push(declaration);
+        }
+        env.set(name, display);
+    }
+    return nextEffects;
+}
 
 function collectClosedTerminalRegion(ctx, startId, forbiddenIds, entryPredId = null) {
     const region = new Set();
@@ -73,6 +164,41 @@ function loopTerminalSiblingRegion(ctx, candidate, currentId, requireCurrentRegi
 
 function isClosedTerminalLoopSibling(ctx, candidate, currentId) {
     return loopTerminalSiblingRegion(ctx, candidate, currentId, true) instanceof Set;
+}
+
+function hasControlOnlyJumpPath(ctx, startId, targetId) {
+    if (!Number.isInteger(startId) || !Number.isInteger(targetId) || startId === targetId) return false;
+    const seen = new Set();
+    let id = startId;
+    while (id !== targetId) {
+        if (seen.has(id)) return false;
+        seen.add(id);
+        const block = ctx.blocks.get(id);
+        if (!block || block.transition?.kind !== "jump" || !Number.isInteger(block.transitionIndex)) return false;
+        for (let i = 0; i < block.body.length; i++) {
+            if (i !== block.transitionIndex) return false;
+        }
+        id = block.transition.target;
+    }
+    return true;
+}
+
+function ordinaryTerminalSiblingRegion(ctx, candidate, currentId) {
+    const markers = candidate?.markers || [];
+    const effects = candidate?.effects || [];
+    if (!markers.length || !Number.isInteger(currentId)) return null;
+    for (let i = markers.length - 1; i >= 0; i--) {
+        const marker = markers[i];
+        if (!marker || marker.kind != null || !Number.isInteger(marker.branchId) || marker.effectCount !== effects.length) continue;
+        const branch = ctx.blocks.get(marker.branchId);
+        if (branch?.transition?.kind !== "branch") continue;
+        const ownStart = marker.truth ? branch.transition.onTrue : branch.transition.onFalse;
+        if (!hasControlOnlyJumpPath(ctx, ownStart, currentId)) continue;
+        const siblingStart = marker.truth ? branch.transition.onFalse : branch.transition.onTrue;
+        const region = collectClosedTerminalRegion(ctx, siblingStart, new Set([currentId]), marker.branchId);
+        if (region) return region;
+    }
+    return null;
 }
 function isLoopAbruptCandidate(candidate) {
     const effects = candidate?.effects || [];
@@ -161,6 +287,8 @@ function foldLoopAbruptGuards(ctx, candidate, currentId) {
                 if (loopBranchIds instanceof Set && loopBranchIds.has(marker.branchId)) continue;
                 const numericForBranchIds = ctx.options?.numericForBranchIds;
                 if (numericForBranchIds instanceof Set && numericForBranchIds.has(marker.branchId)) continue;
+                const genericForBranchIds = ctx.options?.genericForBranchIds;
+                if (genericForBranchIds instanceof Set && genericForBranchIds.has(marker.branchId)) continue;
                 const guard = guardLine(ctx, marker.condition, marker.truth, (abrupt.effects || []).slice(match.effectPrefix));
                 if (!guard) return null;
                 const prefix = current.effects.slice(0, match.effectPrefix);
@@ -215,6 +343,17 @@ function reduceLoopNestedCandidates(ctx, candidates, joinId) {
     return changed || work.length < candidates.length ? work : null;
 }
 
+function recordTerminalFoldedRootContinuation(ctx, beforeCandidate, afterCandidate, joinId) {
+    const beforeMarkers = beforeCandidate?.markers || [];
+    const afterMarkers = afterCandidate?.markers || [];
+    if (beforeMarkers.length === 0 || afterMarkers.length !== 0) return true;
+    const rootMarker = beforeMarkers[0];
+    // Only an ordinary root conditional can advance the sequential root anchor.
+    // Loop-scope/synthetic markers have their own structural merge rules.
+    if (!rootMarker || rootMarker.kind != null || !Number.isInteger(rootMarker.branchId)) return true;
+    return recordRootConditional(ctx, rootMarker.branchId, joinId);
+}
+
 function matchMultiStateLogicalLocals(source, stateWhile, stateName, returnName, options = {}) {
     const ctx = createStructuredContext(source, stateWhile, stateName, returnName, options);
     if (!ctx) return null;
@@ -225,19 +364,21 @@ function matchMultiStateLogicalLocals(source, stateWhile, stateName, returnName,
         if (ctx.processed.has(id)) continue;
         const candidates = ctx.incoming.get(id) || [];
         if (!collapseTerminalCandidates(ctx)) return null;
-        // A join can become graph-ready before an abrupt sibling has finished
-        // producing terminal candidates because terminal paths have no edge to
-        // the join. Delay only when that opposite branch is a proven closed,
-        // acyclic terminal region inside the loop and one of its states is
-        // already ready to process.
+        // A continuation can become graph-ready before an opposite terminal
+        // branch has finished producing its terminal candidate because terminal
+        // paths have no edge to the continuation. Defer only when CFG proof says
+        // that sibling is a closed acyclic terminal region and one of its states
+        // is already ready. This makes recovery independent of VM queue order.
         let pendingTerminalSibling = null;
-        if (candidates.length > 1) {
-            for (const candidate of candidates) {
-                const region = loopTerminalSiblingRegion(ctx, candidate, id, false);
-                if (region && ctx.processingQueue.some(readyId => region.has(readyId))) {
-                    pendingTerminalSibling = region;
-                    break;
-                }
+        for (const candidate of candidates) {
+            const regions = [
+                ordinaryTerminalSiblingRegion(ctx, candidate, id),
+                candidates.length > 1 ? loopTerminalSiblingRegion(ctx, candidate, id, false) : null,
+            ];
+            const region = regions.find(item => item && ctx.processingQueue.some(readyId => item.has(readyId)));
+            if (region) {
+                pendingTerminalSibling = region;
+                break;
             }
         }
         if (pendingTerminalSibling) {
@@ -252,6 +393,7 @@ function matchMultiStateLogicalLocals(source, stateWhile, stateName, returnName,
         for (const candidate of candidates) {
             const terminalFolded = foldTerminalGuards(ctx, candidate);
             if (!terminalFolded) return null;
+            if (!recordTerminalFoldedRootContinuation(ctx, candidate, terminalFolded, id)) return null;
             const folded = foldLoopAbruptGuards(ctx, terminalFolded, id);
             if (!folded) return null;
             // Abrupt reduction can remove a nested marker and expose a terminal
@@ -259,6 +401,7 @@ function matchMultiStateLogicalLocals(source, stateWhile, stateName, returnName,
             // exact terminal siblings again before N-way/ancestor convergence.
             const refoldedTerminal = foldTerminalGuards(ctx, folded);
             if (!refoldedTerminal) return null;
+            if (!recordTerminalFoldedRootContinuation(ctx, folded, refoldedTerminal, id)) return null;
             normalizedCandidates.push(refoldedTerminal);
         }
         let merged = mergeCandidates(ctx, normalizedCandidates, id);
@@ -273,6 +416,20 @@ function matchMultiStateLogicalLocals(source, stateWhile, stateName, returnName,
         if (markers.length === 0 && effects.length > 0) {
             ctx.out.push(...effects);
             effects = [];
+        }
+        const terminalRepeatBodyStarts = ctx.options?.terminalRepeatBodyStarts;
+        const terminalRepeatStart = terminalRepeatBodyStarts instanceof Map ? terminalRepeatBodyStarts.get(id) : null;
+        if (terminalRepeatStart) {
+            const condition = resolveId(ctx, terminalRepeatStart.captureName, env);
+            if (typeof condition !== "string") return null;
+            env.delete(terminalRepeatStart.captureName);
+            markers = [...markers, {
+                kind: "terminal-repeat-scope",
+                condition,
+                truth: null,
+                branchId: `terminal-repeat:${terminalRepeatStart.preheaderId}:${id}`,
+                effectCount: effects.length,
+            }];
         }
         const repeatBodyStarts = ctx.options?.repeatBodyStarts;
         const repeatStart = repeatBodyStarts instanceof Map ? repeatBodyStarts.get(id) : null;
@@ -296,9 +453,45 @@ function matchMultiStateLogicalLocals(source, stateWhile, stateName, returnName,
             }
             const display = numericForStart.loopVariableDisplay;
             ctx.pathLocalBindingNames.add(display);
-            env.set(pathLocalOwnerKey(ctx, numericForStart.loopVarReg), display);
-            env.set(numericForStart.loopVarReg, display);
-            env.delete(upvalueAliasKey(ctx, numericForStart.loopVarReg));
+            if (typeof numericForStart.loopVarReg === "string") {
+                env.set(pathLocalOwnerKey(ctx, numericForStart.loopVarReg), display);
+                env.set(numericForStart.loopVarReg, display);
+                env.delete(upvalueAliasKey(ctx, numericForStart.loopVarReg));
+            } else if (typeof numericForStart.loopVarCellReg === "string") {
+                // Captured numeric-for variables are represented by a fresh
+                // compiler upvalue cell each iteration. The loop classifier
+                // removes that cell's alloc/init/release bookkeeping and seeds
+                // its source binding here so ordinary captured-closure rendering
+                // resolves the cell directly to the recovered loop variable.
+                env.set(pathUpvalueCellKey(ctx, numericForStart.loopVarCellReg), display);
+            } else {
+                return null;
+            }
+        }
+        const genericForBodyStarts = ctx.options?.genericForBodyStarts;
+        const genericForStart = genericForBodyStarts instanceof Map ? genericForBodyStarts.get(id) : null;
+        if (genericForStart) {
+            const bindings = Array.isArray(genericForStart.loopVarBindings)
+                ? genericForStart.loopVarBindings
+                : genericForStart.loopVarRegs.map(reg => ({ kind: "register", reg }));
+            if (!Array.isArray(genericForStart.loopVariableDisplays)) {
+                genericForStart.loopVariableDisplays = bindings.map(() => allocateValueDisplay(ctx));
+            }
+            if (genericForStart.loopVariableDisplays.length !== bindings.length || bindings.length !== genericForStart.loopVarRegs.length) return null;
+            for (let loopIndex = 0; loopIndex < bindings.length; loopIndex++) {
+                const binding = bindings[loopIndex];
+                const display = genericForStart.loopVariableDisplays[loopIndex];
+                ctx.pathLocalBindingNames.add(display);
+                if (binding?.kind === "register" && typeof binding.reg === "string") {
+                    env.set(pathLocalOwnerKey(ctx, binding.reg), display);
+                    env.set(binding.reg, display);
+                    env.delete(upvalueAliasKey(ctx, binding.reg));
+                } else if (binding?.kind === "captured-cell" && typeof binding.handleReg === "string") {
+                    env.set(pathUpvalueCellKey(ctx, binding.handleReg), display);
+                } else {
+                    return null;
+                }
+            }
         }
         const block = ctx.blocks.get(id);
         let terminalReturnIndex = -1;
@@ -321,14 +514,92 @@ function matchMultiStateLogicalLocals(source, stateWhile, stateName, returnName,
 
         for (let i = 0; i < block.body.length; i++) {
             if (i === block.transitionIndex) continue;
+            effects = flushReadyPendingDeferredLocals(ctx, env, markers, effects);
             const statement = block.body[i];
             const op = decodeVmStatement(statement);
             if (!op) return null;
             const dest = op.destination;
             const rhs = op.value;
 
-            if (op.kind === "index-write") {
+            if (op.kind === "compound-index-write") {
+                const value = render(ctx, rhs, env);
+                if (typeof value !== "string" || typeof op.operator !== "string") return null;
                 const capturedDestination = capturedSlotName(ctx, dest);
+                let line = null;
+                if (typeof capturedDestination === "string") {
+                    line = capturedDestination + " " + op.operator + "= " + value;
+                } else if (isIdentifier(dest.base, "upvalueValues") && isIdentifier(dest.index) &&
+                    (ctx.upvalueCells.has(dest.index.name) || hasPathUpvalueCell(ctx, dest.index.name, env))) {
+                    const existing = upvalueCellBinding(ctx, dest.index.name, env);
+                    if (typeof existing !== "string") return null;
+                    line = existing + " " + op.operator + "= " + value;
+                } else {
+                    if (!isIdentifier(dest.base)) return null;
+                    const key = isIdentifier(dest.index) ? resolveId(ctx, dest.index.name, env)
+                        : (isPrimitiveLiteral(dest.index) ? sourceOf(ctx.source, dest.index) : null);
+                    const baseName = dest.base.name;
+                    const base = baseName === "_env" ? null : resolveId(ctx, baseName, env);
+                    const stableBase = baseName === "_env" || hasActiveLocal(ctx, baseName, env) ||
+                        (typeof base === "string" && env.get(upvalueAliasKey(ctx, baseName)) === base) ||
+                        (typeof base === "string" && env.get(mutationBaseOwnerKey(baseName)) === base);
+                    const decoded = renderOrdinaryIndexCompoundWrite({ baseName, renderedBase: base, renderedKey: key, renderedValue: value, stableBase, operator: op.operator });
+                    if (!decoded) return null;
+                    line = decoded.line;
+                }
+                if (markers.length !== 0) {
+                    if (!ctx.allowConditionalIf) return null;
+                    effects = [...effects, line];
+                } else {
+                    ctx.out.push(line);
+                }
+                continue;
+            }
+            if (op.kind === "compound-register-write") {
+                const target = activeLocalDisplay(ctx, op.targetName, env);
+                const value = render(ctx, rhs, env);
+                if (typeof target !== "string" || typeof value !== "string" || typeof op.operator !== "string") return null;
+                const line = target + " " + op.operator + "= " + value;
+                if (markers.length !== 0) {
+                    if (!ctx.allowConditionalIf) return null;
+                    effects = [...effects, line];
+                } else {
+                    ctx.out.push(line);
+                }
+                continue;
+            }
+
+            if (op.kind === "index-write") {
+                const globalAssignmentBatch = matchCompilerGlobalAssignmentBatch(block.body, i, {
+                    skipIndex: block.transitionIndex,
+                    resolveIdentifier: identifier => resolveRenderableId(ctx, identifier, env),
+                    isCompilerTemp: identifier => !hasActiveLocal(ctx, identifier, env) &&
+                        !hasPathUpvalueCell(ctx, identifier, env) && !ctx.upvalueCells.has(identifier),
+                    neutralReturnName: ctx.returnName,
+                });
+                if (globalAssignmentBatch) {
+                    if (globalAssignmentBatch.neutralIndices?.has(terminalReturnIndex)) terminalReturnLine = "return";
+                    if (markers.length !== 0) {
+                        if (!ctx.allowConditionalIf) return null;
+                        effects = [...effects, globalAssignmentBatch.line];
+                    } else {
+                        ctx.out.push(globalAssignmentBatch.line);
+                    }
+                    i = globalAssignmentBatch.endIndex;
+                    continue;
+                }
+                const capturedDestination = capturedSlotName(ctx, dest);
+                const reservedPackCaptureOwner = ctx.structuredPackFutureCaptureOwners.get(id + ":" + i);
+                if (reservedPackCaptureOwner) {
+                    const reservedPack = ctx.structuredPacks.get(reservedPackCaptureOwner.packId);
+                    const reservedInfo = reservedPack?.slots.get(reservedPackCaptureOwner.slot);
+                    if (reservedPack?.emitted && reservedInfo?.display &&
+                        capturedDestination === reservedPackCaptureOwner.capturedDestination &&
+                        reservedInfo.ownerCaptured === capturedDestination &&
+                        isIdentifier(rhs, reservedPackCaptureOwner.carrierReg) &&
+                        resolveId(ctx, rhs.name, env) === reservedInfo.display) {
+                        continue;
+                    }
+                }
                 if (typeof capturedDestination === "string") {
                     const value = render(ctx, rhs, env);
                     if (typeof value !== "string") return null;
@@ -346,6 +617,7 @@ function matchMultiStateLogicalLocals(source, stateWhile, stateName, returnName,
                     const value = render(ctx, rhs, env);
                     if (typeof value !== "string") return null;
                     const pathCell = hasPathUpvalueCell(ctx, dest.index.name, env);
+                    const cellIdentity = upvalueCellIdentity(ctx, dest.index.name, env);
                     const existing = upvalueCellBinding(ctx, dest.index.name, env);
                     if (typeof existing === "string") {
                         const line = existing + " = " + value;
@@ -359,14 +631,29 @@ function matchMultiStateLogicalLocals(source, stateWhile, stateName, returnName,
                     }
                     const display = allocateValueDisplay(ctx);
                     if (pathCell) {
-                        if (!ctx.allowConditionalIf || markers.length === 0) return null;
-                        env.set(pathUpvalueCellKey(ctx, dest.index.name), display);
-                        ctx.pathLocalBindingNames.add(display);
-                        effects = [...effects, "local " + display + " = " + value];
+                        if (cellIdentity) {
+                            if (!bindUpvalueCellIdentity(ctx, cellIdentity, display, env)) return null;
+                        } else {
+                            // Synthetic loop bindings can already carry the recovered source
+                            // name directly and therefore have no allocUpvalue identity.
+                            env.set(pathUpvalueCellKey(ctx, dest.index.name), display);
+                        }
+                        if (markers.length !== 0) {
+                            if (!ctx.allowConditionalIf) return null;
+                            ctx.pathLocalBindingNames.add(display);
+                            effects = [...effects, "local " + display + " = " + value];
+                        } else {
+                            // The declaration dominates future branches, but cell liveness still
+                            // remains candidate-local through the identity mapping above.
+                            ctx.out.push("local " + display + " = " + value);
+                        }
                     } else {
-                        // Root cell initialization must dominate later routing.
+                        // Attach the recovered binding to this allocation epoch as well as the
+                        // current physical register. Deferred closures keep the epoch identity
+                        // after release/reuse of the register.
                         if (markers.length !== 0) return null;
                         ctx.upvalueCellBindings.set(dest.index.name, display);
+                        if (cellIdentity && !bindUpvalueCellIdentity(ctx, cellIdentity, display, env)) return null;
                         ctx.out.push("local " + display + " = " + value);
                     }
                     continue;
@@ -378,8 +665,10 @@ function matchMultiStateLogicalLocals(source, stateWhile, stateName, returnName,
                 if (key == null || value == null) return null;
                 const baseName = dest.base.name;
                 const base = baseName === "_env" ? null : resolveId(ctx, baseName, env);
+                const singleUseCallBase = typeof base === "string" && provenSingleUseCallResultAt(ctx, id, i, baseName);
                 const stableBase = baseName === "_env" || hasActiveLocal(ctx, baseName, env) ||
-                    (typeof base === "string" && env.get(upvalueAliasKey(ctx, baseName)) === base);
+                    (typeof base === "string" && env.get(upvalueAliasKey(ctx, baseName)) === base) ||
+                    (typeof base === "string" && env.get(mutationBaseOwnerKey(baseName)) === base) || singleUseCallBase;
                 const decoded = renderOrdinaryIndexWrite({ baseName, renderedBase: base, renderedKey: key, renderedValue: value, stableBase });
                 if (!decoded) return null;
                 if (markers.length !== 0) {
@@ -400,6 +689,8 @@ function matchMultiStateLogicalLocals(source, stateWhile, stateName, returnName,
                     ? upvalueCellBinding(ctx, rhs.index.name, env)
                     : (isIdentifier(rhs) ? (env.get(upvalueAliasKey(ctx, rhs.name)) ?? null) : null));
             env.delete(upvalueAliasKey(ctx, name));
+            env.delete(mutationBaseOwnerKey(name));
+            if (rhs?.type !== "NilLiteral") env.delete(deadJoinTempKey(ctx, name));
 
             const reservedPackExtraction = ctx.structuredPackFutureExtractions.get(id + ":" + i);
             if (reservedPackExtraction) {
@@ -434,8 +725,8 @@ function matchMultiStateLogicalLocals(source, stateWhile, stateName, returnName,
 
             if (i !== terminalReturnIndex) {
                 const packFields = rhs?.type === "TableConstructorExpression" ? (rhs.fields || []) : [];
-                if (packFields.length === 1 && packFields[0]?.type === "TableValue" && packFields[0].value?.type === "CallExpression") {
-                    const packed = render(ctx, packFields[0].value, env, true);
+                if (packFields.length === 1 && packFields[0]?.type === "TableValue" && packFields[0].value?.type === "CallExpression" && !sourcePackedTablePackReg(rhs, terminalPackExprs)) {
+                    const packed = render(ctx, packFields[0].value, env, true, terminalPackExprs);
                     if (typeof packed === "string") terminalPackExprs.set(name, packed);
                     else terminalPackExprs.delete(name);
                 } else {
@@ -445,11 +736,11 @@ function matchMultiStateLogicalLocals(source, stateWhile, stateName, returnName,
 
             const packFieldsForStructured = rhs?.type === "TableConstructorExpression" ? (rhs.fields || []) : [];
             const structuredPackCallNode = packFieldsForStructured.length === 1 && packFieldsForStructured[0]?.type === "TableValue" &&
-                packFieldsForStructured[0].value?.type === "CallExpression" ? packFieldsForStructured[0].value : null;
+                packFieldsForStructured[0].value?.type === "CallExpression" && !sourcePackedTablePackReg(rhs, terminalPackExprs) ? packFieldsForStructured[0].value : null;
             if (structuredPackCallNode && !isCompilerVarargPack(ctx, rhs)) {
                 const expectedSlots = expectedPackSlotsInBlock(ctx, block, i, name);
                 if (expectedSlots) {
-                    const call = render(ctx, structuredPackCallNode, env, true);
+                    const call = render(ctx, structuredPackCallNode, env, true, terminalPackExprs);
                     if (typeof call !== "string") return null;
                     const packId = String(++ctx.nextStructuredPackId);
                     const pack = { id: packId, packReg: name, call, expectedSlots, slots: new Map(), emitted: false };
@@ -459,6 +750,16 @@ function matchMultiStateLogicalLocals(source, stateWhile, stateName, returnName,
                     env.set(name, ctx.structuredPackPrefix + packId);
                     effects = flushReadyStructuredPacks(ctx, env, markers, effects, false);
                     if (effects === null) return null;
+                    continue;
+                }
+                // RETURN_ALL packs that are never split into numbered slots may be
+                // forwarded directly into the final argument of the next call. Keep
+                // the already-proven multi-return expression in terminalPackExprs and
+                // suppress the compiler transport table itself. The forward-only proof
+                // is deliberately strict so source table identity or duplicated calls
+                // cannot be erased.
+                if (terminalPackExprs.has(name) && isForwardOnlyPackUseInBlock(ctx, block, i, name)) {
+                    env.delete(name);
                     continue;
                 }
             }
@@ -503,13 +804,12 @@ function matchMultiStateLogicalLocals(source, stateWhile, stateName, returnName,
             }
             if (rhsCallKind === "alloc-upvalue" && (rhs.arguments || []).length === 0) {
                 if (ctx.upvalueCells.has(name) || hasPathUpvalueCell(ctx, name, env) || hasActiveLocal(ctx, name, env)) return null;
-                if (markers.length !== 0) {
-                    if (!ctx.allowConditionalIf) return null;
-                    env.set(pathUpvalueCellKey(ctx, name), ctx.pathUpvalueCellUnbound);
-                } else {
-                    ctx.upvalueCells.add(name);
-                    ctx.upvalueCellBindings.delete(name);
-                }
+                const identity = allocateUpvalueCellIdentity(ctx);
+                // Upvalue-cell liveness is CFG-candidate state even when allocation happens
+                // in the root preheader. A later branch may release the physical cell on one
+                // path while a sibling path still captures/uses the same allocation epoch.
+                // Keeping the physical->epoch mapping in env prevents cross-path mutation.
+                env.set(pathUpvalueCellKey(ctx, name), identity);
                 env.delete(name);
                 continue;
             }
@@ -523,6 +823,7 @@ function matchMultiStateLogicalLocals(source, stateWhile, stateName, returnName,
                 if (ctx.upvalueCells.has(name)) {
                     ctx.upvalueCells.delete(name);
                     ctx.upvalueCellBindings.delete(name);
+                    ctx.upvalueCellIdentities.delete(name);
                     env.delete(name);
                     continue;
                 }
@@ -556,13 +857,23 @@ function matchMultiStateLogicalLocals(source, stateWhile, stateName, returnName,
             // direct register=createClosureN anonymous TEMPs never enter here.
             const terminalClosureTransport = transportKind === "closure" && valueMayBeReadAfter(ctx, id, i, name) &&
                 !hasFutureNonNilWrite(ctx, id, i, name);
-            const terminalUsedTransportAlias = ctx.allowConditionalIf && isVmRegisterName(name) && !ctx.cleanupRegs.has(name) &&
+            const terminalTransportEpoch = cleanupOrTerminalEpoch(ctx, id, i, name);
+            const terminalReusedVarEpoch = ctx.cleanupRegs.has(name) && terminalTransportEpoch.valid &&
+                !terminalTransportEpoch.sawCleanup && !hasFutureNonNilWrite(ctx, id, i, name);
+            const terminalUsedTransportAlias = ctx.allowConditionalIf && isVmRegisterName(name) &&
                 !hasActiveLocal(ctx, name, env) && isIdentifier(rhs) && (rhs.name === ctx.stateName || rhs.name === ctx.returnName) &&
-                (terminalStableUsedEpoch(ctx, id, i, name) || terminalClosureTransport);
+                (terminalStableUsedEpoch(ctx, id, i, name) || terminalClosureTransport || terminalReusedVarEpoch);
             if (terminalUsedTransportAlias) {
                 const value = render(ctx, rhs, env);
-                if (typeof value !== "string") return null;
                 const kind = transportKind ?? transportSourceKind(ctx, block, i, rhs.name);
+                if (typeof value !== "string") {
+                    const deferred = deferredClosureFromRhs(ctx, rhs, env, rhsCallKind);
+                    if (!deferred || kind !== "closure") return null;
+                    const installed = installPendingDeferredLocal(ctx, env, markers, effects, name, deferred, true);
+                    if (installed === null) return null;
+                    effects = installed;
+                    continue;
+                }
                 const display = kind === "table" ? allocateTableDisplay(ctx) : allocateValueDisplay(ctx);
                 const declaration = value === "nil" ? `local ${display}` : `local ${display} = ${value}`;
                 if (markers.length !== 0) {
@@ -579,7 +890,22 @@ function matchMultiStateLogicalLocals(source, stateWhile, stateName, returnName,
                 continue;
             }
 
-            if (ctx.cleanupRegs.has(name) && rhs?.type === "NilLiteral") {
+            // Prometheus uses nil both as a real expression value and as dead register cleanup.
+            // If this exact nil definition reaches a read before any overwrite, it is semantic
+            // data and must flow through ordinary value/source-storage handling below. Only a
+            // dead nil definition is eligible for compiler-cleanup removal.
+            const semanticNilDefinition = rhs?.type === "NilLiteral" && valueMayBeReadAfter(ctx, id, i, name);
+            if (ctx.cleanupRegs.has(name) && rhs?.type === "NilLiteral" && !semanticNilDefinition) {
+                if (!hasActiveLocal(ctx, name, env) && env.get(deadJoinTempKey(ctx, name)) === true) {
+                    env.delete(deadJoinTempKey(ctx, name));
+                    env.delete(name);
+                    continue;
+                }
+                if (!hasActiveLocal(ctx, name, env) && isRedundantReleasedUpvalueCleanup(ctx, block, i, name)) {
+                    env.delete(name);
+                    continue;
+                }
+                if (isPendingDeferredLocalValue(env.get(name))) return null;
                 const activeDisplay = activeLocalDisplay(ctx, name, env);
                 if (activeDisplay !== null && ctx.pathLocalBindingNames.has(activeDisplay)) {
                     env.delete(pathLocalOwnerKey(ctx, name));
@@ -593,13 +919,25 @@ function matchMultiStateLogicalLocals(source, stateWhile, stateName, returnName,
                     env.delete(name);
                     continue;
                 }
+                if (ctx.locals.has(name)) {
+                    ctx.locals.delete(name);
+                    ctx.localNames.delete(name);
+                    env.delete(name);
+                    continue;
+                }
+                // An absent candidate value is not enough to prove redundancy: it
+                // may represent an ambiguous join. Drop this dead nil only when
+                // every reaching definition is itself a previously proven dead nil
+                // cleanup, with no intervening value epoch.
+                if (!env.has(name) && allReachingDefinitionsAreDeadNilCleanup(ctx, id, i, name)) {
+                    env.delete(name);
+                    continue;
+                }
                 if (ctx.accumulatorRegs.has(name)) {
-                    if (ctx.persistentStorageRegs.has(name) && ctx.locals.has(name)) {
-                        ctx.locals.delete(name);
-                        ctx.localNames.delete(name);
-                        env.delete(name);
-                        continue;
-                    }
+                    // This fallback exists only for legacy ambiguous multi-definition
+                    // storage. Never move it out of a branch/loop: without an earlier
+                    // proven epoch start, preserving evaluation order is not possible.
+                    if (markers.length !== 0) return null;
                     const value = env.get(name);
                     if (value == null) return null;
                     const display = allocateValueDisplay(ctx);
@@ -607,11 +945,7 @@ function matchMultiStateLogicalLocals(source, stateWhile, stateName, returnName,
                     env.delete(name);
                     continue;
                 }
-                if (!ctx.locals.has(name)) return null;
-                ctx.locals.delete(name);
-                ctx.localNames.delete(name);
-                env.delete(name);
-                continue;
+                return null;
             }
 
             // Function-call statements are represented by a write to a VM
@@ -619,18 +953,23 @@ function matchMultiStateLogicalLocals(source, stateWhile, stateName, returnName,
             // without a read, preserve the call itself.  A path-dependent
             // call cannot be represented as a bare source statement here, so
             // fail closed instead of moving it ctx.out of its branch.
-            if (rhsCallKind !== null && (!ctx.cleanupRegs.has(name) || !valueMayBeReadAfter(ctx, id, i, name))) {
+            const callWritesSourceStorage = rhsCallKind === "call" &&
+                (hasActiveLocal(ctx, name, env) || sourceStorageStartsHere(ctx, id, i, name, markers));
+            const callResultBecomesMutationBase = rhsCallKind === "call" &&
+                !hasActiveLocal(ctx, name, env) && valueMayBeIndexWriteBaseAfter(ctx, id, i, name);
+            if (rhsCallKind === "call" && !callWritesSourceStorage && !callResultBecomesMutationBase &&
+                (!ctx.cleanupRegs.has(name) || !valueMayBeReadAfter(ctx, id, i, name))) {
                 const promotedArguments = [];
                 if (markers.length === 0) {
                     for (const argument of rhs.arguments || []) {
                         if (!isIdentifier(argument) || !ctx.cleanupRegs.has(argument.name) || ctx.locals.has(argument.name) || ctx.earlyCleanupPending.has(argument.name)) continue;
                         if (valueMayBeReadAfter(ctx, id, i, argument.name)) continue;
-                        // While preheaders can reuse the eventual source-local
-                        // physical register as a call-argument TEMP before the
-                        // real source handoff. Suppress only that loop-scoped
-                        // promotion when a later non-nil write starts the next
-                        // epoch; ordinary structured recovery keeps its legacy
-                        // promotion behavior unchanged.
+                        // Promote only a proven source-storage epoch. An explicit TEMP -> VAR copy is
+                        // ownership evidence; an erased direct promotion is accepted only when
+                        // the definition reaches cleanup before any later non-nil write. Loop
+                        // preheaders keep their additional future-write guard because they can
+                        // borrow the eventual VAR register for argument transport before handoff.
+                        if (!provenCallArgumentSourceEpoch(ctx, id, i, argument.name)) continue;
                         if (ctx.options?.suppressFutureWriteCallArgumentPromotion &&
                             hasFutureNonNilWrite(ctx, id, i, argument.name)) continue;
                         const argumentValue = env.get(argument.name);
@@ -665,8 +1004,28 @@ function matchMultiStateLogicalLocals(source, stateWhile, stateName, returnName,
                 continue;
             }
 
-            const value = render(ctx, rhs, env);
+            const sourcePackedTableReg = sourcePackedTablePackReg(rhs, terminalPackExprs);
+            // Compiler multi-return transport can feed the final argument of an ordinary assigned call.
+            // Pass the proven pack map into call rendering too; real source-packed tables are removed
+            // from terminalPackExprs when their source table constructor is recovered.
+            const singleCallPacks = rhs?.type === "CallExpression" || sourcePackedTableReg ? terminalPackExprs : null;
+            const value = render(ctx, rhs, env, false, singleCallPacks);
             if (value == null) {
+                // Closure construction is a semantic value. Track capture-cell identities
+                // independently of statement/register order. Source ownership may be proven
+                // before every captured binding is renderable, so keep a pending source local
+                // and materialize it only when its dependency bindings are available.
+                const deferred = deferredClosureFromRhs(ctx, rhs, env, rhsCallKind);
+                if (deferred) {
+                    if (sourceStorageStartsHere(ctx, id, i, name, markers)) {
+                        const installed = installPendingDeferredLocal(ctx, env, markers, effects, name, deferred, false);
+                        if (installed === null) return null;
+                        effects = installed;
+                    } else {
+                        env.set(name, deferred);
+                    }
+                    continue;
+                }
                 // Borrowed state/temp writes may be dead before overwrite; only allow
                 // an immediate same-register overwrite inside this block.
                 const next = block.body[i + 1];
@@ -679,8 +1038,21 @@ function matchMultiStateLogicalLocals(source, stateWhile, stateName, returnName,
             // returns before that cleanup executes. Later writes after either
             // boundary belong to a new physical-register epoch.
             const storageEpochEnd = cleanupOrTerminalEpoch(ctx, id, i, name);
+            // Source ownership is epoch-local: an unused source local is still source.
+            // If this exact definition reaches compiler nil cleanup before any non-nil
+            // rewrite on every path, Prometheus has promoted this value into VAR storage.
             const stableStorageEpoch = ctx.allowConditionalIf && ctx.cleanupRegs.has(name) && !ctx.locals.has(name) &&
-                valueMayBeReadAfter(ctx, id, i, name) && storageEpochEnd.valid && storageEpochEnd.sawCleanup;
+                storageEpochEnd.valid && storageEpochEnd.sawCleanup;
+            // A semantic nil initializer may be the source VAR itself and reach function
+            // termination without a later compiler cleanup. Prove that case from the exact
+            // epoch: it must dominate from the root path, be observed later, remain stable
+            // through all uses, and never be overwritten. This is storage proof, not a
+            // special case for any register/state/layout.
+            const terminalStableNilEpoch = ctx.allowConditionalIf && markers.length === 0 &&
+                rhs?.type === "NilLiteral" && semanticNilDefinition && !ctx.locals.has(name) &&
+                terminalStableUsedEpoch(ctx, id, i, name) && !hasFutureNonNilWrite(ctx, id, i, name);
+            const conditionalUpdatedEpoch = ctx.allowConditionalIf && markers.length === 0 &&
+                !ctx.locals.has(name) ? conditionalUpdatedStorageEpoch(ctx, id, i, name) : null;
             // A storage binding that survives a conditional join must already
             // exist before entering that conditional. If the same physical
             // register is written on a branch before any active binding exists,
@@ -696,11 +1068,51 @@ function matchMultiStateLogicalLocals(source, stateWhile, stateName, returnName,
             const isForcedLoopStorage = forcedPersistentRegs instanceof Set && forcedPersistentRegs.has(name);
             const startsPersistentStorage = ctx.persistentStorageRegs.has(name) &&
                 (provenLoopPreheaderStart || (!isForcedLoopStorage && markers.length === 0));
-            if ((startsPersistentStorage || stableStorageEpoch) && !hasActiveLocal(ctx, name, env)) {
+            if ((startsPersistentStorage || stableStorageEpoch || terminalStableNilEpoch || conditionalUpdatedEpoch?.proven) && !hasActiveLocal(ctx, name, env)) {
                 const display = allocateValueDisplay(ctx);
-                ctx.accumulatorRegs.delete(name);
                 const declaration = `local ${display} = ${value}`;
                 if (markers.length !== 0) {
+                    ctx.pathLocalBindingNames.add(display);
+                    env.set(pathLocalOwnerKey(ctx, name), display);
+                    effects = [...effects, declaration];
+                } else {
+                    ctx.localNames.set(name, display);
+                    ctx.locals.add(name);
+                    if (terminalStableNilEpoch || conditionalUpdatedEpoch?.terminalLive) ctx.terminalLiveLocals.add(name);
+                    ctx.out.push(declaration);
+                }
+                env.set(name, display);
+                continue;
+            }
+
+            // Some compiler TEMPs hold an object/index result that must remain
+            // stable across later key/value evaluation before a field write.
+            // Materialize that exact epoch at its original definition point,
+            // but do not classify the physical register as a source local.
+            if (!hasActiveLocal(ctx, name, env) && valueMayBeIndexWriteBaseAfter(ctx, id, i, name)) {
+                // A TEMP alias to an already-proven captured/source binding does not
+                // need new storage. Preserve its owner provenance so mutation renders
+                // directly against the existing source object instead of inventing an
+                // alias local. Only explicit alias identity qualifies here.
+                if (typeof inheritedUpvalueAlias === "string" && value === inheritedUpvalueAlias) {
+                    env.set(name, value);
+                    env.set(upvalueAliasKey(ctx, name), inheritedUpvalueAlias);
+                    continue;
+                }
+                const display = allocateValueDisplay(ctx);
+                const declaration = `local ${display} = ${value}`;
+                if (markers.length !== 0) effects = [...effects, declaration];
+                else ctx.out.push(declaration);
+                env.set(name, display);
+                env.set(mutationBaseOwnerKey(name), display);
+                continue;
+            }
+
+            if (ctx.cleanupRegs.has(name) && !ctx.accumulatorRegs.has(name) && !hasActiveLocal(ctx, name, env) && isIdentifier(rhs) && rhs.name !== name) {
+                const display = allocateValueDisplay(ctx);
+                const declaration = `local ${display} = ${value}`;
+                if (markers.length !== 0) {
+                    if (!ctx.allowConditionalIf) return null;
                     ctx.pathLocalBindingNames.add(display);
                     env.set(pathLocalOwnerKey(ctx, name), display);
                     effects = [...effects, declaration];
@@ -710,18 +1122,11 @@ function matchMultiStateLogicalLocals(source, stateWhile, stateName, returnName,
                     ctx.out.push(declaration);
                 }
                 env.set(name, display);
-                continue;
-            }
-
-            const conditionalIfLocalHandoff = ctx.allowConditionalIf && ctx.cleanupRegs.has(name) && !hasActiveLocal(ctx, name, env) &&
-                isIdentifier(rhs, ctx.stateName) && block.transition.kind === "branch" && block.transition.conditionRegister === name;
-            if (conditionalIfLocalHandoff) ctx.accumulatorRegs.delete(name);
-            if (ctx.cleanupRegs.has(name) && !ctx.accumulatorRegs.has(name) && !hasActiveLocal(ctx, name, env) && isIdentifier(rhs) && rhs.name !== name) {
-                const display = rhs?.type === "TableConstructorExpression" ? allocateTableDisplay(ctx) : allocateValueDisplay(ctx);
-                ctx.localNames.set(name, display);
-                ctx.locals.add(name);
-                ctx.out.push(`local ${display} = ${value}`);
-                env.set(name, display);
+            } else if (isPendingDeferredLocalValue(env.get(name))) {
+                // A source closure local exists but its capture dependencies are not
+                // renderable yet. Do not turn a later write into an assignment to an
+                // internal owner token; unresolved semantic use is ambiguous.
+                return null;
             } else if (hasActiveLocal(ctx, name, env)) {
                 const line = `${activeLocalDisplay(ctx, name, env)} = ${value}`;
                 if (markers.length !== 0) {
@@ -753,16 +1158,20 @@ function matchMultiStateLogicalLocals(source, stateWhile, stateName, returnName,
         }
 
         ctx.processed.add(id);
+        effects = flushReadyPendingDeferredLocals(ctx, env, markers, effects);
         const tr = block.transition;
         const sends = [];
         if (tr.kind === "stop") {
             if (terminalReturnLine === null) return null;
-            ctx.terminalCandidates.push({
+            let terminalCandidate = {
                 env: new Map(env),
                 markers: [...markers],
                 effects: [...effects, terminalReturnLine],
                 terminal: true,
-            });
+            };
+            terminalCandidate = foldTerminalRepeatScopes(ctx, terminalCandidate);
+            if (!terminalCandidate) return null;
+            ctx.terminalCandidates.push(terminalCandidate);
             if (!collapseTerminalCandidates(ctx)) return null;
         } else if (tr.kind === "jump") sends.push({ target: tr.target, env, markers, effects });
         else if (tr.kind === "branch") {
@@ -797,7 +1206,16 @@ function matchMultiStateLogicalLocals(source, stateWhile, stateName, returnName,
         ctx.localNames.delete(name);
     }
     if (ctx.processed.size !== ctx.reachable.size || ctx.locals.size !== 0 || ctx.out.length === 0) return null;
-    if (ctx.allowConditionalIf && ctx.conditionalIfCount < 1) {
+    const logicalReductionApplied = ctx.logicalReduction.originalReachableStateIds.size > ctx.reachable.size;
+    const provenLoopControl =
+        (ctx.options?.loopBranchIds instanceof Set && ctx.options.loopBranchIds.size > 0) ||
+        (ctx.options?.repeatBranchIds instanceof Set && ctx.options.repeatBranchIds.size > 0) ||
+        (ctx.options?.terminalRepeatBodyStarts instanceof Map && ctx.options.terminalRepeatBodyStarts.size > 0) ||
+        (ctx.options?.numericForBranchIds instanceof Set && ctx.options.numericForBranchIds.size > 0) ||
+        (ctx.options?.genericForBranchIds instanceof Set && ctx.options.genericForBranchIds.size > 0);
+    if (ctx.allowConditionalIf && ctx.conditionalIfCount < 1 && !provenLoopControl &&
+        ctx.options?.allowStraightLineStructured !== true &&
+        !(ctx.options?.allowLogicalOnlyStructured === true && logicalReductionApplied)) {
         if (!ctx.out.some(line => /^if\s/.test(line) || /^while\s/.test(line))) return null;
         ctx.conditionalIfCount = 1;
     }

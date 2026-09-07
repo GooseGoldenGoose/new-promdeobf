@@ -14,8 +14,16 @@ function renderEnvironmentRead(key) {
 
 function renderIndexAccess(base, key) {
     if (typeof base !== "string" || typeof key !== "string") return null;
+    const trimmed = base.trim();
+    // Lua indexing requires a prefix expression. Rendered table constructors and
+    // other bare literals are expressions, not prefix expressions, so wrap only
+    // those bases before applying .member or [key]. Existing identifier/call/
+    // index/member/parenthesized bases stay unchanged.
+    const needsPrefixParens = trimmed.startsWith("{") || /^function\b/.test(trimmed) ||
+        /^(?:["']|\d|\.\d|true\b|false\b|nil\b)/.test(trimmed);
+    const prefix = needsPrefixParens ? `(${base})` : base;
     const member = staticMemberNameFromRenderedKey(key);
-    return member ? `${base}.${member}` : `${base}[${key}]`;
+    return member ? `${prefix}.${member}` : `${prefix}[${key}]`;
 }
 
 function renderInfix(left, operator, right) {

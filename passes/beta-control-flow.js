@@ -8,6 +8,7 @@ const { normalizeRegisterOverflowGraph } = require("./beta-cf/normalize");
 const { collapseCompilerWhileLoops, matchCompilerWhileConditionRegion } = require("./beta-cf/control/while");
 const { collapseCompilerStructuredLoops } = require("./beta-cf/control/loops");
 const { collapseCompilerNumericForLoops } = require("./beta-cf/control/numeric-for");
+const { collapseCompilerGenericForLoops } = require("./beta-cf/control/generic-for");
 const { collapseCompilerRepeatLoops, matchCompilerRepeatConditionRegion, removeDuplicatedRepeatConditionRegions } = require("./beta-cf/control/repeat");
 const { unsupported } = require("./beta-cf/diagnostics");
 
@@ -19,7 +20,7 @@ module.exports = {
     sinkTerminalReturnPayload: unsupported("sinkTerminalReturnPayload"),
     lowerTerminalReturn: unsupported("lowerTerminalReturn"),
     collapseCompilerNumericForLoops,
-    collapseCompilerGenericForLoops: unsupported("collapseCompilerGenericForLoops"),
+    collapseCompilerGenericForLoops,
     collapseCompilerWhileLoops,
     matchCompilerWhileConditionRegion,
     collapseCompilerRepeatLoops,

@@ -1,8 +1,21 @@
 "use strict";
 
 const { isEmptyTable, isIdentifier, isLuaIdentifier, isPrimitiveLiteral, isSingleAssignment, isVmRegisterName, renderTableFields, renderUnary, sourceOf } = require("../ast");
-const { hasLinearRootContinuation, recordRootConditional, upvalueAliasKey, allocateValueDisplay, allocateTableDisplay, parameterName, capturedSlotName, forwardedCaptureName, displayLocal, activeLocalDisplay, hasActiveLocal, resolveId, resolveRenderableId } = require("./bindings");
+const { hasLinearRootContinuation, recordRootConditional, upvalueAliasKey, pathLocalOwnerKey, deadJoinTempKey, allocateValueDisplay, allocateTableDisplay, parameterName, capturedSlotName, forwardedCaptureName, displayLocal, activeLocalDisplay, hasActiveLocal, resolveId, resolveRenderableId } = require("./bindings");
 const { nodeReadsIdentifier, nodeUsesAsCallBaseMulti, terminalStableUsedEpoch, transportSourceKind, valueMayBeReadFrom, eventualCleanupOnAllPaths, valueMayBeReadAfter, hasFutureNonNilWrite, cleanupReachedOnAllPaths, analyzePersistentStorage } = require("./lifetime");
+
+function mergeDeadJoinTempMetadata(ctx, key, candidates, env) {
+    if (typeof key !== "string" || typeof ctx.deadJoinTempPrefix !== "string" || !key.startsWith(ctx.deadJoinTempPrefix)) return false;
+    const name = key.slice(ctx.deadJoinTempPrefix.length);
+    if (!isVmRegisterName(name)) return true;
+    // This marker means the register value was already proven dead at an earlier
+    // join. Preserve it through nested joins only while every incoming candidate
+    // still has no live value for that physical register. A later value epoch
+    // therefore invalidates the marker automatically.
+    if (candidates.every(candidate => candidate.env.get(name) === undefined) &&
+        candidates.some(candidate => candidate.env.get(key) === true)) env.set(key, true);
+    return true;
+}
 function mergeElseIfCandidates(ctx, candidates, joinId) {
     if (!ctx.allowConditionalIf || candidates.length < 3) return null;
     const markerLists = candidates.map(candidate => candidate.markers || []);
@@ -75,13 +88,17 @@ function mergeElseIfCandidates(ctx, candidates, joinId) {
     for (const candidate of ordered) for (const key of candidate.env.keys()) keys.add(key);
     keys.delete(ctx.stateName);
     for (const key of keys) {
+        if (mergeDeadJoinTempMetadata(ctx, key, ordered, env)) continue;
         const values = ordered.map(candidate => candidate.env.get(key));
         const first = values[0];
         if (values.every(value => value === first)) {
             if (first !== undefined) env.set(key, first);
             continue;
         }
-        if (!valueMayBeReadFrom(ctx, joinId, key)) continue;
+        if (!valueMayBeReadFrom(ctx, joinId, key)) {
+            if (isVmRegisterName(key)) env.set(deadJoinTempKey(ctx, key), true);
+            continue;
+        }
         return null;
     }
 
@@ -146,8 +163,16 @@ function mergeCandidates(ctx, candidates, joinId) {
     const effectPrefix = al.effectCount;
     if (effectPrefix > te.length || effectPrefix > fe.length) return null;
     for (let i = 0; i < effectPrefix; i++) if (te[i] !== fe[i]) return null;
-    const trueEffects = te.slice(effectPrefix), falseEffects = fe.slice(effectPrefix);
-    const hasConditionalEffects = trueEffects.length > 0 || falseEffects.length > 0;
+    let trueEffects = te.slice(effectPrefix), falseEffects = fe.slice(effectPrefix);
+    let hasConditionalEffects = trueEffects.length > 0 || falseEffects.length > 0;
+    const mergeDeclarations = [];
+    let hasSyntheticValueMerge = false;
+    const structuredLoopBranch = [
+        ctx.options?.genericForBranchIds,
+        ctx.options?.numericForBranchIds,
+        ctx.options?.repeatBranchIds,
+        ctx.options?.loopBranchIds,
+    ].some(set => set instanceof Set && set.has(al.branchId));
     if (hasConditionalEffects && !ctx.allowConditionalIf) return null;
     const branchBlock = ctx.blocks.get(al.branchId);
     const branchTransition = branchBlock?.transition;
@@ -168,6 +193,7 @@ function mergeCandidates(ctx, candidates, joinId) {
     keys.delete(ctx.stateName);
     const env = new Map();
     for (const key of keys) {
+        if (mergeDeadJoinTempMetadata(ctx, key, [t, f], env)) continue;
         const tv = t.env.get(key);
         const fv = f.env.get(key);
         if (tv === fv) {
@@ -175,8 +201,12 @@ function mergeCandidates(ctx, candidates, joinId) {
             continue;
         }
         if (tv === undefined || fv === undefined) {
-            // Path-local TEMP: keep it unknown at the join. A later read
-            // before redefinition will still fail closed.
+            // Path-local TEMP: keep it unknown at the join. If liveness proves
+            // it is overwritten before any later read, remember that exact fact
+            // so a later compiler nil cleanup can be discarded safely.
+            if (isVmRegisterName(key) && !valueMayBeReadFrom(ctx, joinId, key)) {
+                env.set(deadJoinTempKey(ctx, key), true);
+            }
             continue;
         }
         // A path-dependent compiler TEMP that is overwritten before any
@@ -191,7 +221,60 @@ function mergeCandidates(ctx, candidates, joinId) {
             if (hasConditionalEffects) return null;
             env.set(key, `(${cond} or ${fv})`);
         }
-        else return null;
+        else {
+            // An ordinary compiler TEMP may carry different lazy branch values
+            // into a live join without being source storage. Preserve that exact
+            // value identity with a synthetic merge local rather than guessing a
+            // source local or re-evaluating the branch condition. Loop-control
+            // branches retain their dedicated reconstruction rules below.
+            const storageBackedMerge = ctx.accumulatorRegs.has(key) && eventualCleanupOnAllPaths(ctx, joinId, -1, key);
+            if (!ctx.allowConditionalIf || structuredLoopBranch || !storageBackedMerge || !isVmRegisterName(key) ||
+                key === ctx.returnName || typeof tv !== "string" || typeof fv !== "string") return null;
+            const display = allocateValueDisplay(ctx);
+            mergeDeclarations.push(`local ${display}`);
+            trueEffects = [...trueEffects, `${display} = ${tv}`];
+            falseEffects = [...falseEffects, `${display} = ${fv}`];
+            hasConditionalEffects = true;
+            hasSyntheticValueMerge = true;
+            ctx.pathLocalBindingNames.add(display);
+            env.set(pathLocalOwnerKey(ctx, key), display);
+            env.set(key, display);
+        }
+    }
+
+    const genericForBranchIds = ctx.options?.genericForBranchIds;
+    const isGenericForBranch = genericForBranchIds instanceof Set && genericForBranchIds.has(al.branchId);
+    if (isGenericForBranch) {
+        const meta = ctx.options?.genericForMetaByBranchId instanceof Map
+            ? ctx.options.genericForMetaByBranchId.get(al.branchId) : null;
+        if (!meta || branchCarriesLogicalResult || branchTransition?.kind !== "branch" ||
+            branchTransition.onTrue === joinId || branchTransition.onFalse !== joinId ||
+            falseEffects.length !== 0 || !Array.isArray(meta.loopVariableDisplays) ||
+            meta.loopVariableDisplays.length !== meta.loopVarRegs.length ||
+            !Array.isArray(meta.captures) || meta.captures.length < 1) return null;
+        const headerExpressions = [];
+        for (const capture of meta.captures) {
+            const value = env.get(capture.name);
+            if (typeof value !== "string") return null;
+            headerExpressions.push(value);
+        }
+        const loopBodyEffects = [...trueEffects];
+        if (loopBodyEffects[loopBodyEffects.length - 1] === "continue") loopBodyEffects.pop();
+        const body = loopBodyEffects.map(line => indentConditionalEffect(ctx, line)).join("\n");
+        const structured = `for ${meta.loopVariableDisplays.join(", ")} in ${headerExpressions.join(", ")} do\n${body ? body + "\n" : ""}end`;
+        for (const capture of meta.captures) env.delete(capture.name);
+        env.delete(meta.conditionName);
+        if (prefix === 0) {
+            if (!recordRootConditional(ctx, al.branchId, joinId)) return null;
+            ctx.out.push(structured);
+        } else {
+            return {
+                env,
+                markers: am.slice(0, prefix),
+                effects: [...te.slice(0, effectPrefix), structured],
+            };
+        }
+        return { env, markers: am.slice(0, prefix), effects: te.slice(0, effectPrefix) };
     }
 
     const numericForBranchIds = ctx.options?.numericForBranchIds;
@@ -288,25 +371,29 @@ function mergeCandidates(ctx, candidates, joinId) {
 
     if (hasConditionalEffects || preserveEmptyStatementBranch) {
         let structured;
-        if (explicitTrueArm && explicitFalseArm) {
+        if (hasSyntheticValueMerge || (explicitTrueArm && explicitFalseArm)) {
             const trueBody = trueEffects.map(line => indentConditionalEffect(ctx, line)).join("\n");
             const falseBody = falseEffects.map(line => indentConditionalEffect(ctx, line)).join("\n");
             structured = `if ${cond} then\n${trueBody ? trueBody + "\n" : ""}else\n${falseBody ? falseBody + "\n" : ""}end`;
+        } else if (explicitFalseArm) {
+            // Preserve compiler-proven source branch polarity. An else-only source
+            // clause (`if cond then else ... end`) has a direct true edge to the
+            // join and an explicit false arm. Do not canonicalize it to
+            // `if not cond then ... end`; Fresh CF is source recovery.
+            const falseBody = falseEffects.map(line => indentConditionalEffect(ctx, line)).join("\n");
+            structured = `if ${cond} then\nelse\n${falseBody ? falseBody + "\n" : ""}end`;
         } else {
-            const useTrueArm = explicitTrueArm || (!explicitFalseArm && trueEffects.length > 0);
-            const bodyEffects = useTrueArm ? trueEffects : falseEffects;
-            const condition = useTrueArm ? cond : `(not ${cond})`;
-            const body = bodyEffects.map(line => indentConditionalEffect(ctx, line)).join("\n");
-            structured = `if ${condition} then\n${body ? body + "\n" : ""}end`;
+            const body = trueEffects.map(line => indentConditionalEffect(ctx, line)).join("\n");
+            structured = `if ${cond} then\n${body ? body + "\n" : ""}end`;
         }
         if (prefix === 0) {
             if (!recordRootConditional(ctx, al.branchId, joinId)) return null;
-            ctx.out.push(structured);
+            ctx.out.push(...mergeDeclarations, structured);
         } else {
             return {
                 env,
                 markers: am.slice(0, prefix),
-                effects: [...te.slice(0, effectPrefix), structured],
+                effects: [...te.slice(0, effectPrefix), ...mergeDeclarations, structured],
             };
         }
     }

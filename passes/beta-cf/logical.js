@@ -5,7 +5,10 @@ const { decodeLogicalStateTransition } = require("./normalize");
 const { canReach: graphCanReach, createStateGraph, reachableFrom, transitionOfBody } = require("./cfg");
 
 function flattenLogicalRootLeaf(leaves, entryId, stateName, returnName, diagnostics = null, options = {}) {
-    const graph = createStateGraph(leaves, entryId, stateName, { strictTargets: false });
+    const graph = createStateGraph(leaves, entryId, stateName, {
+        strictTargets: false,
+        reachableOnly: options.reachableOnly === true,
+    });
     if (!graph) return null;
     let currentForDiagnostics = entryId;
     function fail(reason, state = currentForDiagnostics) {
@@ -199,10 +202,35 @@ function flattenLogicalRootLeaf(leaves, entryId, stateName, returnName, diagnost
                     }
                 }
 
+                // The compiler may place transport/extraction statements after the
+                // state transition and primary result copy. A flattened lazy RHS can
+                // legitimately depend on one of those later definitions (for example
+                // the second slot of a pcall result pack). In that case, replacing the
+                // primary copy in-place would read the dependency before it exists.
+                // Preserve the primary copy as the captured left operand, keep all
+                // remaining current-leaf evaluation in order, then combine with the
+                // inlined lazy RHS before jumping to the proven join.
+                let delayedLogicalCombine = false;
+                for (let i = primary.index + 1; i < body.length; i++) {
+                    if (i === transition.index || !isSingleAssignment(body[i])) continue;
+                    const dest = body[i].variables[0];
+                    if (!isIdentifier(dest)) continue;
+                    if (nodeReadsName(fallback, dest.name)) delayedLogicalCombine = true;
+                }
+                if (delayedLogicalCombine) {
+                    for (let i = primary.index + 1; i < body.length; i++) {
+                        if (i === transition.index || !isSingleAssignment(body[i])) continue;
+                        const dest = body[i].variables[0];
+                        if (isIdentifier(dest, primary.resultReg)) {
+                            return fail("logical delayed combine overwrites the captured left result", current);
+                        }
+                    }
+                }
+
                 consumed.add(current);
                 for (let i = 0; i < body.length; i++) {
                     if (i === transition.index) continue;
-                    if (i === primary.index) {
+                    if (i === primary.index && !delayedLogicalCombine) {
                         const statement = body[i];
                         targetOut.push({
                             ...statement,
@@ -217,6 +245,20 @@ function flattenLogicalRootLeaf(leaves, entryId, stateName, returnName, diagnost
                     } else {
                         targetOut.push(body[i]);
                     }
+                }
+                if (delayedLogicalCombine) {
+                    const statement = body[primary.index];
+                    targetOut.push({
+                        ...statement,
+                        range: undefined,
+                        init: [{
+                            type: "LogicalExpression",
+                            freshCompilerLogical: true,
+                            operator,
+                            left: { type: "Identifier", name: primary.resultReg },
+                            right: fallback,
+                        }],
+                    });
                 }
                 current = joinId;
                 continue;
@@ -248,7 +290,7 @@ function reduceCompilerLogicalStateGraph(leaves, entryId, stateName, returnName)
     }
 
     function buildGraph() {
-        return createStateGraph(working, entryId, stateName, { strictTargets: false });
+        return createStateGraph(working, entryId, stateName, { strictTargets: false, reachableOnly: true });
     }
 
     function canReach(start, target, successors) {
@@ -288,7 +330,7 @@ function reduceCompilerLogicalStateGraph(leaves, entryId, stateName, returnName)
         for (const id of reachable) {
             const joinId = logicalJoinFor(id, successors);
             if (!Number.isInteger(joinId) || joinId === id || !working.has(joinId)) continue;
-            const flattened = flattenLogicalRootLeaf(working, id, stateName, returnName, null, { stopId: joinId });
+            const flattened = flattenLogicalRootLeaf(working, id, stateName, returnName, null, { stopId: joinId, reachableOnly: true });
             if (!flattened || !flattened.consumed.has(id) || flattened.consumed.has(joinId)) continue;
             let closed = true;
             for (const consumedId of flattened.consumed) {

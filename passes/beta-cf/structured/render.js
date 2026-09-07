@@ -3,9 +3,22 @@
 const { isEmptyTable, isIdentifier, isPrimitiveLiteral, isSingleAssignment, isVmRegisterName, renderTableFields, renderUnary, sourceOf } = require("../ast");
 const { hasLinearRootContinuation, recordRootConditional, upvalueAliasKey, upvalueCellBinding, allocateValueDisplay, allocateTableDisplay, parameterName, capturedSlotName, forwardedCaptureName, displayLocal, activeLocalDisplay, hasActiveLocal, resolveId, resolveRenderableId } = require("./bindings");
 const { structuredPackId, structuredPackSlot, structuredPackSlotToken } = require("./tokens");
-const { isCompilerVarargPack, isVarargUnpack, expectedPackSlotsInBlock, cleanupOrTerminalEpoch, maybeOwnStructuredPackSlot, preclaimFutureStructuredPackOwner, preclaimFutureStructuredPackSlots, flushStructuredPack, flushReadyStructuredPacks } = require("./packs");
+const { isCompilerVarargPack, isCompilerVarargSelect, isVarargUnpack, expectedPackSlotsInBlock, cleanupOrTerminalEpoch, maybeOwnStructuredPackSlot, preclaimFutureStructuredPackOwner, preclaimFutureStructuredPackSlots, flushStructuredPack, flushReadyStructuredPacks } = require("./packs");
 const { renderEnvironmentRead, renderIndexAccess, renderInfix, renderCallable } = require("../expression-semantics");
 function render(ctx, rhs, env, provenRecursive = false, singleCallPacks = null) {
+    if (rhs?.type === "FreshGenericForExpression") return render(ctx, rhs.expression, env, true, singleCallPacks);
+    if (rhs?.type === "FreshTerminalRepeatConditionExpression") return render(ctx, rhs.expression, env, true, singleCallPacks);
+    if (rhs?.type === "FreshGenericMethodCallExpression") {
+        const receiver = render(ctx, rhs.receiver, env, true, singleCallPacks);
+        if (typeof receiver !== "string" || typeof rhs.member !== "string") return null;
+        const args = [];
+        for (const arg of rhs.arguments || []) {
+            const value = render(ctx, arg, env, true, singleCallPacks);
+            if (typeof value !== "string") return null;
+            args.push(value);
+        }
+        return `${receiver}:${rhs.member}(${args.join(", ")})`;
+    }
     if (isPrimitiveLiteral(rhs) || isEmptyTable(rhs)) return sourceOf(ctx.source, rhs);
     if (rhs?.type === "TableConstructorExpression") return renderTableFields(rhs.fields || [], node => render(ctx, node, env, provenRecursive, singleCallPacks));
     if (isIdentifier(rhs)) return resolveRenderableId(ctx, rhs.name, env);
@@ -25,8 +38,12 @@ function render(ctx, rhs, env, provenRecursive = false, singleCallPacks = null) 
         return renderIndexAccess(base, key);
     }
     if (rhs?.type === "IndexExpression" && isIdentifier(rhs.base)) {
+        // Proven recursive expressions may use an arbitrary computed key even
+        // when the base itself is a register. This occurs after logical/loop
+        // reduction folds compiler TEMP chains into one expression.
         const key = isIdentifier(rhs.index) ? resolveRenderableId(ctx, rhs.index.name, env)
-            : (provenRecursive && isPrimitiveLiteral(rhs.index) ? sourceOf(ctx.source, rhs.index) : null);
+            : (isPrimitiveLiteral(rhs.index) ? sourceOf(ctx.source, rhs.index)
+                : (provenRecursive ? render(ctx, rhs.index, env, true, singleCallPacks) : null));
         if (key == null) return null;
         if (rhs.base.name === "_env") {
             return renderEnvironmentRead(key);
@@ -54,14 +71,27 @@ function render(ctx, rhs, env, provenRecursive = false, singleCallPacks = null) 
         return renderInfix(left, rhs.operator, right);
     }
     if (rhs?.type === "CallExpression") {
+        // Logical/loop reduction may inline a proven compiler RETURN_ALL pack
+        // directly into unpack(), producing unpack({ call(...) }). In recursive
+        // proven expressions that table is compiler transport, not source table
+        // identity, so preserve the original multi-return call directly.
+        if (provenRecursive && isIdentifier(rhs.base, "unpack") && (rhs.arguments || []).length === 1) {
+            const inlinePack = rhs.arguments[0];
+            const fields = inlinePack?.type === "TableConstructorExpression" ? (inlinePack.fields || []) : [];
+            if (fields.length === 1 && fields[0]?.type === "TableValue" && fields[0].value?.type === "CallExpression") {
+                const packedCall = render(ctx, fields[0].value, env, true, singleCallPacks);
+                if (typeof packedCall === "string") return packedCall;
+            }
+        }
+        if (isIdentifier(rhs.base, "unpack") && (rhs.arguments || []).length === 1 && isIdentifier(rhs.arguments[0]) && singleCallPacks instanceof Map) {
+            const packed = singleCallPacks.get(rhs.arguments[0].name);
+            if (typeof packed === "string") return packed;
+        }
         if (ctx.renderAsFunction && isVarargUnpack(ctx, rhs, env)) {
             ctx.sawVarargs = true;
             return "...";
         }
-        if (ctx.renderAsFunction && isIdentifier(rhs.base, "select") && (rhs.arguments || []).length === 2 &&
-            rhs.arguments[0]?.type === "NumericLiteral" && Number(rhs.arguments[0].value) === 1 &&
-            rhs.arguments[1]?.type === "CallExpression" && isIdentifier(rhs.arguments[1].base, "unpack") &&
-            (rhs.arguments[1].arguments || []).length === 1 && isIdentifier(rhs.arguments[1].arguments[0], "args")) {
+        if (isCompilerVarargSelect(ctx, rhs)) {
             ctx.sawVarargs = true;
             return "...";
         }

@@ -2002,6 +2002,92 @@ function sequentialLogicalCallStates(count) {
 }
 
 {
+    // A source table containing a multi-return call is lowered through two
+    // tables: a compiler return pack, then the real { unpack(pack) } table.
+    // Preserve the second table instead of collapsing it back into the call.
+    const source = vmStatesSource({
+        1: [
+            'r2 = "pcall"', 'r3 = createClosure3(2, {})', 'ReturnVal = _env[r2]',
+            'r2 = { ReturnVal(r3) }', 'state = { unpack(r2) }', 'r2 = state',
+            'ReturnVal = 2', 'state = r2[ReturnVal]', 'r2 = nil', 'r3 = state',
+            'r3 = nil', 'r1 = args', 'ReturnVal = {}', 'state = nil',
+        ],
+        2: ['ReturnVal = { 1 }', 'state = nil'],
+    });
+    const result = solveBetaControlFlow(source, parse(source));
+    assert.strictEqual(result.applied, true, "source-packed call table was collapsed into the call result");
+    assert.strictEqual(result.mode, "fresh-closure-entry");
+    assert.strictEqual(result.source, 'local v1 = { pcall(function()\n    return 1\nend) }\nlocal v2 = v1[2]\n');
+}
+
+{
+    // The same source-packed table must keep its identity after a multi-state
+    // TESTSET/logical region. This exercises the structured pack provenance path.
+    const source = vmStatesSource({
+        1: ['r1 = state', 'r2 = "table"', 'r6 = _env[r2]', 'state = r6 and 2 or 3', 'r4 = args', 'r3 = r6'],
+        2: ['r5 = "table"', 'r2 = _env[r5]', 'r5 = "unpack"', 'r6 = r2[r5]', 'r3 = r6', 'state = 3'],
+        3: ['state = r1', 'state = r3 and 4 or 5', 'ReturnVal = r3'],
+        4: [
+            'r3 = ReturnVal', 'r6 = createClosure4(6, {})', 'r1 = "pcall"', 'ReturnVal = _env[r1]',
+            'r1 = { ReturnVal(r6) }', 'state = { unpack(r1) }', 'r1 = state',
+            'ReturnVal = 2', 'state = r1[ReturnVal]', 'r1 = nil', 'r3 = nil',
+            'r6 = state', 'r6 = nil', 'ReturnVal = {}', 'state = nil',
+        ],
+        5: ['r1 = "unpack"', 'r3 = _env[r1]', 'ReturnVal = r3', 'state = 4'],
+        6: ['state = 1', 'ReturnVal = { state }', 'state = nil'],
+    });
+    const result = solveBetaControlFlow(source, parse(source));
+    assert.strictEqual(result.applied, true, "structured logical root lost source-packed table provenance");
+    assert.strictEqual(result.mode, "fresh-closure-entry");
+    assert.strictEqual(result.source, 'local v1 = ((table and table.unpack) or unpack)\nlocal v2 = { pcall(function()\n    return 1\nend) }\nlocal v3 = v2[2]\n');
+}
+
+{
+    // Prometheus may create a closure after allocating a captured cell but
+    // before writing the cell's first source value. The deferred closure may
+    // cross primitive transport and an unrelated capture-free closure creation,
+    // but no captured/effectful observable operation before cell initialization.
+    const source = vmStatesSource({
+        1: [
+            'r1 = allocUpvalue()', 'r2 = createClosure1(2, { r1 })',
+            'state = createClosure1(3, {})', 'r5 = state',
+            'state = false', 'upvalueValues[r1] = state',
+            'r3 = "pcall"', 'r4 = _env[r3]', 'ReturnVal = r4(r2)',
+            'r1 = releaseUpvalue(r1)', 'r2 = nil', 'r5 = nil', 'ReturnVal = {}', 'state = nil',
+        ],
+        2: ['state = true', 'upvalueValues[upvalues[1]] = state', 'ReturnVal = {}', 'state = nil'],
+        3: ['ReturnVal = {}', 'state = nil'],
+    });
+    const result = solveBetaControlFlow(source, parse(source));
+    assert.strictEqual(result.applied, true, "create-before-initialize captured closure was rejected");
+    assert.strictEqual(result.mode, "fresh-closure-entry");
+    assert.strictEqual(result.source, 'local v1 = function()end\nlocal v2 = false\nlocal v3 = function()\n    v2 = true\nend\npcall(v3)\n');
+}
+
+{
+    // A cleanup-backed physical register may first hold a call-argument TEMP
+    // and only later receive the source-local value. A future non-nil write
+    // splits those epochs, so the TEMP argument must stay inline instead of
+    // becoming a false source local.
+    const source = vmStatesSource({
+        1: [
+            'r1 = 65',
+            'r2 = "sink"', 'r3 = _env[r2]', 'ReturnVal = r3(r1)',
+            'r4 = "make"', 'r5 = _env[r4]', 'state = r5()', 'r1 = state',
+            'r6 = "cond"', 'state = _env[r6]', 'state = state and 2 or 3',
+        ],
+        2: ['ReturnVal = "print"', 'state = _env[ReturnVal]', 'ReturnVal = state("T")', 'state = 4'],
+        3: ['ReturnVal = "print"', 'state = _env[ReturnVal]', 'ReturnVal = state("F")', 'state = 4'],
+        4: ['r1 = nil', 'ReturnVal = {}', 'state = nil'],
+    });
+    const result = solveBetaControlFlow(source, parse(source));
+    assert.strictEqual(result.applied, true, "call-argument TEMP was not separated from the later source-local epoch");
+    assert.strictEqual(result.mode, "fresh-simple-if");
+    assert.strictEqual(result.source, 'sink(65)\nlocal v1 = make()\nif cond then\n    print("T")\nelse\n    print("F")\nend\n');
+    assert.doesNotMatch(result.source, /local v\d+ = 65/);
+}
+
+{
     // Every Fresh-CF block starts from the same VM-statement IR and ordinary
     // expression/write semantics. Control-flow solvers may differ in lifetime
     // placement, but they must not rediscover the meaning of normal statements.
@@ -2029,5 +2115,94 @@ function sequentialLogicalCallStates(count) {
     assert.strictEqual(renderEnvironmentRead('"print"'), "print");
     assert.strictEqual(renderIndexAccess("v1", '"field"'), "v1.field");
     assert.strictEqual(renderCallable("function()\nend", ["1"]), "(function()\nend)(1)");
+}
+{
+    // Prometheus AssignmentStatement evaluates every RHS before any LHS write.
+    // Preserve the entire global write phase atomically, including the compiler's
+    // neutral ReturnVal = {} reset that may appear between later LHS writes.
+    const source = vmStatesSource({
+        1: [
+            'ReturnVal = "c"', 'state = _env[ReturnVal]',
+            'r3 = "a"', 'ReturnVal = _env[r3]',
+            'r2 = "b"', 'r3 = _env[r2]',
+            'r2 = "a"', '_env[r2] = state',
+            'r2 = "b"', '_env[r2] = ReturnVal',
+            'ReturnVal = {}',
+            'r2 = "c"', '_env[r2] = r3',
+            'r1 = args', 'state = nil',
+        ],
+    });
+    const result = solveBetaControlFlow(source, parse(source));
+    assert.strictEqual(result.applied, true, "3-way global assignment was not recovered atomically");
+    assert.strictEqual(result.source, 'a, b, c = c, a, b\n');
+}
+
+{
+    // The same proof must scale beyond one fixed arity. The final RHS carrier was
+    // computed before the first LHS write even though ReturnVal is reset mid-phase.
+    const source = vmStatesSource({
+        1: [
+            'ReturnVal = "d"', 'state = _env[ReturnVal]',
+            'r3 = "c"', 'ReturnVal = _env[r3]',
+            'r1 = "b"', 'r3 = _env[r1]',
+            'r2 = "a"', 'r1 = _env[r2]',
+            'r2 = "a"', '_env[r2] = state',
+            'r2 = "b"', '_env[r2] = ReturnVal',
+            'r2 = "c"', '_env[r2] = r3',
+            'ReturnVal = {}',
+            'r2 = "d"', '_env[r2] = r1',
+            'r4 = args', 'state = nil',
+        ],
+    });
+    const result = solveBetaControlFlow(source, parse(source));
+    assert.strictEqual(result.applied, true, "4-way global assignment was not recovered atomically");
+    assert.strictEqual(result.source, 'a, b, c, d = d, c, b, a\n');
+}
+
+{
+    // Negative control: separate source assignments evaluate the second RHS only
+    // after the first write, so they must never be collapsed into one assignment.
+    const source = vmStatesSource({
+        1: [
+            'ReturnVal = "l2"', 'state = _env[ReturnVal]',
+            'ReturnVal = "l1"', '_env[ReturnVal] = state',
+            'r2 = "l1"', 'ReturnVal = _env[r2]',
+            'r2 = "l2"', '_env[r2] = ReturnVal',
+            'r1 = args', 'ReturnVal = {}', 'state = nil',
+        ],
+    });
+    const result = solveBetaControlFlow(source, parse(source));
+    assert.strictEqual(result.applied, true, "sequential global assignments were rejected");
+    assert.strictEqual(result.source, 'l1 = l2\nl2 = l1\n');
+}
+{
+    // A simple closure leaf may reuse the dispatcher state register as a semantic
+    // value after creating another closure. Once state is overwritten with nil,
+    // later copies must observe nil rather than the prior closure payload.
+    const source = vmStatesSource({
+        1: [
+            'state = createClosure1(2, {})', 'r1 = state',
+            'ReturnVal = { r1 }', 'state = nil',
+        ],
+        2: [
+            'r1 = allocUpvalue()', 'r2 = args[1]',
+            'ReturnVal = "tostring"', 'state = _env[ReturnVal]',
+            'ReturnVal = state(r2)', 'upvalueValues[r1] = ReturnVal',
+            'ReturnVal = upvalueValues[r1]', 'r3 = true',
+            'state = { [ReturnVal] = r3 }', 'r4 = state',
+            'state = createClosure1(3, { r1 })', 'r5 = state',
+            'state = nil', 'r6 = state',
+            'ReturnVal = { r5, r6, r4 }', 'state = nil',
+        ],
+        3: [
+            'state = upvalueValues[upvalues[1]]',
+            'ReturnVal = { state }', 'state = nil',
+        ],
+    });
+    const result = solveBetaControlFlow(source, parse(source));
+    assert.strictEqual(result.applied, true, "semantic nil after closure-valued state overwrite was rejected");
+    assert.strictEqual(result.mode, "fresh-closure-entry");
+    assert.match(result.source, /end, nil, \{ \[v\d+\] = true \}/);
+    assert.doesNotMatch(result.source, /end, function\(\)/);
 }
 console.log("fresh beta direct-global-call regression: ok");

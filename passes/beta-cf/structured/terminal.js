@@ -24,9 +24,34 @@ function terminalSiblingMatch(ctx, a, b) {
 
 function guardLine(ctx, condition, truth, bodyEffects) {
     if (!Array.isArray(bodyEffects) || bodyEffects.length === 0) return null;
-    const test = truth ? condition : `(not ${condition})`;
     const body = bodyEffects.map(line => indentConditionalEffect(ctx, line)).join("\n");
-    return `if ${test} then\n${body}\nend`;
+    if (truth) return `if ${condition} then\n${body}\nend`;
+    // Preserve a compiler-proven false/else arm instead of inverting the
+    // condition. Fresh CF is source recovery, so an else-only source branch
+    // remains `if cond then else ... end`.
+    return `if ${condition} then\nelse\n${body}\nend`;
+}
+
+function foldTerminalRepeatScopes(ctx, candidate) {
+    if (!candidate) return null;
+    const current = {
+        env: new Map(candidate.env),
+        markers: [...(candidate.markers || [])],
+        effects: [...(candidate.effects || [])],
+        terminal: candidate.terminal === true,
+    };
+    while (current.markers.length > 0) {
+        const marker = current.markers[current.markers.length - 1];
+        if (marker?.kind !== "terminal-repeat-scope") break;
+        if (typeof marker.condition !== "string" || !Number.isInteger(marker.effectCount) || marker.effectCount < 0 || marker.effectCount > current.effects.length) return null;
+        const bodyEffects = current.effects.slice(marker.effectCount);
+        if (!bodyEffects.length) return null;
+        const body = bodyEffects.map(line => indentConditionalEffect(ctx, line)).join("\n");
+        const structured = `repeat\n${body}\nuntil ${marker.condition}`;
+        current.effects = [...current.effects.slice(0, marker.effectCount), structured];
+        current.markers.pop();
+    }
+    return current;
 }
 
 function collapseTerminalCandidates(ctx) {
@@ -42,7 +67,7 @@ function collapseTerminalCandidates(ctx) {
                 const falseCandidate = match.al.truth ? b : a;
                 const guard = guardLine(ctx, match.al.condition, true, (trueCandidate.effects || []).slice(match.effectPrefix));
                 if (!guard) return false;
-                const merged = {
+                let merged = {
                     env: new Map(falseCandidate.env),
                     markers: (falseCandidate.markers || []).slice(0, -1),
                     effects: [
@@ -52,6 +77,8 @@ function collapseTerminalCandidates(ctx) {
                     ],
                     terminal: true,
                 };
+                merged = foldTerminalRepeatScopes(ctx, merged);
+                if (!merged) return false;
                 ctx.terminalCandidates.splice(j, 1);
                 ctx.terminalCandidates.splice(i, 1, merged);
                 changed = true;
@@ -96,4 +123,4 @@ function foldTerminalGuards(ctx, candidate) {
     return current;
 }
 
-module.exports = { markersSharePrefix, terminalSiblingMatch, guardLine, collapseTerminalCandidates, foldTerminalGuards };
+module.exports = { markersSharePrefix, terminalSiblingMatch, guardLine, foldTerminalRepeatScopes, collapseTerminalCandidates, foldTerminalGuards };

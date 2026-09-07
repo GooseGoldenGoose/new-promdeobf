@@ -267,6 +267,34 @@ function nodeReadsName(node, name) {
     return false;
 }
 
+
+function isAllocUpvalueCall(node) {
+    return node?.type === "CallExpression" && isIdentifier(node.base, "allocUpvalue") && (node.arguments || []).length === 0;
+}
+
+function isReleaseUpvalueCallFor(statement, cellReg) {
+    if (!isSingleAssignment(statement, cellReg)) return false;
+    const rhs = statement.init[0];
+    return rhs?.type === "CallExpression" && isIdentifier(rhs.base, "releaseUpvalue") &&
+        (rhs.arguments || []).length === 1 && isIdentifier(rhs.arguments[0], cellReg);
+}
+
+function isCapturedCellWriteFrom(statement, cellReg, valueReg) {
+    if (statement?.type !== "AssignmentStatement" || (statement.variables || []).length !== 1 || (statement.init || []).length !== 1) return false;
+    const dest = statement.variables[0];
+    return dest?.type === "IndexExpression" && isIdentifier(dest.base, "upvalueValues") &&
+        isIdentifier(dest.index, cellReg) && isIdentifier(statement.init[0], valueReg);
+}
+
+function closureCapturesCell(statement, cellReg) {
+    if (!isSingleAssignment(statement)) return false;
+    const rhs = statement.init[0];
+    if (rhs?.type !== "CallExpression" || !isIdentifier(rhs.base) || !/^createClosure\d*$/.test(rhs.base.name)) return false;
+    const args = rhs.arguments || [];
+    if (args.length !== 2 || args[1]?.type !== "TableConstructorExpression") return false;
+    return (args[1].fields || []).some(field => field?.type === "TableValue" && isIdentifier(field.value, cellReg));
+}
+
 function matchLoopVariableHandoff(graph, loopInfo, raw) {
     const body = graph.blocks.get(raw.bodyId);
     if (!body) return null;
@@ -276,25 +304,80 @@ function matchLoopVariableHandoff(graph, loopInfo, raw) {
         if (!isSingleAssignment(statement) || !isIdentifier(statement.variables[0]) || !isIdentifier(statement.init[0], raw.currentReg)) continue;
         const loopVarReg = statement.variables[0].name;
         if (!isVmRegisterName(loopVarReg) || loopVarReg === raw.currentReg) continue;
-        handoffs.push({ statement, index: i, loopVarReg });
+        handoffs.push({ kind: "register", statement, index: i, loopVarReg, loopVarCellReg: null, bookkeepingStatements: new Set([statement]) });
     }
-    if (handoffs.length !== 1) return null;
-    const handoff = handoffs[0];
-
-    let cleanupCount = 0;
-    for (const id of loopInfo.coreIds) {
-        const block = graph.blocks.get(id);
-        if (!block) return null;
-        for (let i = 0; i < block.body.length; i++) {
-            if (i === block.transitionIndex) continue;
-            const statement = block.body[i];
-            if (statement === handoff.statement) continue;
-            if (isSingleAssignment(statement, handoff.loopVarReg) && statement.init[0]?.type === "NilLiteral") cleanupCount++;
-            if (nodeReadsName(statement, raw.currentReg)) return null;
+    if (handoffs.length > 1) return null;
+    if (handoffs.length === 1) {
+        const handoff = handoffs[0];
+        let cleanupCount = 0;
+        for (const id of loopInfo.coreIds) {
+            const block = graph.blocks.get(id);
+            if (!block) return null;
+            for (let i = 0; i < block.body.length; i++) {
+                if (i === block.transitionIndex) continue;
+                const statement = block.body[i];
+                if (statement === handoff.statement) continue;
+                if (isSingleAssignment(statement, handoff.loopVarReg) && statement.init[0]?.type === "NilLiteral") {
+                    handoff.bookkeepingStatements.add(statement);
+                    cleanupCount++;
+                    continue;
+                }
+                if (nodeReadsName(statement, raw.currentReg)) return null;
+            }
         }
+        if (cleanupCount < 1) return null;
+        return handoff;
     }
-    if (cleanupCount < 1) return null;
-    return handoff;
+
+    // Captured numeric-for variables are lowered directly into a fresh upvalue
+    // cell for each iteration instead of receiving an ordinary VAR-register
+    // handoff. Prove the exact alloc -> current-value cell write -> closure
+    // capture -> release bookkeeping before treating the cell as the source
+    // loop-variable binding.
+    const capturedCandidates = [];
+    for (let initIndex = 0; initIndex < body.transitionIndex; initIndex++) {
+        const initStatement = body.body[initIndex];
+        const dest = initStatement?.variables?.[0];
+        if (dest?.type !== "IndexExpression" || !isIdentifier(dest.base, "upvalueValues") || !isIdentifier(dest.index) ||
+            !isIdentifier(initStatement.init?.[0], raw.currentReg)) continue;
+        const cellReg = dest.index.name;
+        let allocStatement = null;
+        let captureCount = 0;
+        for (let i = 0; i < body.transitionIndex; i++) {
+            const statement = body.body[i];
+            if (i < initIndex && isSingleAssignment(statement, cellReg) && isAllocUpvalueCall(statement.init[0])) allocStatement = statement;
+            if (closureCapturesCell(statement, cellReg)) captureCount++;
+        }
+        if (!allocStatement || captureCount < 1) continue;
+        const bookkeepingStatements = new Set([allocStatement, initStatement]);
+        let releaseCount = 0;
+        let invalidCurrentRead = false;
+        for (const id of loopInfo.coreIds) {
+            const blockInfo = graph.blocks.get(id);
+            if (!blockInfo) return null;
+            for (let i = 0; i < blockInfo.body.length; i++) {
+                if (i === blockInfo.transitionIndex) continue;
+                const statement = blockInfo.body[i];
+                if (statement === initStatement) continue;
+                if (isReleaseUpvalueCallFor(statement, cellReg)) {
+                    bookkeepingStatements.add(statement);
+                    releaseCount++;
+                    continue;
+                }
+                if (nodeReadsName(statement, raw.currentReg)) invalidCurrentRead = true;
+            }
+        }
+        if (invalidCurrentRead || releaseCount < 1) continue;
+        capturedCandidates.push({
+            kind: "captured-cell",
+            statement: initStatement,
+            index: initIndex,
+            loopVarReg: null,
+            loopVarCellReg: cellReg,
+            bookkeepingStatements,
+        });
+    }
+    return capturedCandidates.length === 1 ? capturedCandidates[0] : null;
 }
 
 function matchCompilerNumericForNaturalLoop(graph, loopInfo, raw, returnName = null) {
@@ -342,6 +425,21 @@ function matchCompilerNumericForNaturalLoop(graph, loopInfo, raw, returnName = n
 
     const handoff = matchLoopVariableHandoff(graph, loopInfo, raw);
     if (!handoff) return null;
+
+    // The compiler may reuse the future source loop-variable register as the
+    // TEMP that evaluates the numeric-for initial expression. If that exact
+    // TEMP feeds only current = initial - step before the loop, keep evaluation
+    // at its original statement position and remove the transport epoch.
+    let initialTransportDef = null;
+    if (handoff.loopVarReg && setup.initialSourceReg === handoff.loopVarReg) {
+        const def = nearestDefinition(preheader.body, setup.currentDef.index, setup.initialSourceReg);
+        if (!def || setup.setupStatements.has(def.statement)) return null;
+        for (let i = def.index + 1; i < setup.currentDef.index; i++) {
+            if (nodeReadsName(preheader.body[i], setup.initialSourceReg)) return null;
+        }
+        initialTransportDef = def;
+    }
+
     return {
         ...raw,
         ...setup,
@@ -355,7 +453,10 @@ function matchCompilerNumericForNaturalLoop(graph, loopInfo, raw, returnName = n
         backedgeSources: new Set(loopInfo.backedgeSources),
         continueIds: new Set(loopInfo.backedgeSources),
         loopVarReg: handoff.loopVarReg,
+        loopVarCellReg: handoff.loopVarCellReg,
+        initialTransportDef,
         loopVarHandoffStatement: handoff.statement,
+        loopVarBookkeepingStatements: handoff.bookkeepingStatements,
     };
 }
 
@@ -389,6 +490,10 @@ function applyCompilerNumericForMatch(transformed, graph, match, stateName, body
     if (!Array.isArray(preheaderBody)) return false;
     const nextPreheader = [];
     for (const statement of preheaderBody) {
+        if (match.initialTransportDef && statement === match.initialTransportDef.statement) {
+            nextPreheader.push(syntheticAssignment(match.initialCapture, match.initialTransportDef.rhs));
+            continue;
+        }
         if (statement === match.finalDef.statement) {
             nextPreheader.push(syntheticAssignment(match.finalCapture, identifier(match.finalSourceReg)));
             continue;
@@ -398,7 +503,9 @@ function applyCompilerNumericForMatch(transformed, graph, match, stateName, body
             continue;
         }
         if (statement === match.currentDef.statement) {
-            nextPreheader.push(syntheticAssignment(match.initialCapture, identifier(match.initialSourceReg)));
+            if (!match.initialTransportDef) {
+                nextPreheader.push(syntheticAssignment(match.initialCapture, identifier(match.initialSourceReg)));
+            }
             continue;
         }
         if (statement === match.zeroDef.statement || statement === match.negDef.statement) continue;
@@ -407,7 +514,8 @@ function applyCompilerNumericForMatch(transformed, graph, match, stateName, body
     transformed.set(match.preheaderId, nextPreheader);
 
     const body = transformed.get(match.bodyId);
-    if (!Array.isArray(body) || !body.includes(match.loopVarHandoffStatement)) return false;
+    if (!Array.isArray(body) || !body.includes(match.loopVarHandoffStatement) ||
+        !(match.loopVarBookkeepingStatements instanceof Set)) return false;
 
     // Rewrite backedges while the graph's transition indexes still refer to
     // the unmodified loop-body arrays. Remove the compiler loop-variable
@@ -420,9 +528,20 @@ function applyCompilerNumericForMatch(transformed, graph, match, stateName, body
         if (!rewriteJumpTarget(transformed, graph, source, bodyJoinId)) return false;
         loopControlByBlockId.set(source, "break");
     }
-    const rewrittenBody = transformed.get(match.bodyId);
-    if (!Array.isArray(rewrittenBody)) return false;
-    transformed.set(match.bodyId, rewrittenBody.filter(statement => statement !== match.loopVarHandoffStatement));
+    // Remove only the proven source-loop-variable compiler bookkeeping. For a
+    // captured loop variable this includes its per-iteration cell allocation,
+    // current-value initialization, and release(s); the closure capture itself
+    // remains and resolves through the seeded source binding at body entry.
+    const cleanupBlockIds = new Set([
+        ...match.coreIds,
+        ...(match.breakRegionIds || []),
+        ...(match.terminalReturnRegionIds || []),
+    ]);
+    for (const blockId of cleanupBlockIds) {
+        const blockBody = transformed.get(blockId);
+        if (!Array.isArray(blockBody)) continue;
+        transformed.set(blockId, blockBody.filter(statement => !match.loopVarBookkeepingStatements.has(statement)));
+    }
     transformed.set(bodyJoinId, [syntheticJump(stateName, match.exitId)]);
 
     match.bodyJoinId = bodyJoinId;

@@ -16,6 +16,8 @@ const { flattenLogicalRootLeaf } = require("./logical");
 const { matchLocalRegisterProgram } = require("./linear/solver");
 const { matchMultiStateLogicalLocals } = require("./structured/solver");
 const { matchCompilerStructuredLoopProgram } = require("./control/loops");
+const { renderCallable } = require("./expression-semantics");
+const { compilerVarargSelectIndex, inferCompilerVarargFirstIndex } = require("./varargs");
 
 function renderSimpleClosureLeaf(source, leaf, stateName, returnName, options = {}) {
     const env = new Map();
@@ -38,6 +40,7 @@ function renderSimpleClosureLeaf(source, leaf, stateName, returnName, options = 
     }
     let sawReturn = false;
     let sawVarargs = false;
+    const compilerVarargFirstIndex = inferCompilerVarargFirstIndex(leaf);
 
     function nodeUsesIdentifier(node, name) {
         if (!node || typeof node !== "object") return false;
@@ -122,10 +125,8 @@ function renderSimpleClosureLeaf(source, leaf, stateName, returnName, options = 
             return `(${left} ${node.operator} ${right})`;
         }
         if (node?.type === "CallExpression" && isIdentifier(node.base)) {
-            if (node.base.name === "select" && (node.arguments || []).length === 2 &&
-                node.arguments[0]?.type === "NumericLiteral" && Number(node.arguments[0].value) === 1 &&
-                node.arguments[1]?.type === "CallExpression" && isIdentifier(node.arguments[1].base, "unpack") &&
-                (node.arguments[1].arguments || []).length === 1 && isIdentifier(node.arguments[1].arguments[0], "args")) {
+            const rawVarargIndex = compilerVarargSelectIndex(node);
+            if (rawVarargIndex !== null && rawVarargIndex === compilerVarargFirstIndex) {
                 sawVarargs = true;
                 return "...";
             }
@@ -150,7 +151,7 @@ function renderSimpleClosureLeaf(source, leaf, stateName, returnName, options = 
             if (member?.kind === "member" && args.length > 0 && args[0] === member.base) {
                 return `${member.base}:${member.member}(${args.slice(1).join(", ")})`;
             }
-            return `${base}(${args.join(", ")})`;
+            return renderCallable(base, args);
         }
         return null;
     }
@@ -219,6 +220,12 @@ function renderSimpleClosureLeaf(source, leaf, stateName, returnName, options = 
         const name = dest.name;
 
         if (name === stateName && rhs?.type === "NilLiteral") {
+            // The dispatcher stops after this block, but later statements in the
+            // same block still observe the assigned nil value. Do not retain the
+            // previous state payload (commonly a just-created closure) across
+            // this overwrite.
+            env.set(stateName, "nil");
+            envMeta.delete(stateName);
             sawStop = true;
             continue;
         }
@@ -242,7 +249,11 @@ function renderSimpleClosureLeaf(source, leaf, stateName, returnName, options = 
             continue;
         }
         if (rhs?.type === "NilLiteral" && name !== stateName && name !== returnName) {
-            env.delete(name);
+            // Nil can be semantic source data or dead compiler cleanup. Preserve
+            // the exact nil definition only when it reaches a read before the
+            // next overwrite; otherwise dropping it is safe compiler cleanup.
+            if (valueUsedBeforeOverwrite(index, name)) env.set(name, "nil");
+            else env.delete(name);
             envMeta.delete(name);
             continue;
         }
@@ -346,15 +357,30 @@ function renderSimpleClosureLeaf(source, leaf, stateName, returnName, options = 
 }
 
 function matchClosureEntryProgram(source, stateWhile, stateName, returnName, diagnostics = null) {
-    const leaves = extractNormalizedStateLeaves(stateWhile, stateName);
-    if (!leaves || leaves.size < 2 || !leaves.has(1)) return null;
+    const extractedLeaves = extractNormalizedStateLeaves(stateWhile, stateName);
+    if (!extractedLeaves || extractedLeaves.size < 2 || !extractedLeaves.has(1)) return null;
+    const leaves = extractedLeaves;
     const consumedEntries = new Set();
     const renderedClosureEntries = new Set();
     const renderingEntries = new Set();
+    const renderedClosureCache = new Map();
 
     function restoreConsumedEntries(stateSnapshot, closureSnapshot) {
         for (const id of [...consumedEntries]) if (!stateSnapshot.has(id)) consumedEntries.delete(id);
         for (const id of [...renderedClosureEntries]) if (!closureSnapshot.has(id)) renderedClosureEntries.delete(id);
+        for (const id of [...renderedClosureCache.keys()]) if (!renderedClosureEntries.has(id)) renderedClosureCache.delete(id);
+    }
+
+    function captureSignature(fields, captureNames) {
+        if (captureNames === null) return fields.length === 0 ? "[]" : null;
+        if (!(captureNames instanceof Map) || fields.length !== captureNames.size) return null;
+        const names = [];
+        for (let slot = 1; slot <= fields.length; slot++) {
+            const name = captureNames.get(slot);
+            if (typeof name !== "string") return null;
+            names.push(name);
+        }
+        return JSON.stringify(names);
     }
 
     function renderClosureCall(call, captureNames = null) {
@@ -362,10 +388,16 @@ function matchClosureEntryProgram(source, stateWhile, stateName, returnName, dia
         const args = call.arguments || [];
         if (args.length !== 2 || args[0]?.type !== "NumericLiteral" || args[1]?.type !== "TableConstructorExpression") return null;
         const fields = args[1].fields || [];
-        if (captureNames === null && fields.length !== 0) return null;
-        if (captureNames instanceof Map && fields.length !== captureNames.size) return null;
+        const signature = captureSignature(fields, captureNames);
+        if (signature === null) return null;
         const entryId = Number(args[0].value);
-        if (!Number.isInteger(entryId) || entryId === 1 || consumedEntries.has(entryId) || renderingEntries.has(entryId)) return null;
+        if (!Number.isInteger(entryId) || entryId === 1 || renderingEntries.has(entryId)) return null;
+        const cached = renderedClosureCache.get(entryId);
+        if (cached) {
+            if (!consumedEntries.has(entryId) || !renderedClosureEntries.has(entryId) || cached.signature !== signature) return null;
+            return cached.source;
+        }
+        if (consumedEntries.has(entryId)) return null;
         const childLeaf = leaves.get(entryId);
         if (!childLeaf) return null;
 
@@ -381,12 +413,16 @@ function matchClosureEntryProgram(source, stateWhile, stateName, returnName, dia
             consumedEntries.add(entryId);
             renderedClosureEntries.add(entryId);
             renderingEntries.delete(entryId);
+            renderedClosureCache.set(entryId, { signature, source: rendered });
             return rendered;
         }
 
         restoreConsumedEntries(snapshot, closureSnapshot);
         const childOptions = {
             allowConditionalIf: true,
+            allowLogicalOnlyStructured: true,
+            allowStraightLineStructured: true,
+            normalizedLeaves: leaves,
             rootReachableOnly: true,
             entryId,
             captureNames: captureNames instanceof Map ? captureNames : undefined,
@@ -402,6 +438,7 @@ function matchClosureEntryProgram(source, stateWhile, stateName, returnName, dia
                 for (const id of childStates) consumedEntries.add(id);
                 renderedClosureEntries.add(entryId);
                 renderingEntries.delete(entryId);
+                renderedClosureCache.set(entryId, { signature, source: loopStructured.source });
                 return loopStructured.source;
             }
         }
@@ -415,6 +452,7 @@ function matchClosureEntryProgram(source, stateWhile, stateName, returnName, dia
                 for (const id of childStates) consumedEntries.add(id);
                 renderedClosureEntries.add(entryId);
                 renderingEntries.delete(entryId);
+                renderedClosureCache.set(entryId, { signature, source: structured.source });
                 return structured.source;
             }
         }
@@ -434,6 +472,7 @@ function matchClosureEntryProgram(source, stateWhile, stateName, returnName, dia
     const rootClosureSnapshot = new Set(renderedClosureEntries);
     const loopProgram = matchCompilerStructuredLoopProgram(source, stateWhile, stateName, returnName, {
         allowConditionalIf: true,
+        normalizedLeaves: leaves,
         rootReachableOnly: true,
         renderSpecialCall: renderClosureCall,
         renderCapturedCall: renderClosureCall,
@@ -453,6 +492,9 @@ function matchClosureEntryProgram(source, stateWhile, stateName, returnName, dia
     // proof; createClosureN calls render/consume separate child entries.
     const structuredProgram = matchMultiStateLogicalLocals(source, stateWhile, stateName, returnName, {
         allowConditionalIf: true,
+        allowLogicalOnlyStructured: true,
+        allowStraightLineStructured: true,
+        normalizedLeaves: leaves,
         rootReachableOnly: true,
         renderSpecialCall: renderClosureCall,
         renderCapturedCall: renderClosureCall,
@@ -468,6 +510,7 @@ function matchClosureEntryProgram(source, stateWhile, stateName, returnName, dia
     // flattened logical/register-local leaf, including existing capture cases.
     consumedEntries.clear();
     renderedClosureEntries.clear();
+    renderedClosureCache.clear();
     const rootDiagnostics = {};
     const flattenedRoot = flattenLogicalRootLeaf(leaves, 1, stateName, returnName, rootDiagnostics);
     for (const id of (flattenedRoot ? flattenedRoot.consumed : [1])) consumedEntries.add(id);
