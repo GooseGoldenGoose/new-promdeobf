@@ -43,6 +43,12 @@ function createLinearContext(source, leaf, stateName, returnName, options = {}) 
         return null;
     }
 
+    function isDeadNilWrite(index, name) {
+        const next = findNextFutureEvent(name, index, INIT_READ | INDEX_DEST_READ | WRITE);
+        if (next === null) return true;
+        return (next.flags & (INIT_READ | INDEX_DEST_READ)) === 0 && (next.flags & WRITE) !== 0;
+    }
+
     const cleanupRegs = new Set();
     const nonNilDefinitionCount = new Map();
     const nilDefinitionCount = new Map();
@@ -89,7 +95,7 @@ function createLinearContext(source, leaf, stateName, returnName, options = {}) 
         const nextWrite = findNextFutureEvent(dest.name, scanIndex, WRITE);
         if (!nextWrite || (nextWrite.flags & NIL_WRITE) === 0) continue;
         const cleanup = leaf[nextWrite.index];
-        if (!isSingleAssignment(cleanup, dest.name) || cleanup.init[0]?.type !== "NilLiteral") continue;
+        if (!isSingleAssignment(cleanup, dest.name) || cleanup.init[0]?.type !== "NilLiteral" || !isDeadNilWrite(nextWrite.index, dest.name)) continue;
         directPromotionStartIndices.add(scanIndex);
         let starts = directPromotionStartsByRegister.get(dest.name);
         if (!starts) directPromotionStartsByRegister.set(dest.name, starts = []);
@@ -129,7 +135,7 @@ function createLinearContext(source, leaf, stateName, returnName, options = {}) 
     return {
         source, leaf, stateName, returnName, options,
         INIT_READ, INDEX_DEST_READ, WRITE, NIL_WRITE,
-        findNextFutureEvent, hasFutureDirectPromotionStart,
+        findNextFutureEvent, hasFutureDirectPromotionStart, isDeadNilWrite,
         futureEvents, cleanupRegs, nonNilDefinitionCount, nilDefinitionCount, firstNilDefinitionIndex,
         directPromotionStartIndices, directPromotionStartsByRegister,
         expr, exprKinds, exprMeta, locals, localNames, out,

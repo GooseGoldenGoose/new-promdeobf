@@ -4,6 +4,48 @@ const { isIdentifier, isPrimitiveLiteral, isSingleAssignment } = require("./ast"
 const { decodeLogicalStateTransition } = require("./normalize");
 const { canReach: graphCanReach, createStateGraph, reachableFrom, transitionOfBody } = require("./cfg");
 
+function statementWritesIdentifier(statement, name) {
+    if (!statement || typeof statement !== "object") return false;
+    if (Array.isArray(statement.variables) && statement.variables.some(variable => isIdentifier(variable, name))) return true;
+    return isIdentifier(statement.variable, name);
+}
+
+function hasInterveningWrite(body, fromIndex, toIndex, name) {
+    for (let i = fromIndex + 1; i < toIndex; i++) {
+        if (statementWritesIdentifier(body[i], name)) return true;
+    }
+    return false;
+}
+
+function findPrimaryLogicalResultAssignment(body, transition, stateName, returnName) {
+    for (let i = body.length - 1; i >= 0; i--) {
+        if (i === transition.index || !isSingleAssignment(body[i])) continue;
+        const dest = body[i].variables[0];
+        const rhs = body[i].init[0];
+        if (!isIdentifier(dest) || dest.name === stateName) continue;
+
+        if (isIdentifier(rhs, transition.conditionRegister) &&
+            !hasInterveningWrite(body, i, transition.index, transition.conditionRegister)) {
+            return { index: i, resultReg: dest.name };
+        }
+
+        if (dest.name !== transition.conditionRegister || !isIdentifier(rhs) ||
+            (rhs.name !== stateName && rhs.name !== returnName) ||
+            hasInterveningWrite(body, i, transition.index, dest.name)) continue;
+
+        let specialDefinitionIndex = -1;
+        for (let probe = i - 1; probe >= 0; probe--) {
+            if (!isSingleAssignment(body[probe])) continue;
+            const priorDest = body[probe].variables[0];
+            if (!isIdentifier(priorDest, rhs.name)) continue;
+            specialDefinitionIndex = probe;
+            break;
+        }
+        if (specialDefinitionIndex < 0 || hasInterveningWrite(body, specialDefinitionIndex, i, rhs.name)) continue;
+        return { index: i, resultReg: dest.name };
+    }
+    return null;
+}
 function flattenLogicalRootLeaf(leaves, entryId, stateName, returnName, diagnostics = null, options = {}) {
     const graph = createStateGraph(leaves, entryId, stateName, {
         strictTargets: false,
@@ -28,17 +70,6 @@ function flattenLogicalRootLeaf(leaves, entryId, stateName, returnName, diagnost
 
     function canReach(start, target) {
         return graphCanReach(graph, start, target);
-    }
-
-    function findPrimaryResultAssignment(body, transition) {
-        for (let i = body.length - 1; i >= 0; i--) {
-            if (i === transition.index || !isSingleAssignment(body[i])) continue;
-            const dest = body[i].variables[0];
-            const rhs = body[i].init[0];
-            if (!isIdentifier(dest) || dest.name === stateName) continue;
-            if (isIdentifier(rhs, transition.conditionRegister)) return { index: i, resultReg: dest.name };
-        }
-        return null;
     }
 
     function mergeDeps(into, from) {
@@ -171,7 +202,7 @@ function flattenLogicalRootLeaf(leaves, entryId, stateName, returnName, diagnost
             if (!transition) return fail("root state has no recognized terminal state transition", current);
 
             if (transition.kind === "branch") {
-                const primary = findPrimaryResultAssignment(body, transition);
+                const primary = findPrimaryLogicalResultAssignment(body, transition, stateName, returnName);
                 if (!primary) return fail("logical branch has no compiler result copy", current);
                 const trueReachesFalse = canReach(transition.onTrue, transition.onFalse);
                 const falseReachesTrue = canReach(transition.onFalse, transition.onTrue);
@@ -301,17 +332,7 @@ function reduceCompilerLogicalStateGraph(leaves, entryId, stateName, returnName)
         const body = working.get(id);
         const tr = body ? transitionOf(body) : null;
         if (!tr || tr.kind !== "branch") return null;
-        let hasPrimaryCopy = false;
-        for (let i = body.length - 1; i >= 0; i--) {
-            if (i === tr.index || !isSingleAssignment(body[i])) continue;
-            const dest = body[i].variables[0];
-            const rhs = body[i].init[0];
-            if (isIdentifier(dest) && dest.name !== stateName && isIdentifier(rhs, tr.conditionRegister)) {
-                hasPrimaryCopy = true;
-                break;
-            }
-        }
-        if (!hasPrimaryCopy) return null;
+        if (!findPrimaryLogicalResultAssignment(body, tr, stateName, returnName)) return null;
         const trueReachesFalse = canReach(tr.onTrue, tr.onFalse, successors);
         const falseReachesTrue = canReach(tr.onFalse, tr.onTrue, successors);
         if (trueReachesFalse === falseReachesTrue) return null;

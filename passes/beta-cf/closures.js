@@ -64,6 +64,18 @@ function renderSimpleClosureLeaf(source, leaf, stateName, returnName, options = 
         }
         return false;
     }
+
+    function valueUsedAsIndexWriteBaseBeforeOverwrite(startIndex, name) {
+        for (let cursor = startIndex + 1; cursor < leaf.length; cursor++) {
+            const statement = leaf[cursor];
+            if (isSingleAssignment(statement, name)) return false;
+            const dest = statement?.type === "AssignmentStatement" && statement.variables?.length === 1
+                ? statement.variables[0]
+                : null;
+            if (dest?.type === "IndexExpression" && isIdentifier(dest.base, name)) return true;
+        }
+        return false;
+    }
     let sawStop = false;
 
     function resolveNode(node) {
@@ -326,6 +338,23 @@ function renderSimpleClosureLeaf(source, leaf, stateName, returnName, options = 
         }
         const value = resolveNode(rhs);
         if (value == null) return null;
+        const inheritedTableMeta = isIdentifier(rhs) ? envMeta.get(rhs.name) : null;
+        const needsTableIdentity = valueUsedAsIndexWriteBaseBeforeOverwrite(index, name) && (
+            rhs?.type === "TableConstructorExpression" ||
+            (inheritedTableMeta?.kind === "table" && !isLuaIdentifier(value))
+        );
+        if (needsTableIdentity) {
+            // A table TEMP that becomes an index-write base has observable identity.
+            // Materialize this exact epoch once so the mutation and later reads refer
+            // to the same table instead of re-rendering independent constructors.
+            // Follow compiler aliases too: state/ReturnVal may temporarily carry the
+            // constructor before the ordinary register used for the field write.
+            const displayName = allocateClosureBindingName();
+            body.push(`local ${displayName} = ${value}`);
+            env.set(name, displayName);
+            envMeta.set(name, { kind: "table" });
+            continue;
+        }
         if (rhs?.type === "CallExpression" && !valueUsedBeforeOverwrite(index, name)) body.push(value);
         env.set(name, value);
         const fields = rhs?.type === "TableConstructorExpression" ? (rhs.fields || []) : [];

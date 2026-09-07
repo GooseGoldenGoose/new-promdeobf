@@ -432,4 +432,66 @@ function vmStatesSource(states) {
     assert.strictEqual(result.applied, false);
 }
 
+{
+    // A source local initialized from a borrowed POS/ReturnVal expression cannot
+    // reuse the special register as VAR storage. Prometheus therefore emits an
+    // explicit special-register -> ordinary VAR copy. If every branch then
+    // updates that binding and the lifetime ends at return, no nil cleanup is
+    // emitted; the handoff itself is the ownership proof.
+    const source = vmStatesSource({
+        1: ['ReturnVal = 4', 'state = ReturnVal + 1', 'r3 = state', 'ReturnVal = 6', 'state = r3 > ReturnVal', 'state = state and 2 or 3'],
+        2: ['ReturnVal = 2', 'state = r3 * ReturnVal', 'r3 = state', 'state = 4'],
+        3: ['r4 = 1', 'ReturnVal = r3 - r4', 'r3 = ReturnVal', 'state = 4'],
+        4: ['ReturnVal = { r3 }', 'state = nil'],
+    });
+    const result = solveBetaControlFlow(source, parse(source));
+    assert.strictEqual(result.applied, true);
+    assert.strictEqual(result.mode, "fresh-simple-if");
+    assert.strictEqual(result.source,
+        'local v1 = (4 + 1)\n' +
+        'if (v1 > 6) then\n' +
+        '    v1 = (v1 * 2)\n' +
+        'else\n' +
+        '    v1 = (v1 - 1)\n' +
+        'end\n' +
+        'return v1\n');
+}
+
+{
+    // Copying the incoming dispatcher POS before any semantic POS definition is
+    // compiler preservation transport, not source-local ownership. Even if later
+    // blocks happen to write the same register, Fresh CF must fail closed.
+    const source = vmStatesSource({
+        1: ['r3 = state', 'ReturnVal = true', 'state = ReturnVal and 2 or 3'],
+        2: ['r3 = 10', 'state = 4'],
+        3: ['r3 = 20', 'state = 4'],
+        4: ['ReturnVal = { r3 }', 'state = nil'],
+    });
+    const result = solveBetaControlFlow(source, parse(source));
+    assert.strictEqual(result.applied, false);
+}
+
+{
+    // A stale copy of the POS register from an earlier value epoch must not make
+    // a later source branch look like a TESTSET/logical-value region. The copy
+    // is valid source-storage transport, but the branch condition is defined by
+    // a later POS write, so the epochs are distinct.
+    const source = vmStatesSource({
+        1: ['state = 99', 'r1 = state', 'r2 = "cond"', 'r3 = _env[r2]', 'state = not r3', 'state = state and 2 or 3'],
+        2: ['r1 = 1', 'state = 4'],
+        3: ['state = 4'],
+        4: ['ReturnVal = { r1 }', 'state = nil'],
+    });
+    const result = solveBetaControlFlow(source, parse(source));
+    assert.strictEqual(result.applied, true);
+    assert.strictEqual(result.mode, "fresh-simple-if");
+    assert.strictEqual(result.source,
+        'local v1 = 99\n' +
+        'if (not cond) then\n' +
+        '    v1 = 1\n' +
+        'else\n' +
+        'end\n' +
+        'return v1\n');
+}
+
 console.log("fresh beta simple-if regression: ok");

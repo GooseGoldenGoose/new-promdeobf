@@ -450,7 +450,25 @@ function conditionalUpdatedStorageEpoch(ctx, startBlockId, startIndex, name) {
             isIdentifier(startRhs.base, "args") ||
             (isIdentifier(startRhs.base) && isCompilerArgsAliasBefore(ctx, startBlockId, startIndex, startRhs.base.name))
         );
-    if (!compilerArgumentStart) return remember(fail);
+    // POS/ReturnVal cannot be promoted directly into VAR storage. When a source
+    // local initializer is compiled into one of those borrowed special registers,
+    // getVarRegister() must allocate an ordinary VAR and copy the semantic value
+    // into it. Require a concrete non-transition definition of the special value
+    // earlier in this same block so dispatcher POS-preservation copies do not
+    // qualify as source ownership.
+    let compilerSpecialValueHandoffStart = false;
+    if (isIdentifier(startRhs) && (startRhs.name === ctx.stateName || startRhs.name === ctx.returnName)) {
+        for (let probe = startIndex - 1; probe >= 0; probe--) {
+            if (probe === startBlock.transitionIndex) continue;
+            const prior = startBlock.body[probe];
+            if (!isSingleAssignment(prior, startRhs.name)) continue;
+            // The closest same-block special-register definition is semantic even when it is nil:
+            // this handoff reads that exact value before the block's real control transition.
+            compilerSpecialValueHandoffStart = true;
+            break;
+        }
+    }
+    if (!compilerArgumentStart && !compilerSpecialValueHandoffStart) return remember(fail);
 
     // ORIGINAL means the exact start definition still reaches this path.
     // UPDATED means a semantic assignment to the same source binding happened
@@ -458,6 +476,7 @@ function conditionalUpdatedStorageEpoch(ctx, startBlockId, startIndex, name) {
     const ORIGINAL = 1;
     const UPDATED = 2;
     const incoming = new Map();
+    const incomingPredecessors = new Map();
     const queue = [{ blockId: startBlockId, index: startIndex + 1, status: ORIGINAL }];
     const seen = new Set();
 
@@ -507,7 +526,15 @@ function conditionalUpdatedStorageEpoch(ctx, startBlockId, startIndex, name) {
             const previous = incoming.get(next) || 0;
             const combined = previous | status;
             if (combined !== previous) incoming.set(next, combined);
-            if (combined === (ORIGINAL | UPDATED) && valueMayBeReadFrom(ctx, next, name) && !hasSemanticWriteFrom(next)) {
+            let predecessorSet = incomingPredecessors.get(next);
+            if (!predecessorSet) incomingPredecessors.set(next, predecessorSet = new Set());
+            predecessorSet.add(cursor.blockId);
+            const ordinaryConditionalJoin = combined === (ORIGINAL | UPDATED);
+            const reachablePredecessors = (ctx.predecessors.get(next) || []).filter(id => ctx.reachable.has(id));
+            const allUpdatedSpecialHandoffJoin = compilerSpecialValueHandoffStart && combined === UPDATED &&
+                reachablePredecessors.length >= 2 && reachablePredecessors.every(id => predecessorSet.has(id));
+            if ((ordinaryConditionalJoin || allUpdatedSpecialHandoffJoin) &&
+                valueMayBeReadFrom(ctx, next, name) && !hasSemanticWriteFrom(next)) {
                 const terminalLive = !cleanupReachedOnAllPaths(ctx, next, -1, name);
                 return remember({ proven: true, terminalLive, joinId: next });
             }

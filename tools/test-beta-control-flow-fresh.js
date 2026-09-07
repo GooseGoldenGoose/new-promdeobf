@@ -2205,4 +2205,38 @@ function sequentialLogicalCallStates(count) {
     assert.match(result.source, /end, nil, \{ \[v\d+\] = true \}/);
     assert.doesNotMatch(result.source, /end, function\(\)/);
 }
+{
+    // A borrowed dispatcher/ReturnVal register may hold semantic nil before the
+    // compiler copies it into ordinary source storage and branches on that storage.
+    // The nil handoff is source data, not dispatcher stop/cleanup bookkeeping.
+    const source = vmStatesSource({
+        1: ['r2 = createClosure0(2, {})', 'ReturnVal = { r2() }', 'state = nil'],
+        2: ['state = nil', 'r1 = state', 'state = r1 and 3 or 4'],
+        3: ['state = 1', 'r1 = state', 'state = 5'],
+        4: ['ReturnVal = 2', 'r1 = ReturnVal', 'state = 5'],
+        5: ['ReturnVal = { r1 }', 'state = nil'],
+    });
+    const result = solveBetaControlFlow(source, parse(source));
+    assert.strictEqual(result.applied, true, "semantic nil special-register handoff was rejected");
+    assert.strictEqual(result.mode, "fresh-closure-entry");
+    assert.strictEqual(result.source, 'return (function()\n    local v1 = nil\n    if v1 then\n        v1 = 1\n    else\n        v1 = 2\n    end\n    return v1\nend)()\n');
+}
+
+{
+    // Simple closure recovery must preserve table identity when a constructor is
+    // transported through state/ReturnVal into the register later used as a field
+    // write base. Re-rendering the constructor would mutate a different table.
+    const source = vmStatesSource({
+        1: ['r1 = createClosure0(2, {})', 'ReturnVal = { r1() }', 'state = nil'],
+        2: [
+            'ReturnVal = "f"', 'r2 = 5', 'state = { [ReturnVal] = r2 }', 'r2 = state',
+            'ReturnVal = "g"', 'state = 7', 'r2[ReturnVal] = state',
+            'ReturnVal = "f"', 'ReturnVal = r2[ReturnVal]', 'ReturnVal = { ReturnVal }', 'state = nil',
+        ],
+    });
+    const result = solveBetaControlFlow(source, parse(source));
+    assert.strictEqual(result.applied, true, "table TEMP mutation identity was not preserved");
+    assert.strictEqual(result.mode, "fresh-closure-entry");
+    assert.strictEqual(result.source, 'return (function()\n    local v1 = { f = 5 }\n    v1.g = 7\n    return v1.f\nend)()\n');
+}
 console.log("fresh beta direct-global-call regression: ok");

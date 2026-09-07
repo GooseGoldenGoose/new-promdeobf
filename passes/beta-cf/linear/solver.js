@@ -279,12 +279,27 @@ function matchLocalRegisterProgram(source, leaf, stateName, returnName, options 
             ctx.sawStop = true; continue;
         }
         if (ctx.cleanupRegs.has(name) && rhs?.type === "NilLiteral") {
+            const nilIsLive = !ctx.isDeadNilWrite(index, name);
+            if (ctx.locals.has(name) && nilIsLive) {
+                // A nil local may be predeclared because Prometheus shuffled its
+                // compiler initialization after an earlier read. That first live
+                // nil is the implicit `local x` initialization, not a later source
+                // assignment, so keep the declaration without emitting `x = nil`.
+                if (ctx.predeclaredNilLocals.has(name)) continue;
+                const displayName = localName(ctx, name);
+                flushAssignmentEffect();
+                emitSourceLine(ctx, `${displayName} = nil`, [name]);
+                ctx.expr.set(name, displayName);
+                ctx.exprKinds.set(name, "value");
+                ctx.exprMeta.delete(name);
+                continue;
+            }
             if (!ctx.locals.has(name)) {
-                // Prometheus uses nil for both semantic ctx.source values and dead/temporary register state.
+                // Prometheus uses nil for both semantic source values and dead/temporary register state.
                 // Preserve a nil lifetime only when this exact definition reaches a read before overwrite.
                 // Otherwise the definition is unobservable and may be dropped; a later meaningful write can
-                // still establish the ctx.source lifetime through the normal cleanup-backed promotion rules.
-                if (!valueUsedBeforeOverwrite(ctx, index, name)) {
+                // still establish the source lifetime through the normal cleanup-backed promotion rules.
+                if (!nilIsLive) {
                     const nonNilDefs = ctx.nonNilDefinitionCount.get(name) || 0;
                     // A nil-only VAR lifetime has a compiler-emitted nil value plus a later scope-end nil.
                     // Ordinary TEMP registers are freed internally and do not receive that cleanup write.
@@ -301,9 +316,25 @@ function matchLocalRegisterProgram(source, leaf, stateName, returnName, options 
                     }
                     // Multiple meaningful definitions before cleanup cannot prove where VAR ownership began.
                     if (nonNilDefs > 1) return null;
-                    // Unowned nil bookkeeping remains removable only when it cannot prove a ctx.source lifetime.
+                    // Unowned nil bookkeeping remains removable only when it cannot prove a source lifetime.
                     continue;
                 }
+
+                // An active source VAR cannot be selected by allocRegister(false). Therefore if this live nil
+                // epoch is followed by a direct non-copy expression write to the same physical register, the
+                // register was freed/reused as TEMP storage and this nil is semantic TEMP data, not a source
+                // local declaration. Keep the value inline and let the later direct write begin a new epoch.
+                const nextWrite = ctx.findNextFutureEvent(name, index, ctx.WRITE);
+                const nextStatement = nextWrite ? ctx.leaf[nextWrite.index] : null;
+                const nextRhs = isSingleAssignment(nextStatement, name) ? nextStatement.init[0] : null;
+                const provesTemporaryReuse = nextRhs && nextRhs.type !== "Identifier" && nextRhs.type !== "NilLiteral";
+                if (provesTemporaryReuse) {
+                    ctx.expr.set(name, "nil");
+                    ctx.exprKinds.set(name, "value");
+                    ctx.exprMeta.delete(name);
+                    continue;
+                }
+
                 const displayName = allocateLocal(ctx, name, "value");
                 ctx.out.push(`local ${displayName}`);
                 if ((ctx.nonNilDefinitionCount.get(name) || 0) === 0 && !hasLaterNilAssignment(ctx, index, name)) {
@@ -323,7 +354,6 @@ function matchLocalRegisterProgram(source, leaf, stateName, returnName, options 
             ctx.predeclaredNilLocals.delete(name);
             ctx.locals.delete(name); ctx.expr.delete(name); ctx.exprKinds.delete(name); ctx.exprMeta.delete(name); ctx.localNames.delete(name); continue;
         }
-
         if (isPackIndex) {
             const rendered = renderRhs(ctx, rhs);
             if (!rendered?.packSlot) { if (ctx.options.diagnostics) ctx.options.diagnostics.reason = `pack index lost provenance at statement ${index}`; return null; }
