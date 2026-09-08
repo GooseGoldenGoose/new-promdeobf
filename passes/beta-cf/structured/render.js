@@ -57,7 +57,8 @@ function render(ctx, rhs, env, provenRecursive = false, singleCallPacks = null) 
             : (isIdentifier(rhs.argument) ? resolveRenderableId(ctx, rhs.argument.name, env) : (isPrimitiveLiteral(rhs.argument) ? sourceOf(ctx.source, rhs.argument) : null));
         return renderUnary(rhs.operator, argument);
     }
-    if ((provenRecursive || (rhs?.type === "LogicalExpression" && rhs.freshCompilerLogical === true)) &&
+    if ((provenRecursive || (rhs?.type === "LogicalExpression" &&
+        (rhs.freshCompilerLogical === true || rhs.freshSemanticFallbackLogical === true))) &&
         (rhs?.type === "BinaryExpression" || rhs?.type === "LogicalExpression") && rhs.operator) {
         const left = render(ctx, rhs.left, env, true, singleCallPacks);
         const right = render(ctx, rhs.right, env, true, singleCallPacks);

@@ -16,6 +16,7 @@ const { flattenLogicalRootLeaf } = require("./logical");
 const { matchLocalRegisterProgram } = require("./linear/solver");
 const { matchMultiStateLogicalLocals } = require("./structured/solver");
 const { matchCompilerStructuredLoopProgram } = require("./control/loops");
+const { canonicalizeCompilerNumericForChecks } = require("./control/numeric-for");
 const { renderCallable } = require("./expression-semantics");
 const { compilerVarargSelectIndex, inferCompilerVarargFirstIndex } = require("./varargs");
 
@@ -473,7 +474,14 @@ function matchClosureEntryProgram(source, stateWhile, stateName, returnName, dia
         }
 
         restoreConsumedEntries(snapshot, closureSnapshot);
-        const structured = matchMultiStateLogicalLocals(source, stateWhile, stateName, returnName, childOptions);
+        const structuredLeaves = new Map([...leaves].map(([id, body]) => [id, [...body]]));
+        const numericForSignatures = canonicalizeCompilerNumericForChecks(structuredLeaves, stateName);
+        const structured = numericForSignatures
+            ? matchMultiStateLogicalLocals(source, stateWhile, stateName, returnName, {
+                ...childOptions,
+                normalizedLeaves: structuredLeaves,
+            })
+            : null;
         if (structured) {
             const childStates = structured.reachableStateIds || [];
             const overlaps = childStates.some(id => snapshot.has(id));

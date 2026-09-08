@@ -191,11 +191,26 @@ function findUniqueStatementSubsequence(operations, pattern) {
         if (candidates.size > 1) return;
         if (matched.size === patternNodes.length) {
             const selected = new Set(selectedIndices);
-            const written = new Set(selectedIndices.map(index => operations[index].target));
+            const liveSelected = new Set();
+            const everSelected = new Set();
             for (let index = 0; index < operations.length; index++) {
-                if (selected.has(index)) continue;
-                const reads = identifiersRead(operations[index].rhs);
-                for (const name of written) if (reads.has(name)) return;
+                const operation = operations[index];
+                const reads = identifiersRead(operation.rhs);
+                if (selected.has(index)) {
+                    // A selected dependency must still come from the selected epoch;
+                    // an intervening unselected overwrite invalidates this match.
+                    for (const name of reads) {
+                        if (everSelected.has(name) && !liveSelected.has(name)) return;
+                    }
+                    liveSelected.add(operation.target);
+                    everSelected.add(operation.target);
+                    continue;
+                }
+                // Only reads reached by a currently-live selected definition are
+                // dependent on the duplicated condition. Earlier reads belong to
+                // older physical-register epochs and are unrelated.
+                for (const name of liveSelected) if (reads.has(name)) return;
+                liveSelected.delete(operation.target);
             }
             candidates.set(selectedIndices.join(","), [...selectedIndices]);
             return;
@@ -269,20 +284,27 @@ function topologicalRegionOrder(graph, ids, entryId) {
     return order.length === ids.size ? order : null;
 }
 
-function regionOperations(graph, ids, entryId) {
+function regionOperations(graph, ids, entryId, options = {}) {
     const order = topologicalRegionOrder(graph, ids, entryId);
     if (!order) return null;
     const operations = [];
+    const entryExtras = new Set();
     for (const id of order) {
         const block = graph.blocks.get(id);
         for (let index = 0; index < block.body.length; index++) {
             if (index === block.transitionIndex) continue;
             const op = statementOperation(block.body[index]);
-            if (!op) return null;
+            if (!op) {
+                if (options.allowEntryExtras === true && id === entryId) {
+                    entryExtras.add(`${id}:${index}`);
+                    continue;
+                }
+                return null;
+            }
             operations.push({ ...op, blockId: id, bodyIndex: index });
         }
     }
-    return operations;
+    return { operations, entryExtras };
 }
 
 function statementReadsName(statement, name) {
@@ -355,13 +377,14 @@ function dispatcherPositionTransport(graph, regionIds, exitBlockId, stateName) {
     return { ignored };
 }
 
-function normalizeConditionOperations(graph, regionIds, entryId, exitBlockId, stateName) {
-    const operations = regionOperations(graph, regionIds, entryId);
-    if (!operations) return null;
+function normalizeConditionOperations(graph, regionIds, entryId, exitBlockId, stateName, options = {}) {
+    const region = regionOperations(graph, regionIds, entryId, options);
+    if (!region) return null;
     const transport = dispatcherPositionTransport(graph, regionIds, exitBlockId, stateName);
     return {
-        operations: operations.filter(operation => !transport.ignored.has(`${operation.blockId}:${operation.bodyIndex}`)),
+        operations: region.operations.filter(operation => !transport.ignored.has(`${operation.blockId}:${operation.bodyIndex}`)),
         ignored: transport.ignored,
+        entryExtras: region.entryExtras,
     };
 }
 
@@ -400,7 +423,7 @@ function findDuplicatedConditionRegion(graph, realRegion, directPreheaderId, exc
         if (excludedIds.has(id) || id === directPreheaderId) continue;
         const region = collectAcyclicRegionToExit(graph, id, directPreheaderId, excludedIds);
         if (!region) continue;
-        const normalized = normalizeConditionOperations(graph, region.ids, id, directPreheaderId, realRegion.stateName);
+        const normalized = normalizeConditionOperations(graph, region.ids, id, directPreheaderId, realRegion.stateName, { allowEntryExtras: true });
         const operations = normalized?.operations;
         if (!operations || operations.length < realRegion.operations.length) continue;
         const match = findUniqueStatementSubsequence(operations, realRegion.operations);
@@ -426,6 +449,18 @@ function findDuplicatedConditionRegion(graph, realRegion, directPreheaderId, exc
         if (!safe) continue;
         const entry = graph.blocks.get(id);
         const selectedEntry = selectedByBlock.get(id) || new Set();
+        const entryExtras = normalized.entryExtras || new Set();
+        if (entryExtras.size) {
+            const selectedIndices = [...selectedEntry];
+            if (!selectedIndices.length) continue;
+            const firstSelected = Math.min(...selectedIndices);
+            let prefixOnly = true;
+            for (const key of entryExtras) {
+                const bodyIndex = Number(String(key).split(":").pop());
+                if (!Number.isInteger(bodyIndex) || bodyIndex >= firstSelected) { prefixOnly = false; break; }
+            }
+            if (!prefixOnly) continue;
+        }
         const retainedStatements = [];
         for (let bodyIndex = 0; bodyIndex < entry.body.length; bodyIndex++) {
             if (bodyIndex === entry.transitionIndex || selectedEntry.has(bodyIndex) || ignored.has(`${id}:${bodyIndex}`)) continue;

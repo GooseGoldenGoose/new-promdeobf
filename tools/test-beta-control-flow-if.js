@@ -494,4 +494,27 @@ function vmStatesSource(states) {
         'return v1\n');
 }
 
+
+{
+    // A closed value-only fallback chain inside a child closure is
+    // semantically `(A() and B()) or C()`. This is intentionally distinct
+    // from native compiler TESTSET recognition and requires the exact
+    // positive-guard / not-carrier / same-carrier proof.
+    const source = vmStatesSource({
+        1: ['state = createClosure0(2, {})', 'r1 = state', 'ReturnVal = { r1() }', 'state = nil'],
+        2: ['ReturnVal = "A"', 'state = _env[ReturnVal]', 'ReturnVal = state()', 'r3 = ReturnVal', 'state = r3 and 3 or 4'],
+        3: ['ReturnVal = "B"', 'state = _env[ReturnVal]', 'ReturnVal = state()', 'r3 = ReturnVal', 'state = 4'],
+        4: ['state = not r3', 'state = state and 5 or 6'],
+        5: ['r1 = "C"', 'state = _env[r1]', 'r1 = state()', 'r3 = r1', 'state = 6'],
+        6: ['ReturnVal = { r3 }', 'state = nil'],
+    });
+    const result = solveBetaControlFlow(source, parse(source));
+    assert.strictEqual(result.applied, true, "semantic fallback chain inside a child closure was rejected");
+    assert.strictEqual(result.mode, "fresh-closure-entry");
+    assert.strictEqual(result.source,
+        'local v1 = function()\n' +
+        '    return ((A() and B()) or C())\n' +
+        'end\n' +
+        'return v1()\n');
+}
 console.log("fresh beta simple-if regression: ok");

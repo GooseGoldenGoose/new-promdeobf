@@ -248,7 +248,13 @@ function matchLocalRegisterProgram(source, leaf, stateName, returnName, options 
         }
         if (name === ctx.returnName && rhs?.type === "TableConstructorExpression" && (rhs.fields || []).length > 0) {
             const next = ctx.leaf[index + 1];
-            if (index === ctx.leaf.length - 1 || (isSingleAssignment(next, ctx.stateName) && next.init[0]?.type === "NilLiteral")) {
+            const cleanupTail = ctx.leaf.slice(index + 1).every((statement, offset) => {
+                if (!isSingleAssignment(statement) || !isIdentifier(statement.variables[0])) return false;
+                const target = statement.variables[0].name;
+                return target !== ctx.returnName && statement.init[0]?.type === "NilLiteral" &&
+                    !valueUsedBeforeOverwrite(ctx, index + 1 + offset, target);
+            });
+            if (index === ctx.leaf.length - 1 || cleanupTail || (isSingleAssignment(next, ctx.stateName) && next.init[0]?.type === "NilLiteral")) {
                 const values = [];
                 for (const field of rhs.fields || []) {
                     if (field?.type !== "TableValue") return null;
@@ -512,8 +518,9 @@ function matchLocalRegisterProgram(source, leaf, stateName, returnName, options 
                 else if (terminalClosureFutureLocal === futureLocal) { ctx.deferredTerminalClosureCopies.set(futureLocal, name); ctx.terminalClosureLocals.add(futureLocal); }
                 else if (terminalUnusedFutureLocal === futureLocal) { ctx.deferredTerminalUnusedCopies.set(futureLocal, name); ctx.terminalUnusedLocals.add(futureLocal); }
             } else if (callResultIsDiscarded) {
-                if (isDeferredOrdinaryCall && ctx.pendingPacks.size) ctx.deferredSourceLines.push({ line: value, afterPackOrder: callPackBarrier });
-                else ctx.out.push(value);
+                const statementValue = value.startsWith("(") && (ctx.out.length || ctx.deferredSourceLines.length || ctx.pendingPacks.size) ? ";" + value : value;
+                if (isDeferredOrdinaryCall && ctx.pendingPacks.size) ctx.deferredSourceLines.push({ line: statementValue, afterPackOrder: callPackBarrier });
+                else ctx.out.push(statementValue);
             }
             ctx.expr.set(name, value); ctx.exprKinds.set(name, "value"); continue;
         }

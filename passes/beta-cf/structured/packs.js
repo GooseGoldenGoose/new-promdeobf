@@ -117,35 +117,43 @@ function isForwardOnlyPackUseInBlock(ctx, block, creationIndex, packReg) {
 function cleanupOrTerminalEpoch(ctx, blockId, statementIndex, name, visiting = new Set()) {
     const visitKey = blockId + ":" + statementIndex + ":" + name;
     if (visiting.has(visitKey)) return { valid: false, sawCleanup: false };
+    const cache = ctx.cleanupOrTerminalCache || (ctx.cleanupOrTerminalCache = new Map());
+    if (cache.has(visitKey)) return cache.get(visitKey);
     const block = ctx.blocks.get(blockId);
     if (!block) return { valid: false, sawCleanup: false };
-    const nextVisiting = new Set(visiting);
-    nextVisiting.add(visitKey);
+    visiting.add(visitKey);
+    const finish = (valid, sawCleanup = false) => {
+        const result = { valid, sawCleanup };
+        visiting.delete(visitKey);
+        cache.set(visitKey, result);
+        return result;
+    };
     for (let i = statementIndex + 1; i < block.body.length; i++) {
         if (i === block.transitionIndex) continue;
         const statement = block.body[i];
-        if (!isSingleAssignment(statement)) return { valid: false, sawCleanup: false };
+        if (!isSingleAssignment(statement)) return finish(false);
         const dest = statement.variables[0];
         if (!isIdentifier(dest, name)) continue;
-        if (statement.init[0]?.type === "NilLiteral" && isDeadNilCleanup(ctx, blockId, i, name)) return { valid: true, sawCleanup: true };
-        if (statement.init[0]?.type === "NilLiteral") return { valid: false, sawCleanup: false };
-        return { valid: false, sawCleanup: false };
+        if (statement.init[0]?.type === "NilLiteral" && isDeadNilCleanup(ctx, blockId, i, name)) return finish(true, true);
+        return finish(false);
     }
     const next = ctx.successors.get(blockId) || [];
-    if (next.length === 0) return { valid: block.transition.kind === "stop", sawCleanup: false };
+    if (next.length === 0) return finish(block.transition.kind === "stop");
     let sawCleanup = false;
     for (const target of next) {
-        const child = cleanupOrTerminalEpoch(ctx, target, -1, name, nextVisiting);
-        if (!child.valid) return { valid: false, sawCleanup: false };
+        const child = cleanupOrTerminalEpoch(ctx, target, -1, name, visiting);
+        if (!child.valid) return finish(false);
         sawCleanup = sawCleanup || child.sawCleanup;
     }
-    return { valid: true, sawCleanup };
+    return finish(true, sawCleanup);
 }
 
 function maybeOwnStructuredPackSlot(ctx, pack, slot, reg, blockId, statementIndex) {
     if (!pack || !Number.isInteger(slot) || !isVmRegisterName(reg) || reg === ctx.stateName || reg === ctx.returnName) return;
     const epochEnd = cleanupOrTerminalEpoch(ctx, blockId, statementIndex, reg);
-    if (!epochEnd.valid || !valueMayBeReadAfter(ctx, blockId, statementIndex, reg)) return;
+    // An unused source local is still a source binding. An exact value epoch
+    // ending in proven cleanup supplies ownership even without a later read.
+    if (!epochEnd.valid) return;
     const terminalOwned = terminalStableUsedEpoch(ctx, blockId, statementIndex, reg);
     const mixedCleanupOwned = epochEnd.sawCleanup;
     if (!mixedCleanupOwned && !terminalOwned) return;
@@ -159,16 +167,56 @@ function maybeOwnStructuredPackSlot(ctx, pack, slot, reg, blockId, statementInde
 function preclaimFutureStructuredPackOwner(ctx, pack, slot, carrierReg, blockId, statementIndex) {
     const info = pack?.slots.get(slot);
     const block = ctx.blocks.get(blockId);
-    if (!info || info.ownerReg || info.ownerCaptured || info.ownerTemporary || info.ambiguous || !block ||
+    if (!info || info.ownerReg || info.ownerCaptured || info.ownerNewCaptured || info.ownerTemporary || info.ambiguous || !block ||
         !(isVmRegisterName(carrierReg) || carrierReg === ctx.stateName || carrierReg === ctx.returnName)) return;
     const carriers = new Set([carrierReg]);
+    const carrierDefinitions = new Map([[carrierReg, statementIndex]]);
     for (let i = statementIndex + 1; i < block.body.length; i++) {
-        if (i === block.transitionIndex) continue;
         const statement = block.body[i];
         if (!isSingleAssignment(statement)) return;
         const dest = statement.variables[0];
         const rhs = statement.init[0];
+        if (i === block.transitionIndex) {
+            // The dispatcher transition is still an ordinary sequential assignment
+            // inside the current leaf. If it reads this extracted pack slot before
+            // overwriting the carrier, that read proves the slot is a compiler TEMP
+            // feeding control flow. Do not ignore the read merely because the same
+            // statement is also the block transition.
+            const transitionRead = [...carriers].some(name => nodeReadsIdentifier(ctx, rhs, name) ||
+                (dest?.type === "IndexExpression" && nodeReadsIdentifier(ctx, dest, name)));
+            if (transitionRead) {
+                info.ownerTemporary = true;
+                return;
+            }
+            if (isIdentifier(dest) && carriers.has(dest.name)) {
+                carriers.delete(dest.name);
+                carrierDefinitions.delete(dest.name);
+            }
+            if (carriers.size === 0) return;
+            continue;
+        }
         const copiedCarrier = isIdentifier(rhs) && carriers.has(rhs.name);
+        if (copiedCarrier && dest?.type === "IndexExpression" && isIdentifier(dest.base, "upvalueValues") && isIdentifier(dest.index)) {
+            // A multi-local can initialize a newly captured binding. Its cell
+            // allocation is compiler transport; the source declaration belongs
+            // to the original multi-return call, not a later separate call.
+            let freshAllocation = false;
+            for (let probe = i - 1; probe >= 0; probe--) {
+                const prior = block.body[probe];
+                if (!isSingleAssignment(prior)) break;
+                const target = prior.variables[0];
+                if (target?.type === "IndexExpression" && isIdentifier(target.base, "upvalueValues") && isIdentifier(target.index, dest.index.name)) break;
+                if (!isIdentifier(target, dest.index.name)) continue;
+                const value = prior.init[0];
+                freshAllocation = value?.type === "CallExpression" && isIdentifier(value.base, "allocUpvalue") && (value.arguments || []).length === 0;
+                break;
+            }
+            if (freshAllocation) {
+                info.ownerNewCaptured = dest.index.name;
+                ctx.structuredPackFutureCaptureOwners.set(blockId + ":" + i, { packId: pack.id, slot, newCellReg: dest.index.name, carrierReg: rhs.name });
+                return;
+            }
+        }
         const capturedOwner = copiedCarrier ? capturedSlotName(ctx, dest) : null;
         if (typeof capturedOwner === "string") {
             if (info.ownerReg || (info.ownerCaptured && info.ownerCaptured !== capturedOwner)) { info.ambiguous = true; return; }
@@ -185,6 +233,7 @@ function preclaimFutureStructuredPackOwner(ctx, pack, slot, carrierReg, blockId,
             maybeOwnStructuredPackSlot(ctx, pack, slot, dest.name, blockId, i);
             if (info.ambiguous) return;
             carriers.add(dest.name);
+            carrierDefinitions.set(dest.name, i);
             if (info.ownerReg === dest.name) {
                 info.ownerDeferred = true;
                 ctx.structuredPackFutureOwnerCopies.set(blockId + ":" + i, {
@@ -204,8 +253,21 @@ function preclaimFutureStructuredPackOwner(ctx, pack, slot, carrierReg, blockId,
                 return;
             }
         }
-        if (isIdentifier(dest) && carriers.has(dest.name) && !copiedCarrier) carriers.delete(dest.name);
+        if (isIdentifier(dest) && carriers.has(dest.name) && !copiedCarrier) {
+            carriers.delete(dest.name);
+            carrierDefinitions.delete(dest.name);
+        }
         if (carriers.size === 0) return;
+    }
+    // Values carried into a later block cannot remain symbolic pack slots.
+    // Materialize them once at the original call so loop iterations and branch
+    // paths reuse the same returned value without repeating the call.
+    for (const name of carriers) {
+        const definitionIndex = carrierDefinitions.get(name);
+        if (Number.isInteger(definitionIndex) && valueMayBeReadAfter(ctx, blockId, definitionIndex, name)) {
+            info.ownerTemporary = true;
+            return;
+        }
     }
 }
 
@@ -235,7 +297,7 @@ function preclaimFutureStructuredPackSlots(ctx, pack, blockId, creationIndex) {
         maybeOwnStructuredPackSlot(ctx, pack, slot, dest.name, blockId, i);
         if (info.ambiguous) return false;
         if (info.ownerReg === dest.name) info.ownerDeferred = true;
-        if (!info.ownerReg && !info.ownerCaptured && !info.ownerTemporary) preclaimFutureStructuredPackOwner(ctx, pack, slot, dest.name, blockId, i);
+        if (!info.ownerReg && !info.ownerCaptured && !info.ownerNewCaptured && !info.ownerTemporary) preclaimFutureStructuredPackOwner(ctx, pack, slot, dest.name, blockId, i);
         if (info.ambiguous) return false;
     }
     return pack.expectedSlots.every(slot => seen.has(slot));
@@ -245,11 +307,11 @@ function flushStructuredPack(ctx, packId, env, markers, effects) {
     const pack = ctx.structuredPacks.get(packId);
     if (!pack || pack.emitted) return effects;
     const slots = pack.expectedSlots.map(slot => pack.slots.get(slot));
-    if (slots.some(info => !info || info.ambiguous || (!info.ownerReg && !info.ownerCaptured && !info.ownerTemporary))) return null;
-    const ownerKeys = slots.map(info => info.ownerCaptured ? `capture:${info.ownerCaptured}` : (info.ownerReg ? `reg:${info.ownerReg}` : `temp:${info.slot}`));
+    if (slots.some(info => !info || info.ambiguous || (!info.ownerReg && !info.ownerCaptured && !info.ownerTemporary && !info.ownerNewCaptured))) return null;
+    const ownerKeys = slots.map(info => info.ownerCaptured ? `capture:${info.ownerCaptured}` : info.ownerNewCaptured ? `cell:${info.ownerNewCaptured}` : (info.ownerReg ? `reg:${info.ownerReg}` : `temp:${info.slot}`));
     if (new Set(ownerKeys).size !== ownerKeys.length) return null;
 
-    const allLocalOwners = slots.every(info => !!info.ownerReg || info.ownerTemporary === true);
+    const allLocalOwners = slots.every(info => !!info.ownerReg || !!info.ownerNewCaptured || info.ownerTemporary === true);
     const allCapturedOwners = slots.every(info => typeof info.ownerCaptured === "string");
     const names = [];
     for (const info of slots) {
@@ -288,7 +350,7 @@ function flushStructuredPack(ctx, packId, env, markers, effects) {
         if (markers.length !== 0) effects = [...effects, line];
         else ctx.out.push(line);
     } else {
-        const localInfos = slots.filter(info => !!info.ownerReg || info.ownerTemporary === true);
+        const localInfos = slots.filter(info => !!info.ownerReg || !!info.ownerNewCaptured || info.ownerTemporary === true);
         const declaration = `local ${localInfos.map(info => info.display).join(", ")}`;
         const assignment = `${names.join(", ")} = ${pack.call}`;
         if (markers.length !== 0) {
@@ -337,7 +399,7 @@ function flushReadyStructuredPacks(ctx, env, markers, effects, requireAll = fals
         if (!present) continue;
         const ready = pack.expectedSlots.every(slot => {
             const info = pack.slots.get(slot);
-            return info && !info.ambiguous && !!(info.ownerReg || info.ownerCaptured || info.ownerTemporary);
+            return info && !info.ambiguous && !!(info.ownerReg || info.ownerCaptured || info.ownerTemporary || info.ownerNewCaptured);
         });
         if (!ready) { if (requireAll) return null; continue; }
         effects = flushStructuredPack(ctx, packId, env, markers, effects);

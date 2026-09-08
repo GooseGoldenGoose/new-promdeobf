@@ -22,9 +22,17 @@ function terminalSiblingMatch(ctx, a, b) {
     return { al, bl, effectPrefix };
 }
 
-function guardLine(ctx, condition, truth, bodyEffects) {
+function guardLine(ctx, condition, truth, bodyEffects, marker = null, env = null) {
     if (!Array.isArray(bodyEffects) || bodyEffects.length === 0) return null;
     const body = bodyEffects.map(line => indentConditionalEffect(ctx, line)).join("\n");
+    const generic = ctx.options?.genericForMetaByBranchId?.get(marker?.branchId);
+    if (generic) {
+        if (!truth || !(env instanceof Map) || !Array.isArray(generic.loopVariableDisplays) ||
+            generic.loopVariableDisplays.length !== generic.loopVarRegs.length) return null;
+        const expressions = generic.captures.map(capture => env.get(capture.name));
+        if (!expressions.length || expressions.some(value => typeof value !== "string")) return null;
+        return `for ${generic.loopVariableDisplays.join(", ")} in ${expressions.join(", ")} do\n${body}\nend`;
+    }
     if (truth) return `if ${condition} then\n${body}\nend`;
     // Preserve a compiler-proven false/else arm instead of inverting the
     // condition. Fresh CF is source recovery, so an else-only source branch
@@ -65,7 +73,7 @@ function collapseTerminalCandidates(ctx) {
                 if (!match) continue;
                 const trueCandidate = match.al.truth ? a : b;
                 const falseCandidate = match.al.truth ? b : a;
-                const guard = guardLine(ctx, match.al.condition, true, (trueCandidate.effects || []).slice(match.effectPrefix));
+                const guard = guardLine(ctx, match.al.condition, true, (trueCandidate.effects || []).slice(match.effectPrefix), match.al, trueCandidate.env);
                 if (!guard) return false;
                 let merged = {
                     env: new Map(falseCandidate.env),
@@ -109,7 +117,7 @@ function foldTerminalGuards(ctx, candidate) {
         if (matchIndex < 0) break;
         const terminal = ctx.terminalCandidates[matchIndex];
         const terminalMarker = terminal.markers[terminal.markers.length - 1];
-        const guard = guardLine(ctx, terminalMarker.condition, terminalMarker.truth, (terminal.effects || []).slice(match.effectPrefix));
+        const guard = guardLine(ctx, terminalMarker.condition, terminalMarker.truth, (terminal.effects || []).slice(match.effectPrefix), terminalMarker, terminal.env);
         if (!guard) return null;
         const prefixEffects = current.effects.slice(0, match.effectPrefix);
         current = {

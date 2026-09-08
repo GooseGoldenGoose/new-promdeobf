@@ -189,4 +189,35 @@ function vmStatesSource(states, registers = "r1, r2, r3, r4, r5, r6, r7, r8, r9"
         "    return f()\n" +
         "until true\n");
 }
+
+{
+    // The duplicated pre-body repeat condition may follow source setup effects.
+    // Preserve entry-block setup, remove only the proven duplicated condition,
+    // and track physical register reuse by reaching-definition epoch.
+    const source = vmStatesSource({
+        1: ['r6 = "marker"', 'r5 = true', '_env[r6] = r5', 'r6 = "ra"', 'r2 = _env[r6]', 'r6 = r2()', 'state = r6 and 2 or 3', 'r1 = r6'],
+        2: ['r6 = "rb"', 'r2 = _env[r6]', 'r6 = r2()', 'r1 = r6', 'state = 3'],
+        3: ['state = r1 and 4 or 5', 'ReturnVal = r1'],
+        4: ['state = 6'],
+        5: ['r6 = "rc"', 'r2 = _env[r6]', 'r6 = r2()', 'ReturnVal = r6', 'state = 4'],
+        6: ['state = 10'],
+        10: ['state = 20'],
+        20: ['r6 = "ra"', 'r2 = _env[r6]', 'r6 = r2()', 'state = r6 and 21 or 22', 'r1 = r6'],
+        21: ['r6 = "rb"', 'r2 = _env[r6]', 'r6 = r2()', 'r1 = r6', 'state = 22'],
+        22: ['state = r1 and 23 or 24', 'ReturnVal = r1'],
+        23: ['state = 25'],
+        24: ['r6 = "rc"', 'r2 = _env[r6]', 'r6 = r2()', 'ReturnVal = r6', 'state = 23'],
+        25: ['state = ReturnVal and 30 or 10'],
+        30: ['ReturnVal = {}', 'state = nil'],
+    });
+    const result = solveBetaControlFlow(source, parse(source));
+    assert.strictEqual(result.applied, true, "repeat duplicate condition with setup prefix was rejected");
+    assert.strictEqual(result.mode, "fresh-repeat");
+    assert.strictEqual(result.repeatLoopCount, 1);
+    assert.strictEqual(result.source,
+        'marker = true\n' +
+        'repeat\n' +
+        'until ((ra() and rb()) or rc())\n');
+}
+
 console.log("beta control-flow repeat tests passed");

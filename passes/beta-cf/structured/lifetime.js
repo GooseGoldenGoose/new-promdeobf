@@ -319,23 +319,28 @@ function countIdentifierReads(node, name) {
     return count;
 }
 
-function valueMayBeIndexWriteBaseAfter(ctx, blockId, statementIndex, name, visiting = new Set()) {
-    const visitKey = blockId + ":" + statementIndex + ":" + name;
-    if (visiting.has(visitKey)) return false;
-    const block = ctx.blocks.get(blockId);
-    if (!block) return false;
-    const nextVisiting = new Set(visiting);
-    nextVisiting.add(visitKey);
-    for (let i = statementIndex + 1; i < block.body.length; i++) {
-        const statement = block.body[i];
-        if (statement?.type !== "AssignmentStatement") return false;
-        for (const dest of statement.variables || []) {
-            if (dest?.type === "IndexExpression" && isIdentifier(dest.base, name)) return true;
+function valueMayBeIndexWriteBaseAfter(ctx, blockId, statementIndex, name) {
+    const seen = new Set();
+    const pending = [{ blockId, statementIndex }];
+    while (pending.length) {
+        const cursor = pending.pop();
+        const key = cursor.blockId + ":" + cursor.statementIndex;
+        if (seen.has(key)) continue;
+        seen.add(key);
+        const block = ctx.blocks.get(cursor.blockId);
+        if (!block) continue;
+        let killed = false;
+        for (let i = cursor.statementIndex + 1; i < block.body.length; i++) {
+            const statement = block.body[i];
+            if (statement?.type !== "AssignmentStatement") { killed = true; break; }
+            for (const dest of statement.variables || []) {
+                if (dest?.type === "IndexExpression" && isIdentifier(dest.base, name)) return true;
+            }
+            if ((statement.variables || []).some(dest => isIdentifier(dest, name))) { killed = true; break; }
         }
-        if ((statement.variables || []).some(dest => isIdentifier(dest, name))) return false;
-    }
-    for (const next of ctx.successors.get(blockId) || []) {
-        if (valueMayBeIndexWriteBaseAfter(ctx, next, -1, name, nextVisiting)) return true;
+        if (!killed) {
+            for (const next of ctx.successors.get(cursor.blockId) || []) pending.push({ blockId: next, statementIndex: -1 });
+        }
     }
     return false;
 }
@@ -424,6 +429,32 @@ function isCompilerArgsAliasBefore(ctx, blockId, statementIndex, name) {
     return sawDefinition;
 }
 
+function feedsDirectPosRestoreBeforeOverwrite(ctx, startBlockId, startIndex, name) {
+    const pending = [{ blockId: startBlockId, index: startIndex + 1 }];
+    const seen = new Set();
+    while (pending.length) {
+        const cursor = pending.pop();
+        const key = cursor.blockId + ":" + cursor.index;
+        if (seen.has(key)) continue;
+        seen.add(key);
+        const block = ctx.blocks.get(cursor.blockId);
+        if (!block) continue;
+        let killed = false;
+        for (let i = cursor.index; i < block.body.length; i++) {
+            const statement = block.body[i];
+            if (!isSingleAssignment(statement)) continue;
+            const dest = statement.variables[0];
+            const rhs = statement.init[0];
+            if (isIdentifier(dest, name)) { killed = true; break; }
+            if (isIdentifier(dest, ctx.stateName) && isIdentifier(rhs, name)) return true;
+        }
+        if (!killed) {
+            for (const next of ctx.successors.get(cursor.blockId) || []) pending.push({ blockId: next, index: 0 });
+        }
+    }
+    return false;
+}
+
 function conditionalUpdatedStorageEpoch(ctx, startBlockId, startIndex, name) {
     const cacheKey = `${startBlockId}:${startIndex}:${name}`;
     if (ctx.conditionalStorageCache instanceof Map && ctx.conditionalStorageCache.has(cacheKey)) {
@@ -457,7 +488,8 @@ function conditionalUpdatedStorageEpoch(ctx, startBlockId, startIndex, name) {
     // earlier in this same block so dispatcher POS-preservation copies do not
     // qualify as source ownership.
     let compilerSpecialValueHandoffStart = false;
-    if (isIdentifier(startRhs) && (startRhs.name === ctx.stateName || startRhs.name === ctx.returnName)) {
+    if (isIdentifier(startRhs) && (startRhs.name === ctx.stateName || startRhs.name === ctx.returnName) &&
+        !(startRhs.name === ctx.stateName && feedsDirectPosRestoreBeforeOverwrite(ctx, startBlockId, startIndex, name))) {
         for (let probe = startIndex - 1; probe >= 0; probe--) {
             if (probe === startBlock.transitionIndex) continue;
             const prior = startBlock.body[probe];
@@ -501,6 +533,26 @@ function conditionalUpdatedStorageEpoch(ctx, startBlockId, startIndex, name) {
         return false;
     }
 
+    function hasReachableDeadNilCleanupFrom(blockId) {
+        const work = [blockId];
+        const visited = new Set();
+        while (work.length) {
+            const id = work.pop();
+            if (visited.has(id)) continue;
+            visited.add(id);
+            const block = ctx.blocks.get(id);
+            if (!block) return true;
+            for (let i = 0; i < block.body.length; i++) {
+                if (i === block.transitionIndex) continue;
+                const statement = block.body[i];
+                if (!isSingleAssignment(statement, name)) continue;
+                if (statement.init[0]?.type === "NilLiteral" && isDeadNilCleanup(ctx, id, i, name)) return true;
+            }
+            for (const next of ctx.successors.get(id) || []) work.push(next);
+        }
+        return false;
+    }
+
     while (queue.length) {
         const cursor = queue.shift();
         const visitKey = `${cursor.blockId}:${cursor.index}:${cursor.status}`;
@@ -533,8 +585,14 @@ function conditionalUpdatedStorageEpoch(ctx, startBlockId, startIndex, name) {
             const reachablePredecessors = (ctx.predecessors.get(next) || []).filter(id => ctx.reachable.has(id));
             const allUpdatedSpecialHandoffJoin = compilerSpecialValueHandoffStart && combined === UPDATED &&
                 reachablePredecessors.length >= 2 && reachablePredecessors.every(id => predecessorSet.has(id));
+            const futureSemanticWrite = hasSemanticWriteFrom(next);
+            const sameTerminalStorageEpoch = futureSemanticWrite && !hasReachableDeadNilCleanupFrom(next);
             if ((ordinaryConditionalJoin || allUpdatedSpecialHandoffJoin) &&
-                valueMayBeReadFrom(ctx, next, name) && !hasSemanticWriteFrom(next)) {
+                valueMayBeReadFrom(ctx, next, name) && (!futureSemanticWrite || sameTerminalStorageEpoch)) {
+                // Once compiler ownership is proven from args or a special-register handoff,
+                // later writes remain assignments to the same VAR until a compiler cleanup
+                // boundary. This permits repeated conditional reassignment of a terminal-live
+                // source local without treating the physical register as a fresh TEMP epoch.
                 const terminalLive = !cleanupReachedOnAllPaths(ctx, next, -1, name);
                 return remember({ proven: true, terminalLive, joinId: next });
             }

@@ -2,6 +2,7 @@
 
 const { createStateGraph } = require("../cfg");
 const { extractNormalizedStateLeaves } = require("../normalize");
+const { reduceCompilerLogicalStateGraph } = require("../logical");
 const { matchMultiStateLogicalLocals } = require("../structured/solver");
 const { candidateLoopCarriedRegisters, remapLoopCarriedStarts } = require("./loop-storage");
 const {
@@ -11,7 +12,7 @@ const {
     matchCompilerWhileConditionRegion,
 } = require("./while");
 const { applyCompilerRepeatMatch, matchCompilerRepeatNaturalLoop, applyCompilerTerminalRepeatMatches, matchCompilerTerminalRepeatPreheaders } = require("./repeat");
-const { applyCompilerGenericForMatch, matchCompilerGenericForNaturalLoop } = require("./generic-for");
+const { applyCompilerGenericForMatch, matchCompilerGenericForNaturalLoop, findCompilerTerminalGenericForLoops } = require("./generic-for");
 const {
     applyCompilerNumericForMatch,
     canonicalizeCompilerNumericForChecks,
@@ -43,12 +44,7 @@ function nextSyntheticBelow(leaves, current) {
 
 function collapseCompilerStructuredLoops(leaves, entryId, stateName, returnName = null) {
     if (!(leaves instanceof Map) || !Number.isInteger(entryId) || typeof stateName !== "string") return null;
-    const transformed = cloneLeaves(leaves);
-    // Numeric-for uses Prometheus' split `state = cond and body; state = state or final`
-    // transition. Canonicalize only the exact proven compiler check template so the
-    // shared StateGraph can see the loop before classification.
-    const numericForSignatures = canonicalizeCompilerNumericForChecks(transformed, stateName);
-    if (!numericForSignatures) return null;
+    let transformed = cloneLeaves(leaves);
 
     const loopBranchIds = new Set();
     const loopBodyJoinIds = new Set();
@@ -73,6 +69,16 @@ function collapseCompilerStructuredLoops(leaves, entryId, stateName, returnName 
     let nextSyntheticId = nextSyntheticBelow(transformed, -1);
     let rounds = 0;
 
+    // Numeric-for uses Prometheus' split `state = cond and body; state = state or final`
+    // transition. Canonicalize the exact proven compiler check template before any
+    // generic logical classification so its two-step state transfer is not mistaken
+    // for another control-flow shape.
+    const numericForSignatures = canonicalizeCompilerNumericForChecks(transformed, stateName);
+    if (!numericForSignatures) return null;
+
+    // Terminal-repeat proof runs on the compiler graph after numeric-only state
+    // canonicalization but before generic lazy logical reduction. This preserves the
+    // terminal-repeat signature without allowing unreduced numeric checks to mimic it.
     {
         const initialGraph = createStateGraph(transformed, entryId, stateName);
         if (!initialGraph) return null;
@@ -84,16 +90,21 @@ function collapseCompilerStructuredLoops(leaves, entryId, stateName, returnName 
         }
     }
 
+    // Reduce only compiler-proven lazy value regions after the specialized proofs
+    // above, so while/repeat natural-loop classification sees one condition decision.
+    transformed = reduceCompilerLogicalStateGraph(transformed, entryId, stateName, returnName).leaves;
+
     while (true) {
         if (rounds++ > leaves.size * 3 + 16) return null;
         const graph = createStateGraph(transformed, entryId, stateName);
         if (!graph) return null;
         const natural = findNaturalLoops(graph);
         if (!natural) return null;
-        if (!natural.loops.length) break;
+        const terminalGeneric = findCompilerTerminalGenericForLoops(graph, returnName);
+        if (!natural.loops.length && !terminalGeneric.length) break;
         if (!loopsAreNestedOrDisjoint(natural.loops)) return null;
 
-        const ordered = [...natural.loops].sort((a, b) => a.coreIds.size - b.coreIds.size || a.headerId - b.headerId);
+        const ordered = [...natural.loops, ...terminalGeneric].sort((a, b) => a.coreIds.size - b.coreIds.size || a.headerId - b.headerId);
         let applied = false;
         for (const loopInfo of ordered) {
             const numericRaw = numericForSignatures.get(loopInfo.headerId);

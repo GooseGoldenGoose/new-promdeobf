@@ -134,7 +134,7 @@ function literalString(node) {
     }
 }
 
-function makeTracer(body, boundaryRegs, forcedTraceRegs) {
+function makeTracer(body, boundaryRegs, forcedTraceRegs, boundaryDefinitions = new Set()) {
     const memo = new Map();
 
     function external(name) {
@@ -155,6 +155,7 @@ function makeTracer(body, boundaryRegs, forcedTraceRegs) {
         const def = nearestDefinition(body, beforeIndex, name);
         if (!def) return external(name);
         if (def.ambiguous) return null;
+        if (boundaryDefinitions.has(`${name}:${def.index}`)) return external(name);
         const nextStack = new Set(stack);
         nextStack.add(memoKey);
         const value = traceNode(def.rhs, def.index, nextStack);
@@ -409,7 +410,10 @@ function closureCapturesCell(statement, cellReg) {
     return (args[1].fields || []).some(field => field?.type === "TableValue" && isIdentifier(field.value, cellReg));
 }
 
-function matchCapturedLoopVariable(graph, loopInfo, body, varReg) {
+function matchCapturedLoopVariable(graph, loopInfo, body, varReg, returnName = null) {
+    const transitionStatement = body?.body?.[body.transitionIndex];
+    const stateReg = isSingleAssignment(transitionStatement) && isIdentifier(transitionStatement.variables[0])
+        ? transitionStatement.variables[0].name : null;
     const candidates = [];
     for (let initIndex = 0; initIndex < body.transitionIndex; initIndex++) {
         const initStatement = body.body[initIndex];
@@ -417,7 +421,9 @@ function matchCapturedLoopVariable(graph, loopInfo, body, varReg) {
         if (dest?.type !== "IndexExpression" || !isIdentifier(dest.base, "upvalueValues") || !isIdentifier(dest.index) ||
             !isIdentifier(initStatement.init?.[0], varReg)) continue;
         const allocCellReg = dest.index.name;
-        if (!isVmRegisterName(allocCellReg) || allocCellReg === varReg) continue;
+        const compilerCellCarrier = isVmRegisterName(allocCellReg) || allocCellReg === stateReg ||
+            (typeof returnName === "string" && allocCellReg === returnName);
+        if (!compilerCellCarrier || allocCellReg === varReg) continue;
         const allocDef = nearestDefinition(body.body, initIndex, allocCellReg);
         if (!allocDef || allocDef.ambiguous || !isAllocUpvalueCall(allocDef.rhs)) continue;
 
@@ -497,7 +503,7 @@ function loopValueReadBeforeOverwrite(graph, loopInfo, startBlockId, startIndex,
     return false;
 }
 
-function matchBodyVariables(graph, loopInfo, raw) {
+function matchBodyVariables(graph, loopInfo, raw, returnName = null) {
     const body = graph.blocks.get(raw.bodyId);
     if (!body) return null;
     const firstHandoffs = [];
@@ -518,7 +524,7 @@ function matchBodyVariables(graph, loopInfo, raw) {
     const loopVarBookkeepingStatements = new Set([first.statement]);
     const loopVarBindings = [];
     for (const name of loopVarRegs) {
-        const captured = matchCapturedLoopVariable(graph, loopInfo, body, name);
+        const captured = matchCapturedLoopVariable(graph, loopInfo, body, name, returnName);
         if (captured) {
             loopVarBindings.push(captured);
             for (const statement of captured.bookkeepingStatements) loopVarBookkeepingStatements.add(statement);
@@ -539,7 +545,14 @@ function matchBodyVariables(graph, loopInfo, raw) {
                 if (isReleaseUpvalueCallFor(statement, name)) return null;
             }
         }
-        if (cleanupCount < 1) return null;
+        // Returning ends every binding epoch without explicit nil cleanup.
+        // Only use that proof when the complete body is already proven to
+        // return, with no break or backedge that could keep storage live.
+        const terminalReturnBody = loopInfo.terminalBody &&
+            loopInfo.terminalBody.breakTerminalIds.size === 0 &&
+            loopInfo.backedgeSources.size === 0 &&
+            [...loopInfo.coreIds].every(id => id === raw.checkId || loopInfo.terminalBody.returnRegionIds.has(id));
+        if (cleanupCount < 1 && !terminalReturnBody) return null;
         loopVarBindings.push({ kind: "register", reg: name, bookkeepingStatements });
         for (const statement of bookkeepingStatements) loopVarBookkeepingStatements.add(statement);
     }
@@ -549,11 +562,15 @@ function matchBodyVariables(graph, loopInfo, raw) {
     // entry, which is indistinguishable from a real source local initialized to
     // nil. If such a non-loop register nil is observed before overwrite, fail
     // closed instead of guessing a wider generic-for header or a body local.
-    for (let i = 0; i < body.body.length; i++) {
+    // Compiler emits variables 3+ as one contiguous nil prefix immediately
+    // after copying variable 1 from the control register. Nil temporaries later
+    // in the body belong to source expressions and must not be confused with
+    // extra loop variables.
+    for (let i = first.index + 1; i < body.body.length; i++) {
         if (i === body.transitionIndex) continue;
         const statement = body.body[i];
         if (loopVarBookkeepingStatements.has(statement) || statement === raw.checkStatement) continue;
-        if (!isSingleAssignment(statement) || statement.init[0]?.type !== "NilLiteral" || !isIdentifier(statement.variables[0])) continue;
+        if (!isSingleAssignment(statement) || statement.init[0]?.type !== "NilLiteral" || !isIdentifier(statement.variables[0])) break;
         const name = statement.variables[0].name;
         if (loopVarRegs.includes(name)) continue;
         if (loopValueReadBeforeOverwrite(graph, loopInfo, raw.bodyId, i, name)) return null;
@@ -591,32 +608,50 @@ function matchPreheaderHeader(graph, preheaderId, raw, preBodyTempRegs = new Set
         ? transitionStatement.variables[0].name : null;
     const forced = new Set([raw.iteratorReg, raw.invariantReg, raw.controlReg, ...preBodyTempRegs]);
     if (typeof stateReg === "string") forced.add(stateReg);
-    const tracer = makeTracer(block.body, cleanupRegs, forced);
-    const iteratorValue = tracer.traceReg(raw.iteratorReg, block.transitionIndex);
-    const invariantValue = tracer.traceReg(raw.invariantReg, block.transitionIndex);
-    const controlValue = tracer.traceReg(raw.controlReg, block.transitionIndex);
-    const inferred = inferHeaderExpressions(iteratorValue, invariantValue, controlValue);
-    if (!inferred || inferred.length < 1 || inferred.length > 3) return null;
+    const boundaryDefinitions = new Set();
+    let inferred = null;
+    let consumed = null;
+    for (let attempt = 0; attempt <= block.transitionIndex; attempt++) {
+        const tracer = makeTracer(block.body, cleanupRegs, forced, boundaryDefinitions);
+        const iteratorValue = tracer.traceReg(raw.iteratorReg, block.transitionIndex);
+        const invariantValue = tracer.traceReg(raw.invariantReg, block.transitionIndex);
+        const controlValue = tracer.traceReg(raw.controlReg, block.transitionIndex);
+        inferred = inferHeaderExpressions(iteratorValue, invariantValue, controlValue);
+        if (!inferred || inferred.length < 1 || inferred.length > 3) return null;
 
-    const consumed = new Set();
-    for (const item of inferred) for (const value of item.values) for (const index of value.consumed || []) consumed.add(index);
-    if (!consumed.size) return null;
-    const consumedNames = new Set();
-    for (const index of consumed) {
-        if (index < 0 || index >= block.transitionIndex) return null;
-        const statement = block.body[index];
-        if (!isSingleAssignment(statement) || !isIdentifier(statement.variables[0])) return null;
-        consumedNames.add(statement.variables[0].name);
-    }
-    for (let i = 0; i < block.transitionIndex; i++) {
-        if (consumed.has(i)) continue;
-        const statement = block.body[i];
-        for (const name of consumedNames) {
-            if (!statementReadsName(statement, name)) continue;
-            const reaching = nearestDefinition(block.body, i, name);
-            if (reaching && consumed.has(reaching.index)) return null;
+        consumed = new Set();
+        for (const item of inferred) for (const value of item.values) for (const index of value.consumed || []) consumed.add(index);
+        if (!consumed.size) return null;
+        const consumedNames = new Set();
+        for (const index of consumed) {
+            if (index < 0 || index >= block.transitionIndex) return null;
+            const statement = block.body[index];
+            if (!isSingleAssignment(statement) || !isIdentifier(statement.variables[0])) return null;
+            consumedNames.add(statement.variables[0].name);
         }
+
+        const sharedDefinitions = new Set();
+        for (let i = 0; i < block.transitionIndex; i++) {
+            if (consumed.has(i)) continue;
+            const statement = block.body[i];
+            for (const name of consumedNames) {
+                if (!statementReadsName(statement, name)) continue;
+                const reaching = nearestDefinition(block.body, i, name);
+                if (reaching && consumed.has(reaching.index)) sharedDefinitions.add(`${name}:${reaching.index}`);
+            }
+        }
+        if (!sharedDefinitions.size) break;
+        let added = false;
+        for (const key of sharedDefinitions) {
+            if (boundaryDefinitions.has(key)) continue;
+            boundaryDefinitions.add(key);
+            added = true;
+        }
+        if (!added) return null;
+        inferred = null;
+        consumed = null;
     }
+    if (!inferred || !consumed) return null;
 
     const capturePrefix = `__fresh_generic_for_${raw.checkId}`;
     const captures = inferred.map((item, index) => {
@@ -648,28 +683,50 @@ function matchPreheaderHeader(graph, preheaderId, raw, preBodyTempRegs = new Set
     return { consumed, captures };
 }
 
+function findCompilerTerminalGenericForLoops(graph, returnName = null) {
+    const loops = [];
+    for (const id of graph.reachable) {
+        const raw = matchCompilerGenericForCheck(graph.blocks.get(id));
+        if (!raw) continue;
+        const boundary = new Set([id]);
+        const breaks = collectBreakRegion(graph, raw.bodyId, boundary, raw.exitId);
+        const returns = breaks ? null : collectTerminalReturnRegion(graph, raw.bodyId, boundary, returnName, raw.exitId);
+        const mixed = breaks || returns ? null : collectMixedAbruptRegion(graph, raw.bodyId, boundary, raw.exitId, returnName);
+        const region = breaks || returns || mixed;
+        if (!region) continue;
+        const breakTerminalIds = breaks?.terminalIds || mixed?.breakTerminalIds || new Set();
+        if ([...breakTerminalIds].some(source => graph.blocks.get(source)?.transition?.kind !== "jump")) continue;
+        loops.push({
+            headerId: id, coreIds: new Set([id, ...region.ids]), backedgeSources: new Set(),
+            terminalBody: { breakTerminalIds, returnRegionIds: returns?.ids || mixed?.returnTerminalIds || new Set() },
+        });
+    }
+    return loops;
+}
+
 function matchCompilerGenericForNaturalLoop(graph, loopInfo, returnName = null) {
-    if (!graph || !loopInfo?.coreIds?.size || !loopInfo.backedgeSources?.size) return null;
+    if (!graph || !loopInfo?.coreIds?.size || (!loopInfo.backedgeSources?.size && !loopInfo.terminalBody)) return null;
     const raw = matchCompilerGenericForCheck(graph.blocks.get(loopInfo.headerId));
     if (!raw) return null;
     if (!loopInfo.coreIds.has(raw.bodyId) || loopInfo.coreIds.has(raw.exitId) || !graph.blocks.has(raw.exitId)) return null;
     const outsideHeaderPreds = (graph.predecessors.get(raw.checkId) || []).filter(id => graph.reachable.has(id) && !loopInfo.coreIds.has(id));
     if (outsideHeaderPreds.length !== 1) return null;
     const preheaderId = outsideHeaderPreds[0];
-    const variables = matchBodyVariables(graph, loopInfo, raw);
+    const variables = matchBodyVariables(graph, loopInfo, raw, returnName);
     if (!variables) return null;
     const header = matchPreheaderHeader(graph, preheaderId, raw, new Set(variables.loopVarRegs));
     if (!header) return null;
 
     const breakRegionIds = new Set();
-    const breakTerminalIds = new Set();
-    const terminalReturnRegionIds = new Set();
+    const breakTerminalIds = new Set(loopInfo.terminalBody?.breakTerminalIds || []);
+    const terminalReturnRegionIds = new Set(loopInfo.terminalBody?.returnRegionIds || []);
     for (const id of loopInfo.coreIds) {
         const block = graph.blocks.get(id);
         if (!block) return null;
         for (const target of transitionTargets(block.transition)) {
             if (loopInfo.coreIds.has(target)) continue;
             if (id === raw.checkId && target === raw.exitId) continue;
+            if (breakTerminalIds.has(id) && target === raw.exitId) continue;
             const breakRegion = collectBreakRegion(graph, target, loopInfo.coreIds, raw.exitId);
             if (breakRegion) {
                 for (const member of breakRegion.ids) breakRegionIds.add(member);
@@ -786,7 +843,9 @@ function applyCompilerGenericForMatch(transformed, graph, match, stateName, body
         syntheticBranch(stateName, conditionName, match.bodyId, match.exitId),
     ]);
 
-    transformed.set(bodyJoinId, [syntheticJump(stateName, match.exitId)]);
+    if (match.backedgeSources.size || match.breakTerminalIds?.size) {
+        transformed.set(bodyJoinId, [syntheticJump(stateName, match.exitId)]);
+    }
     match.bodyJoinId = bodyJoinId;
     loopBodyJoinIds.add(bodyJoinId);
     loopBackedgeCountsByJoin.set(bodyJoinId, match.backedgeSources.size);
@@ -855,4 +914,5 @@ module.exports = {
     collapseCompilerGenericForLoops,
     matchCompilerGenericForCheck,
     matchCompilerGenericForNaturalLoop,
+    findCompilerTerminalGenericForLoops,
 };

@@ -19,8 +19,9 @@ function mutationBaseOwnerKey(name) { return "\0freshMutationBaseOwner:" + name;
 function sourcePackedTablePackReg(rhs, singleCallPacks) {
     if (rhs?.type !== "TableConstructorExpression" || !(singleCallPacks instanceof Map)) return null;
     const fields = rhs.fields || [];
-    if (fields.length !== 1 || fields[0]?.type !== "TableValue") return null;
-    const call = fields[0].value;
+    const finalField = fields[fields.length - 1];
+    if (finalField?.type !== "TableValue") return null;
+    const call = finalField.value;
     if (call?.type !== "CallExpression" || !isIdentifier(call.base, "unpack") || (call.arguments || []).length !== 1 || !isIdentifier(call.arguments[0])) return null;
     return singleCallPacks.has(call.arguments[0].name) ? call.arguments[0].name : null;
 }
@@ -592,6 +593,20 @@ function matchMultiStateLogicalLocals(source, stateWhile, stateName, returnName,
                 if (reservedPackCaptureOwner) {
                     const reservedPack = ctx.structuredPacks.get(reservedPackCaptureOwner.packId);
                     const reservedInfo = reservedPack?.slots.get(reservedPackCaptureOwner.slot);
+                    if (reservedPackCaptureOwner.newCellReg) {
+                        const cellReg = reservedPackCaptureOwner.newCellReg;
+                        if (!reservedPack?.emitted || !reservedInfo?.display ||
+                            !isIdentifier(dest.base, "upvalueValues") || !isIdentifier(dest.index, cellReg) ||
+                            reservedInfo.ownerNewCaptured !== cellReg ||
+                            !isIdentifier(rhs, reservedPackCaptureOwner.carrierReg) ||
+                            resolveId(ctx, rhs.name, env) !== reservedInfo.display) return null;
+                        const identity = upvalueCellIdentity(ctx, cellReg, env);
+                        const existing = upvalueCellBinding(ctx, cellReg, env);
+                        if (!identity || (typeof existing === "string" && existing !== reservedInfo.display) ||
+                            !bindUpvalueCellIdentity(ctx, identity, reservedInfo.display, env)) return null;
+                        if (!hasPathUpvalueCell(ctx, cellReg, env)) ctx.upvalueCellBindings.set(cellReg, reservedInfo.display);
+                        continue;
+                    }
                     if (reservedPack?.emitted && reservedInfo?.display &&
                         capturedDestination === reservedPackCaptureOwner.capturedDestination &&
                         reservedInfo.ownerCaptured === capturedDestination &&
@@ -614,11 +629,33 @@ function matchMultiStateLogicalLocals(source, stateWhile, stateName, returnName,
                 }
                 if (isIdentifier(dest.base, "upvalueValues") && isIdentifier(dest.index) &&
                     (ctx.upvalueCells.has(dest.index.name) || hasPathUpvalueCell(ctx, dest.index.name, env))) {
-                    const value = render(ctx, rhs, env);
-                    if (typeof value !== "string") return null;
                     const pathCell = hasPathUpvalueCell(ctx, dest.index.name, env);
                     const cellIdentity = upvalueCellIdentity(ctx, dest.index.name, env);
                     const existing = upvalueCellBinding(ctx, dest.index.name, env);
+                    const deferred = deferredClosureFromRhs(ctx, rhs, env, callKind(rhs));
+                    const selfCaptured = typeof existing !== "string" && cellIdentity &&
+                        deferred?.captureRefs.some(ref => ref.kind === "cell" && ref.identity === cellIdentity);
+                    if (selfCaptured) {
+                        // Compiler local-function lowering allocates its cell,
+                        // constructs a closure capturing that same cell, then stores
+                        // the closure in it. Declare the binding before rendering
+                        // the body so recursive calls resolve to this exact epoch.
+                        if (!pathCell && markers.length !== 0) return null;
+                        const display = allocateValueDisplay(ctx);
+                        if (!bindUpvalueCellIdentity(ctx, cellIdentity, display, env)) return null;
+                        const value = renderDeferredClosureValue(ctx, deferred, env);
+                        if (typeof value !== "string") return null;
+                        if (!pathCell) ctx.upvalueCellBindings.set(dest.index.name, display);
+                        const lines = ["local " + display, display + " = " + value];
+                        if (markers.length !== 0) {
+                            if (!ctx.allowConditionalIf) return null;
+                            ctx.pathLocalBindingNames.add(display);
+                            effects = [...effects, ...lines];
+                        } else ctx.out.push(...lines);
+                        continue;
+                    }
+                    const value = render(ctx, rhs, env);
+                    if (typeof value !== "string") return null;
                     if (typeof existing === "string") {
                         const line = existing + " = " + value;
                         if (markers.length !== 0) {
@@ -986,11 +1023,14 @@ function matchMultiStateLogicalLocals(source, stateWhile, stateName, returnName,
                 const value = render(ctx, rhs, env, false, terminalPackExprs);
                 if (value == null) return null;
                 if (!valueMayBeReadAfter(ctx, id, i, name)) {
+                    // A parenthesized callee must not attach to the preceding
+                    // statement as another argument list in Lua/Luau.
+                    const statementValue = value.startsWith("(") && (ctx.out.length || effects.length) ? ";" + value : value;
                     if (markers.length !== 0) {
                         if (!ctx.allowConditionalIf) return null;
-                        effects = [...effects, value];
+                        effects = [...effects, statementValue];
                     } else {
-                        ctx.out.push(value);
+                        ctx.out.push(statementValue);
                     }
                     env.delete(name);
                 } else {
@@ -1008,7 +1048,7 @@ function matchMultiStateLogicalLocals(source, stateWhile, stateName, returnName,
             // Compiler multi-return transport can feed the final argument of an ordinary assigned call.
             // Pass the proven pack map into call rendering too; real source-packed tables are removed
             // from terminalPackExprs when their source table constructor is recovered.
-            const singleCallPacks = rhs?.type === "CallExpression" || sourcePackedTableReg ? terminalPackExprs : null;
+            const singleCallPacks = rhs?.type === "CallExpression" || rhs?.type === "TableConstructorExpression" || rhs?.type === "FreshGenericForExpression" || sourcePackedTableReg ? terminalPackExprs : null;
             const value = render(ctx, rhs, env, false, singleCallPacks);
             if (value == null) {
                 // Closure construction is a semantic value. Track capture-cell identities

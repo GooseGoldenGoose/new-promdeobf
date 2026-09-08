@@ -34,22 +34,29 @@ function statementReadsName(statement, name) {
     return nodeReadsName(statement, name);
 }
 
-function valueMayBeReadBeforeOverwriteFrom(graph, blockId, name, visiting = new Set()) {
-    if (visiting.has(blockId)) return false;
-    const block = graph.blocks.get(blockId);
-    if (!block) return false;
-    const nextVisiting = new Set(visiting);
-    nextVisiting.add(blockId);
-    for (let i = 0; i < block.body.length; i++) {
-        if (i === block.transitionIndex) continue;
-        const statement = block.body[i];
-        if (statementReadsName(statement, name)) return true;
-        if (statement?.type === "AssignmentStatement" &&
-            (statement.variables || []).some(dest => isIdentifier(dest, name))) return false;
-    }
-    if (block.transition?.kind === "branch" && block.transition.conditionRegister === name) return true;
-    for (const target of transitionTargets(block.transition)) {
-        if (valueMayBeReadBeforeOverwriteFrom(graph, target, name, nextVisiting)) return true;
+function valueMayBeReadBeforeOverwriteFrom(graph, blockId, name) {
+    // Every queued block receives the same still-live incoming value. Once a
+    // write kills that value, stop that path; revisiting a join cannot add proof.
+    // A per-path DFS otherwise enumerates exponentially many diamond paths.
+    const seen = new Set();
+    const queue = [blockId];
+    while (queue.length) {
+        const id = queue.pop();
+        if (seen.has(id)) continue;
+        seen.add(id);
+        const block = graph.blocks.get(id);
+        if (!block) continue;
+        let killed = false;
+        for (let i = 0; i < block.body.length; i++) {
+            if (i === block.transitionIndex) continue;
+            const statement = block.body[i];
+            if (statementReadsName(statement, name)) return true;
+            if (statement?.type === "AssignmentStatement" &&
+                (statement.variables || []).some(dest => isIdentifier(dest, name))) { killed = true; break; }
+        }
+        if (killed) continue;
+        if (block.transition?.kind === "branch" && block.transition.conditionRegister === name) return true;
+        queue.push(...transitionTargets(block.transition));
     }
     return false;
 }

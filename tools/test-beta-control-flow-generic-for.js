@@ -182,4 +182,103 @@ function ipairsBase() {
     assert.strictEqual(result.applied, false);
 }
 
+{
+    // allocUpvalue may borrow the dispatcher state register before the compiler
+    // copies the cell handle into the loop-variable register. The alloc/init/
+    // handoff/capture/release chain still proves the captured generic-for epoch.
+    const source = vmStatesSource({
+        1: [
+            'ReturnVal = "ipairs"',
+            'state = _env[ReturnVal]',
+            'r8 = 3',
+            'r9 = 5',
+            'r10 = 8',
+            'r4 = { r8, r9, r10 }',
+            'r4 = { state(r4) }',
+            'r1 = r4[1]',
+            'r2 = r4[2]',
+            'r3 = r4[3]',
+            'state = 2',
+        ],
+        2: ['r3, r10 = r1(r2, r3)', 'state = r3 and 3 or 4'],
+        3: [
+            'r8 = r3',
+            'state = allocUpvalue()',
+            'upvalueValues[state] = r8',
+            'r8 = state',
+            'state = allocUpvalue()',
+            'upvalueValues[state] = r10',
+            'r10 = state',
+            'state = createClosure5(8, { r8, r10 })',
+            'r9 = state',
+            'state = 5',
+        ],
+        4: ['ReturnVal = {}', 'state = nil'],
+        5: [
+            'ReturnVal = "print"',
+            'state = _env[ReturnVal]',
+            'r5 = { r9() }',
+            'r6 = "borrowed-cell"',
+            'r7 = state(r6, unpack(r5))',
+            'state = 7',
+        ],
+        7: ['r8 = releaseUpvalue(r8)', 'r9 = nil', 'r10 = releaseUpvalue(r10)', 'state = 2'],
+        8: [
+            'ReturnVal = upvalueValues[upvalues[1]]',
+            'r4 = upvalueValues[upvalues[2]]',
+            'state = ReturnVal + r4',
+            'ReturnVal = { state }',
+            'state = nil',
+        ],
+    });
+    const result = solveBetaControlFlow(source, parse(source));
+    assert.strictEqual(result.applied, true, "generic-for capture with borrowed state cell carrier was not recovered");
+    assert.strictEqual(result.mode, "fresh-closure-entry");
+    assert.strictEqual(result.source,
+        'for v1, v2 in ipairs({ 3, 5, 8 }) do\n' +
+        '    local v3 = function()\n' +
+        '        return (v1 + v2)\n' +
+        '    end\n' +
+        '    print("borrowed-cell", v3())\n' +
+        'end\n');
+}
+
+{
+    // A generic-for header may consume a compiler RETURN_ALL pack from an
+    // earlier call. Loop canonicalization wraps the header in
+    // FreshGenericForExpression; the proven pack source must survive that
+    // wrapper so unpack(pack) remains the original multi-return call.
+    const source = vmStatesSource({
+        1: [
+            'r1 = "getItems"',
+            'r2 = _env[r1]',
+            'r3 = { r2() }',
+            'r4 = "ipairs"',
+            'r5 = _env[r4]',
+            'r6 = { r5(unpack(r3)) }',
+            'r1 = r6[1]',
+            'r2 = r6[2]',
+            'r3 = r6[3]',
+            'state = 2',
+        ],
+        2: ['r3, r4 = r1(r2, r3)', 'state = r3 and 3 or 4'],
+        3: [
+            'r5 = r3',
+            'r6 = "print"',
+            'r7 = _env[r6]',
+            'r6 = r7(r5, r4)',
+            'r4 = nil',
+            'r5 = nil',
+            'state = 2',
+        ],
+        4: ['ReturnVal = {}', 'state = nil'],
+    });
+    const result = solveBetaControlFlow(source, parse(source));
+    assert.strictEqual(result.applied, true, "RETURN_ALL pack through synthetic generic-for header was rejected");
+    assert.strictEqual(result.mode, "fresh-generic-for");
+    assert.strictEqual(result.source,
+        'for v1, v2 in ipairs(getItems()) do\n' +
+        '    print(v1, v2)\n' +
+        'end\n');
+}
 console.log("beta control-flow generic-for tests passed");

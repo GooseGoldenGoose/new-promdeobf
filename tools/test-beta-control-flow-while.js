@@ -676,4 +676,25 @@ function vmStatesSource(states, registers = "r1, r2, r3, r4, r5, r6") {
         'end\n');
 }
 
+
+{
+    // A nested lazy condition survives arbitrary state layout. Loop detection must
+    // reason about the forward compiler TESTSET region without letting the loop
+    // backedge make both lazy successors appear mutually reachable.
+    const source = vmStatesSource({
+        1: ['state = 11'],
+        11: ['r6 = "qa"', 'r2 = _env[r6]', 'r6 = r2()', 'state = r6 and 14 or 18', 'ReturnVal = r6'],
+        14: ['r6 = state', 'r5 = "qb"', 'r4 = _env[r5]', 'r5 = r4()', 'state = r5 and 23 or 27', 'r2 = r5'],
+        18: ['state = ReturnVal and 35 or 40'],
+        23: ['state = r6', 'ReturnVal = r2', 'state = 18'],
+        27: ['r5 = "qc"', 'r4 = _env[r5]', 'r5 = r4()', 'r2 = r5', 'state = 23'],
+        35: ['state = 11'],
+        40: ['ReturnVal = {}', 'state = nil'],
+    });
+    const result = solveBetaControlFlow(source, parse(source));
+    assert.strictEqual(result.applied, true, "nested short-circuit while condition was rejected");
+    assert.strictEqual(result.mode, "fresh-while");
+    assert.strictEqual(result.source, 'while (qa() and (qb() or qc())) do\nend\n');
+}
+
 console.log("beta control-flow while tests passed");
