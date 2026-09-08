@@ -187,38 +187,38 @@ function eventualCleanupOnAllPaths(ctx, blockId, statementIndex, name, visiting 
     return result;
 }
 
-function valueMayBeReadAfter(ctx, blockId, statementIndex, name, visiting = new Set()) {
-    if (statementIndex < 0 && implicitLoopBodyEntryDefines(ctx, blockId, name)) return false;
-    const visitKey = `${blockId}:${statementIndex}`;
-    if (visiting.has(visitKey)) return true;
+function valueMayBeReadAfter(ctx, blockId, statementIndex, name) {
     const cacheKey = `${blockId}:${statementIndex}:${name}`;
     if (ctx.valueReadAfterCache.has(cacheKey)) return ctx.valueReadAfterCache.get(cacheKey);
-    const block = ctx.blocks.get(blockId);
-    if (!block) return true;
-    const nextVisiting = new Set(visiting);
-    nextVisiting.add(visitKey);
-    for (let i = statementIndex + 1; i < block.body.length; i++) {
-        if (i === block.transitionIndex) continue;
-        const statement = block.body[i];
-        const flow = assignmentValueFlow(ctx, statement, name);
-        if (flow === "unknown" || flow === "read") {
+    const pending = [{ blockId, statementIndex }];
+    const seen = new Set();
+    while (pending.length) {
+        const cursor = pending.pop();
+        const visitKey = `${cursor.blockId}:${cursor.statementIndex}`;
+        if (seen.has(visitKey)) continue;
+        seen.add(visitKey);
+        if (cursor.statementIndex < 0 && implicitLoopBodyEntryDefines(ctx, cursor.blockId, name)) continue;
+        const block = ctx.blocks.get(cursor.blockId);
+        if (!block) {
             ctx.valueReadAfterCache.set(cacheKey, true);
             return true;
         }
-        if (flow === "kill") {
-            ctx.valueReadAfterCache.set(cacheKey, false);
-            return false;
+        let killed = false;
+        for (let i = cursor.statementIndex + 1; i < block.body.length; i++) {
+            if (i === block.transitionIndex) continue;
+            const flow = assignmentValueFlow(ctx, block.body[i], name);
+            if (flow === "unknown" || flow === "read") {
+                ctx.valueReadAfterCache.set(cacheKey, true);
+                return true;
+            }
+            if (flow === "kill") { killed = true; break; }
         }
-    }
-    if (block.transition.kind === "branch" && block.transition.conditionRegister === name) {
-        ctx.valueReadAfterCache.set(cacheKey, true);
-        return true;
-    }
-    for (const next of ctx.successors.get(blockId) || []) {
-        if (valueMayBeReadAfter(ctx, next, -1, name, nextVisiting)) {
+        if (killed) continue;
+        if (block.transition.kind === "branch" && block.transition.conditionRegister === name) {
             ctx.valueReadAfterCache.set(cacheKey, true);
             return true;
         }
+        for (const next of ctx.successors.get(cursor.blockId) || []) pending.push({ blockId: next, statementIndex: -1 });
     }
     ctx.valueReadAfterCache.set(cacheKey, false);
     return false;

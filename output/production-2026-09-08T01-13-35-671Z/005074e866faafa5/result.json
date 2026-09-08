@@ -1,0 +1,18 @@
+{
+  "file": "005074e866faafa5.lua",
+  "inputHash": "005074e866faafa523e03f089cf6c724d7516229aa2c1e3c572e21db455d7abd",
+  "engineHash": "a63e98fd158683473248ed1c9c5ab705438b7f660f70b4206753ecae9d3167a6",
+  "stage": "luau-syntax",
+  "recovered": true,
+  "syntax": true,
+  "luauSyntax": false,
+  "compiled": false,
+  "normalMs": 302,
+  "mode": "fresh-closure-entry",
+  "states": 232,
+  "outputHash": "fef6dee6039e605fa15a4da02be6d9d7faa21b8f5c576df0ddba592be5eea3d4",
+  "error": "C:/Users/reala/Desktop/!workspaces/promdeobf ova/new promdeobf/output/production-2026-09-08T01-13-35-671Z/005074e866faafa5/recovered.lua(238,5): SyntaxError: Ambiguous syntax: this looks like an argument list for a function call, but could also be a start of new statement; use ';' to separate statements\r\n",
+  "stack": "Error: C:/Users/reala/Desktop/!workspaces/promdeobf ova/new promdeobf/output/production-2026-09-08T01-13-35-671Z/005074e866faafa5/recovered.lua(238,5): SyntaxError: Ambiguous syntax: this looks like an argument list for a function call, but could also be a start of new statement; use ';' to separate statements\r\n\n    at worker (C:\\Users\\reala\\Desktop\\!workspaces\\promdeobf ova\\new promdeobf\\tools\\test-production-corpus.js:45:58)\n    at main (C:\\Users\\reala\\Desktop\\!workspaces\\promdeobf ova\\new promdeobf\\tools\\test-production-corpus.js:61:40)\n    at Object.<anonymous> (C:\\Users\\reala\\Desktop\\!workspaces\\promdeobf ova\\new promdeobf\\tools\\test-production-corpus.js:92:30)\n    at Module._compile (node:internal/modules/cjs/loader:1872:14)\n    at Object..js (node:internal/modules/cjs/loader:2003:10)\n    at Module.load (node:internal/modules/cjs/loader:1594:32)\n    at Module._load (node:internal/modules/cjs/loader:1396:12)\n    at wrapModuleLoad (node:internal/modules/cjs/loader:255:19)\n    at Module.executeUserEntryPoint [as runMain] (node:internal/modules/run_main:154:5)\n    at node:internal/main/run_main_module:33:47",
+  "elapsedMs": 470,
+  "inputUnchanged": true
+}

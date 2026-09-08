@@ -58,6 +58,12 @@ function parseArgs(argv) {
 
     for (let i = 0; i < argv.length; i += 1) {
         const arg = argv[i];
+        if (arg === "--seed") {
+            const seed = Number(argv[++i]);
+            if (!Number.isSafeInteger(seed) || seed < 1) throw new Error("--seed requires a positive integer");
+            options.seed = seed;
+            continue;
+        }
         if (arg === "--runtime" || arg === "--run") {
             options.runtime = true;
             continue;
@@ -105,7 +111,7 @@ function runOne(sourceArg, options) {
     const obfStart = process.hrtime.bigint();
     const obf = runProcess(
         "luajit.exe",
-        [PROMETHEUS_CLI, "--preset", options.preset, sourcePath, "--out", obfuscatedPath, "--nocolors"],
+        [...(options.seed ? ["-e", `os.time = function() return ${options.seed} end`] : []), PROMETHEUS_CLI, "--preset", options.preset, sourcePath, "--out", obfuscatedPath, "--nocolors"],
         PROMETHEUS_ROOT,
     );
     assertSuccess("Prometheus obfuscation", obf);

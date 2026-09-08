@@ -1,0 +1,13 @@
+{
+  "file": "01be446e7be630d2.lua",
+  "inputHash": "94e3fe710f521b56eeb8167f2a66676ccadbdd497faa5472ba5cb2b2e9992a79",
+  "stage": "complete",
+  "recovered": true,
+  "syntax": true,
+  "normalMs": 128,
+  "mode": "fresh-closure-entry",
+  "states": 64,
+  "outputHash": "3738b9c7826bc9880b85a800e4042b9a879d965890420022fc02cb58534762b8",
+  "elapsedMs": 194,
+  "inputUnchanged": true
+}

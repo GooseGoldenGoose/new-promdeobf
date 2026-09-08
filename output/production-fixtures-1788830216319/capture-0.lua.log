@@ -1,0 +1,10 @@
+PASS capture-0.lua
+  Obfuscate: 62.4 ms
+  Deobf+CF:  76.4 ms
+  Runtime:   71.6 ms (exact parity)
+  Total:     210.6 ms
+  States:    3
+  Closures:  0
+  Obf:       C:\Users\reala\Desktop\!workspaces\promdeobf ova\new promdeobf\output\capture-0.obfuscated.lua
+  Normal:    C:\Users\reala\Desktop\!workspaces\promdeobf ova\new promdeobf\output\capture-0.normal.lua
+  Fresh CF:  C:\Users\reala\Desktop\!workspaces\promdeobf ova\new promdeobf\output\capture-0.beta.cf.lua

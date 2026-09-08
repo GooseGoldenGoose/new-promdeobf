@@ -9,6 +9,14 @@ Rules for maintaining this file:
 - do not preserve old gate counts or historical feature checkpoints once superseded;
 - if code/tests disagree with this file, inspect current Git/compiler/tests and update this file.
 
+### Standing context-maintenance rule
+
+Maintain this file proactively during every project task; do not wait for another reminder. Update the relevant canonical section after meaningful discoveries, decisions, changes, and verification, and before the final response or a handoff. During long tasks, save useful checkpoints here so unfinished work can resume after context loss.
+
+Record the current objective, completed work, affected files, actual verification results, unresolved issues, and the next concrete step when work remains. Clearly distinguish verified results from plans, assumptions, and historical test results. Never imply old tests certify newer edits.
+
+Keep the handoff concise: replace stale statements, merge duplicates, and remove superseded detail without losing correctness rules, ownership boundaries, evidence, or unresolved work. Keep one current checkpoint rather than an accumulating conversation log. Read this file when resuming and reconcile it with current files and Git state. Context maintenance is part of finishing the task, not a separate optional request.
+
 ---
 
 ## 0. New-chat bootstrap / current snapshot
@@ -21,16 +29,16 @@ A new chat must:
 5. inspect Prometheus `compiler.lua` whenever a lowering rule is uncertain;
 6. never ask the user to repeat durable facts already recorded here.
 
-Current project state as of 2026-09-06:
-- branch: `main`;
+Current project state as of 2026-09-08:
+- branch: `main`, two commits ahead of `origin/main`; HEAD `2a63976` (`Fix Fresh-CF sample 20 recovery`), preceding commit `5e55abf` (`Integrate Fresh-CF fixes and clean temp artifacts`);
 - active Fresh-CF implementation is under `passes/beta-cf/` with `passes/beta-control-flow.js` as compatibility facade;
-- working tree currently contains **uncommitted Fresh-CF work**, including generic-for support and the latest closure/pack/TEMP→VAR/semantic-nil lifetime fixes; do not assume these changes are already committed/pushed;
-- `passes/beta-cf/control/generic-for.js` and `tools/test-beta-control-flow-generic-for.js` are currently present as untracked project files and are part of the intended feature work;
-- user-owned tracked dirty file currently known: `formater/input.txt`; never stage/revert it unless explicitly asked;
-- many `_tmp_*.lua` probes are untracked; never bulk-clean them or stage them by accident;
-- latest established regression gate: **19/19 PASS**, including the 42-order capture-permutation suite;
-- latest full tamper/gmatch fixture certification: **30/30 fresh randomized structural runs PASS** on current code; the randomness/error-heavy fixture is not certified via uncontrolled runtime parity;
-- semantic-nil/dispatcher-overwrite certification: **30/30 fresh Medium randomized runs PASS with exact LuaJIT runtime parity** on a closure/upvalue + later-register-reuse fixture;
+- existing uncommitted recovery changes are in `control/generic-for.js`, `control/loops.js`, `control/repeat.js`, and `logical.js` under `passes/beta-cf/`, plus generic-for/repeat/while regression tests;
+- generic-for implementation and tests are tracked; `deobf.bat` has an existing tracked deletion; `passes/beta-cf/closures.debug.js` and `passes/beta-cf/structured/solver.debug.js` are untracked;
+- `prod sample/` contains 50 downloaded Lua samples; contents were verified against GitHub blob hashes and sizes, but deobfuscation/runtime tests have not been run on these samples;
+- preserve unrelated changes and any user probes; `formater/input.txt` is not currently dirty;
+- historical regression gate: **19/19 PASS**, including the 42-order capture-permutation suite; not rerun for the current dirty tree during this handoff update;
+- historical full tamper/gmatch fixture certification: **30/30 fresh randomized structural runs PASS**; the randomness/error-heavy fixture is not certified via uncontrolled runtime parity;
+- historical semantic-nil/dispatcher-overwrite certification: **30/30 fresh Medium randomized runs PASS with exact LuaJIT runtime parity** on a closure/upvalue + later-register-reuse fixture;
 - generic `for` currently supports proven one- and two-variable Prometheus shapes; **3+ iteration variables intentionally fail closed**.
 
 Preferred project communication style:
@@ -46,7 +54,8 @@ Before project work that inspects/tests/modifies code, state the scope of the tu
 
 During work:
 - inspect relevant current files before editing;
-- use the real compiler rather than guessing lowering behavior;
+- when an obfuscation shape is unclear, unfamiliar, or forgotten, inspect the relevant compiler logic in `C:\Users\reala\Desktop\!workspaces\promdeobf ova\wearedev obf` (primary source: `src\prometheus\compiler\compiler.lua`) before designing or changing recovery; do not guess from memory;
+- if reading the compiler does not settle the shape, make a small source fixture, obfuscate it with that compiler, and compare the emitted pattern with the actual sample; verify the sample matches the compiler rule rather than assuming every downloaded sample uses the same compiler version;
 - make tiny readable fixtures for uncertain patterns;
 - preserve unrelated work;
 - fail closed on ambiguity;
@@ -95,6 +104,35 @@ Fast project validation command:
 `node tools/fast-obf-deobf.js <fixture.lua> --runtime`
 
 Never use blind `git clean -fd`. Generated `output/` material is not authority; regenerate it when needed.
+
+Production sample corpus: `prod sample/` in the deobfuscator workspace. Contains the first 50 `.lua` files by filename from `https://github.com/terrorlua/obfuscator-samples/tree/main/Prometheus/WeAreDevs`, downloaded from commit `82fa0134a660437c082b757517c2a59140112740` with original filenames preserved. All 50 saved files matched GitHub sizes and blob hashes (7,092,523 bytes total). Download verification does not certify recovery or execution.
+
+Current objective: implement and verify complete recovery of all 50 production samples. User authorized implementation after the requirements interview. Preserve the pre-existing dirty tree and debug probes.
+
+### All-50 recovery acceptance and implementation plan
+
+Confirmed user requirements: recover every function, loop, and branch correctly in all 50 samples. Partial recovery, unresolved regions, placeholder bodies, or retained compiler VM machinery count as failures. Preserve proven source operations and semantics; do not remove source logic to obtain a passing result. Original variable names and exact original formatting are not required or generally recoverable.
+
+The samples target Roblox. The user accepts syntax validation for the actual corpus in this environment; full Roblox runtime behavior remains unverified and must not be claimed. Syntax success is necessary but not proof of correctness. Recovery-rule changes still require source-shape checks, controlled behavior tests, randomized compiler layouts, and the established regression gate. Reject ambiguous recovery rather than silently emit guessed code, and count such rejection as a corpus failure.
+
+Planned execution:
+1. Preserve input hashes and existing work; establish the current regression baseline and a per-file corpus baseline with bounded processes, timings, failure reasons, and separate output directories. The existing `fast-obf-deobf.js` re-obfuscates source, so downloaded obfuscated samples must use the direct deobfuscation entry point instead.
+2. Group failures by shared root cause and pipeline stage. Inspect actual normalized output and relevant compiler rules; reduce failures to small representative fixtures before changing recovery.
+3. Implement general, evidence-based fixes. Add positive and ambiguity-rejection regressions, inspect recovered source, and validate deterministic fixture behavior across fresh randomized obfuscations. Never special-case sample filenames, literals, or randomized registers/states.
+4. Rerun the corpus after each completed fix group and track recovery coverage separately from syntax validity. Require every root/child region to be accounted for; inspect residual machinery by provenance, not merely identifier searches.
+5. Final gate: all 50 fully recovered, all recovered files pass Luau syntax/compilation checks, all established regressions pass, and touched recovery rules pass controlled behavior/randomized tests. Investigate any compiler resource-limit failures without dropping source operations. Report remaining Roblox-runtime uncertainty explicitly.
+6. Keep this canonical checkpoint and the per-file results current during implementation; preserve the original corpus. Deliver recovered outputs and a reproducible batch command/report.
+
+Current implementation checkpoint:
+- Original all-50 baseline: 21 recovered/parser-valid, 27 recovery rejections, 2 timeouts at 120 seconds. Report: `output/production-2026-09-07T17-53-04-189Z/results.json`. All 19 established suites passed before edits.
+- Latest complete batch: 26/50 accepted by recovery, 25/50 also pass independent Luau syntax/compilation, no timeouts; report `output/production-2026-09-08T01-13-35-671Z/results.json`. One parenthesized-call statement lacked a separator; emission is now fixed but needs a fresh corpus run. These counts are not correctness certification.
+- Added `tools/test-production-corpus.js` (bounded per-file processes, original input hashes, separate normal/recovered output, retained errors and timings), `tools/inspect-fresh-failure.js` (diagnostics instrument modules only in memory), and `tools/test-beta-production-recovery.js` (controlled recursive-function and unused-result behavior plus reconverging graph regression).
+- Current fixes: structured self-recursive cell binding; preserve unused cleanup-backed multi-return locals; recognize terminal return before dead nil cleanup; avoid exponential revisiting in loop-storage/read-before-write and structured cleanup/index-write queries; require live join use for new direct logical-result candidates so ordinary conditionals are not erased; recognize source tables with fixed fields followed by a proven return-pack expansion.
+- `logical.js` changed outside this task during the first runs. Its broadened direct-result rule caused an existing nested-if regression; the live-join guard restores that test. Preserve the other existing edits; do not claim any mixed-revision run certifies a frozen revision.
+- Additional fixes: terminal generic-for bodies with only breaks/returns, including return paths without nil cleanup; newly allocated captured locals initialized from a multi-return call (bind the exact cell identity to the already emitted local); separate parenthesized call statements from preceding expressions.
+- All 19 established suites pass on the current edits. `tools/test-beta-production-recovery.js` passes controlled recovery tests. `tools/test-production-randomized.js` passes 30/30 behavior checks across five safe source fixtures and six distinct fixed compiler seeds; report logs `output/production-fixtures-1788830288761/`. The earlier time-seeded run was superseded because nearby runs could reuse a seed. `fast-obf-deobf.js --seed <positive integer>` now supports reproducible compiler layouts.
+- Independent compiler available at `../luau/build/Release/luau-compile2.exe`; downloaded payloads have not been executed. Output review, remaining failure fixes, another frozen all-50 run, and all-50 completion remain outstanding.
+- Next: diagnose child graph rejection in `0003d9e06049f5ed.lua` entry 86; explicit while/iterator lowering in `0126223f1553147e.lua` leaves its third iterator result unowned; nested call-pack forwarding in `0182c4620fb447f9.lua`. Continue grouping failures and keep strict all-region accounting.
 
 ---
 
@@ -852,7 +890,7 @@ Fail closed with a precise reason rather than weakening a global rule to make on
 
 ## 13. Current validation authority
 
-### Established 18-suite gate
+### Established 19-suite gate
 
 Current full gate consists of:
 
@@ -1012,23 +1050,16 @@ Rules:
 - generated outputs are not authority;
 - inspect staged diff before commit.
 
-Current intended project files from the uncommitted Fresh-CF feature/fix work include changes under:
-- `passes/beta-cf/closures.js`
+Existing uncommitted recovery files verified on 2026-09-08:
 - `passes/beta-cf/control/loops.js`
 - `passes/beta-cf/control/generic-for.js`
-- `passes/beta-cf/linear/render.js`
-- `passes/beta-cf/linear/solver.js`
-- `passes/beta-cf/solve.js`
-- `passes/beta-cf/structured/branches.js`
-- `passes/beta-cf/structured/lifetime.js`
-- `passes/beta-cf/structured/render.js`
-- `passes/beta-cf/structured/solver.js`
-- `passes/beta-control-flow.js`
-- `tools/test-beta-control-flow-fresh.js`
+- `passes/beta-cf/control/repeat.js`
+- `passes/beta-cf/logical.js`
 - `tools/test-beta-control-flow-generic-for.js`
-- `CONTEXT.md`
+- `tools/test-beta-control-flow-repeat.js`
+- `tools/test-beta-control-flow-while.js`
 
-This list describes the current feature work only; always verify with Git before staging.
+Other worktree items: existing deletion of `deobf.bat`, two untracked debug files listed in section 0, the new `prod sample/` corpus, and this context update. Their presence is not authorization to stage, delete, or commit them. Always verify with Git before staging.
 
 ---
 

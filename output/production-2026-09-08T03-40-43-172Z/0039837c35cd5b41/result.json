@@ -1,0 +1,16 @@
+{
+  "file": "0039837c35cd5b41.lua",
+  "inputHash": "0039837c35cd5b417733214165e521b80779fbf3475289a29000b6c6a1a8cf9c",
+  "engineHash": "5fe782c82b2408747e4e393edbe7cd5a1acf542018247a91b77dd72493ab087e",
+  "stage": "complete",
+  "recovered": true,
+  "syntax": true,
+  "luauSyntax": true,
+  "compiled": true,
+  "normalMs": 212,
+  "mode": "fresh-closure-entry",
+  "states": 82,
+  "outputHash": "90b949782c5b1548d7a8cc76e45dcca7892db04025e3c5e9b2f0e2bfd85cdcb1",
+  "elapsedMs": 389,
+  "inputUnchanged": true
+}

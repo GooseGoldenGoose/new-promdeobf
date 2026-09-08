@@ -1,0 +1,15 @@
+{
+  "file": "00176f3566583c2a.lua",
+  "inputHash": "00176f3566583c2ad785ea9e4eddc711e9b11d13459f8d8d77a5bb956b39f60e",
+  "engineHash": "a63e98fd158683473248ed1c9c5ab705438b7f660f70b4206753ecae9d3167a6",
+  "stage": "recovery",
+  "recovered": false,
+  "syntax": false,
+  "luauSyntax": false,
+  "compiled": false,
+  "normalMs": 805,
+  "error": "Fresh beta CF: unsupported multi-state control flow (1249 normalized states); closure recovery: root is not a proven register-local program at state 1; root statement 6: r27 = createClosure1(281, { r69 })",
+  "stack": "Error: Fresh beta CF: unsupported multi-state control flow (1249 normalized states); closure recovery: root is not a proven register-local program at state 1; root statement 6: r27 = createClosure1(281, { r69 })\n    at generateBetaControlFlowFromSource (C:\\Users\\reala\\Desktop\\!workspaces\\promdeobf ova\\new promdeobf\\tools\\beta-control-flow.js:23:37)\n    at worker (C:\\Users\\reala\\Desktop\\!workspaces\\promdeobf ova\\new promdeobf\\tools\\test-production-corpus.js:34:27)\n    at main (C:\\Users\\reala\\Desktop\\!workspaces\\promdeobf ova\\new promdeobf\\tools\\test-production-corpus.js:61:40)\n    at Object.<anonymous> (C:\\Users\\reala\\Desktop\\!workspaces\\promdeobf ova\\new promdeobf\\tools\\test-production-corpus.js:92:30)\n    at Module._compile (node:internal/modules/cjs/loader:1872:14)\n    at Object..js (node:internal/modules/cjs/loader:2003:10)\n    at Module.load (node:internal/modules/cjs/loader:1594:32)\n    at Module._load (node:internal/modules/cjs/loader:1396:12)\n    at wrapModuleLoad (node:internal/modules/cjs/loader:255:19)\n    at Module.executeUserEntryPoint [as runMain] (node:internal/modules/run_main:154:5)",
+  "elapsedMs": 24350,
+  "inputUnchanged": true
+}

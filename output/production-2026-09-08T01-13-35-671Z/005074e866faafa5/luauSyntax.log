@@ -1,0 +1,2 @@
+Compiled 0 KLOC into 0 KB bytecode (read 0.01s, parse 0.00s, compile 0.00s)
+C:/Users/reala/Desktop/!workspaces/promdeobf ova/new promdeobf/output/production-2026-09-08T01-13-35-671Z/005074e866faafa5/recovered.lua(238,5): SyntaxError: Ambiguous syntax: this looks like an argument list for a function call, but could also be a start of new statement; use ';' to separate statements
