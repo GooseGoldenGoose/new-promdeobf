@@ -116,31 +116,31 @@ function implicitLoopBodyEntryDefines(ctx, blockId, name) {
     return false;
 }
 
-function valueMayBeReadFrom(ctx, blockId, name, visiting = new Set()) {
-    // Proven compiler loop headers assign source iteration variables before the
-    // first body statement. An incoming pre-loop TEMP epoch is therefore killed
-    // at body entry even though that assignment was removed during loop collapse.
-    if (implicitLoopBodyEntryDefines(ctx, blockId, name)) return false;
-    // This query asks whether any CFG path can READ the current value before
-    // an overwrite. Revisiting a block on the current DFS stack is not a read;
-    // it only closes a cycle. Any real read reachable through an exit from that
-    // cycle is explored through the other successor edges, so treating the
-    // back-edge itself as live creates false liveness at loop joins.
-    if (visiting.has(blockId)) return false;
-    const block = ctx.blocks.get(blockId);
-    if (!block) return true;
-    const nextVisiting = new Set(visiting);
-    nextVisiting.add(blockId);
-    for (let i = 0; i < block.body.length; i++) {
-        if (i === block.transitionIndex) continue;
-        const statement = block.body[i];
-        const flow = assignmentValueFlow(ctx, statement, name);
-        if (flow === "unknown" || flow === "read") return true;
-        if (flow === "kill") return false;
-    }
-    if (block.transition.kind === "branch" && block.transition.conditionRegister === name) return true;
-    for (const next of ctx.successors.get(blockId) || []) {
-        if (valueMayBeReadFrom(ctx, next, name, nextVisiting)) return true;
+function valueMayBeReadFrom(ctx, blockId, name) {
+    // This is an existential liveness query. Each queued block receives the
+    // same incoming value; a write kills only that path. Visiting each block
+    // once avoids enumerating every route through nested diamonds and loops.
+    const pending = [blockId];
+    const seen = new Set();
+    while (pending.length) {
+        const id = pending.pop();
+        if (seen.has(id)) continue;
+        seen.add(id);
+        // Proven loop headers assign iteration variables implicitly before the
+        // first retained body statement, killing the incoming compiler TEMP.
+        if (implicitLoopBodyEntryDefines(ctx, id, name)) continue;
+        const block = ctx.blocks.get(id);
+        if (!block) return true;
+        let killed = false;
+        for (let i = 0; i < block.body.length; i++) {
+            if (i === block.transitionIndex) continue;
+            const flow = assignmentValueFlow(ctx, block.body[i], name);
+            if (flow === "unknown" || flow === "read") return true;
+            if (flow === "kill") { killed = true; break; }
+        }
+        if (killed) continue;
+        if (block.transition.kind === "branch" && block.transition.conditionRegister === name) return true;
+        pending.push(...(ctx.successors.get(id) || []));
     }
     return false;
 }
@@ -317,6 +317,38 @@ function countIdentifierReads(node, name) {
         }
     }
     return count;
+}
+
+function valueHasMultipleReadsAfter(ctx, blockId, statementIndex, name) {
+    const pending = [{ blockId, statementIndex }];
+    const seen = new Set();
+    let readSites = 0;
+    while (pending.length) {
+        const cursor = pending.pop();
+        const key = `${cursor.blockId}:${cursor.statementIndex}`;
+        if (seen.has(key)) continue;
+        seen.add(key);
+        if (cursor.statementIndex < 0 && implicitLoopBodyEntryDefines(ctx, cursor.blockId, name)) continue;
+        const block = ctx.blocks.get(cursor.blockId);
+        if (!block) return true;
+        let killed = false;
+        for (let i = cursor.statementIndex + 1; i < block.body.length; i++) {
+            if (i === block.transitionIndex) continue;
+            const statement = block.body[i];
+            let reads = 0;
+            if (statement?.type === "AssignmentStatement") {
+                for (const node of statement.init || []) reads += countIdentifierReads(node, name);
+                for (const dest of statement.variables || []) if (dest?.type === "IndexExpression") reads += countIdentifierReads(dest, name);
+            } else reads = countIdentifierReads(statement, name);
+            if (reads > 0 && ++readSites > 1) return true;
+            if (statement?.type === "AssignmentStatement" &&
+                (statement.variables || []).some(dest => isIdentifier(dest, name))) { killed = true; break; }
+        }
+        if (killed) continue;
+        if (block.transition.kind === "branch" && block.transition.conditionRegister === name && ++readSites > 1) return true;
+        for (const next of ctx.successors.get(cursor.blockId) || []) pending.push({ blockId: next, statementIndex: -1 });
+    }
+    return false;
 }
 
 function valueMayBeIndexWriteBaseAfter(ctx, blockId, statementIndex, name) {
@@ -690,4 +722,4 @@ function analyzePersistentStorage(ctx) {
     }
 }
 
-module.exports = { nodeReadsIdentifier, nodeUsesAsCallBaseMulti, terminalStableUsedEpoch, transportSourceKind, valueMayBeReadFrom, eventualCleanupOnAllPaths, valueMayBeReadAfter, hasFutureNonNilWrite, cleanupReachedOnAllPaths, isDeadNilCleanup, allReachingDefinitionsAreDeadNilCleanup, conditionalUpdatedStorageEpoch, provenCallArgumentSourceEpoch, provenSingleUseCallResultAt, valueMayBeIndexWriteBaseAfter, analyzePersistentStorage };
+module.exports = { nodeReadsIdentifier, nodeUsesAsCallBaseMulti, terminalStableUsedEpoch, transportSourceKind, valueMayBeReadFrom, valueHasMultipleReadsAfter, eventualCleanupOnAllPaths, valueMayBeReadAfter, hasFutureNonNilWrite, cleanupReachedOnAllPaths, isDeadNilCleanup, allReachingDefinitionsAreDeadNilCleanup, conditionalUpdatedStorageEpoch, provenCallArgumentSourceEpoch, provenSingleUseCallResultAt, valueMayBeIndexWriteBaseAfter, analyzePersistentStorage };

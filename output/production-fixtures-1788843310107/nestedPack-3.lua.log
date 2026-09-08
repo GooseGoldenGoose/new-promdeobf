@@ -1,0 +1,10 @@
+PASS nestedPack-3.lua
+  Obfuscate: 113.0 ms
+  Deobf+CF:  145.6 ms
+  Runtime:   121.0 ms (exact parity)
+  Total:     379.7 ms
+  States:    3
+  Closures:  0
+  Obf:       C:\Users\reala\Desktop\!workspaces\promdeobf ova\new promdeobf\output\nestedPack-3.obfuscated.lua
+  Normal:    C:\Users\reala\Desktop\!workspaces\promdeobf ova\new promdeobf\output\nestedPack-3.normal.lua
+  Fresh CF:  C:\Users\reala\Desktop\!workspaces\promdeobf ova\new promdeobf\output\nestedPack-3.beta.cf.lua

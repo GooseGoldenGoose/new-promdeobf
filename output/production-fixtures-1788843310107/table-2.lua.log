@@ -1,0 +1,10 @@
+PASS table-2.lua
+  Obfuscate: 115.9 ms
+  Deobf+CF:  143.4 ms
+  Runtime:   130.2 ms (exact parity)
+  Total:     389.6 ms
+  States:    2
+  Closures:  0
+  Obf:       C:\Users\reala\Desktop\!workspaces\promdeobf ova\new promdeobf\output\table-2.obfuscated.lua
+  Normal:    C:\Users\reala\Desktop\!workspaces\promdeobf ova\new promdeobf\output\table-2.normal.lua
+  Fresh CF:  C:\Users\reala\Desktop\!workspaces\promdeobf ova\new promdeobf\output\table-2.beta.cf.lua

@@ -1,0 +1,10 @@
+PASS returnLoop-0.lua
+  Obfuscate: 98.0 ms
+  Deobf+CF:  118.0 ms
+  Runtime:   129.6 ms (exact parity)
+  Total:     345.7 ms
+  States:    5
+  Closures:  0
+  Obf:       C:\Users\reala\Desktop\!workspaces\promdeobf ova\new promdeobf\output\returnLoop-0.obfuscated.lua
+  Normal:    C:\Users\reala\Desktop\!workspaces\promdeobf ova\new promdeobf\output\returnLoop-0.normal.lua
+  Fresh CF:  C:\Users\reala\Desktop\!workspaces\promdeobf ova\new promdeobf\output\returnLoop-0.beta.cf.lua

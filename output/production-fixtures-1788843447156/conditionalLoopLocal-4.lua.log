@@ -1,0 +1,10 @@
+PASS conditionalLoopLocal-4.lua
+  Obfuscate: 122.2 ms
+  Deobf+CF:  199.3 ms
+  Runtime:   163.0 ms (exact parity)
+  Total:     484.7 ms
+  States:    12
+  Closures:  0
+  Obf:       C:\Users\reala\Desktop\!workspaces\promdeobf ova\new promdeobf\output\conditionalLoopLocal-4.obfuscated.lua
+  Normal:    C:\Users\reala\Desktop\!workspaces\promdeobf ova\new promdeobf\output\conditionalLoopLocal-4.normal.lua
+  Fresh CF:  C:\Users\reala\Desktop\!workspaces\promdeobf ova\new promdeobf\output\conditionalLoopLocal-4.beta.cf.lua

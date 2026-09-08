@@ -1,0 +1,10 @@
+PASS recursion-5.lua
+  Obfuscate: 92.6 ms
+  Deobf+CF:  151.6 ms
+  Runtime:   131.2 ms (exact parity)
+  Total:     375.6 ms
+  States:    4
+  Closures:  0
+  Obf:       C:\Users\reala\Desktop\!workspaces\promdeobf ova\new promdeobf\output\recursion-5.obfuscated.lua
+  Normal:    C:\Users\reala\Desktop\!workspaces\promdeobf ova\new promdeobf\output\recursion-5.normal.lua
+  Fresh CF:  C:\Users\reala\Desktop\!workspaces\promdeobf ova\new promdeobf\output\recursion-5.beta.cf.lua

@@ -1,0 +1,10 @@
+PASS breakLoop-3.lua
+  Obfuscate: 129.6 ms
+  Deobf+CF:  152.3 ms
+  Runtime:   140.2 ms (exact parity)
+  Total:     422.2 ms
+  States:    4
+  Closures:  0
+  Obf:       C:\Users\reala\Desktop\!workspaces\promdeobf ova\new promdeobf\output\breakLoop-3.obfuscated.lua
+  Normal:    C:\Users\reala\Desktop\!workspaces\promdeobf ova\new promdeobf\output\breakLoop-3.normal.lua
+  Fresh CF:  C:\Users\reala\Desktop\!workspaces\promdeobf ova\new promdeobf\output\breakLoop-3.beta.cf.lua

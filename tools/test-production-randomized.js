@@ -12,6 +12,8 @@ const fixtures = {
     nestedPack: 'local count=0 local function values() count=count+1 return 11,42 end local function combine(a,b) return a+b end local t={combine(values())} print(t[1],count)',
     breakLoop: 'for k,v in ipairs({11,42}) do print(k,v) break end',
     returnLoop: 'local function f(t) for k,v in ipairs(t) do return k,v end return 0 end print(f({11,42})) print(f({}))',
+    conditionalLoopLocal: 'local function f(enabled,t) if enabled then local found=false for k,v in ipairs(t) do if v==42 then found=true break end end if found then print("found") else print("missing") end end end f(true,{11,42}) f(true,{11}) f(false,{42})',
+    repeatedValue: 'local count=0 local function value() count=count+1 return {count} end local function f(enabled) if enabled then local t=value() print(t[1],t[1],t==t) end print(count) end f(true) f(false)',
 };
 let failures = 0;
 for (const [name, source] of Object.entries(fixtures)) {

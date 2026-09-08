@@ -257,6 +257,16 @@ function renderSimpleClosureLeaf(source, leaf, stateName, returnName, options = 
                 envMeta.set(returnName, { kind: "return-pack", call: values[0] });
                 continue;
             }
+            if (valueUsedBeforeOverwrite(index, returnName)) {
+                // ReturnVal is also a borrowed expression register. A table
+                // consumed by a later statement is a source value, not the
+                // final VM return vector. Bind once to preserve its identity.
+                const display = allocateClosureBindingName();
+                body.push(`local ${display} = { ${values.join(", ")} }`);
+                env.set(returnName, display);
+                envMeta.delete(returnName);
+                continue;
+            }
             if (values.length > 0) body.push(`return ${values.join(", ")}`);
             sawReturn = true;
             continue;

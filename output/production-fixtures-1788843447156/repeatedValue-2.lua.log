@@ -1,0 +1,11 @@
+[ERROR] SyntaxError: [5:4] 'end' expected near 'return'
+    at raise (C:\Users\reala\Desktop\!workspaces\promdeobf ova\new promdeobf\parser\luaparse.js:609:32)
+    at expect (C:\Users\reala\Desktop\!workspaces\promdeobf ova\new promdeobf\parser\luaparse.js:1411:14)
+    at parseFunctionDeclaration (C:\Users\reala\Desktop\!workspaces\promdeobf ova\new promdeobf\parser\luaparse.js:2243:9)
+    at parsePrimaryExpression (C:\Users\reala\Desktop\!workspaces\promdeobf ova\new promdeobf\parser\luaparse.js:2536:20)
+    at parseSubExpression (C:\Users\reala\Desktop\!workspaces\promdeobf ova\new promdeobf\parser\luaparse.js:2386:26)
+    at parseExpression (C:\Users\reala\Desktop\!workspaces\promdeobf ova\new promdeobf\parser\luaparse.js:2317:26)
+    at parseExpectedExpression (C:\Users\reala\Desktop\!workspaces\promdeobf ova\new promdeobf\parser\luaparse.js:2322:26)
+    at parseLocalStatement (C:\Users\reala\Desktop\!workspaces\promdeobf ova\new promdeobf\parser\luaparse.js:2071:38)
+    at parseStatement (C:\Users\reala\Desktop\!workspaces\promdeobf ova\new promdeobf\parser\luaparse.js:1804:28)
+    at parseBlock (C:\Users\reala\Desktop\!workspaces\promdeobf ova\new promdeobf\parser\luaparse.js:1773:25)

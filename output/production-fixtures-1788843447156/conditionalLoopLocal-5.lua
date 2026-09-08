@@ -1,0 +1,1 @@
+local function f(enabled,t) if enabled then local found=false for k,v in ipairs(t) do if v==42 then found=true break end end if found then print("found") else print("missing") end end end f(true,{11,42}) f(true,{11}) f(false,{42})

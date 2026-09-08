@@ -1,11 +1,11 @@
 "use strict";
 
 const { createStructuredContext } = require("./context");
-const { isEmptyTable, isIdentifier, isPrimitiveLiteral, isSingleAssignment, isVmRegisterName, renderTableFields, renderUnary, sourceOf } = require("../ast");
+const { isEmptyTable, isIdentifier, isLuaIdentifier, isPrimitiveLiteral, isSingleAssignment, isVmRegisterName, renderTableFields, renderUnary, sourceOf } = require("../ast");
 const { hasLinearRootContinuation, recordRootConditional, upvalueAliasKey, pathLocalOwnerKey, deadJoinTempKey, pathUpvalueCellKey, hasPathUpvalueCell, allocateUpvalueCellIdentity, upvalueCellIdentity, bindUpvalueCellIdentity, upvalueCellBinding, deferredClosureValue, isDeferredClosureValue, pendingDeferredLocalValue, isPendingDeferredLocalValue, renderDeferredClosureValue, allocateValueDisplay, allocateTableDisplay, parameterName, capturedSlotName, forwardedCaptureName, displayLocal, activeLocalDisplay, hasActiveLocal, resolveId, resolveRenderableId } = require("./bindings");
 const { structuredPackId, structuredPackSlot, structuredPackSlotToken } = require("./tokens");
 const { isCompilerVarargPack, isVarargUnpack, expectedPackSlotsInBlock, isForwardOnlyPackUseInBlock, cleanupOrTerminalEpoch, maybeOwnStructuredPackSlot, preclaimFutureStructuredPackOwner, preclaimFutureStructuredPackSlots, flushStructuredPack, flushReadyStructuredPacks } = require("./packs");
-const { nodeReadsIdentifier, nodeUsesAsCallBaseMulti, terminalStableUsedEpoch, transportSourceKind, valueMayBeReadFrom, eventualCleanupOnAllPaths, valueMayBeReadAfter, hasFutureNonNilWrite, allReachingDefinitionsAreDeadNilCleanup, conditionalUpdatedStorageEpoch, provenCallArgumentSourceEpoch, provenSingleUseCallResultAt, valueMayBeIndexWriteBaseAfter, analyzePersistentStorage } = require("./lifetime");
+const { nodeReadsIdentifier, nodeUsesAsCallBaseMulti, terminalStableUsedEpoch, transportSourceKind, valueMayBeReadFrom, valueHasMultipleReadsAfter, eventualCleanupOnAllPaths, valueMayBeReadAfter, hasFutureNonNilWrite, allReachingDefinitionsAreDeadNilCleanup, conditionalUpdatedStorageEpoch, provenCallArgumentSourceEpoch, provenSingleUseCallResultAt, valueMayBeIndexWriteBaseAfter, analyzePersistentStorage } = require("./lifetime");
 const { render } = require("./render");
 const { renderFunction, renderProgram } = require("../render");
 const { decodeVmStatement, callKind } = require("../statement-ir");
@@ -725,6 +725,7 @@ function matchMultiStateLogicalLocals(source, stateWhile, stateName, returnName,
                 : (rhs?.type === "IndexExpression" && isIdentifier(rhs.base, "upvalueValues") && isIdentifier(rhs.index)
                     ? upvalueCellBinding(ctx, rhs.index.name, env)
                     : (isIdentifier(rhs) ? (env.get(upvalueAliasKey(ctx, rhs.name)) ?? null) : null));
+            const previousMutationBaseOwner = env.get(mutationBaseOwnerKey(name));
             env.delete(upvalueAliasKey(ctx, name));
             env.delete(mutationBaseOwnerKey(name));
             if (rhs?.type !== "NilLiteral") env.delete(deadJoinTempKey(ctx, name));
@@ -956,6 +957,11 @@ function matchMultiStateLogicalLocals(source, stateWhile, stateName, returnName,
                     env.delete(name);
                     continue;
                 }
+                if (!hasActiveLocal(ctx, name, env) && typeof previousMutationBaseOwner === "string" &&
+                    env.get(name) === previousMutationBaseOwner) {
+                    env.delete(name);
+                    continue;
+                }
                 if (ctx.locals.has(name)) {
                     ctx.locals.delete(name);
                     ctx.localNames.delete(name);
@@ -967,6 +973,23 @@ function matchMultiStateLogicalLocals(source, stateWhile, stateName, returnName,
                 // every reaching definition is itself a previously proven dead nil
                 // cleanup, with no intervening value epoch.
                 if (!env.has(name) && allReachingDefinitionsAreDeadNilCleanup(ctx, id, i, name)) {
+                    env.delete(name);
+                    continue;
+                }
+                const deadTemporary = env.get(name);
+                const withinProvenLoop = markers.some(marker => marker?.kind != null || [
+                    ctx.options?.genericForBranchIds,
+                    ctx.options?.numericForBranchIds,
+                    ctx.options?.repeatBranchIds,
+                    ctx.options?.loopBranchIds,
+                ].some(set => set instanceof Set && set.has(marker?.branchId)));
+                if (withinProvenLoop && !hasActiveLocal(ctx, name, env) && typeof deadTemporary === "string" &&
+                    !structuredPackId(ctx, deadTemporary) && !structuredPackSlot(ctx, deadTemporary) &&
+                    deadTemporary !== ctx.varargPackMarker) {
+                    // The rendered value has already been consumed, and this
+                    // exact nil is unread before overwrite/exit. Calls whose
+                    // results were never consumed are emitted at definition,
+                    // so ending this compiler TEMP epoch cannot drop effects.
                     env.delete(name);
                     continue;
                 }
@@ -1091,8 +1114,10 @@ function matchMultiStateLogicalLocals(source, stateWhile, stateName, returnName,
             const terminalStableNilEpoch = ctx.allowConditionalIf && markers.length === 0 &&
                 rhs?.type === "NilLiteral" && semanticNilDefinition && !ctx.locals.has(name) &&
                 terminalStableUsedEpoch(ctx, id, i, name) && !hasFutureNonNilWrite(ctx, id, i, name);
-            const conditionalUpdatedEpoch = ctx.allowConditionalIf && markers.length === 0 &&
-                !ctx.locals.has(name) ? conditionalUpdatedStorageEpoch(ctx, id, i, name) : null;
+            const conditionalUpdatedEpoch = ctx.allowConditionalIf &&
+                !hasActiveLocal(ctx, name, env) ? conditionalUpdatedStorageEpoch(ctx, id, i, name) : null;
+            const repeatedDeferredExpression = isIdentifier(rhs) && typeof value === "string" &&
+                !isLuaIdentifier(value) && valueHasMultipleReadsAfter(ctx, id, i, name);
             // A storage binding that survives a conditional join must already
             // exist before entering that conditional. If the same physical
             // register is written on a branch before any active binding exists,
@@ -1125,11 +1150,11 @@ function matchMultiStateLogicalLocals(source, stateWhile, stateName, returnName,
                 continue;
             }
 
-            // Some compiler TEMPs hold an object/index result that must remain
-            // stable across later key/value evaluation before a field write.
+            // Some compiler TEMPs hold a repeated expression or an object/index
+            // result that must remain stable across later evaluation.
             // Materialize that exact epoch at its original definition point,
             // but do not classify the physical register as a source local.
-            if (!hasActiveLocal(ctx, name, env) && valueMayBeIndexWriteBaseAfter(ctx, id, i, name)) {
+            if (!hasActiveLocal(ctx, name, env) && (repeatedDeferredExpression || valueMayBeIndexWriteBaseAfter(ctx, id, i, name))) {
                 // A TEMP alias to an already-proven captured/source binding does not
                 // need new storage. Preserve its owner provenance so mutation renders
                 // directly against the existing source object instead of inventing an

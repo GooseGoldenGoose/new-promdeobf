@@ -11,7 +11,8 @@ global.__freshFailure = (line, state, ctx, entry = 1) => {
     const key = `${entry}:${state}:${line}`;
     if (!seen.has(key)) {
         seen.add(key);
-        console.error(JSON.stringify({ entry, state, line, statement: ctx?.diagnosticStatement,
+        console.error(JSON.stringify({ entry, state, line, statement: ctx?.diagnosticStatement, markers: ctx?.diagnosticMarkers,
+            remainingLocals: ctx?.locals ? [...ctx.locals] : null, processed: ctx?.processed?.size, reachable: ctx?.reachable?.size,
             ...(process.env.FRESH_TRACE_FULL ? { env: ctx?.diagnosticEnv, packs: ctx?.structuredPacks ? [...ctx.structuredPacks].map(([id, pack]) => [id, {...pack, slots: [...pack.slots].map(([slot, info]) => [slot, {...info, tempRegs: [...info.tempRegs]}])}]) : null,
                 forcedRegs: ctx?.options?.forcedPersistentStorageRegs ? [...ctx.options.forcedPersistentStorageRegs] : null,
                 forcedStarts: ctx?.options?.forcedPersistentStorageStarts ? [...ctx.options.forcedPersistentStorageStarts].map(([k,v]) => [k,[...v]]) : null,
@@ -110,8 +111,12 @@ Module._extensions[".js"] = (module, filename) => {
         }
         if (!active) return line;
         if (line.includes("const ctx = createStructuredContext")) line += ` console.error(JSON.stringify({contextCall:true,created:!!ctx,entry:options.entryId||1,allowConditionalIf:options.allowConditionalIf, normalizedSize:options.normalizedLeaves?.size, rootReachableOnly:options.rootReachableOnly, loops:{while:options.loopBranchIds?.size,repeat:options.repeatBranchIds?.size,numeric:options.numericForBranchIds?.size,generic:options.genericForBranchIds?.size}}));`;
-        if (line.includes("const id = ctx.processingQueue.shift();")) line += " diagnosticState = id;";
-        if (line.includes("const statement = block.body[i];")) line += " ctx.diagnosticStatement = sourceOf(source, statement); ctx.diagnosticEnv = [...env];";
+        if (line.includes("const id = ctx.processingQueue.shift();")) line += " diagnosticState = id; if (process.env.FRESH_TRACE_PROGRESS) console.error(JSON.stringify({progress:true,entry:options.entryId||1,state:id,time:Date.now()}));";
+        if (line.includes("const candidates = ctx.incoming.get(id)")) line += " if (process.env.FRESH_TRACE_PROGRESS && (options.entryId||1)===64 && id===67) console.error(JSON.stringify({stage:'candidates',count:candidates.length,time:Date.now()}));";
+        if (line.includes("if (!collapseTerminalCandidates(ctx))")) line = "if (process.env.FRESH_TRACE_PROGRESS && (options.entryId||1)===64 && id===67) console.error(JSON.stringify({stage:'before-terminal',time:Date.now()})); " + line + " if (process.env.FRESH_TRACE_PROGRESS && (options.entryId||1)===64 && id===67) console.error(JSON.stringify({stage:'after-terminal',time:Date.now()}));";
+        if (line.includes("const normalizedCandidates = []")) line += " if (process.env.FRESH_TRACE_PROGRESS && (options.entryId||1)===64 && id===67) console.error(JSON.stringify({stage:'normalize',time:Date.now()}));";
+        if (line.includes("let merged = mergeCandidates")) line = "if (process.env.FRESH_TRACE_PROGRESS && (options.entryId||1)===64 && id===67) console.error(JSON.stringify({stage:'before-merge',time:Date.now()})); " + line + " if (process.env.FRESH_TRACE_PROGRESS && (options.entryId||1)===64 && id===67) console.error(JSON.stringify({stage:'after-merge',time:Date.now()}));";
+        if (line.includes("const statement = block.body[i];")) line += " ctx.diagnosticStatement = sourceOf(source, statement); ctx.diagnosticEnv = [...env]; ctx.diagnosticMarkers = markers; if (process.env.FRESH_TRACE_PROGRESS && (options.entryId||1) === 64 && diagnosticState >= 67) console.error(JSON.stringify({statement:true,entry:options.entryId||1,state:diagnosticState,index:i,text:String(ctx.diagnosticStatement).slice(0,100),time:Date.now()}));";
         if (line.includes("if (!merged) return null;")) line = line.replace("if (!merged) return null;", "if (!merged) { global.__freshMergeFailure(diagnosticState, normalizedCandidates, ctx, options.entryId || 1); return null; }");
         return line.replace(/return null;/g, `return global.__freshFailure(${index + 1}, diagnosticState, ctx, options.entryId || 1);`);
     }).join("\n");
